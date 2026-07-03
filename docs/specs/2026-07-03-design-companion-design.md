@@ -179,7 +179,17 @@ Stack: React 18/19 + Vite + Tailwind (v3/v4). Agent: Claude Code. Testbed: one o
 
 Each milestone is independently useful (M1 alone ≈ a better click-to-source; M2 ≈ VisBug with source awareness).
 
-## 10. Risks & open questions
+## 10. Performance principles (hard commitments)
+
+- **Production impact: zero by construction.** The Vite plugin registers with `apply: 'serve'` — it does not run in `vite build`. No attributes, no toolbar, no bytes in production output. CI check asserts the prod bundle is byte-identical with the plugin present vs. absent.
+- **Idle overhead: ~zero by design.** With design mode toggled off, the overlay holds no active listeners, observers, or timers. Dev-mode cost is limited to attribute bytes in the served bundle and one incremental transform in Vite's existing per-file pipeline (the Nuxt DevTools inspector / lovable-tagger precedent).
+- **Previews bypass the framework.** Panel edits write inline styles directly — no React state, no re-render, no reconciliation. Slider-to-pixel latency is one frame.
+- **No app reflow from chrome.** Selection outlines/badges render on the overlay's own fixed-position layer in the shadow root; hover hit-testing is rAF-throttled.
+- **Heavy work stays out of the page.** Screenshots, token mapping, queue persistence, and dispatch run in the companion CLI process, only on Send.
+- **Scope guard:** tagging limited to project `src/` by default (node_modules excluded); transform must preserve line numbers (source-map fidelity asserted in tests).
+- **Perf test:** fixture app with several thousand DOM nodes; assert no dropped frames with toolbar idle and <16ms edit-preview latency with design mode active.
+
+## 11. Risks & open questions
 
 - **React 19 / ecosystem drift:** mitigated by owning the build-time transform rather than depending on React internals. SWC-based projects (Next.js) deferred to a post-v1 plugin.
 - **Channels is a gated preview:** treated as an experiment behind a flag, never the only path.
@@ -188,7 +198,7 @@ Each milestone is independently useful (M1 alone ≈ a better click-to-source; M
 - **Styles defined in CSS files (not utility classes):** v1 emits the delta with the element's source location and lets the agent decide where the change belongs; authored-rule attribution via CDP is a possible v2 (requires extension or debugger attach — revisit).
 - **Open:** exact naming; whether M4's `/design` should auto-run via a `UserPromptSubmit` hook that surfaces pending edits whenever the user next messages Claude Code.
 
-## 11. Testing approach
+## 12. Testing approach
 
 - Unit: token mapper (px→Tailwind snapping, v3+v4 configs), change-request serialization, state machine transitions.
 - Integration: fixture Vite app; Playwright drives the toolbar (select → edit → toggle → send), asserts queue contents; a scripted fake "agent" applies edits so the verifier path is testable without burning agent tokens.
