@@ -127,6 +127,10 @@ export function migrateLegacyForgeDir(resolvedRoot: string, viteRoot: string, qu
 
   queue.mergeItems(legacyItems as Parameters<Queue['mergeItems']>[0])
 
+  // Read → merge → delete with no lock: assumes no OLD-version server is still writing
+  // the legacy location mid-upgrade (a write landing between the read above and this
+  // unlink would be lost). Acceptable for a single-user dev tool — worst case is one
+  // queued-but-unapplied item, recoverable by re-sending from the panel.
   try {
     fs.unlinkSync(legacyQueueFile)
   } catch {
