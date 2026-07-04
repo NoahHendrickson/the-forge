@@ -1329,6 +1329,212 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     panel.hide()
     expect(picker.root.hidden).toBe(true)
   })
+
+  it('single-corner radius rows (TL/TR/BR/BL) bind an honest rounded-<side>-<name> pill, not rounded-<name>', () => {
+    const { el, panel, drafts } = setupTailwind()
+    const btn = panel.root.querySelectorAll('[data-expand]')
+    // expand the Appearance section's radius group to reveal TL/TR/BR/BL
+    const radiusBtn = [...btn].find((b) => b.getAttribute('data-expand') === 'radius') as HTMLElement
+    radiusBtn.click()
+
+    const field = pxField(panel, 'TL')
+    const input = field.querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('md'))!
+    ;(row as HTMLElement).click()
+
+    expect(drafts.current(el, 'border-top-left-radius')).toBe('6px')
+    // The OTHER three corners must NOT be touched by a single-corner row.
+    expect(drafts.current(el, 'border-top-right-radius')).toBeNull()
+    expect(input.value).toBe('rounded-tl-md')
+  })
+
+  it('the linked R row (all 4 corners) still binds the collapsed rounded-<name> pill', () => {
+    // Pins the R row's behavior alongside the TL row fix above so the two can't regress
+    // into each other (R must stay collapsed, TL must stay per-side).
+    const { panel } = setupTailwind()
+    const field = pxField(panel, 'R')
+    const input = field.querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('md'))!
+    ;(row as HTMLElement).click()
+    expect(input.value).toBe('rounded-md')
+  })
+
+  it('radiusScale {} (non-Tailwind project) makes `=` on a radius field a no-op', () => {
+    // Fix for B5 minor #5: tokenEntriesFor must return null (not []) for an empty scale so
+    // buildField's onTokenKey guard (`if (!entries) return`) actually fires.
+    document.documentElement.style.removeProperty('--radius-sm')
+    document.documentElement.style.removeProperty('--radius-md')
+    document.documentElement.style.removeProperty('--radius-lg')
+    resetTokensCache()
+    const { panel } = setup()
+    const input = pxField(panel, 'R').querySelector('input') as HTMLInputElement
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    pressEquals(input)
+    expect(picker.root.hidden).toBe(true)
+  })
+
+  it('un-Compare restores a bound pill (Compare must not permanently destroy pill bookkeeping)', () => {
+    const { el, panel, drafts } = setupTailwind()
+    const field = pxField(panel, 'PX')
+    const input = field.querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+    expect(input.value).toBe('px-4')
+
+    // Enter Compare: the field must show the ORIGINAL (pre-draft) value with NO pill —
+    // a pill during Compare would lie about what's actually drafted.
+    drafts.compare(el, true)
+    panel.refresh()
+    expect(field.classList.contains('nf-pill')).toBe(false)
+
+    // Leave Compare: the bound entry must have survived the round-trip so the pill returns.
+    drafts.compare(el, false)
+    panel.refresh()
+    expect(field.classList.contains('nf-pill')).toBe(true)
+    expect(input.value).toBe('px-4')
+  })
+
+  it('Reset clears pill bookkeeping wholesale, even for a coincidentally-equal original value', () => {
+    // Fix for B5 minor #4: an author-authored inline value that happens to equal the bound
+    // px must NOT resurrect a pill after Reset discards the draft entirely.
+    const { el, panel, drafts } = setupTailwind(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding-left: 16px; padding-right: 16px; width: 200px;"></div>`
+    )
+    const field = pxField(panel, 'PX')
+    const input = field.querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+    expect(input.value).toBe('px-4')
+
+    panel.resetButton.click()
+    expect(drafts.hasDrafts(el)).toBe(false)
+    // Original inline value (16px) coincidentally equals the bound px — without the fix,
+    // refresh()'s per-field re-check would see values[0] === bound.px and resurrect the pill.
+    expect(field.classList.contains('nf-pill')).toBe(false)
+    expect(input.value).toBe('16')
+  })
+})
+
+describe('Panel Gap field + TokenPicker (B5 important #1)', () => {
+  function setupTailwindFlex(styleExtra = '') {
+    document.documentElement.style.setProperty('--spacing', '4px')
+    document.documentElement.style.setProperty('--radius-sm', '4px')
+    document.documentElement.style.setProperty('--radius-md', '6px')
+    document.documentElement.style.setProperty('--radius-lg', '8px')
+    return setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="display: flex; width: 200px; height: 100px; ${styleExtra}"></div>`
+    )
+  }
+
+  afterEach(() => {
+    document.documentElement.removeAttribute('style')
+    document.head.innerHTML = ''
+    resetTokensCache()
+  })
+
+  function gapInput(panel: Panel): HTMLInputElement {
+    return fieldInput(panel, 'Gap')
+  }
+
+  function pressEquals(input: HTMLInputElement): KeyboardEvent {
+    const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
+    input.dispatchEvent(ev)
+    return ev
+  }
+
+  it('`=` on the Gap field opens the token picker with the spacing scale entries', () => {
+    const { panel } = setupTailwindFlex()
+    const input = gapInput(panel)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    pressEquals(input)
+    expect(picker.root.hidden).toBe(false)
+    const rows = [...picker.root.querySelectorAll('.tp-row')]
+    expect(rows.some((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))).toBe(true)
+  })
+
+  it('applying a spacing entry to Gap drafts gap:Npx and binds a gap-<n> pill', () => {
+    const { el, panel, drafts } = setupTailwindFlex()
+    const input = gapInput(panel)
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+
+    expect(drafts.current(el, 'gap')).toBe('16px')
+    expect(input.readOnly).toBe(true)
+    expect(input.value).toBe('gap-4')
+  })
+
+  it('a bound Gap pill survives an unrelated refresh() when the draft still equals the bound px', () => {
+    const { panel } = setupTailwindFlex()
+    const input = gapInput(panel)
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+    expect(input.value).toBe('gap-4')
+
+    panel.refresh()
+    expect(input.value).toBe('gap-4')
+  })
+
+  it('a bound Gap pill is cleared when the draft value diverges from the bound px', () => {
+    const { el, panel, drafts } = setupTailwindFlex()
+    const input = gapInput(panel)
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+    expect(input.value).toBe('gap-4')
+
+    drafts.apply(el, 'gap', '20px')
+    panel.refresh()
+    expect(input.value).toBe('20')
+  })
+
+  it('switching Gap to Auto (space-between) clears a bound pill — setAuto path must not resurrect it later', () => {
+    const { el, panel, drafts } = setupTailwindFlex()
+    const input = gapInput(panel)
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+    expect(input.value).toBe('gap-4')
+
+    commit(input, 'auto')
+    expect(drafts.current(el, 'justify-content')).toBe('space-between')
+    expect(input.value).toBe('auto')
+
+    // Switch back off space-between with the SAME 16px — must show a plain number, not a
+    // resurrected pill, since the Auto detour must have cleared the bookkeeping.
+    drafts.discard(el, ['justify-content'])
+    drafts.apply(el, 'gap', '16px')
+    panel.refresh()
+    expect(input.value).toBe('16')
+  })
+
+  it('Backspace on a Gap pill detaches: numeric display returns, draft is unchanged', () => {
+    const { el, panel, drafts } = setupTailwindFlex()
+    const input = gapInput(panel)
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+    expect(drafts.current(el, 'gap')).toBe('16px')
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }))
+    expect(input.readOnly).toBe(false)
+    expect(input.value).toBe('16')
+    expect(drafts.current(el, 'gap')).toBe('16px')
+  })
 })
 
 describe('Panel + ColorPicker lifecycle', () => {

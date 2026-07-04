@@ -200,6 +200,34 @@ describe('TokenPicker', () => {
     expect(picker.root.hidden).toBe(true)
   })
 
+  it('ArrowDown scrolls the newly active row into view (guarded for jsdom)', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    // jsdom's HTMLElement doesn't implement scrollIntoView at all — install a shared stub
+    // on the prototype so it survives renderList()'s replaceChildren()/re-create per move.
+    const scrollSpy = vi.fn()
+    ;(Element.prototype as unknown as { scrollIntoView: typeof scrollSpy }).scrollIntoView = scrollSpy
+    try {
+      picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+      const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      const rowsAfter = [...picker.root.querySelectorAll('.tp-row')] as HTMLElement[]
+      const activeAfter = rowsAfter.findIndex((r) => r.classList.contains('tp-row-active'))
+      expect(activeAfter).toBe(0)
+      expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest' })
+    } finally {
+      delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  })
+
+  it('does not throw when the active row lacks scrollIntoView (plain jsdom element)', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+    expect(() => search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))).not.toThrow()
+  })
+
   it('reselection (a second open()) resets the filter and keyboard-active state', () => {
     const { picker } = setupPicker()
     const anchor = anchorEl()

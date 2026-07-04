@@ -128,6 +128,12 @@ export class TokenPicker {
       this.activeIndex = Math.min(this.filtered.length - 1, Math.max(0, this.activeIndex + delta))
     }
     this.renderList()
+    // Keep the keyboard-active row in view for long scale lists (e.g. the full spacing
+    // scale) — jsdom elements don't implement scrollIntoView, so guard its existence.
+    const activeRow = this.listEl.children[this.activeIndex] as (Element & { scrollIntoView?: (opts?: ScrollIntoViewOptions) => void }) | undefined
+    if (activeRow && typeof activeRow.scrollIntoView === 'function') {
+      activeRow.scrollIntoView({ block: 'nearest' })
+    }
   }
 
   private applyActive(): void {

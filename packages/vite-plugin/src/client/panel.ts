@@ -58,6 +58,12 @@ const BORDER_WIDTH_PROPS = ['border-top-width', 'border-right-width', 'border-bo
 const BORDER_STYLE_PROPS = ['border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style']
 const BORDER_COLOR_PROPS = ['border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color']
 
+// Gap isn't built via buildField/RowSpec (it's a bespoke NumberField inside the Layout
+// section's custom body — see buildLayoutSection), but it still needs a RowSpec-shaped
+// object so tokenEntriesFor/pillLabelFor (both keyed on `.props`) and the boundTokens map
+// (keyed on `.props.join(',')`) can treat it identically to every other token-pickable field.
+const GAP_SPEC: RowSpec = { label: 'Gap', props: ['gap'], min: 0 }
+
 // Tailwind's numeric spacing scale (padding/margin/gap/width/height) — each step n maps to
 // n * theme.spacingBasePx. Kept as a flat literal list (not generated) so the exact set —
 // including the half-steps (0.5, 1.5, ...) and the post-12 non-uniform stride (14, 16, 20, ...) —
@@ -100,10 +106,12 @@ const RADIUS_PROP_SET = new Set(RADIUS)
  */
 export function tokenEntriesFor(spec: { props: string[] }, theme: Theme, tokens: Tokens): TokenEntry[] | null {
   if (spec.props.some((p) => p === 'font-size')) {
-    return tokens.textScale.map((t) => ({ label: t.name, px: t.px }))
+    const entries = tokens.textScale.map((t) => ({ label: t.name, px: t.px }))
+    return entries.length === 0 ? null : entries
   }
   if (spec.props.some((p) => RADIUS_PROP_SET.has(p))) {
-    return Object.entries(theme.radiusScale).map(([label, px]) => ({ label, px }))
+    const entries = Object.entries(theme.radiusScale).map(([label, px]) => ({ label, px }))
+    return entries.length === 0 ? null : entries
   }
   const prefix = utilityPrefixFor(spec.props)
   const isSpacingProp = prefix !== undefined && prefix !== 'opacity' && prefix !== 'border'
@@ -426,6 +434,10 @@ export class Panel {
       if (!this.el) return
       this.onBeforeEdit(this.el)
       this.drafts.discard(this.el)
+      // Reset must clear pill bookkeeping wholesale, not just per-field on divergence — a
+      // coincidentally-equal original value (e.g. the author's own inline px matches a
+      // scale step) would otherwise resurrect a pill backed by no draft at all.
+      this.boundTokens.clear()
       this.refresh()
       this.onEdited()
     })
@@ -509,9 +521,16 @@ export class Panel {
       // (same-field refresh with an unchanged draft). A DIFFERING value (user edited the
       // field directly, or a different draft arrived) leaves the pill cleared and drops
       // the stale entry from boundTokens so it doesn't keep getting checked forever.
+      //
+      // Compare mode is an exception to BOTH halves of that: while comparing, `values`
+      // was read from the ORIGINAL (pre-draft) computed style, not the live draft, so it
+      // diverging from bound.px is expected and must NOT be treated as "the user changed
+      // it" — skip the delete so un-compare can still re-bind. And the pill itself must
+      // stay hidden while comparing (a pristine-preview state showing a token pill would
+      // lie about what's actually drafted), so skip the bindToken call too.
       const key = spec.props.join(',')
       const bound = this.boundTokens.get(key)
-      if (bound) {
+      if (bound && !this.drafts.isComparing(el)) {
         if (!mixed && values[0] === bound.px) field.bindToken(bound.label)
         else this.boundTokens.delete(key)
       }
@@ -539,11 +558,28 @@ export class Panel {
     this.wrapField?.set(wrap === 'wrap' ? 'wrap' : 'nowrap')
 
     if (this.gapField) {
-      if (spaceBetween) this.gapField.setAuto()
-      else {
+      const gapKey = GAP_SPEC.props.join(',')
+      if (spaceBetween) {
+        // setAuto (Figma "space it out for me") supersedes any bound pill — same rule as
+        // the sizeMode W/H auto-continue path above: a switch to Auto must clear the
+        // bookkeeping, not just the visible pill, so a later equal-px value can't resurrect it.
+        this.gapField.setAuto()
+        this.boundTokens.delete(gapKey)
+      } else {
         const gapCss = this.drafts.isComparing(el) ? null : this.drafts.current(el, 'gap')
         const css = gapCss ?? computed.getPropertyValue('gap')
-        this.gapField.set(fromPx(css))
+        const value = fromPx(css)
+        this.gapField.set(value)
+
+        // Same B5 re-bind contract as the generic field loop above (including the Compare
+        // exception from B5's Compare-round-trip fix): skip while comparing so the pristine
+        // preview state never shows a pill, and don't drop the entry on a Compare-induced
+        // "divergence" that isn't really a user edit.
+        const bound = this.boundTokens.get(gapKey)
+        if (bound && !this.drafts.isComparing(el)) {
+          if (value === bound.px) this.gapField.bindToken(bound.label)
+          else this.boundTokens.delete(gapKey)
+        }
       }
     }
 
@@ -808,6 +844,31 @@ export class Panel {
         this.drafts.apply(this.el, 'gap', px(n))
         this.refresh()
         this.onEdited()
+      },
+      onDetach: () => {
+        // Mirrors buildField's onDetach — drop the bookkeeping so a later refresh() doesn't
+        // try to re-bind a pill the user explicitly detached via Backspace.
+        this.boundTokens.delete(GAP_SPEC.props.join(','))
+      },
+      onTokenKey: () => {
+        if (!this.el || !this.gapField) return
+        const entries = tokenEntriesFor(GAP_SPEC, readTheme(), readTokens())
+        if (!entries) return
+        const field = this.gapField
+        this.tokenPicker.open({
+          anchor: field.root,
+          entries,
+          onApply: (entry) => {
+            if (!this.el) return
+            this.onBeforeEdit(this.el)
+            this.drafts.apply(this.el, 'gap', px(entry.px))
+            this.refresh()
+            this.onEdited()
+            const label = this.pillLabelFor(GAP_SPEC, entry)
+            field.bindToken(label)
+            this.boundTokens.set(GAP_SPEC.props.join(','), { label, px: entry.px })
+          },
+        })
       },
       onKeyword: (kw) => {
         if (!this.el || kw !== 'auto') return
@@ -1208,10 +1269,16 @@ export class Panel {
     this.onEdited()
   }
 
-  /** Full Tailwind utility label for a token-picker entry applied to `spec` (e.g. `px-4`, `rounded-md`, `text-sm`). */
+  /**
+   * Full Tailwind utility label for a token-picker entry applied to `spec` (e.g. `px-4`,
+   * `rounded-md`, `text-sm`). Radius rows are NOT special-cased to `rounded-*` uniformly —
+   * a single-corner row (TL/TR/BR/BL, props.length === 1) must yield its own honest
+   * `rounded-tl-md`-style label via UTILITY_PREFIXES (utilityPrefixFor resolves each
+   * longhand's own prefix), while the linked R row (all 4 corners) resolves through
+   * MULTI_PROP_SYNTHETIC to the collapsed `rounded-md` form.
+   */
   private pillLabelFor(spec: RowSpec, entry: TokenEntry): string {
     if (spec.props.some((p) => p === 'font-size')) return `text-${entry.label}`
-    if (spec.props.some((p) => RADIUS_PROP_SET.has(p))) return `rounded-${entry.label}`
     const prefix = utilityPrefixFor(spec.props) ?? spec.props[0]
     return `${prefix}-${entry.label}`
   }
