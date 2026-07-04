@@ -129,6 +129,55 @@ describe('buildChangeRequest', () => {
   })
 })
 
+describe('buildChangeRequest — keyword drafts (M2b-1 Fix 1)', () => {
+  it('a Hug width draft (auto) reports the measured before size and the literal "auto" after, not a re-measured px', () => {
+    document.body.innerHTML = `
+      <div data-dc-source="src/Parent.tsx:1:1" id="parent" style="display: flex; width: 400px;">
+        <div data-dc-source="src/Child.tsx:2:2" id="child" style="width: 240px; height: 50px;"></div>
+      </div>`
+    const child = document.getElementById('child')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(child, 'width', 'auto')
+    const req = buildChangeRequest(store, TW)
+    const c = req.elements[0].changes.find((x) => x.property === 'width')!
+    expect(c.beforeCss).toBe('240px')
+    expect(c.afterCss).toBe('auto')
+    expect(c.afterUtility).toBe('w-auto')
+  })
+
+  it('full layout session in one request: parent flex drafts + child align-self/width/height drafts', () => {
+    document.body.innerHTML = `
+      <div data-dc-source="src/Parent.tsx:1:1" id="parent" style="display: flex; width: 400px; height: 300px;">
+        <div data-dc-source="src/Child.tsx:2:2" id="child" style="width: 240px; height: 50px;"></div>
+      </div>`
+    const parent = document.getElementById('parent')! as HTMLElement
+    const child = document.getElementById('child')! as HTMLElement
+    const store = new DraftStore()
+
+    // Parent: flex-direction: column, gap-auto (justify-content: space-between)
+    store.apply(parent, 'flex-direction', 'column')
+    store.apply(parent, 'justify-content', 'space-between')
+
+    // Child: align-self Start, width Hug (auto), pinned height
+    store.apply(child, 'align-self', 'flex-start')
+    store.apply(child, 'width', 'auto')
+    store.apply(child, 'height', '240px')
+
+    const req = buildChangeRequest(store, TW)
+    const md = renderMarkdown(req)
+
+    expect(md).toMatch(/width: \d+(\.\d+)?px → auto — (change|add) `w-auto`/)
+    expect(md).toMatch(/justify-content: .* → space-between/)
+    expect(md).toMatch(/align-self: .* → flex-start/)
+    // css-only lines (no utility mapping) must not emit backtick-undefined junk
+    expect(md).not.toContain('undefined')
+    expect(md).toContain('height: 50px → 240px')
+    for (const line of md.split('\n')) {
+      expect(line).not.toContain('undefined')
+    }
+  })
+})
+
 describe('cssPath', () => {
   it('uses the id when present', () => {
     document.body.innerHTML = `<div><button id="save-btn">Save</button></div>`
@@ -199,5 +248,18 @@ line2 \`code\`</button>`
     const md = renderMarkdown(buildChangeRequest(store, PLAIN))
     const textLine = md.split('\n').find((l) => l.startsWith('Text:'))!
     expect(textLine).toBe('Text: "line1 line2 code"')
+  })
+
+  it('skips no-op change lines where beforeCss equals afterCss', () => {
+    document.body.innerHTML = `
+      <div data-dc-source="src/Parent.tsx:1:1" id="parent" style="display: flex;">
+        <div data-dc-source="src/Child.tsx:2:2" id="child" style="width: 240px;"></div>
+      </div>`
+    const child = document.getElementById('child')! as HTMLElement
+    const store = new DraftStore()
+    // draft the SAME value the element already has — a genuine no-op
+    store.apply(child, 'width', '240px')
+    const md = renderMarkdown(buildChangeRequest(store, PLAIN))
+    expect(md).not.toContain('width: 240px → 240px')
   })
 })

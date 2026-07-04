@@ -61,6 +61,10 @@ export function suggestUtility(
   const prefix = UTILITY_PREFIXES[prop]
   if (!prefix || theme.spacingBasePx === null) return null
 
+  if ((prop === 'width' || prop === 'height') && css === 'auto') {
+    return { utility: `${prefix}-auto`, tokenExact: true }
+  }
+
   if (prop === 'opacity') {
     const pct = Number.parseFloat(css) * 100
     const rounded = Math.round(pct)
