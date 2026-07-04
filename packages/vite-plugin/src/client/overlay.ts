@@ -1,5 +1,6 @@
-const CSS = `
+export const CSS = `
 :host { all: initial; }
+[hidden] { display: none !important; }
 button {
   font: 500 12px system-ui, sans-serif; border-radius: 999px;
   border: 1px solid #d0d0cb; background: #fff; color: #1a1a18;
@@ -34,7 +35,6 @@ button {
 }
 #panel .panel-head { font-weight: 500; margin-bottom: 8px; word-break: break-all; }
 #panel .panel-section { color: #6b6b66; margin: 10px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
-#panel .panel-section[hidden] { display: none; }
 #panel .panel-rows { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 #panel button { border-radius: 6px; padding: 4px 10px; }
 .nf { display: flex; align-items: center; gap: 4px; border: 1px solid #e3e3de; border-radius: 6px; padding: 2px 6px; }

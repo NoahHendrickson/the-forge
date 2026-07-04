@@ -36,6 +36,30 @@ function isFlex(el: TaggedElement): boolean {
   return d === 'flex' || d === 'inline-flex'
 }
 
+/**
+ * Normalizes a computed justify-content keyword to the matrix's flex-start|center|flex-end
+ * vocabulary. Display-only: drafts still store whatever canonical keyword the user clicked.
+ * An untouched flex container reports 'normal' (real browsers) or '' (jsdom) rather than
+ * 'flex-start', so without this the matrix would show zero active dots by default.
+ */
+function normalizeJustify(justify: string): string {
+  if (justify === 'normal' || justify === 'start' || justify === 'left' || justify === '') return 'flex-start'
+  if (justify === 'end' || justify === 'right') return 'flex-end'
+  return justify
+}
+
+/**
+ * Normalizes a computed align-items keyword the same way as normalizeJustify, except
+ * 'stretch' is intentionally left as-is (not mapped to a matrix keyword) — stretch is
+ * represented by the child's W/H size mode being Fill, not a matrix position, so it must
+ * continue to produce no active dot.
+ */
+function normalizeAlign(align: string): string {
+  if (align === 'normal' || align === 'start' || align === '') return 'flex-start'
+  if (align === 'end') return 'flex-end'
+  return align
+}
+
 // Section ORDER is fixed forever: Layout -> Size -> Padding -> Margin -> Appearance.
 const SECTIONS: SectionSpec[] = [
   {
@@ -246,7 +270,7 @@ export class Panel {
       }
     }
 
-    this.alignMatrix?.set(justify, align, direction, spaceBetween)
+    this.alignMatrix?.set(normalizeJustify(justify), normalizeAlign(align), direction, spaceBetween)
   }
 
   private refreshFlexChild(el: TaggedElement, computed: CSSStyleDeclaration): void {

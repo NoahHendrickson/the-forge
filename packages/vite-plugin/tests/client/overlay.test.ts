@@ -1,9 +1,25 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { Overlay } from '../../src/client/overlay'
+import { Overlay, CSS } from '../../src/client/overlay'
 
 beforeEach(() => {
   document.body.innerHTML = ''
+})
+
+describe('Overlay CSS (Track A visibility correctness)', () => {
+  it('declares a shadow-root-wide [hidden] rule as the very first rule, forcing display:none regardless of other selectors', () => {
+    const trimmed = CSS.trim()
+    // Must be the first rule in the stylesheet so nothing declared later can outrank it.
+    expect(trimmed.startsWith(':host { all: initial; }')).toBe(true)
+    const hostRuleEnd = trimmed.indexOf('}') + 1
+    const rest = trimmed.slice(hostRuleEnd).trim()
+    expect(rest.startsWith('[hidden]')).toBe(true)
+    expect(rest).toMatch(/^\[hidden\]\s*{\s*display:\s*none\s*!important;?\s*}/)
+  })
+
+  it('no longer needs the now-redundant #panel .panel-section[hidden] guard', () => {
+    expect(CSS).not.toContain('.panel-section[hidden]')
+  })
 })
 
 describe('Overlay (M2 additions)', () => {

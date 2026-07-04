@@ -219,6 +219,23 @@ describe('Panel', () => {
     expect(el.style.getPropertyValue('gap')).toBe('16px')
   })
 
+  it('default flex container (computed justify/align normal or empty) shows an active dot at flex-start/flex-start', () => {
+    // flexSetup() sets only `display: flex` — no justify-content/align-items authored.
+    // jsdom's getComputedStyle reports '' for these (real browsers report 'normal'); both
+    // must normalize to flex-start so the matrix isn't stuck with zero active dots.
+    const { panel } = flexSetup()
+    const active = panel.root.querySelector('.am-dot.am-active') as HTMLElement
+    expect(active).toBeTruthy()
+    expect(active.dataset.j).toBe('flex-start')
+    expect(active.dataset.a).toBe('flex-start')
+  })
+
+  it('explicit align-items: stretch shows no active dot (stretch is represented via Fill, not a matrix position)', () => {
+    const { panel } = flexSetup('align-items: stretch;')
+    const active = panel.root.querySelector('.am-dot.am-active')
+    expect(active).toBeNull()
+  })
+
   it('align matrix click drafts justify-content and align-items', () => {
     const { el, panel, drafts } = flexSetup()
     const dot = panel.root.querySelector('.am-dot') as HTMLElement
