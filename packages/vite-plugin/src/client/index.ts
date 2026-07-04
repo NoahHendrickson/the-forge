@@ -5,6 +5,7 @@ import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { buildChangeRequestWithElements, renderMarkdown } from './request'
 import { SentRegistry } from './sent'
+import { Verifier } from './verifier'
 
 declare global {
   interface Window {
@@ -23,6 +24,8 @@ export class DesignMode {
   private lastMove: MouseEvent | null = null
   private drafts: DraftStore
   private panel: Panel
+  private verifier: Verifier
+  private verifierSummary = ''
   private buttonTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>()
 
   constructor(
@@ -32,6 +35,10 @@ export class DesignMode {
   ) {
     this.drafts = drafts ?? new DraftStore()
     this.panel = panel ?? new Panel(this.drafts, () => this.remeasure())
+    this.verifier = new Verifier(this.sent, this.drafts, (summary) => {
+      this.verifierSummary = summary
+      this.refreshStatus()
+    })
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
     overlay.sendButton.addEventListener('click', () => {
       const originalLabel = 'Send to agent'
@@ -45,9 +52,11 @@ export class DesignMode {
           changes: change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
         }))
         this.sent.add(id, mapping)
+        this.verifier.start()
         this.flashButton(overlay.sendButton, 'Sent ✓', originalLabel)
         this.onSendComplete?.()
       }
+      // nesting is deliberate: the send test counts microtask ticks — re-check it before flattening to async/await
       fetch('/__the-forge/queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -78,10 +87,7 @@ export class DesignMode {
       this.panel.refresh()
       this.remeasure()
     })
-    this.drafts.onChange = () => {
-      if (!this.active) return
-      this.overlay.updateStatus(this.drafts.elementCount(), this.drafts.isComparingAll())
-    }
+    this.drafts.onChange = () => this.refreshStatus()
   }
 
   get panelRoot(): HTMLElement {
@@ -98,7 +104,8 @@ export class DesignMode {
       document.addEventListener('keydown', this.onKey, true)
       document.addEventListener('scroll', this.onReflow, { capture: true, passive: true })
       window.addEventListener('resize', this.onReflow, { passive: true })
-      this.overlay.updateStatus(this.drafts.elementCount(), this.drafts.isComparingAll())
+      if (this.sent.size() > 0) this.verifier.start()
+      this.refreshStatus()
     } else {
       document.removeEventListener('mousemove', this.onMove, true)
       document.removeEventListener('click', this.onClick, true)
@@ -113,7 +120,13 @@ export class DesignMode {
       this.selected = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
+      this.verifier.stop()
     }
+  }
+
+  private refreshStatus(): void {
+    if (!this.active) return
+    this.overlay.updateStatus(this.drafts.elementCount(), this.drafts.isComparingAll(), this.verifierSummary || undefined)
   }
 
   select(el: TaggedElement): void {

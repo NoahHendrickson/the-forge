@@ -332,3 +332,72 @@ describe('DesignMode send-to-agent (M4)', () => {
     expect(onSendComplete).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('DesignMode verifier wiring (M4 Task 4)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('starts the verifier after a successful send and reflects the summary in the status strip', async () => {
+    const fetchMock = vi.fn()
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'q1' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const sentLabel = overlay.host.shadowRoot!.getElementById('sent') as HTMLElement
+    expect(sentLabel.hidden).toBe(false)
+    expect(sentLabel.textContent).toContain('implemented')
+    expect(drafts.hasDrafts(btn)).toBe(false)
+  })
+
+  it('stops polling on deactivate and resumes on activate while entries remain', async () => {
+    const fetchMock = vi.fn()
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'q1' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(mode.sent.size()).toBe(1)
+
+    mode.setActive(false)
+    fetchMock.mockClear()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(fetchMock).not.toHaveBeenCalled() // stopped: no polling while inactive
+
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ items: [] }) })
+    mode.setActive(true) // entries remain pending -> polling resumes
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(fetchMock).toHaveBeenCalledWith('/__the-forge/status?ids=q1')
+  })
+
+  it('does not start polling on activate when there are no pending sends', () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    expect(mode.sent.size()).toBe(0)
+    return vi.advanceTimersByTimeAsync(4000).then(() => {
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
+})
