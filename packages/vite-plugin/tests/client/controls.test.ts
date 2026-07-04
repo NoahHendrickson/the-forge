@@ -6,7 +6,18 @@ beforeEach(() => {
   document.body.innerHTML = ''
 })
 
-function make(opts: Partial<{ min: number; max: number; allowAuto: boolean; onKeyword: (kw: 'auto') => void }> = {}) {
+function make(
+  opts: Partial<{
+    min: number
+    max: number
+    allowAuto: boolean
+    onKeyword: (kw: 'auto') => void
+    onRelative: (apply: (current: number) => number) => void
+    onScrubStart: () => void
+    onDetach: () => void
+    onTokenKey: () => void
+  }> = {}
+) {
   const onInput = vi.fn()
   const nf = new NumberField({ label: 'W', onInput, ...opts })
   document.body.appendChild(nf.root)
@@ -232,5 +243,244 @@ describe('NumberField v2 — Mixed and auto', () => {
     expect(onInput).not.toHaveBeenCalled()
     expect(input.value).toBe('auto')
     expect(nf.get()).toBeNull()
+  })
+})
+
+describe('NumberField v3 — destroy()', () => {
+  it('removes scrub window listeners; a mousemove/mouseup after destroy commits nothing', () => {
+    const { nf, onInput, label } = make({ min: 0 })
+    nf.set(20)
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, bubbles: true }))
+    nf.destroy()
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 150 }))
+    expect(onInput).not.toHaveBeenCalled()
+    window.dispatchEvent(new MouseEvent('mouseup', {}))
+    expect(onInput).not.toHaveBeenCalled()
+  })
+
+  it('is idempotent — calling destroy twice does not throw', () => {
+    const { nf, label } = make()
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 0, bubbles: true }))
+    expect(() => {
+      nf.destroy()
+      nf.destroy()
+    }).not.toThrow()
+  })
+})
+
+describe('NumberField v3 — Escape key', () => {
+  it('blurs the input and stops propagation so a bubble-phase parent listener never sees it', () => {
+    const { nf, input } = make()
+    nf.set(10)
+    input.focus()
+    expect(document.activeElement).toBe(input)
+    const parentHandler = vi.fn()
+    // A bubble-phase listener on an ancestor is the achievable, in-scope contract: the
+    // input's own stopPropagation() prevents the event from reaching listeners further up
+    // the bubble path. (DesignMode's real Escape handler is registered on `document` in the
+    // CAPTURE phase, which — per the DOM event model — always runs before any listener on a
+    // descendant fires, so no amount of stopPropagation() at the input can suppress it; that
+    // is a separate, pre-existing gap in index.ts's onKey, out of scope for this task.)
+    input.parentElement!.addEventListener('keydown', parentHandler)
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    input.dispatchEvent(ev)
+    expect(parentHandler).not.toHaveBeenCalled()
+    expect(document.activeElement).not.toBe(input)
+  })
+
+  it('reverts garbage text on Escape via the normal blur/change-revert path', () => {
+    const { nf, input } = make()
+    nf.set(10)
+    input.focus()
+    input.value = 'garbage'
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(input.value).toBe('10')
+  })
+})
+
+describe('NumberField v3 — onRelative', () => {
+  it('leading-operator expression calls onRelative, not onInput; closure applies math with clamp at min', () => {
+    const onRelative = vi.fn()
+    const { onInput, input } = make({ min: 0, onRelative })
+    input.value = '+8'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onInput).not.toHaveBeenCalled()
+    expect(onRelative).toHaveBeenCalledTimes(1)
+    const apply = onRelative.mock.calls[0][0] as (c: number) => number
+    expect(apply(10)).toBe(18)
+    expect(apply(-100)).toBe(0) // -100 + 8 = -92, clamped to min 0
+  })
+
+  it('plain numbers still hit onInput even when onRelative is set', () => {
+    const onRelative = vi.fn()
+    const { onInput, input } = make({ onRelative })
+    input.value = '42'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onInput).toHaveBeenCalledWith(42)
+    expect(onRelative).not.toHaveBeenCalled()
+  })
+
+  it('standalone expressions still hit onInput even when onRelative is set', () => {
+    const onRelative = vi.fn()
+    const { onInput, input } = make({ onRelative })
+    input.value = '60+12'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onInput).toHaveBeenCalledWith(72)
+    expect(onRelative).not.toHaveBeenCalled()
+  })
+
+  it('bare negative number (leading-op caveat) routes to onRelative when set', () => {
+    const onRelative = vi.fn()
+    const { onInput, input } = make({ onRelative })
+    input.value = '-8'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onInput).not.toHaveBeenCalled()
+    expect(onRelative).toHaveBeenCalledTimes(1)
+    const apply = onRelative.mock.calls[0][0] as (c: number) => number
+    expect(apply(10)).toBe(2)
+  })
+})
+
+describe('NumberField v3 — relative scrub', () => {
+  it('onScrubStart fires on label mousedown before any move', () => {
+    const onScrubStart = vi.fn()
+    const { label } = make({ onScrubStart })
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, bubbles: true }))
+    expect(onScrubStart).toHaveBeenCalledTimes(1)
+    window.dispatchEvent(new MouseEvent('mouseup', {}))
+  })
+
+  it('when onRelative is set, mousemove calls onRelative with a baseline-based closure instead of committing directly', () => {
+    const onRelative = vi.fn()
+    const { onInput, label } = make({ onRelative })
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 115 }))
+    expect(onInput).not.toHaveBeenCalled()
+    expect(onRelative).toHaveBeenCalledTimes(1)
+    const apply = onRelative.mock.calls[0][0] as (baseline: number) => number
+    expect(apply(50)).toBe(65) // baseline + delta(15)
+    window.dispatchEvent(new MouseEvent('mouseup', {}))
+  })
+
+  it('each move replaces the previous closure effect against the caller baseline (idempotent per-move)', () => {
+    const onRelative = vi.fn()
+    const { label } = make({ onRelative })
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 110 }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 130 }))
+    const lastApply = onRelative.mock.calls[onRelative.mock.calls.length - 1][0] as (b: number) => number
+    expect(lastApply(50)).toBe(80) // baseline + total delta (30), not cumulative from prior move
+    window.dispatchEvent(new MouseEvent('mouseup', {}))
+  })
+
+  it('non-relative scrub (no onRelative) behaves exactly as before', () => {
+    const { nf, onInput, label } = make({ min: 0 })
+    nf.set(20)
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 115 }))
+    expect(onInput).toHaveBeenLastCalledWith(35)
+    window.dispatchEvent(new MouseEvent('mouseup', {}))
+  })
+})
+
+describe('NumberField v3 — pill API', () => {
+  it('bindToken() makes the input readOnly, sets its value to the label, and adds the nf-pill class', () => {
+    const { nf, input } = make()
+    nf.set(10)
+    nf.bindToken('$spacing-lg')
+    expect(input.readOnly).toBe(true)
+    expect(input.value).toBe('$spacing-lg')
+    expect(nf.root.classList.contains('nf-pill')).toBe(true)
+    expect(nf.get()).toBe(10) // lastValid untouched
+  })
+
+  it('detach() removes readOnly + class and re-renders lastValid', () => {
+    const { nf, input } = make()
+    nf.set(10)
+    nf.bindToken('$spacing-lg')
+    nf.detach()
+    expect(input.readOnly).toBe(false)
+    expect(nf.root.classList.contains('nf-pill')).toBe(false)
+    expect(input.value).toBe('10')
+  })
+
+  it('Backspace while pill-bound calls onDetach then detaches', () => {
+    const onDetach = vi.fn()
+    const { nf, input } = make({ onDetach })
+    nf.set(10)
+    nf.bindToken('$spacing-lg')
+    const ev = new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true })
+    input.dispatchEvent(ev)
+    expect(ev.defaultPrevented).toBe(true)
+    expect(onDetach).toHaveBeenCalledTimes(1)
+    expect(input.readOnly).toBe(false)
+    expect(nf.root.classList.contains('nf-pill')).toBe(false)
+  })
+
+  it('Delete while pill-bound calls onDetach then detaches', () => {
+    const onDetach = vi.fn()
+    const { nf, input } = make({ onDetach })
+    nf.set(10)
+    nf.bindToken('$spacing-lg')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }))
+    expect(onDetach).toHaveBeenCalledTimes(1)
+    expect(nf.root.classList.contains('nf-pill')).toBe(false)
+  })
+
+  it('set() while pill-bound clears the pill', () => {
+    const { nf, input } = make()
+    nf.set(10)
+    nf.bindToken('$spacing-lg')
+    nf.set(42)
+    expect(input.readOnly).toBe(false)
+    expect(nf.root.classList.contains('nf-pill')).toBe(false)
+    expect(input.value).toBe('42')
+  })
+
+  it('setMixed() while pill-bound clears the pill', () => {
+    const { nf, input } = make()
+    nf.bindToken('$spacing-lg')
+    nf.setMixed()
+    expect(input.readOnly).toBe(false)
+    expect(nf.root.classList.contains('nf-pill')).toBe(false)
+    expect(input.value).toBe('Mixed')
+  })
+
+  it('setAuto() while pill-bound clears the pill', () => {
+    const { nf, input } = make({ allowAuto: true })
+    nf.bindToken('$spacing-lg')
+    nf.setAuto()
+    expect(input.readOnly).toBe(false)
+    expect(nf.root.classList.contains('nf-pill')).toBe(false)
+    expect(input.value).toBe('auto')
+  })
+})
+
+describe('NumberField — onTokenKey (`=` opens token picker)', () => {
+  it('`=` keydown fires onTokenKey and prevents default when not pill-bound', () => {
+    const onTokenKey = vi.fn()
+    const { input } = make({ onTokenKey })
+    const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
+    input.dispatchEvent(ev)
+    expect(onTokenKey).toHaveBeenCalledTimes(1)
+    expect(ev.defaultPrevented).toBe(true)
+  })
+
+  it('`=` keydown while pill-bound does nothing (no onTokenKey call)', () => {
+    const onTokenKey = vi.fn()
+    const { nf, input } = make({ onTokenKey })
+    nf.set(10)
+    nf.bindToken('p-4')
+    const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
+    input.dispatchEvent(ev)
+    expect(onTokenKey).not.toHaveBeenCalled()
+    expect(ev.defaultPrevented).toBe(false)
+  })
+
+  it('`=` keydown without onTokenKey wired is a harmless no-op', () => {
+    const { input } = make()
+    const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
+    expect(() => input.dispatchEvent(ev)).not.toThrow()
   })
 })

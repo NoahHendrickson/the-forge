@@ -43,6 +43,15 @@ describe('Overlay CSS (Track A visibility correctness)', () => {
     // .layout-side, governs the field's HEIGHT — this override pins it back to content size.
     expect(CSS).toMatch(/\.layout-side\s+\.nf\s*{\s*flex:\s*0\s+0\s+auto;?\s*}/)
   })
+
+  it('[data-text-align] gets the same stacked (label-above-full-width-track) treatment as [data-align-self], fixing "Center" clipping at 280px (final review fix #7)', () => {
+    // The Typography Align row shares its .type-row with the LS number field, leaving too
+    // little width for the 3-option segment track — "Center" clips. [data-align-self]
+    // already solves this identical problem (5 options, even tighter) by stacking the
+    // label above a full-width track; [data-text-align] must get the same rule.
+    expect(CSS).toMatch(/\[data-text-align\]\s*{\s*flex-direction:\s*column;\s*align-items:\s*stretch;\s*gap:\s*3px;?\s*}/)
+    expect(CSS).toContain('[data-text-align] .seg-field-label { width: auto; }')
+  })
 })
 
 describe('Overlay (M2 additions)', () => {
@@ -141,6 +150,75 @@ describe('Overlay (M4 additions)', () => {
     expect(overlay.resetAllButton.hidden).toBe(true)
     overlay.updateStatus(0, false, '')
     expect(status.hidden).toBe(true)
+  })
+})
+
+describe('Overlay.showSelectOutlines (B6 multi-select)', () => {
+  function multiOutlines(overlay: Overlay): HTMLElement[] {
+    return [...overlay.host.shadowRoot!.querySelectorAll('.select-outline-multi')] as HTMLElement[]
+  }
+
+  it('draws one pooled outline per rect, class select-outline-multi', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showSelectOutlines([new DOMRect(0, 0, 10, 10), new DOMRect(20, 20, 5, 5)])
+    expect(multiOutlines(overlay)).toHaveLength(2)
+  })
+
+  it('reuses the pool on a second call rather than growing indefinitely', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showSelectOutlines([new DOMRect(0, 0, 10, 10)])
+    overlay.showSelectOutlines([new DOMRect(0, 0, 10, 10), new DOMRect(1, 1, 2, 2)])
+    expect(multiOutlines(overlay)).toHaveLength(2)
+  })
+
+  it('a shrinking selection hides the now-unused pool slots instead of removing them', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showSelectOutlines([new DOMRect(0, 0, 10, 10), new DOMRect(1, 1, 2, 2), new DOMRect(2, 2, 3, 3)])
+    overlay.showSelectOutlines([new DOMRect(0, 0, 10, 10)])
+    const all = multiOutlines(overlay)
+    expect(all).toHaveLength(3) // pool retained
+    expect(all[0].hidden).toBe(false)
+    expect(all[1].hidden).toBe(true)
+    expect(all[2].hidden).toBe(true)
+  })
+
+  it('hideSelectOutlines hides every pooled div', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showSelectOutlines([new DOMRect(0, 0, 10, 10), new DOMRect(1, 1, 2, 2)])
+    overlay.hideSelectOutlines()
+    expect(multiOutlines(overlay).every((d) => d.hidden)).toBe(true)
+  })
+
+  it('setActive(false) hides the multi-outline pool too', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showSelectOutlines([new DOMRect(0, 0, 10, 10)])
+    overlay.setActive(false)
+    expect(multiOutlines(overlay).every((d) => d.hidden)).toBe(true)
+  })
+
+  it('positions each outline via the same place() convention (2px outset)', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showSelectOutlines([new DOMRect(10, 20, 100, 50)])
+    const [el] = multiOutlines(overlay)
+    expect(el.style.left).toBe('8px')
+    expect(el.style.top).toBe('18px')
+    expect(el.style.width).toBe('104px')
+    expect(el.style.height).toBe('54px')
+  })
+
+  it('single-selection outline (#select-outline) is unaffected — no visual change for single-select', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showSelectOutline(new DOMRect(0, 0, 5, 5))
+    const sel = overlay.host.shadowRoot!.getElementById('select-outline') as HTMLElement
+    expect(sel.hidden).toBe(false)
+    expect(multiOutlines(overlay)).toHaveLength(0)
   })
 })
 

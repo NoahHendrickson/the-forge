@@ -1,6 +1,6 @@
 import { DraftStore } from './drafts'
 import { parseSourceAttr, type SourceLocation, type TaggedElement } from './source'
-import { readTheme, suggestUtility, findExistingUtility, type Theme } from './tokens'
+import { readTheme, readTokens, suggestUtility, findExistingUtility, type Theme } from './tokens'
 
 export interface ChangeItem {
   property: string
@@ -28,6 +28,41 @@ export interface ChangeRequest {
   elements: ElementChange[]
 }
 
+// Keywords that are safe to pass through verbatim as an "after" value instead of the
+// getComputedStyle-measured px/rgb/etc equivalent. Restricted to layout/box-model keywords
+// (sizing, flex, alignment, border-style) where the computed value would silently invert the
+// user's intent (e.g. Hug width 'auto' -> a hardcoded px). Deliberately excludes color keywords
+// like 'red' — those DO round-trip meaningfully through getComputedStyle (-> 'rgb(255, 0, 0)')
+// and must be measured, not passed through, once COLOR drafts exist (M2b-2).
+export const KEYWORD_PASSTHROUGH = new Set([
+  'auto',
+  'fit-content',
+  'min-content',
+  'max-content',
+  'flex',
+  'inline-flex',
+  'row',
+  'column',
+  'row-reverse',
+  'column-reverse',
+  'wrap',
+  'nowrap',
+  'wrap-reverse',
+  'flex-start',
+  'flex-end',
+  'center',
+  'space-between',
+  'space-around',
+  'space-evenly',
+  'stretch',
+  'baseline',
+  'normal',
+  'none',
+  'solid',
+  'dashed',
+  'dotted',
+])
+
 const COLLAPSE: Array<{ into: string; parts: string[] }> = [
   {
     into: 'border-radius',
@@ -37,6 +72,18 @@ const COLLAPSE: Array<{ into: string; parts: string[] }> = [
   { into: 'padding-inline', parts: ['padding-left', 'padding-right'] },
   { into: 'margin-block', parts: ['margin-top', 'margin-bottom'] },
   { into: 'margin-inline', parts: ['margin-left', 'margin-right'] },
+  {
+    into: 'border-width',
+    parts: ['border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width'],
+  },
+  {
+    into: 'border-style',
+    parts: ['border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style'],
+  },
+  {
+    into: 'border-color',
+    parts: ['border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color'],
+  },
 ]
 
 function collapse(items: Map<string, { beforeCss: string; afterCss: string }>): Map<string, { beforeCss: string; afterCss: string }> {
@@ -90,6 +137,7 @@ export function buildChangeRequestWithElements(
 ): { request: ChangeRequest; elements: Map<TaggedElement, ElementChange> } {
   const elementList: ElementChange[] = []
   const elements = new Map<TaggedElement, ElementChange>()
+  const tokens = readTokens()
 
   for (const [el, props] of drafts.entries()) {
     if (!el.isConnected) continue
@@ -110,11 +158,14 @@ export function buildChangeRequestWithElements(
 
       raw = new Map<string, { beforeCss: string; afterCss: string }>()
       for (const [prop, draft] of props) {
-        // A drafted keyword (currently just 'auto', e.g. Hug width/height) never round-trips
-        // through the computed style — getComputedStyle resolves it to a px measurement, which
-        // would silently invert the user's intent (Hug -> a hardcoded px). Pass such keywords
-        // through verbatim as the "after" value; "before" stays a real measurement.
-        const isKeyword = /^[a-z-]+$/i.test(draft.value)
+        // A drafted layout keyword (e.g. 'auto' for Hug width/height) never round-trips through
+        // the computed style — getComputedStyle resolves it to a px measurement, which would
+        // silently invert the user's intent (Hug -> a hardcoded px). Pass such keywords through
+        // verbatim as the "after" value; "before" stays a real measurement. Restricted to an
+        // explicit allowlist (KEYWORD_PASSTHROUGH) rather than a keyword-shape regex, so that
+        // color keywords like 'red' are NOT passed through — those must be measured, since
+        // getComputedStyle legitimately resolves them to 'rgb(...)'.
+        const isKeyword = KEYWORD_PASSTHROUGH.has(draft.value.toLowerCase())
         raw.set(prop, {
           beforeCss: beforeCss.get(prop)!,
           afterCss: isKeyword ? draft.value : afterCss.get(prop)!,
@@ -129,7 +180,7 @@ export function buildChangeRequestWithElements(
     const className = typeof el.className === 'string' ? el.className : [...el.classList].join(' ')
     const changes: ChangeItem[] = []
     for (const [property, v] of collapse(raw)) {
-      const suggestion = suggestUtility(property, v.afterCss, theme)
+      const suggestion = suggestUtility(property, v.afterCss, theme, tokens)
       changes.push({
         property,
         beforeCss: v.beforeCss,

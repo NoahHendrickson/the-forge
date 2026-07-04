@@ -7,6 +7,7 @@ import { buildChangeRequestWithElements, renderMarkdown } from './request'
 import { SentRegistry } from './sent'
 import { Verifier } from './verifier'
 import { snapshotRects, diffRects } from './ripple'
+import { resetTokensCache } from './tokens'
 
 /** Rapid edits (e.g. dragging a number field) within this window reuse the first snapshot. */
 const RIPPLE_DEBOUNCE_MS = 300
@@ -19,7 +20,8 @@ declare global {
 
 export class DesignMode {
   active = false
-  selected: TaggedElement | null = null
+  /** Ordered set of currently selected elements — VisBug-style multi-select (B6). */
+  selection: TaggedElement[] = []
   sent = new SentRegistry()
   onSendComplete?: () => void
 
@@ -128,11 +130,22 @@ export class DesignMode {
     return this.panel.root
   }
 
+  /** First selection member (or null) — kept for single-selection call sites/tests. */
+  get selected(): TaggedElement | null {
+    return this.selection[0] ?? null
+  }
+
   setActive(on: boolean): void {
     if (on === this.active) return
     this.active = on
     this.overlay.setActive(on)
     if (on) {
+      // Tokens (colors, text scale) are memoized module-globally (readTokens) for cheap
+      // repeat access during a session — but that means a theme edit made while design
+      // mode was INACTIVE (author tweaks CSS, HMR reloads styles) would otherwise be
+      // invisible until a full page reload. Reset on every activation so a fresh session
+      // always re-reads the live stylesheet.
+      resetTokensCache()
       document.addEventListener('mousemove', this.onMove, true)
       document.addEventListener('click', this.onClick, true)
       document.addEventListener('keydown', this.onKey, true)
@@ -154,7 +167,7 @@ export class DesignMode {
       this.rippleRaf = 0
       this.clearRippleState()
       this.lastMove = null
-      this.selected = null
+      this.selection = []
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
       this.verifier.stop()
@@ -166,18 +179,38 @@ export class DesignMode {
     this.overlay.updateStatus(this.drafts.elementCount(), this.drafts.isComparingAll(), this.verifierSummary || undefined)
   }
 
+  /** Replaces the selection with just `el` (plain click / programmatic single-select). */
   select(el: TaggedElement): void {
-    this.selected = el
-    this.clearRippleState()
-    this.overlay.showSelectOutline(el.getBoundingClientRect())
-    this.panel.show(el, buildInspectorData(el))
+    this.setSelection([el])
   }
 
   deselect(): void {
-    this.selected = null
+    this.setSelection([])
+  }
+
+  /** Shift+click: toggles `el`'s membership in the selection (add if absent, remove if present). */
+  private toggleSelection(el: TaggedElement): void {
+    const idx = this.selection.indexOf(el)
+    const next = idx === -1 ? [...this.selection, el] : this.selection.filter((s) => s !== el)
+    this.setSelection(next)
+  }
+
+  private setSelection(next: TaggedElement[]): void {
+    this.selection = next
     this.clearRippleState()
-    this.overlay.hideSelectOutline()
-    this.panel.hide()
+    if (next.length === 0) {
+      this.overlay.hideSelectOutline()
+      this.overlay.hideSelectOutlines()
+      this.panel.hide()
+    } else if (next.length === 1) {
+      this.overlay.hideSelectOutlines()
+      this.overlay.showSelectOutline(next[0].getBoundingClientRect())
+      this.panel.show(next[0], buildInspectorData(next[0]))
+    } else {
+      this.overlay.hideSelectOutline()
+      this.overlay.showSelectOutlines(next.map((el) => el.getBoundingClientRect()))
+      this.panel.show(next, buildInspectorData(next[0]))
+    }
   }
 
   /** Clears all layout-ripple debounce state, including the pending quiet-window timer. */
@@ -190,7 +223,11 @@ export class DesignMode {
   }
 
   private remeasure(): void {
-    if (this.selected) this.overlay.showSelectOutline(this.selected.getBoundingClientRect())
+    if (this.selection.length === 1) {
+      this.overlay.showSelectOutline(this.selection[0].getBoundingClientRect())
+    } else if (this.selection.length > 1) {
+      this.overlay.showSelectOutlines(this.selection.map((el) => el.getBoundingClientRect()))
+    }
   }
 
   /** Panel's pre-hook, called immediately before drafts.apply() for every control edit. */
@@ -251,7 +288,7 @@ export class DesignMode {
       const ev = this.lastMove
       if (!this.active || !ev || this.overlay.contains(ev.target)) return
       const el = findTaggedElement(ev.target as Element)
-      if (el && el !== this.selected) this.overlay.showOutline(el.getBoundingClientRect())
+      if (el && !this.selection.includes(el)) this.overlay.showOutline(el.getBoundingClientRect())
       else this.overlay.hideOutline()
     })
   }
@@ -261,14 +298,16 @@ export class DesignMode {
     e.preventDefault()
     e.stopPropagation()
     const el = findTaggedElement(e.target as Element)
-    if (el) this.select(el)
+    if (el && e.shiftKey) this.toggleSelection(el)
+    else if (el) this.select(el)
     else this.deselect()
   }
 
   private onKey = (e: KeyboardEvent): void => {
     if (e.key !== 'Escape') return
+    if (this.overlay.contains(e.target)) return
     e.stopPropagation()
-    if (this.selected) this.deselect()
+    if (this.selection.length > 0) this.deselect()
     else this.setActive(false)
   }
 

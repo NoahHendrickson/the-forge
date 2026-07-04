@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { DraftStore } from '../../src/client/drafts'
 import { buildChangeRequest, buildChangeRequestWithElements, cssPath, renderMarkdown } from '../../src/client/request'
-import type { Theme } from '../../src/client/tokens'
+import { resetTokensCache, type Theme } from '../../src/client/tokens'
 
 const TW: Theme = { rootFontPx: 16, spacingBasePx: 4, radiusScale: { lg: 8, xl: 12 } }
 const PLAIN: Theme = { rootFontPx: 16, spacingBasePx: null, radiusScale: {} }
@@ -48,6 +48,52 @@ describe('buildChangeRequest', () => {
     expect(req.elements[0].changes).toEqual([
       expect.objectContaining({ property: 'border-radius', afterCss: '12px', afterUtility: 'rounded-xl' }),
     ])
+  })
+
+  it('collapses four equal border widths into a single border-width line', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      store.apply(el, `border-${side}-width`, '2px')
+    }
+    const req = buildChangeRequest(store, TW)
+    expect(req.elements[0].changes).toEqual([
+      expect.objectContaining({ property: 'border-width', afterCss: '2px', afterUtility: 'border-2' }),
+    ])
+  })
+
+  it('collapses four equal border styles into a single border-style line', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      store.apply(el, `border-${side}-style`, 'dashed')
+    }
+    const req = buildChangeRequest(store, TW)
+    expect(req.elements[0].changes).toEqual([
+      expect.objectContaining({ property: 'border-style', afterCss: 'dashed', afterUtility: null }),
+    ])
+  })
+
+  it('collapses four equal border colors into a single border-color line', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      store.apply(el, `border-${side}-color`, 'rgb(255, 0, 0)')
+    }
+    const req = buildChangeRequest(store, TW)
+    expect(req.elements[0].changes).toEqual([
+      expect.objectContaining({ property: 'border-color', afterCss: 'rgb(255, 0, 0)' }),
+    ])
+  })
+
+  it('keeps unequal border-width longhands separate', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    store.apply(el, 'border-top-width', '2px')
+    store.apply(el, 'border-bottom-width', '4px')
+    const req = buildChangeRequest(store, TW)
+    const props = req.elements[0].changes.map((c) => c.property).sort()
+    expect(props).toEqual(['border-bottom-width', 'border-top-width'])
   })
 
   it('keeps unequal longhands separate', () => {
@@ -178,6 +224,56 @@ describe('buildChangeRequest — keyword drafts (M2b-1 Fix 1)', () => {
   })
 })
 
+describe('buildChangeRequest — keyword allowlist (B0)', () => {
+  it('a color draft ("red") is NOT passed through verbatim — it is measured via computed style', () => {
+    document.body.innerHTML = `<div data-dc-source="src/Box.tsx:1:1" id="box" style="color: rgb(0, 0, 0);">hi</div>`
+    const el = document.getElementById('box')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(el, 'color', 'red')
+    const req = buildChangeRequest(store, TW)
+    const c = req.elements[0].changes.find((x) => x.property === 'color')!
+    expect(c.afterCss).not.toBe('red')
+    expect(c.afterCss).toBe('rgb(255, 0, 0)')
+  })
+
+  it('"blue" (another color keyword) is also measured, not passed through', () => {
+    document.body.innerHTML = `<div data-dc-source="src/Box.tsx:1:1" id="box" style="color: rgb(0, 0, 0);">hi</div>`
+    const el = document.getElementById('box')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(el, 'color', 'blue')
+    const req = buildChangeRequest(store, TW)
+    const c = req.elements[0].changes.find((x) => x.property === 'color')!
+    expect(c.afterCss).not.toBe('blue')
+    expect(c.afterCss).toBe('rgb(0, 0, 255)')
+  })
+
+  it('"auto" (an allowlisted layout keyword) still passes through verbatim', () => {
+    document.body.innerHTML = `
+      <div data-dc-source="src/Parent.tsx:1:1" id="parent" style="display: flex; width: 400px;">
+        <div data-dc-source="src/Child.tsx:2:2" id="child" style="width: 240px;"></div>
+      </div>`
+    const child = document.getElementById('child')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(child, 'width', 'auto')
+    const req = buildChangeRequest(store, TW)
+    const c = req.elements[0].changes.find((x) => x.property === 'width')!
+    expect(c.afterCss).toBe('auto')
+  })
+
+  it('is case-insensitive: "AUTO" still passes through verbatim', () => {
+    document.body.innerHTML = `
+      <div data-dc-source="src/Parent.tsx:1:1" id="parent" style="display: flex; width: 400px;">
+        <div data-dc-source="src/Child.tsx:2:2" id="child" style="width: 240px;"></div>
+      </div>`
+    const child = document.getElementById('child')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(child, 'width', 'AUTO')
+    const req = buildChangeRequest(store, TW)
+    const c = req.elements[0].changes.find((x) => x.property === 'width')!
+    expect(c.afterCss).toBe('AUTO')
+  })
+})
+
 describe('cssPath', () => {
   it('uses the id when present', () => {
     document.body.innerHTML = `<div><button id="save-btn">Save</button></div>`
@@ -212,6 +308,63 @@ describe('buildChangeRequestWithElements', () => {
     expect(request.elements).toHaveLength(1)
     expect(elements.size).toBe(1)
     expect(elements.get(el)).toBe(request.elements[0])
+  })
+
+  it('resolves background-color drafts against the live token vocabulary (readTokens called once per build)', () => {
+    resetTokensCache()
+    document.head.insertAdjacentHTML('beforeend', '<style data-test-req-tokens>:root { --color-red-500: #fb2c36; }</style>')
+    document.documentElement.style.setProperty('--color-red-500', '#fb2c36')
+    try {
+      document.body.innerHTML = `<button data-dc-source="src/App.tsx:7:9" style="background-color: rgb(0, 0, 0);">Add mod</button>`
+      const el = document.querySelector('button')!
+      const store = new DraftStore()
+      store.apply(el, 'background-color', 'rgb(251, 44, 54)')
+      const req = buildChangeRequest(store, TW)
+      const c = req.elements[0].changes.find((x) => x.property === 'background-color')!
+      expect(c.afterUtility).toBe('bg-red-500')
+      expect(c.tokenExact).toBe(true)
+    } finally {
+      document.querySelectorAll('style[data-test-req-tokens]').forEach((s) => s.remove())
+      document.documentElement.removeAttribute('style')
+      resetTokensCache()
+    }
+  })
+
+  it('resolves font-size before/after utilities against the live text scale (className has text-lg, drafts to text-xl)', () => {
+    resetTokensCache()
+    document.head.insertAdjacentHTML(
+      'beforeend',
+      '<style data-test-req-tokens>:root { --text-lg: 18px; --text-xl: 20px; }</style>'
+    )
+    document.documentElement.style.setProperty('--text-lg', '18px')
+    document.documentElement.style.setProperty('--text-xl', '20px')
+    try {
+      document.body.innerHTML = `<button data-dc-source="src/App.tsx:7:9" class="text-lg font-medium text-neutral-900" style="font-size: 18px;">Add mod</button>`
+      const el = document.querySelector('button')!
+      const store = new DraftStore()
+      store.apply(el, 'font-size', '20px')
+      const req = buildChangeRequest(store, TW)
+      const c = req.elements[0].changes.find((x) => x.property === 'font-size')!
+      expect(c.beforeUtility).toBe('text-lg')
+      expect(c.afterUtility).toBe('text-xl')
+      expect(c.tokenExact).toBe(true)
+    } finally {
+      document.querySelectorAll('style[data-test-req-tokens]').forEach((s) => s.remove())
+      document.documentElement.removeAttribute('style')
+      resetTokensCache()
+    }
+  })
+
+  it('resolves font-weight before/after utilities (600 -> font-semibold)', () => {
+    document.body.innerHTML = `<button data-dc-source="src/App.tsx:7:9" class="text-lg font-medium text-neutral-900" style="font-weight: 500;">Add mod</button>`
+    const el = document.querySelector('button')!
+    const store = new DraftStore()
+    store.apply(el, 'font-weight', '600')
+    const req = buildChangeRequest(store, TW)
+    const c = req.elements[0].changes.find((x) => x.property === 'font-weight')!
+    expect(c.beforeUtility).toBe('font-medium')
+    expect(c.afterUtility).toBe('font-semibold')
+    expect(c.tokenExact).toBe(true)
   })
 })
 

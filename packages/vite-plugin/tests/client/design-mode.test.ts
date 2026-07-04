@@ -4,6 +4,8 @@ import { Overlay } from '../../src/client/overlay'
 import { DesignMode } from '../../src/client/index'
 import { DraftStore } from '../../src/client/drafts'
 import { Panel } from '../../src/client/panel'
+import { readTokens, resetTokensCache } from '../../src/client/tokens'
+import * as tokensModule from '../../src/client/tokens'
 
 // DesignMode registers capture-phase listeners on `document`/`window`, which
 // persist across tests within this file (jsdom's `document` is shared per
@@ -119,6 +121,49 @@ describe('DesignMode listener lifecycle (spec §10: zero idle listeners)', () =>
   })
 })
 
+describe('DesignMode tokens cache invalidation (final review fix #5)', () => {
+  afterEach(() => {
+    resetTokensCache()
+    document.querySelectorAll('style[data-test-dm-tokens]').forEach((el) => el.remove())
+    document.documentElement.removeAttribute('style')
+  })
+
+  it('activating resets the tokens cache so a theme change since the last activation is picked up', () => {
+    document.head.insertAdjacentHTML('beforeend', '<style data-test-dm-tokens>:root { --color-red-500: #fb2c36; }</style>')
+    document.documentElement.style.setProperty('--color-red-500', '#fb2c36')
+
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+
+    mode.setActive(true)
+    expect(readTokens().colors.some((c) => c.name === 'red-500')).toBe(true)
+    mode.setActive(false)
+
+    // Theme changes while inactive (e.g. author edits CSS, HMR reloads styles) — without
+    // invalidation, the stale memoized Tokens would still be returned.
+    document.documentElement.style.setProperty('--color-blue-500', '#2b7fff')
+    document.head.insertAdjacentHTML(
+      'beforeend',
+      '<style data-test-dm-tokens>:root { --color-blue-500: #2b7fff; }</style>'
+    )
+
+    mode.setActive(true)
+    expect(readTokens().colors.some((c) => c.name === 'blue-500')).toBe(true)
+  })
+
+  it('calls resetTokensCache on activation (spy-verified)', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    const spy = vi.spyOn(tokensModule, 'resetTokensCache')
+    mode.setActive(true)
+    expect(spy).toHaveBeenCalled()
+  })
+})
+
 describe('DesignMode selection (M2)', () => {
   it('click selects: retained element, persistent outline, editable panel', () => {
     const { overlay, mode } = fullSetup()
@@ -162,6 +207,24 @@ describe('DesignMode selection (M2)', () => {
     document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     expect(mode.active).toBe(false)
     expect(appEsc).not.toHaveBeenCalled()
+  })
+
+  it('Escape from inside the overlay host does NOT deselect', () => {
+    const { overlay, mode } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')!
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(mode.selected).toBe(btn)
+    // Dispatch Escape with the overlay host as the target (shadow retargeting)
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+    Object.defineProperty(ev, 'target', { value: overlay.host, configurable: true })
+    document.dispatchEvent(ev)
+    // Selection should remain
+    expect(mode.selected).toBe(btn)
+    expect(mode.active).toBe(true)
+    // But Escape from document should still deselect
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(mode.selected).toBeNull()
   })
 
   it('drafts survive deactivation but chrome hides', () => {
@@ -250,6 +313,158 @@ describe('DesignMode selection (M2)', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(overlay.copyButton.textContent).toBe('Copy failed')
+  })
+})
+
+describe('DesignMode multi-select (B6)', () => {
+  function multiSetup() {
+    document.body.innerHTML = `
+      <button data-dc-source="src/Button.tsx:42:8" class="btn" id="a">a</button>
+      <button data-dc-source="src/Button2.tsx:1:1" class="btn" id="b">b</button>
+      <button data-dc-source="src/Button3.tsx:2:2" class="btn" id="c">c</button>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, () => {})
+    overlay.attachPanel(panel.root)
+    const mode = new DesignMode(overlay, panel, drafts)
+    liveModes.push(mode)
+    return { overlay, drafts, panel, mode }
+  }
+
+  function click(el: Element, opts: MouseEventInit = {}): void {
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...opts }))
+  }
+
+  it('plain click replaces the selection with just that element', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    expect(mode.selection).toEqual([a])
+    click(b)
+    expect(mode.selection).toEqual([b])
+  })
+
+  it('shift+click on an unselected element adds it to the selection', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    click(b, { shiftKey: true })
+    expect(mode.selection).toEqual([a, b])
+  })
+
+  it('shift+click on an already-selected element removes it', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    click(b, { shiftKey: true })
+    click(a, { shiftKey: true })
+    expect(mode.selection).toEqual([b])
+  })
+
+  it('shift+click removing the last remaining element deselects entirely', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    click(a)
+    click(a, { shiftKey: true })
+    expect(mode.selection).toEqual([])
+  })
+
+  it('get selected() returns the first selection member (or null) for single-semantics call sites', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    expect(mode.selected).toBeNull()
+    click(a)
+    expect(mode.selected).toBe(a)
+    click(b, { shiftKey: true })
+    expect(mode.selected).toBe(a) // first member, unchanged by appending b
+  })
+
+  it('Escape clears the entire multi-selection', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    click(b, { shiftKey: true })
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(mode.selection).toEqual([])
+    expect(mode.active).toBe(true) // first Escape only deselects
+  })
+
+  it('clicking untagged area deselects the whole multi-selection', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    click(b, { shiftKey: true })
+    click(document.body)
+    expect(mode.selection).toEqual([])
+  })
+
+  it('overlay shows a pooled multi-outline per selected element (single selection keeps using #select-outline)', () => {
+    const { overlay, mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    const c = document.getElementById('c')!
+    click(a)
+    const root = overlay.host.shadowRoot!
+    expect((root.getElementById('select-outline') as HTMLElement).hidden).toBe(false)
+    expect(root.querySelectorAll('.select-outline-multi').length).toBe(0)
+
+    click(b, { shiftKey: true })
+    click(c, { shiftKey: true })
+    expect((root.getElementById('select-outline') as HTMLElement).hidden).toBe(true)
+    const multi = [...root.querySelectorAll('.select-outline-multi')] as HTMLElement[]
+    expect(multi.filter((d) => !d.hidden)).toHaveLength(3)
+  })
+
+  it('shrinking back to a single element switches back to #select-outline and hides the multi pool', () => {
+    const { overlay, mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    click(b, { shiftKey: true })
+    click(b, { shiftKey: true }) // remove b -> back to [a]
+    const root = overlay.host.shadowRoot!
+    expect((root.getElementById('select-outline') as HTMLElement).hidden).toBe(false)
+    expect([...root.querySelectorAll('.select-outline-multi')].every((d: Element) => (d as HTMLElement).hidden)).toBe(
+      true
+    )
+  })
+
+  it('panel.show is called with the full selection array and the first element data in multi-select', () => {
+    const { panel, mode } = multiSetup()
+    mode.setActive(true)
+    const showSpy = vi.spyOn(panel, 'show')
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    click(b, { shiftKey: true })
+    expect(showSpy).toHaveBeenLastCalledWith([a, b], expect.objectContaining({ tag: 'button' }))
+  })
+
+  it('deselecting hides the panel', () => {
+    const { overlay, mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    click(a)
+    click(document.body)
+    const root = overlay.host.shadowRoot!
+    expect((root.getElementById('panel') as HTMLElement).hidden).toBe(true)
   })
 })
 

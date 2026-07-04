@@ -7,6 +7,20 @@ export interface NumberFieldOpts {
   onInput: (value: number) => void
   /** Fired when the user types a recognized keyword (currently only 'auto') into an allowAuto field. */
   onKeyword?: (kw: 'auto') => void
+  /**
+   * When set, a leading-operator entry (typed `+8`, scrub-dragged, etc.) is treated as a
+   * RELATIVE delta rather than an absolute commit: instead of calling onInput, the field
+   * calls `onRelative(apply)` with a closure the caller applies against ITS OWN baseline(s)
+   * (e.g. a multi-select snapshot taken at scrub start) — see NumberField class docs for the
+   * full contract.
+   */
+  onRelative?: (apply: (current: number) => number) => void
+  /** Fires on label mousedown, before any scrub move — callers snapshot per-element baselines here. */
+  onScrubStart?: () => void
+  /** Fires when Backspace/Delete is pressed while the field is pill-bound (see bindToken()). */
+  onDetach?: () => void
+  /** Fires on `=` keydown when the field is NOT pill-bound (preventDefault'd) — opens the token picker. */
+  onTokenKey?: () => void
 }
 
 /**
@@ -156,6 +170,8 @@ export class NumberField {
   private scrubStartValue = 0
   private scrubbing = false
   private displayState: 'number' | 'mixed' | 'auto' = 'number'
+  private pillBound = false
+  private scrubListenersAttached = false
 
   constructor(private opts: NumberFieldOpts) {
     this.root.className = 'nf'
@@ -170,6 +186,23 @@ export class NumberField {
     })
 
     this.input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        e.preventDefault()
+        this.input.blur()
+        return
+      }
+      if (this.pillBound && (e.key === 'Backspace' || e.key === 'Delete')) {
+        e.preventDefault()
+        this.opts.onDetach?.()
+        this.detach()
+        return
+      }
+      if (e.key === '=' && !this.pillBound) {
+        e.preventDefault()
+        this.opts.onTokenKey?.()
+        return
+      }
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
       e.preventDefault()
       const step = (e.shiftKey ? 10 : 1) * (e.key === 'ArrowUp' ? 1 : -1)
@@ -179,12 +212,23 @@ export class NumberField {
 
     this.labelEl.addEventListener('mousedown', (e) => {
       e.preventDefault()
+      this.opts.onScrubStart?.()
       this.scrubbing = true
       this.scrubStartX = e.clientX
       this.scrubStartValue = this.lastValid ?? 0
       window.addEventListener('mousemove', this.onScrub)
       window.addEventListener('mouseup', this.endScrub)
+      this.scrubListenersAttached = true
     })
+  }
+
+  /** Removes the window scrub listeners if attached. Idempotent. */
+  destroy(): void {
+    if (!this.scrubListenersAttached) return
+    this.scrubbing = false
+    window.removeEventListener('mousemove', this.onScrub)
+    window.removeEventListener('mouseup', this.endScrub)
+    this.scrubListenersAttached = false
   }
 
   private handleChange(): void {
@@ -207,15 +251,30 @@ export class NumberField {
       return
     }
 
-    // Plain number path — unchanged from v1.
+    // Plain number path — unchanged from v1, EXCEPT: when onRelative is wired, a bare
+    // negative number ('-8') must NOT be swallowed here as a negative literal — it stays
+    // a leading-operator expression (documented evaluateExpression CAVEAT) so it can route
+    // to onRelative below like every other leading-op entry (+8, *2, /4).
     const n = Number.parseFloat(raw)
-    if (Number.isFinite(n) && /^-?\d+(\.\d+)?$/.test(trimmed)) {
+    const isBareNegative = trimmed.startsWith('-')
+    if (Number.isFinite(n) && /^-?\d+(\.\d+)?$/.test(trimmed) && !(this.opts.onRelative && isBareNegative)) {
       this.commit(n)
       return
     }
 
     // Expression path — only when the input contains expression characters.
     if (/[-+*/()]/.test(raw)) {
+      // Leading-operator expressions (`+8`, `-3`, `*2`, `/4`) are RELATIVE deltas when the
+      // caller wired onRelative — hand back a closure instead of committing an absolute
+      // value here, so a multi-select caller can apply it against each element's own baseline.
+      if (this.opts.onRelative && /^[-+*/]/.test(trimmed)) {
+        const rawEntry = raw
+        this.opts.onRelative((current: number) => {
+          const result = evaluateExpression(rawEntry, current)
+          return result === null ? current : this.clamp(result)
+        })
+        return
+      }
       const result = evaluateExpression(raw, this.lastValid)
       if (result === null) {
         this.revert()
@@ -242,6 +301,15 @@ export class NumberField {
 
   private onScrub = (e: MouseEvent): void => {
     if (!this.scrubbing) return
+    if (this.opts.onRelative) {
+      // Each move REPLACES the previous move's effect: the closure is applied by the caller
+      // against its own immutable per-element baseline(s) snapshotted at onScrubStart, not
+      // against this field's lastValid — so re-applying it after a later move stays correct
+      // (per-move idempotency), unlike accumulating a running total here.
+      const totalDeltaPx = e.clientX - this.scrubStartX
+      this.opts.onRelative((baseline: number) => this.clamp(baseline + totalDeltaPx))
+      return
+    }
     this.commit(this.scrubStartValue + (e.clientX - this.scrubStartX))
   }
 
@@ -249,12 +317,18 @@ export class NumberField {
     this.scrubbing = false
     window.removeEventListener('mousemove', this.onScrub)
     window.removeEventListener('mouseup', this.endScrub)
+    this.scrubListenersAttached = false
+  }
+
+  private clamp(n: number): number {
+    let result = Math.round(n)
+    if (this.opts.min !== undefined) result = Math.max(this.opts.min, result)
+    if (this.opts.max !== undefined) result = Math.min(this.opts.max, result)
+    return result
   }
 
   private commit(raw: number): void {
-    let n = Math.round(raw)
-    if (this.opts.min !== undefined) n = Math.max(this.opts.min, n)
-    if (this.opts.max !== undefined) n = Math.min(this.opts.max, n)
+    const n = this.clamp(raw)
     this.render(n)
     this.opts.onInput(n)
   }
@@ -265,12 +339,22 @@ export class NumberField {
     this.displayState = 'number'
   }
 
+  /** Clears pill binding (readOnly + class) without touching lastValid/display — used by set()/setMixed()/setAuto(). */
+  private unbindPill(): void {
+    if (!this.pillBound) return
+    this.pillBound = false
+    this.input.readOnly = false
+    this.root.classList.remove('nf-pill')
+  }
+
   set(value: number | null): void {
+    this.unbindPill()
     this.render(value)
   }
 
   /** Displays the literal 'Mixed' text; internal value is null (get() reports null). */
   setMixed(): void {
+    this.unbindPill()
     this.lastValid = null
     this.input.value = MIXED_TEXT
     this.displayState = 'mixed'
@@ -278,6 +362,7 @@ export class NumberField {
 
   /** Displays the literal 'auto' text; internal value is null (get() reports null). Only meaningful with allowAuto. */
   setAuto(): void {
+    this.unbindPill()
     this.lastValid = null
     this.input.value = AUTO_TEXT
     this.displayState = 'auto'
@@ -285,5 +370,22 @@ export class NumberField {
 
   get(): number | null {
     return this.lastValid
+  }
+
+  /** Binds the field to a display-only token pill (e.g. a design-token reference). readOnly, does not touch lastValid. */
+  bindToken(label: string): void {
+    this.pillBound = true
+    this.input.readOnly = true
+    this.input.value = label
+    this.root.classList.add('nf-pill')
+    this.displayState = 'number'
+  }
+
+  /** Detaches a pill binding, restoring the input to an editable number display of lastValid. */
+  detach(): void {
+    this.pillBound = false
+    this.input.readOnly = false
+    this.root.classList.remove('nf-pill')
+    this.render(this.lastValid)
   }
 }

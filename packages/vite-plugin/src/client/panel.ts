@@ -3,6 +3,18 @@ import type { InspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { NumberField } from './controls'
 import { SegmentField, AlignMatrix } from './layout-controls'
+import { ColorPicker } from './colorpicker'
+import { TokenPicker, type TokenEntry } from './tokenpicker'
+import {
+  nearestColorToken,
+  readTokens,
+  readTheme,
+  parseColor as parseColorLocal,
+  rgbToHex,
+  UTILITY_PREFIXES,
+  type Theme,
+  type Tokens,
+} from './tokens'
 
 interface RowSpec {
   label: string
@@ -13,6 +25,18 @@ interface RowSpec {
   fromCss?: (css: string) => number
   /** When true (W/H rows), a sizing-mode <select> (Fixed/Hug/Fill) renders next to the field. */
   sizeMode?: boolean
+  /** When true (e.g. LH), the field accepts the literal keyword `auto` and displays it via setAuto(). */
+  allowAuto?: boolean
+  /** Draft value to apply when the user types the `auto` keyword (only meaningful with allowAuto). */
+  autoCss?: string
+  /**
+   * Fired once per prop, immediately before that prop's value is drafted (after onBeforeEdit,
+   * before drafts.apply). Used by Stroke's width fields: drafting a border-*-width while the
+   * computed border-*-style is 'none' also drafts border-*-style: solid (one-time), so a
+   * newly-drafted width is actually visible. Receives the live DraftStore so it can read/write
+   * drafts itself (SECTIONS is a module-level const and can't close over a Panel instance).
+   */
+  onBeforeApply?: (el: TaggedElement, prop: string, drafts: DraftStore) => void
 }
 
 interface SectionSpec {
@@ -23,13 +47,119 @@ interface SectionSpec {
   /** Section renders always (stable DOM order) but is hidden via the `hidden` attribute when this returns false. */
   visible?: (el: TaggedElement) => boolean
   /** Custom section body — used by Layout, which isn't a plain row-field grid. */
-  custom?: 'layout'
+  custom?: 'layout' | 'typography' | 'fill' | 'stroke'
 }
 
 const px = (n: number): string => `${n}px`
 const fromPx = (css: string): number => Math.round(Number.parseFloat(css) || 0)
 
 const RADIUS = ['border-top-left-radius', 'border-top-right-radius', 'border-bottom-right-radius', 'border-bottom-left-radius']
+
+const BORDER_WIDTH_PROPS = ['border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width']
+const BORDER_STYLE_PROPS = ['border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style']
+const BORDER_COLOR_PROPS = ['border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color']
+
+// Gap isn't built via buildField/RowSpec (it's a bespoke NumberField inside the Layout
+// section's custom body — see buildLayoutSection), but it still needs a RowSpec-shaped
+// object so tokenEntriesFor/pillLabelFor (both keyed on `.props`) and the boundTokens map
+// (keyed on `.props.join(',')`) can treat it identically to every other token-pickable field.
+const GAP_SPEC: RowSpec = { label: 'Gap', props: ['gap'], min: 0 }
+
+// Tailwind's numeric spacing scale (padding/margin/gap/width/height) — each step n maps to
+// n * theme.spacingBasePx. Kept as a flat literal list (not generated) so the exact set —
+// including the half-steps (0.5, 1.5, ...) and the post-12 non-uniform stride (14, 16, 20, ...) —
+// is easy to eyeball against Tailwind's own docs.
+const SPACING_SCALE = [
+  0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64,
+  72, 80, 96,
+]
+
+// RowSpec.props arrays with length > 1 that correspond to a single Tailwind synthetic/shorthand
+// utility prefix not derivable from any individual longhand's own UTILITY_PREFIXES entry (e.g.
+// ['padding-left','padding-right'] should resolve to 'px', not 'pl' from props[0]). Keyed by the
+// joined prop list (order matches each RowSpec's own `props` array above). Stroke's W field
+// (BORDER_WIDTH_PROPS) has no entry here — border-width isn't part of Tailwind's linear spacing
+// scale (see tokens.ts's own separate BORDER_WIDTH_SCALE) and tokenEntriesFor returns null for
+// it, so buildField's onTokenKey never opens the picker for that field and pillLabelFor is
+// never reached for it either.
+const MULTI_PROP_SYNTHETIC: Record<string, string> = {
+  [['padding-left', 'padding-right'].join(',')]: 'padding-inline',
+  [['padding-top', 'padding-bottom'].join(',')]: 'padding-block',
+  [['margin-left', 'margin-right'].join(',')]: 'margin-inline',
+  [['margin-top', 'margin-bottom'].join(',')]: 'margin-block',
+  [RADIUS.join(',')]: 'border-radius',
+}
+
+/** Resolves a RowSpec's `props` array to its Tailwind utility prefix (e.g. 'px', 'rounded', 'w'). */
+function utilityPrefixFor(props: string[]): string | undefined {
+  if (props.length === 1) return UTILITY_PREFIXES[props[0]]
+  const synthetic = MULTI_PROP_SYNTHETIC[props.join(',')]
+  return synthetic ? UTILITY_PREFIXES[synthetic] : undefined
+}
+
+const RADIUS_PROP_SET = new Set(RADIUS)
+
+/**
+ * Scale source for the `=` token picker (B5), keyed by RowSpec.props. Spacing props (padding/
+ * margin/gap/width/height) resolve through Tailwind's numeric scale x theme.spacingBasePx;
+ * radius props through theme.radiusScale; font-size through the text scale; everything else
+ * (e.g. opacity) has no token picker and returns null.
+ */
+export function tokenEntriesFor(spec: { props: string[] }, theme: Theme, tokens: Tokens): TokenEntry[] | null {
+  if (spec.props.some((p) => p === 'font-size')) {
+    const entries = tokens.textScale.map((t) => ({ label: t.name, px: t.px }))
+    return entries.length === 0 ? null : entries
+  }
+  if (spec.props.some((p) => RADIUS_PROP_SET.has(p))) {
+    const entries = Object.entries(theme.radiusScale).map(([label, px]) => ({ label, px }))
+    return entries.length === 0 ? null : entries
+  }
+  const prefix = utilityPrefixFor(spec.props)
+  const isSpacingProp = prefix !== undefined && prefix !== 'opacity' && prefix !== 'border'
+  if (isSpacingProp) {
+    if (theme.spacingBasePx === null) return null
+    const base = theme.spacingBasePx
+    return SPACING_SCALE.map((n) => ({ label: String(n), px: n * base }))
+  }
+  return null
+}
+
+/** border-top-width -> border-top-style (matches each width longhand to its side's style longhand). */
+function styleForWidthProp(widthProp: string): string {
+  return widthProp.replace('-width', '-style')
+}
+
+/**
+ * Drafting a border width only becomes visible if the side actually has a style — a computed
+ * `border-style: none` swallows any width. So the FIRST time a width is drafted while the
+ * computed style for that side is 'none', also draft that side's style to 'solid' (one-time —
+ * a later width edit while style is already something else must not stomp a user-chosen style).
+ */
+function draftSolidIfNone(el: TaggedElement, widthProp: string, drafts: DraftStore): void {
+  const styleProp = styleForWidthProp(widthProp)
+  const draftStyle = drafts.current(el, styleProp)
+  // jsdom reports '' rather than the spec default 'none' for an unset border-style — treat
+  // both as "no visible border yet" so the auto-solid behavior works in tests and browsers alike.
+  const computedStyle = draftStyle ?? getComputedStyle(el).getPropertyValue(styleProp)
+  if (computedStyle === 'none' || computedStyle === '') drafts.apply(el, styleProp, 'solid')
+}
+
+/**
+ * Walks up from `el` (starting at el itself) for the first ancestor whose (draft-or-computed)
+ * background-color has alpha > 0 — the color a Text/Stroke swatch would actually be seen
+ * against. Falls back to white when no ancestor paints a background (the page's default canvas).
+ */
+function effectiveBackground(el: TaggedElement, drafts: DraftStore): string {
+  let node: Element | null = el
+  while (node) {
+    const draft = drafts.isComparing(node as TaggedElement) ? null : drafts.current(node as TaggedElement, 'background-color')
+    const css = draft ?? getComputedStyle(node).getPropertyValue('background-color')
+    const parsed = parseColorLocal(css)
+    if (parsed && parsed.a > 0) return css
+    node = node.parentElement
+  }
+  return '#fff'
+}
 
 function isFlex(el: TaggedElement): boolean {
   const d = getComputedStyle(el).display
@@ -60,7 +190,57 @@ export function normalizeAlign(align: string): string {
   return align
 }
 
-// Section ORDER is fixed forever: Layout -> Size -> Padding -> Margin -> Appearance.
+/** True when `el` has a direct child text node with non-whitespace content (element children don't count). */
+export function hasDirectText(el: Element): boolean {
+  return [...el.childNodes].some((n) => n.nodeType === 3 && (n.textContent ?? '').trim() !== '')
+}
+
+const WEIGHTS: Array<[value: string, label: string]> = [
+  ['100', 'Thin'],
+  ['200', 'Extra Light'],
+  ['300', 'Light'],
+  ['400', 'Regular'],
+  ['500', 'Medium'],
+  ['600', 'Semibold'],
+  ['700', 'Bold'],
+  ['800', 'Extra Bold'],
+  ['900', 'Black'],
+]
+
+/** Snaps a computed font-weight keyword/number to one of the 9 named-weight values. */
+function snapWeight(css: string): string {
+  if (css === 'normal') return '400'
+  if (css === 'bold') return '700'
+  const n = Number.parseFloat(css)
+  if (!Number.isFinite(n)) return '400'
+  // Snap to the nearest named weight (100-900, step 100).
+  return String(Math.min(900, Math.max(100, Math.round(n / 100) * 100)))
+}
+
+/** Unquotes a computed font-family's first entry for display (e.g. `"Georgia"` -> `Georgia`). */
+function firstFamily(computedFontFamily: string): string {
+  const first = computedFontFamily.split(',')[0]?.trim() ?? ''
+  return first.replace(/^['"]|['"]$/g, '')
+}
+
+/** Quotes a family name for use in a font-family CSS value if it contains whitespace. */
+function cssFamilyValue(name: string): string {
+  return /\s/.test(name) ? `"${name}"` : name
+}
+
+/** Enumerates unique font families from document.fonts, feature-detecting its absence (jsdom). */
+function documentFontFamilies(): string[] {
+  const fonts: unknown = (document as unknown as { fonts?: Iterable<{ family: string; status?: string }> }).fonts
+  if (!fonts || typeof (fonts as Iterable<unknown>)[Symbol.iterator] !== 'function') return []
+  const seen = new Set<string>()
+  for (const face of fonts as Iterable<{ family: string; status?: string }>) {
+    if (face.status !== undefined && face.status !== 'loaded') continue
+    seen.add(face.family.replace(/^['"]|['"]$/g, ''))
+  }
+  return [...seen]
+}
+
+// Section ORDER is fixed forever: Layout -> Size -> Padding -> Margin -> Typography -> Fill -> Stroke -> Appearance.
 const SECTIONS: SectionSpec[] = [
   {
     title: 'Layout',
@@ -103,6 +283,29 @@ const SECTIONS: SectionSpec[] = [
       { label: 'MR', props: ['margin-right'] },
       { label: 'MB', props: ['margin-bottom'] },
       { label: 'ML', props: ['margin-left'] },
+    ],
+  },
+  {
+    title: 'Typography',
+    rows: [],
+    custom: 'typography',
+    visible: hasDirectText,
+  },
+  {
+    title: 'Fill',
+    rows: [],
+    custom: 'fill',
+  },
+  {
+    title: 'Stroke',
+    rows: [],
+    custom: 'stroke',
+    expandKey: 'stroke',
+    expandRows: [
+      { label: 'BT', props: ['border-top-width'], min: 0, onBeforeApply: draftSolidIfNone },
+      { label: 'BR', props: ['border-right-width'], min: 0, onBeforeApply: draftSolidIfNone },
+      { label: 'BB', props: ['border-bottom-width'], min: 0, onBeforeApply: draftSolidIfNone },
+      { label: 'BL', props: ['border-left-width'], min: 0, onBeforeApply: draftSolidIfNone },
     ],
   },
   {
@@ -158,8 +361,18 @@ export class Panel {
   private actions = document.createElement('div')
   private body = document.createElement('div')
   private fields: BoundField[] = []
-  private sectionEls: Array<{ spec: SectionSpec; el: HTMLElement }> = []
+  // `els` holds the section TITLE plus every body wrap belonging to that section (rowWrap,
+  // expandWrap, custom-body wrap — whatever buildBody appended for it) so refresh() can hide
+  // them all together. Hiding only the title (the pre-fix behavior) left a section's fields
+  // visible/interactive underneath a hidden title, which is the bug this fixes (final review
+  // finding E2).
+  private sectionEls: Array<{ spec: SectionSpec; els: HTMLElement[] }> = []
   private el: TaggedElement | null = null
+  /** Full selection (B6) — [] when hidden, [el] in single-select (mirrors `el` for back-compat). */
+  private els: TaggedElement[] = []
+  // Persists expand/collapse state per section across show() calls (selecting another
+  // element rebuilds the DOM but should keep sections the user expanded, expanded).
+  private expandState = new Map<string, boolean>()
 
   // Layout section widgets (rebuilt per show(), re-set() per refresh()).
   private directionField: SegmentField | null = null
@@ -172,7 +385,48 @@ export class Panel {
   // Flex-child widgets.
   private alignSelfField: SegmentField | null = null
   private alignSelfWrap: HTMLElement | null = null
+  private flexChildControlsWrap: HTMLElement | null = null
   private sizeModes: BoundSizeMode[] = []
+
+  // Typography section widgets (rebuilt per show(), re-set() per refresh()).
+  private typeFamilySelect: HTMLSelectElement | null = null
+  private typeWeightSelect: HTMLSelectElement | null = null
+  private typeAlignField: SegmentField | null = null
+
+  // Fill/Stroke section widgets (rebuilt per show(), re-set() per refresh()).
+  private fillRow: HTMLElement | null = null
+  private textRow: HTMLElement | null = null
+  private strokeStyleSelect: HTMLSelectElement | null = null
+  private strokeColorRow: HTMLElement | null = null
+
+  // Selection colors (B6, multi-select only) — section title + rows wrap, rebuilt per show().
+  private selectionColorsTitle: HTMLElement | null = null
+  private selectionColorsRows: HTMLElement | null = null
+
+  // Scrub baselines (B6): Map<el, Map<prop, number>> snapshotted once at onScrubStart, reused
+  // (never re-snapshotted) across every onRelative call in the same drag — see NumberField's
+  // onScrub contract (each move re-applies against the SAME baseline, not the running value).
+  private scrubBaselines: Map<TaggedElement, Map<string, number>> | null = null
+  // Identity of the NumberField instance currently mid-scrub (cleared on window mouseup) —
+  // distinguishes a scrub-drag onRelative call (uses frozen scrubBaselines) from a typed
+  // relative expression (+8 via change event, which always reads a fresh current value).
+  private scrubbingField: NumberField | null = null
+
+  // Single Panel-level ColorPicker instance shared by Fill and Stroke — closed whenever the
+  // selection changes (show()) so it never dangles pointing at a since-removed row.
+  private colorPicker: ColorPicker
+
+  // Single Panel-level TokenPicker instance (B5) shared by every NumberField's `=` key —
+  // closed whenever the selection changes (show()/hide()), same lifecycle as colorPicker.
+  private tokenPicker: TokenPicker
+
+  // Bound token pills, keyed by the owning field's spec.props.join(',') (a stable per-field
+  // identity — see MULTI_PROP_SYNTHETIC above). B1's set()/setMixed()/setAuto() unconditionally
+  // clear a field's pill state, so a plain refresh() would silently drop every bound pill even
+  // when nothing about that field changed. This map lets refresh() re-apply bindToken() when
+  // the field's current (draft-or-computed) value still matches what was bound — cleared
+  // wholesale on selection change (show()), and per-entry when the value diverges (refresh()).
+  private boundTokens = new Map<string, { label: string; px: number }>()
 
   constructor(
     private drafts: DraftStore,
@@ -195,69 +449,202 @@ export class Panel {
     this.resetButton.textContent = 'Reset'
     this.compareButton.addEventListener('click', () => {
       if (!this.el) return
-      this.drafts.compare(this.el, !this.drafts.isComparing(this.el))
+      const turningOn = !this.drafts.isComparing(this.el)
+      for (const el of this.els) this.drafts.compare(el, turningOn)
       this.refresh()
     })
     this.resetButton.addEventListener('click', () => {
       if (!this.el) return
-      this.onBeforeEdit(this.el)
-      this.drafts.discard(this.el)
+      for (const el of this.els) {
+        this.onBeforeEdit(el)
+        this.drafts.discard(el)
+      }
+      // Reset must clear pill bookkeeping wholesale, not just per-field on divergence — a
+      // coincidentally-equal original value (e.g. the author's own inline px matches a
+      // scale step) would otherwise resurrect a pill backed by no draft at all.
+      this.boundTokens.clear()
       this.refresh()
       this.onEdited()
     })
     this.actions.append(this.compareButton, this.resetButton)
     this.root.append(this.head, this.actions, this.body)
+    this.colorPicker = new ColorPicker(this.root)
+    this.tokenPicker = new TokenPicker(this.root)
+    // Mutual exclusivity (final review fix #11): opening one popover must close the other —
+    // two open at once would overlap/fight for the same anchor-relative position. Wired here
+    // (wrapping each instance's own open(), rather than editing every call site or having the
+    // components import each other) so ColorPicker and TokenPicker stay fully decoupled from
+    // one another; only Panel, which holds both instances, knows they're mutually exclusive.
+    const colorPickerOpen = this.colorPicker.open.bind(this.colorPicker)
+    this.colorPicker.open = (opts) => {
+      this.tokenPicker.close()
+      colorPickerOpen(opts)
+    }
+    const tokenPickerOpen = this.tokenPicker.open.bind(this.tokenPicker)
+    this.tokenPicker.open = (opts) => {
+      this.colorPicker.close()
+      tokenPickerOpen(opts)
+    }
   }
 
-  show(el: TaggedElement, data: InspectorData): void {
+  show(elOrEls: TaggedElement | TaggedElement[], data: InspectorData): void {
+    const els = Array.isArray(elOrEls) ? elOrEls : [elOrEls]
+    this.els = els
+    const el = els[0] ?? null
     this.el = el
+    this.colorPicker.close()
+    this.tokenPicker.close()
+    this.boundTokens.clear()
     this.root.hidden = false
-    this.headTag.textContent = data.tag
-    if (data.source) {
-      const srcText = `${data.source.file}:${data.source.line}:${data.source.col}`
-      this.headSrc.textContent = srcText
-      this.headSrc.title = srcText
-      if (!this.headSrc.isConnected) this.head.append(this.headSrc)
-    } else {
+    if (els.length > 1) {
+      this.headTag.textContent = `${els.length} selected`
       this.headSrc.remove()
+    } else {
+      this.headTag.textContent = data.tag
+      if (data.source) {
+        const srcText = `${data.source.file}:${data.source.line}:${data.source.col}`
+        this.headSrc.textContent = srcText
+        this.headSrc.title = srcText
+        if (!this.headSrc.isConnected) this.head.append(this.headSrc)
+      } else {
+        this.headSrc.remove()
+      }
     }
-    // rebuilds all fields per selection; expand state resets by design (revisit in M2b)
+    // rebuilds all fields per selection; expand state PERSISTS across selection changes
+    // (see this.expandState, applied in buildBody()) — B1 made this intentional, superseding
+    // the earlier "resets by design" plan.
     this.buildBody()
     this.refresh()
   }
 
   hide(): void {
     this.el = null
+    this.els = []
     this.root.hidden = true
+    this.colorPicker.close()
+    this.tokenPicker.close()
+  }
+
+  /**
+   * Applies `hidden` to every DOM element belonging to a section (title + body wraps) —
+   * see the sectionEls field comment (final review finding E2: a hidden TITLE alone left
+   * the section's fields visible/interactive underneath it).
+   *
+   * The section's expandWrap (its collapsible BT/BR/BB/BL-style sub-rows, when present)
+   * is always the LAST entry in `els` and is special-cased: forcing it hidden=false
+   * whenever the section becomes visible would fight the independent expand/collapse
+   * toggle (persisted in expandState) — so when un-hiding, the expandWrap is left to
+   * whatever expandState already set it to via buildBody(), not forced visible.
+   */
+  private setSectionHidden(spec: SectionSpec, els: HTMLElement[], hidden: boolean): void {
+    const expandWrap = spec.expandRows && spec.expandKey ? els[els.length - 1] : null
+    for (const el of els) {
+      if (hidden) {
+        el.hidden = true
+      } else if (el === expandWrap) {
+        el.hidden = !(this.expandState.get(spec.expandKey!) ?? false)
+      } else {
+        el.hidden = false
+      }
+    }
   }
 
   refresh(): void {
     if (!this.el) return
     const el = this.el
     const computed = getComputedStyle(el)
+    const multi = this.isMulti()
 
-    for (const { spec, el: sectionEl } of this.sectionEls) {
-      sectionEl.hidden = spec.visible ? !spec.visible(el) : false
+    for (const { spec, els: sectionEls } of this.sectionEls) {
+      if (spec.title === 'Layout') {
+        // Decision (B6): Layout is single-element only — matrix/direction across N
+        // elements is ambiguous, so the whole section (not just its controls) hides.
+        this.setSectionHidden(spec, sectionEls, multi)
+        continue
+      }
+      if (spec.title === 'Fill' || spec.title === 'Stroke') {
+        // Replaced by Selection colors in multi-mode — title AND body hide together.
+        this.setSectionHidden(spec, sectionEls, multi || (spec.visible ? !spec.visible(el) : false))
+        continue
+      }
+      if (multi) {
+        // visible when applicable to ANY element in the selection (hasDirectText any, flex any…).
+        this.setSectionHidden(spec, sectionEls, spec.visible ? !this.els.some((e) => spec.visible!(e)) : false)
+      } else {
+        this.setSectionHidden(spec, sectionEls, spec.visible ? !spec.visible(el) : false)
+      }
     }
+    if (this.selectionColorsTitle) this.selectionColorsTitle.hidden = !multi
 
     for (const { field, spec } of this.fields) {
       // Size-mode (W/H) fields can hold the literal 'auto' draft (Hug mode) — show
-      // it as the auto keyword rather than resolving it through fromCss.
-      if (spec.sizeMode) {
+      // it as the auto keyword rather than resolving it through fromCss. Draft check
+      // stays first; when there's no draft (and we're not in comparing mode), an
+      // author-authored inline `auto` (e.g. style="width: auto") shows the same way.
+      if (spec.sizeMode && !multi) {
         const draft = this.drafts.isComparing(el) ? null : this.drafts.current(el, spec.props[0])
         if (draft === 'auto') {
           field.setAuto()
+          this.boundTokens.delete(spec.props.join(','))
+          continue
+        }
+        if (draft === null && !this.drafts.isComparing(el) && el.style.getPropertyValue(spec.props[0]) === 'auto') {
+          field.setAuto()
+          this.boundTokens.delete(spec.props.join(','))
           continue
         }
       }
-      const values = spec.props.map((p) => this.readValue(el, p, computed, spec))
+      // allowAuto fields whose current CSS value (draft-or-computed) IS the auto keyword
+      // (e.g. line-height: normal) display via setAuto() rather than resolving through fromCss.
+      if (spec.allowAuto && !spec.sizeMode && !multi) {
+        const css = this.currentValue(el, spec.props[0], computed)
+        if (css === (spec.autoCss ?? 'normal')) {
+          field.setAuto()
+          this.boundTokens.delete(spec.props.join(','))
+          continue
+        }
+      }
+      const values = multi
+        ? this.els.flatMap((e) => spec.props.map((p) => this.readValue(e, p, getComputedStyle(e), spec)))
+        : spec.props.map((p) => this.readValue(el, p, computed, spec))
       const mixed = values.some((v) => v !== values[0])
       if (mixed) field.setMixed()
       else field.set(values[0])
+      if (multi) continue // no token-pill bookkeeping across a multi-selection
+
+      // B5: set() above unconditionally cleared any pill (B1 contract) — re-apply it when
+      // this field has a bound token AND the just-read value still equals the bound px
+      // (same-field refresh with an unchanged draft). A DIFFERING value (user edited the
+      // field directly, or a different draft arrived) leaves the pill cleared and drops
+      // the stale entry from boundTokens so it doesn't keep getting checked forever.
+      //
+      // Compare mode is an exception to BOTH halves of that: while comparing, `values`
+      // was read from the ORIGINAL (pre-draft) computed style, not the live draft, so it
+      // diverging from bound.px is expected and must NOT be treated as "the user changed
+      // it" — skip the delete so un-compare can still re-bind. And the pill itself must
+      // stay hidden while comparing (a pristine-preview state showing a token pill would
+      // lie about what's actually drafted), so skip the bindToken call too.
+      const key = spec.props.join(',')
+      const bound = this.boundTokens.get(key)
+      if (bound && !this.drafts.isComparing(el)) {
+        if (!mixed && values[0] === bound.px) field.bindToken(bound.label)
+        else this.boundTokens.delete(key)
+      }
     }
 
-    this.refreshLayoutSection(el, computed)
-    this.refreshFlexChild(el, computed)
+    if (!multi) {
+      // Layout/flex-child controls, family/weight/align selects, and Fill/Stroke's
+      // single-element swatches are single-selection only (B6 decision).
+      this.refreshLayoutSection(el, computed)
+      this.refreshFlexChild(el, computed)
+      this.refreshTypography(el, computed)
+      this.refreshFillStroke(el, computed)
+    } else {
+      // Flex-child align/size-modes are single-only — DOM stays (stable order) but hidden.
+      if (this.flexChildControlsWrap) this.flexChildControlsWrap.hidden = true
+      for (const sm of this.sizeModes) sm.select.hidden = true
+      this.refreshSelectionColors()
+    }
   }
 
   private refreshLayoutSection(el: TaggedElement, computed: CSSStyleDeclaration): void {
@@ -276,11 +663,28 @@ export class Panel {
     this.wrapField?.set(wrap === 'wrap' ? 'wrap' : 'nowrap')
 
     if (this.gapField) {
-      if (spaceBetween) this.gapField.setAuto()
-      else {
+      const gapKey = GAP_SPEC.props.join(',')
+      if (spaceBetween) {
+        // setAuto (Figma "space it out for me") supersedes any bound pill — same rule as
+        // the sizeMode W/H auto-continue path above: a switch to Auto must clear the
+        // bookkeeping, not just the visible pill, so a later equal-px value can't resurrect it.
+        this.gapField.setAuto()
+        this.boundTokens.delete(gapKey)
+      } else {
         const gapCss = this.drafts.isComparing(el) ? null : this.drafts.current(el, 'gap')
         const css = gapCss ?? computed.getPropertyValue('gap')
-        this.gapField.set(fromPx(css))
+        const value = fromPx(css)
+        this.gapField.set(value)
+
+        // Same B5 re-bind contract as the generic field loop above (including the Compare
+        // exception from B5's Compare-round-trip fix): skip while comparing so the pristine
+        // preview state never shows a pill, and don't drop the entry on a Compare-induced
+        // "divergence" that isn't really a user edit.
+        const bound = this.boundTokens.get(gapKey)
+        if (bound && !this.drafts.isComparing(el)) {
+          if (value === bound.px) this.gapField.bindToken(bound.label)
+          else this.boundTokens.delete(gapKey)
+        }
       }
     }
 
@@ -346,6 +750,46 @@ export class Panel {
     sm.select.value = 'hug'
   }
 
+  private refreshTypography(el: TaggedElement, computed: CSSStyleDeclaration): void {
+    if (!this.typeFamilySelect && !this.typeWeightSelect && !this.typeAlignField) return
+
+    if (this.typeFamilySelect) {
+      const current = firstFamily(this.currentValue(el, 'font-family', computed))
+      if (current && ![...this.typeFamilySelect.options].some((o) => o.value === current)) {
+        const opt = document.createElement('option')
+        opt.value = current
+        opt.textContent = current
+        this.typeFamilySelect.insertBefore(opt, this.typeFamilySelect.firstChild)
+      }
+      if (current) this.typeFamilySelect.value = current
+    }
+
+    if (this.typeWeightSelect) {
+      this.typeWeightSelect.value = snapWeight(this.currentValue(el, 'font-weight', computed))
+    }
+
+    if (this.typeAlignField) {
+      const align = this.currentValue(el, 'text-align', computed)
+      this.typeAlignField.set(align === 'start' || align === '' ? 'left' : align)
+    }
+  }
+
+  private refreshFillStroke(el: TaggedElement, computed: CSSStyleDeclaration): void {
+    ;(this.fillRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
+    if (this.textRow) this.textRow.hidden = !hasDirectText(el)
+    ;(this.textRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
+    ;(this.strokeColorRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
+
+    if (this.strokeStyleSelect) {
+      const style = this.currentValue(el, 'border-top-style', computed)
+      this.strokeStyleSelect.value = ['none', 'solid', 'dashed', 'dotted'].includes(style) ? style : 'none'
+    }
+  }
+
+  private isMulti(): boolean {
+    return this.els.length > 1
+  }
+
   private currentValue(el: TaggedElement, prop: string, computed: CSSStyleDeclaration): string {
     const draft = this.drafts.isComparing(el) ? null : this.drafts.current(el, prop)
     return draft ?? computed.getPropertyValue(prop)
@@ -358,6 +802,14 @@ export class Panel {
   }
 
   private buildBody(): void {
+    for (const { field } of this.fields) field.destroy()
+    if (this.gapField) this.gapField.destroy()
+    // Rebuilding fields orphans any field mid-scrub — drop the reference so a stray
+    // mouseup's endScrub closure (still attached to window until it fires) has nothing
+    // matching to clear, and so a fresh selection never resolves onRelative against a
+    // previous selection's baselines.
+    this.scrubbingField = null
+    this.scrubBaselines = null
     this.body.replaceChildren()
     this.fields = []
     this.sectionEls = []
@@ -369,42 +821,101 @@ export class Panel {
     this.layoutControlsWrap = null
     this.alignSelfField = null
     this.alignSelfWrap = null
+    this.flexChildControlsWrap = null
     this.sizeModes = []
+    this.typeFamilySelect = null
+    this.typeWeightSelect = null
+    this.typeAlignField = null
+    this.fillRow = null
+    this.textRow = null
+    this.strokeStyleSelect = null
+    this.strokeColorRow = null
+    this.selectionColorsTitle = null
+    this.selectionColorsRows = null
+
+    const multi = this.isMulti()
 
     for (const section of SECTIONS) {
       const title = document.createElement('div')
       title.className = 'panel-section'
       title.textContent = section.title
       this.body.append(title)
-      this.sectionEls.push({ spec: section, el: title })
+      // Every body element belonging to this section (title + rowWrap + custom body +
+      // expandWrap, whichever apply) collects here so refresh() can hide them all together —
+      // see the sectionEls field comment (final review finding E2).
+      const sectionBodyEls: HTMLElement[] = [title]
 
       if (section.custom === 'layout') {
-        this.body.append(this.buildLayoutSection())
+        const layoutBody = this.buildLayoutSection()
+        this.body.append(layoutBody)
+        sectionBodyEls.push(layoutBody)
+        this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
       }
 
-      const rowWrap = document.createElement('div')
-      rowWrap.className = 'panel-rows'
-      this.body.append(rowWrap)
-      for (const row of section.rows) rowWrap.append(this.buildRow(row))
+      if (section.custom === 'typography') {
+        const typographyBody = this.buildTypographySection(multi)
+        this.body.append(typographyBody)
+        sectionBodyEls.push(typographyBody)
+        this.sectionEls.push({ spec: section, els: sectionBodyEls })
+        continue
+      }
+
+      if (section.custom === 'fill') {
+        const fillBody = this.buildFillSection()
+        this.body.append(fillBody)
+        sectionBodyEls.push(fillBody)
+        this.sectionEls.push({ spec: section, els: sectionBodyEls })
+        continue
+      }
+
+      let rowWrap: HTMLElement
+      if (section.custom === 'stroke') {
+        // Stroke's body (W+style row, then Color row) is custom, but still a single
+        // .panel-rows sibling — the expand-button logic below appends its own expandWrap
+        // (BT/BR/BB/BL) as the next body child after it, same shape as every other
+        // expandable section.
+        rowWrap = this.buildStrokeSection()
+        this.body.append(rowWrap)
+      } else {
+        rowWrap = document.createElement('div')
+        rowWrap.className = 'panel-rows'
+        this.body.append(rowWrap)
+        for (const row of section.rows) rowWrap.append(this.buildRow(row))
+      }
+      sectionBodyEls.push(rowWrap)
 
       if (section.title === 'Size') {
         rowWrap.append(this.buildFlexChildControls())
       }
 
       if (section.expandRows && section.expandKey) {
+        const expandKey = section.expandKey
         const expandWrap = document.createElement('div')
         expandWrap.className = 'panel-rows'
-        expandWrap.hidden = true
+        expandWrap.hidden = !(this.expandState.get(expandKey) ?? false)
         const btn = document.createElement('button')
         btn.textContent = '⋯'
-        btn.setAttribute('data-expand', section.expandKey)
+        btn.setAttribute('data-expand', expandKey)
         btn.addEventListener('click', () => {
           expandWrap.hidden = !expandWrap.hidden
+          this.expandState.set(expandKey, !expandWrap.hidden)
         })
         title.append(btn)
         for (const row of section.expandRows) expandWrap.append(this.buildRow(row))
         this.body.append(expandWrap)
+        sectionBodyEls.push(expandWrap)
+      }
+
+      this.sectionEls.push({ spec: section, els: sectionBodyEls })
+
+      // Selection colors (B6): a genuinely new section that only exists in multi-mode —
+      // built right after Stroke (replacing Fill+Stroke) so section order stays fixed.
+      // Unlike Fill/Stroke (which pre-exist for single-mode and get hidden), this DOM
+      // isn't created at all in single-select — keeps the pre-existing single-el section
+      // list assertion (Layout..Appearance, no 9th entry) untouched.
+      if (section.title === 'Stroke' && multi) {
+        this.body.append(this.buildSelectionColorsSection())
       }
     }
   }
@@ -479,6 +990,33 @@ export class Panel {
         this.refresh()
         this.onEdited()
       },
+      onDetach: () => {
+        // Mirrors buildField's onDetach — drop the bookkeeping so a later refresh() doesn't
+        // try to re-bind a pill the user explicitly detached via Backspace.
+        this.boundTokens.delete(GAP_SPEC.props.join(','))
+      },
+      onTokenKey: this.isMulti()
+        ? undefined
+        : () => {
+            if (!this.el || !this.gapField) return
+            const entries = tokenEntriesFor(GAP_SPEC, readTheme(), readTokens())
+            if (!entries) return
+            const field = this.gapField
+            this.tokenPicker.open({
+              anchor: field.root,
+              entries,
+              onApply: (entry) => {
+                if (!this.el) return
+                this.onBeforeEdit(this.el)
+                this.drafts.apply(this.el, 'gap', px(entry.px))
+                this.refresh()
+                this.onEdited()
+                const label = this.pillLabelFor(GAP_SPEC, entry)
+                field.bindToken(label)
+                this.boundTokens.set(GAP_SPEC.props.join(','), { label, px: entry.px })
+              },
+            })
+          },
       onKeyword: (kw) => {
         if (!this.el || kw !== 'auto') return
         this.onBeforeEdit(this.el)
@@ -518,9 +1056,375 @@ export class Panel {
     return wrap
   }
 
+  private buildTypographySection(multi = false): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'panel-rows'
+
+    if (!multi) {
+      // Row 1 — Family.
+      const familySelect = document.createElement('select')
+      familySelect.className = 'size-mode type-family'
+      const families = new Set<string>()
+      if (this.el) {
+        const current = firstFamily(getComputedStyle(this.el).getPropertyValue('font-family'))
+        if (current) families.add(current)
+      }
+      for (const f of documentFontFamilies()) families.add(f)
+      for (const f of ['system-ui', 'serif', 'monospace']) families.add(f)
+      for (const f of families) {
+        const opt = document.createElement('option')
+        opt.value = f
+        opt.textContent = f
+        familySelect.append(opt)
+      }
+      familySelect.addEventListener('change', () => {
+        if (!this.el) return
+        this.onBeforeEdit(this.el)
+        this.drafts.apply(this.el, 'font-family', cssFamilyValue(familySelect.value))
+        this.refresh()
+        this.onEdited()
+      })
+      this.typeFamilySelect = familySelect
+      wrap.append(familySelect)
+
+      // Row 2 — Weight.
+      const weightSelect = document.createElement('select')
+      weightSelect.className = 'size-mode type-weight'
+      for (const [value, label] of WEIGHTS) {
+        const opt = document.createElement('option')
+        opt.value = value
+        opt.textContent = label
+        weightSelect.append(opt)
+      }
+      weightSelect.addEventListener('change', () => {
+        if (!this.el) return
+        this.onBeforeEdit(this.el)
+        this.drafts.apply(this.el, 'font-weight', weightSelect.value)
+        this.refresh()
+        this.onEdited()
+      })
+      this.typeWeightSelect = weightSelect
+      wrap.append(weightSelect)
+    }
+
+    // Row 3 — Size + Line height.
+    const sizeRow = document.createElement('div')
+    sizeRow.className = 'type-row'
+    sizeRow.append(
+      this.buildField({ label: 'S', props: ['font-size'], min: 1 }).field.root,
+      this.buildField({
+        label: 'LH',
+        props: ['line-height'],
+        allowAuto: true,
+        autoCss: 'normal',
+        fromCss: (css) => Math.round(Number.parseFloat(css)) || 0,
+      }).field.root
+    )
+    wrap.append(sizeRow)
+
+    // Row 4 — Letter spacing + Align.
+    const lsRow = document.createElement('div')
+    lsRow.className = 'type-row'
+    lsRow.append(this.buildField({ label: 'LS', props: ['letter-spacing'] }).field.root)
+
+    if (!multi) {
+      this.typeAlignField = new SegmentField({
+        label: 'Align',
+        options: [
+          { value: 'left', label: 'Left' },
+          { value: 'center', label: 'Center' },
+          { value: 'right', label: 'Right' },
+        ],
+        onInput: (value) => {
+          if (!this.el) return
+          this.onBeforeEdit(this.el)
+          this.drafts.apply(this.el, 'text-align', value)
+          this.refresh()
+          this.onEdited()
+        },
+      })
+      this.typeAlignField.root.setAttribute('data-text-align', '')
+      lsRow.append(this.typeAlignField.root)
+    }
+    wrap.append(lsRow)
+
+    return wrap
+  }
+
+  /** Renders a token name (exact nearestColorToken match) or a short hex fallback for display. */
+  private colorLabel(css: string): string {
+    const parsed = parseColorLocal(css)
+    if (!parsed) return css
+    // Fully-transparent always renders as the literal keyword — a nearest-token guess (which
+    // only compares r/g/b) would otherwise report some opaque color's name for a color that's
+    // actually invisible.
+    if (parsed.a === 0) return 'transparent'
+    // Token names are only claimed for fully-opaque colors — a semi-transparent value must
+    // show its own hex (with alpha) rather than borrowing an opaque token's name, even when
+    // the r/g/b channels coincide.
+    if (parsed.a === 1) {
+      const nearest = nearestColorToken(parsed, readTokens().colors)
+      if (nearest && nearest.distance === 0) return nearest.token.name
+    }
+    return rgbToHex(parsed.r, parsed.g, parsed.b, parsed.a)
+  }
+
+  /** Builds a `.color-row` — swatch button + value text — wired to open the shared ColorPicker. */
+  private buildColorRow(opts: {
+    label: string
+    getCss: () => string
+    getContrastAgainst: () => string | null
+    onPick: (css: string) => void
+  }): HTMLElement {
+    const row = document.createElement('div')
+    row.className = 'color-row'
+
+    const labelEl = document.createElement('span')
+    labelEl.className = 'nf-label'
+    labelEl.textContent = opts.label
+    row.append(labelEl)
+
+    const swatch = document.createElement('button')
+    swatch.type = 'button'
+    swatch.className = 'swatch'
+    row.append(swatch)
+
+    // Color lives on a child element stacked on top of the parent's checkerboard —
+    // see the `.swatch`/`.swatch-color` comment in overlay.ts for why (background-color
+    // on the parent itself would paint beneath the checkerboard background-image layers).
+    const swatchColor = document.createElement('span')
+    swatchColor.className = 'swatch-color'
+    swatch.append(swatchColor)
+
+    const valueEl = document.createElement('span')
+    valueEl.className = 'color-value'
+    row.append(valueEl)
+
+    swatch.addEventListener('click', () => {
+      this.colorPicker.open({
+        anchor: row,
+        initial: opts.getCss(),
+        contrastAgainst: opts.getContrastAgainst(),
+        // `meta.token` (the exact token name, when the pick came from a palette swatch
+        // or nearest-token hint) is intentionally unused here — reserved surface for B5's
+        // token pills (showing which colors are backed by a design token) rather than dead code.
+        onPick: (css, _meta) => {
+          if (!this.el) return
+          this.onBeforeEdit(this.el)
+          opts.onPick(css)
+          this.refresh()
+          this.onEdited()
+        },
+      })
+    })
+
+    ;(row as HTMLElement & { __refresh?: () => void }).__refresh = () => {
+      const css = opts.getCss()
+      swatchColor.style.color = css
+      valueEl.textContent = this.colorLabel(css)
+    }
+    return row
+  }
+
+  private buildFillSection(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'panel-rows'
+
+    const fillRow = this.buildColorRow({
+      label: 'Fill',
+      getCss: () => (this.el ? this.currentValue(this.el, 'background-color', getComputedStyle(this.el)) : ''),
+      getContrastAgainst: () => (this.el ? this.currentValue(this.el, 'color', getComputedStyle(this.el)) : null),
+      onPick: (css) => {
+        if (!this.el) return
+        this.drafts.apply(this.el, 'background-color', css)
+      },
+    })
+    wrap.append(fillRow)
+    this.fillRow = fillRow
+
+    const textRow = this.buildColorRow({
+      label: 'Text',
+      getCss: () => (this.el ? this.currentValue(this.el, 'color', getComputedStyle(this.el)) : ''),
+      getContrastAgainst: () => (this.el ? effectiveBackground(this.el, this.drafts) : null),
+      onPick: (css) => {
+        if (!this.el) return
+        this.drafts.apply(this.el, 'color', css)
+      },
+    })
+    wrap.append(textRow)
+    this.textRow = textRow
+
+    return wrap
+  }
+
+  private buildStrokeSection(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'panel-rows stroke-rows'
+
+    const row1 = document.createElement('div')
+    row1.className = 'stroke-row'
+    const widthField = this.buildField({
+      label: 'W',
+      props: BORDER_WIDTH_PROPS,
+      min: 0,
+      fromCss: (css) => {
+        const n = Math.round(Number.parseFloat(css))
+        return Number.isFinite(n) ? n : 0
+      },
+      onBeforeApply: draftSolidIfNone,
+    })
+    row1.append(widthField.field.root)
+
+    const styleSelect = document.createElement('select')
+    styleSelect.className = 'size-mode stroke-style'
+    for (const [value, label] of [
+      ['none', 'None'],
+      ['solid', 'Solid'],
+      ['dashed', 'Dashed'],
+      ['dotted', 'Dotted'],
+    ] as const) {
+      const opt = document.createElement('option')
+      opt.value = value
+      opt.textContent = label
+      styleSelect.append(opt)
+    }
+    styleSelect.addEventListener('change', () => {
+      if (!this.el) return
+      this.onBeforeEdit(this.el)
+      for (const prop of BORDER_STYLE_PROPS) this.drafts.apply(this.el, prop, styleSelect.value)
+      this.refresh()
+      this.onEdited()
+    })
+    this.strokeStyleSelect = styleSelect
+    row1.append(styleSelect)
+
+    const row2 = document.createElement('div')
+    row2.className = 'stroke-row'
+    const colorRow = this.buildColorRow({
+      label: 'Color',
+      getCss: () => (this.el ? this.currentValue(this.el, 'border-top-color', getComputedStyle(this.el)) : ''),
+      getContrastAgainst: () => (this.el ? effectiveBackground(this.el, this.drafts) : null),
+      onPick: (css) => {
+        if (!this.el) return
+        for (const prop of BORDER_COLOR_PROPS) this.drafts.apply(this.el, prop, css)
+      },
+    })
+    row2.append(colorRow)
+    this.strokeColorRow = colorRow
+
+    wrap.append(row1, row2)
+    return wrap
+  }
+
+  /**
+   * "Selection colors" (B6, multi-select only) — aggregates background-color/color/
+   * border-top-color across every element in the selection, grouped by exact rgba, one
+   * row per unique color with a usage count. Its section TITLE is a normal SECTIONS-array
+   * entry (appended right after Stroke in buildBody) so it participates in the same
+   * hidden-via-refresh convention as every other section.
+   */
+  private buildSelectionColorsSection(): HTMLElement {
+    const title = document.createElement('div')
+    title.className = 'panel-section'
+    title.textContent = 'Selection colors'
+    this.selectionColorsTitle = title
+    this.body.append(title)
+
+    const rows = document.createElement('div')
+    rows.className = 'panel-rows sc-rows'
+    this.selectionColorsRows = rows
+    return rows
+  }
+
+  /** Usage of one exact color: which (el, prop) pairs currently hold it. */
+  private groupSelectionColors(): Array<{ css: string; usages: Array<{ el: TaggedElement; prop: string }> }> {
+    const groups = new Map<string, { css: string; usages: Array<{ el: TaggedElement; prop: string }> }>()
+    for (const el of this.els) {
+      const computed = getComputedStyle(el)
+      for (const prop of ['background-color', 'color', 'border-top-color']) {
+        // `color` is meaningless to aggregate for an element with no direct text of its own
+        // (it's rendering nothing) — e.g. a pure layout wrapper's inherited/cascaded `color`
+        // would otherwise show up as a "usage" the user never actually sees painted.
+        if (prop === 'color' && !hasDirectText(el)) continue
+        // border-top-color similarly means nothing when there's no visible border to paint
+        // it on — a computed width of 0 (no border authored) or an explicit `none` style
+        // means the color, however it resolves (often currentColor), is never rendered.
+        if (prop === 'border-top-color') {
+          const styleCss = this.currentValue(el, 'border-top-style', computed)
+          const widthCss = this.currentValue(el, 'border-top-width', computed)
+          const widthPx = Number.parseFloat(widthCss)
+          if (styleCss === 'none' || !Number.isFinite(widthPx) || widthPx === 0) continue
+        }
+        const css = this.currentValue(el, prop, computed)
+        const parsed = parseColorLocal(css)
+        if (!parsed || parsed.a === 0) continue // skip transparent/unset
+        const key = `${parsed.r},${parsed.g},${parsed.b},${parsed.a}`
+        let group = groups.get(key)
+        if (!group) {
+          group = { css, usages: [] }
+          groups.set(key, group)
+        }
+        group.usages.push({ el, prop })
+      }
+    }
+    return [...groups.values()]
+  }
+
+  private refreshSelectionColors(): void {
+    if (!this.selectionColorsRows) return
+    const rows = this.selectionColorsRows
+    rows.replaceChildren()
+    for (const group of this.groupSelectionColors()) {
+      const row = document.createElement('div')
+      row.className = 'color-row sc-row'
+
+      const swatch = document.createElement('button')
+      swatch.type = 'button'
+      swatch.className = 'swatch'
+      const swatchColor = document.createElement('span')
+      swatchColor.className = 'swatch-color'
+      swatchColor.style.color = group.css
+      swatch.append(swatchColor)
+      row.append(swatch)
+
+      const valueEl = document.createElement('span')
+      valueEl.className = 'color-value'
+      valueEl.textContent = this.colorLabel(group.css)
+      row.append(valueEl)
+
+      const countEl = document.createElement('span')
+      countEl.className = 'sc-count'
+      countEl.textContent = `×${group.usages.length}`
+      row.append(countEl)
+
+      swatch.addEventListener('click', () => {
+        this.colorPicker.open({
+          anchor: row,
+          initial: group.css,
+          contrastAgainst: null,
+          onPick: (css) => {
+            for (const { el, prop } of group.usages) {
+              this.onBeforeEdit(el)
+              if (prop === 'border-top-color') {
+                for (const borderProp of BORDER_COLOR_PROPS) this.drafts.apply(el, borderProp, css)
+              } else {
+                this.drafts.apply(el, prop, css)
+              }
+            }
+            this.refresh()
+            this.onEdited()
+          },
+        })
+      })
+
+      rows.append(row)
+    }
+  }
+
   private buildFlexChildControls(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'flex-child-controls'
+    this.flexChildControlsWrap = wrap
     this.alignSelfField = new SegmentField({
       label: 'Align',
       options: [
@@ -630,23 +1534,174 @@ export class Panel {
     this.onEdited()
   }
 
+  /**
+   * Full Tailwind utility label for a token-picker entry applied to `spec` (e.g. `px-4`,
+   * `rounded-md`, `text-sm`). Radius rows are NOT special-cased to `rounded-*` uniformly —
+   * a single-corner row (TL/TR/BR/BL, props.length === 1) must yield its own honest
+   * `rounded-tl-md`-style label via UTILITY_PREFIXES (utilityPrefixFor resolves each
+   * longhand's own prefix), while the linked R row (all 4 corners) resolves through
+   * MULTI_PROP_SYNTHETIC to the collapsed `rounded-md` form.
+   */
+  private pillLabelFor(spec: RowSpec, entry: TokenEntry): string {
+    if (spec.props.some((p) => p === 'font-size')) return `text-${entry.label}`
+    const prefix = utilityPrefixFor(spec.props) ?? spec.props[0]
+    return `${prefix}-${entry.label}`
+  }
+
   private buildField(spec: RowSpec): BoundField {
+    // Shared commit path — used by the field's own onInput AND by the token picker's
+    // onApply (per the brief: "call the SAME handler the field's onInput uses").
+    // Plain numbers/standalone expressions and token picks are always ABSOLUTE — in
+    // multi-select that means applying the SAME css to every element in the selection.
+    const commit = (n: number): void => {
+      if (!this.el) return
+      const css = (spec.toCss ?? px)(n)
+      for (const el of this.els) {
+        this.onBeforeEdit(el)
+        for (const prop of spec.props) {
+          spec.onBeforeApply?.(el, prop, this.drafts)
+          this.drafts.apply(el, prop, css)
+        }
+      }
+      this.refresh()
+      this.onEdited()
+    }
+
+    // B6: a leading-operator entry (+8, *2, ...) is a RELATIVE delta — for each element in
+    // the selection, read ITS OWN current value per prop and apply the closure against it
+    // (never overwriting with the same absolute number). This is the core VisBug behavior:
+    // el A at 10px + el B at 20px, both `+8`, land at 18px/28px — never both at 18.
+    const commitRelative = (apply: (current: number) => number): void => {
+      if (!this.el) return
+      for (const el of this.els) {
+        this.onBeforeEdit(el)
+        const computed = getComputedStyle(el)
+        for (const prop of spec.props) {
+          const current = this.readValue(el, prop, computed, spec)
+          const css = (spec.toCss ?? px)(apply(current))
+          spec.onBeforeApply?.(el, prop, this.drafts)
+          this.drafts.apply(el, prop, css)
+        }
+      }
+      this.refresh()
+      this.onEdited()
+    }
+
+    // B6 scrub: baselines are snapshotted ONCE per drag (onScrubStart) — every subsequent
+    // onRelative call during that same drag (each mousemove tick) resolves `apply(baseline)`
+    // against the SAME frozen per-element-per-prop baseline, so a move REPLACES the previous
+    // move's effect instead of accumulating (matches NumberField's own single-el scrub contract).
+    const commitScrubRelative = (apply: (baseline: number) => number): void => {
+      if (!this.el) return
+      const baselines = this.scrubBaselines
+      for (const el of this.els) {
+        this.onBeforeEdit(el)
+        const computed = getComputedStyle(el)
+        for (const prop of spec.props) {
+          const baseline = baselines?.get(el)?.get(prop) ?? this.readValue(el, prop, computed, spec)
+          const css = (spec.toCss ?? px)(apply(baseline))
+          spec.onBeforeApply?.(el, prop, this.drafts)
+          this.drafts.apply(el, prop, css)
+        }
+      }
+      this.refresh()
+      this.onEdited()
+    }
+
+    // B6's onRelative/onScrubStart are wired ONLY in multi-select. Single-selection keeps
+    // the pre-B6 NumberField construction byte-for-byte: NumberField's own documented CAVEAT
+    // means wiring onRelative at all changes how a bare negative number (`-8`) parses (it
+    // becomes `current - 8`, a relative delta, instead of the literal -8) — acceptable/intended
+    // for multi-select's relative-delta model, but would silently regress single-element
+    // typing (e.g. letter-spacing "-1") if wired unconditionally. isMulti() is fixed for the
+    // lifetime of this field (buildBody() rebuilds fields fresh on every selection change).
+    const multi = this.isMulti()
+
     const field = new NumberField({
       label: spec.label,
       min: spec.min,
       max: spec.max,
-      allowAuto: spec.sizeMode,
-      onInput: (n) => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        const css = (spec.toCss ?? px)(n)
-        for (const prop of spec.props) this.drafts.apply(this.el, prop, css)
-        this.refresh()
-        this.onEdited()
+      allowAuto: spec.sizeMode || spec.allowAuto,
+      onInput: commit,
+      onRelative: multi
+        ? (apply) => {
+            // Relative deltas apply per-element against each element's own current value —
+            // never an absolute overwrite (the core VisBug behavior: el A at 10px + el B at
+            // 20px, both `+8`, land at 18px/28px). While a scrub is in progress for THIS
+            // field, resolve against the frozen onScrubStart baselines instead of a fresh
+            // read, so each drag tick replaces (not accumulates on) the previous tick.
+            if (this.scrubbingField === field) commitScrubRelative(apply)
+            else commitRelative(apply)
+          }
+        : undefined,
+      onScrubStart: multi
+        ? () => {
+            this.scrubbingField = field
+            this.snapshotScrubBaselines(spec)
+            const endScrub = (): void => {
+              if (this.scrubbingField === field) {
+                this.scrubbingField = null
+                this.scrubBaselines = null
+              }
+              window.removeEventListener('mouseup', endScrub)
+            }
+            window.addEventListener('mouseup', endScrub)
+          }
+        : undefined,
+      onKeyword: spec.allowAuto
+        ? (kw) => {
+            if (!this.el || kw !== 'auto') return
+            for (const el of this.els) {
+              this.onBeforeEdit(el)
+              for (const prop of spec.props) this.drafts.apply(el, prop, spec.autoCss ?? 'normal')
+            }
+            this.refresh()
+            this.onEdited()
+          }
+        : undefined,
+      onDetach: () => {
+        // Backspace on a pill: field.detach() (called by NumberField itself right after this)
+        // restores the numeric display — drafts are untouched. Just drop the bookkeeping so a
+        // later refresh() doesn't try to re-bind a pill the user explicitly detached.
+        this.boundTokens.delete(spec.props.join(','))
       },
+      onTokenKey: multi
+        ? undefined
+        : () => {
+            if (!this.el) return
+            const entries = tokenEntriesFor(spec, readTheme(), readTokens())
+            if (!entries) return
+            this.tokenPicker.open({
+              anchor: field.root,
+              entries,
+              onApply: (entry) => {
+                commit(entry.px)
+                const label = this.pillLabelFor(spec, entry)
+                field.bindToken(label)
+                this.boundTokens.set(spec.props.join(','), { label, px: entry.px })
+              },
+            })
+          },
     })
     const bound: BoundField = { field, spec }
     this.fields.push(bound)
     return bound
+  }
+
+  /**
+   * Snapshots each selected element's CURRENT (draft-or-computed) value for every prop this
+   * field spec covers — taken once at scrub start (label mousedown), reused unchanged across
+   * every onRelative call in the same drag. Keyed by field identity via `scrubbingField` (set
+   * in onScrubStart) so commitScrubRelative knows which field's baselines are live.
+   */
+  private snapshotScrubBaselines(spec: RowSpec): void {
+    const baselines = new Map<TaggedElement, Map<string, number>>()
+    for (const el of this.els) {
+      const computed = getComputedStyle(el)
+      const perProp = new Map<string, number>()
+      for (const prop of spec.props) perProp.set(prop, this.readValue(el, prop, computed, spec))
+      baselines.set(el, perProp)
+    }
+    this.scrubBaselines = baselines
   }
 }

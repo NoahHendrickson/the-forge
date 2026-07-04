@@ -50,6 +50,10 @@ button {
   position: fixed; z-index: 2147483646; pointer-events: none;
   border: 2px solid #0D99FF; border-radius: 2px;
 }
+.select-outline-multi {
+  position: fixed; z-index: 2147483646; pointer-events: none;
+  border: 2px solid #0D99FF; border-radius: 2px;
+}
 .ripple-outline {
   position: fixed; z-index: 2147483644; pointer-events: none;
   border: 1.5px dashed #e2954a; border-radius: 2px;
@@ -111,6 +115,10 @@ button {
   width: 100%; min-width: 24px; flex: 1;
   border: none; outline: none; font: 400 11px system-ui, sans-serif; color: #F5F5F5; background: transparent;
 }
+.nf-pill input {
+  background: rgba(13,153,255,0.15); color: #7CC4FF; border-radius: 4px;
+  padding: 1px 5px; width: auto; flex: 0 1 auto; font-size: 10.5px;
+}
 
 .seg-field { display: flex; align-items: center; gap: 4px; }
 .seg-field-label { flex: none; width: 40px; color: #9A9A9A; font-size: 11px; }
@@ -121,6 +129,12 @@ button {
 /* Align-self has 5 options — stack label above a full-width track so nothing clips. */
 [data-align-self] { flex-direction: column; align-items: stretch; gap: 3px; }
 [data-align-self] .seg-field-label { width: auto; }
+/* Typography's Align row shares its .type-row with the LS number field, leaving too little
+ * width for the 3-option segment track — "Center" clips at the 280px panel width. Same fix
+ * as [data-align-self] above: stack the label above a full-width track instead of sharing
+ * the row's horizontal space with the label. */
+[data-text-align] { flex-direction: column; align-items: stretch; gap: 3px; }
+[data-text-align] .seg-field-label { width: auto; }
 .seg {
   flex: 1; padding: 3px 0; text-align: center; border-radius: 4px;
   background: transparent; color: #B8B8B8; font-size: 10px; white-space: nowrap;
@@ -169,6 +183,96 @@ button {
 .size-mode:hover { border-color: rgba(255,255,255,0.12); }
 
 .layout-section, .flex-child-controls { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+
+.type-family { width: 100%; }
+.type-row { display: flex; gap: 4px; width: 100%; }
+
+.color-row { display: flex; align-items: center; gap: 6px; flex: 1 1 100%; }
+.swatch {
+  width: 16px; height: 16px; border-radius: 4px; padding: 0; flex: none;
+  border: 1px solid rgba(255,255,255,0.15); position: relative; overflow: hidden;
+  background-image: linear-gradient(45deg, rgba(255,255,255,0.12) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255,255,255,0.12) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.12) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.12) 75%);
+  background-size: 8px 8px; background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+}
+/*
+ * The swatch's own background-color (if any) would paint BENEATH the checkerboard
+ * background-image layers above, inverting the design intent (checker base should
+ * only ever show through actual transparency). So the color lives on a separate
+ * CHILD element stacked on top instead — the parent keeps the checkerboard as its
+ * only background.
+ */
+.swatch-color { position: absolute; inset: 0; background-color: currentColor; }
+.color-value { color: #9A9A9A; font-size: 10.5px; }
+.sc-row { justify-content: space-between; }
+.sc-count { color: #9A9A9A; font-size: 10.5px; margin-left: auto; }
+.stroke-style { flex: 1 1 40%; }
+
+.color-popover {
+  position: absolute; right: 12px; width: 200px; z-index: 10;
+  background: #383838; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
+  box-shadow: 0 5px 24px rgba(0,0,0,0.4); padding: 10px; display: flex; flex-direction: column; gap: 8px;
+}
+.cp-sv {
+  position: relative; height: 120px; border-radius: 6px; cursor: crosshair;
+  background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--cp-hue, red));
+}
+.cp-sv-thumb {
+  position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px;
+  border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,0.4); pointer-events: none;
+}
+.cp-hue {
+  width: 100%; height: 10px; appearance: none; -webkit-appearance: none; border-radius: 999px;
+  background: linear-gradient(to right, red, yellow, lime, cyan, blue, magenta, red);
+}
+.cp-hue::-webkit-slider-thumb {
+  appearance: none; -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 1px solid rgba(0,0,0,0.3);
+}
+.cp-hue::-moz-range-thumb {
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 1px solid rgba(0,0,0,0.3);
+}
+.cp-hex-row { display: flex; }
+.cp-hex {
+  width: 100%; height: 24px; background: rgba(255,255,255,0.06); border: 1px solid transparent;
+  border-radius: 6px; padding: 0 6px; color: #F5F5F5; font: 400 11px ui-monospace, monospace;
+}
+.cp-hex:focus { border-color: #0D99FF; outline: none; }
+.cp-hint {
+  font-size: 10.5px; color: #7CC4FF; cursor: pointer; background: rgba(13,153,255,0.12);
+  border-radius: 4px; padding: 3px 6px; width: fit-content;
+}
+.cp-contrast { font-size: 10.5px; color: #D4D4D4; }
+.cp-contrast.cp-fail { color: #F87171; }
+.cp-palette {
+  display: flex; flex-direction: column; gap: 3px; max-height: 120px; overflow-y: auto;
+}
+.cp-palette-row { display: flex; gap: 2px; }
+.cp-swatch {
+  width: 16px; height: 16px; border-radius: 4px; padding: 0; border: 1px solid rgba(255,255,255,0.15);
+}
+
+.token-popover {
+  position: absolute; right: 12px; width: 180px; z-index: 10;
+  background: #383838; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
+  box-shadow: 0 5px 24px rgba(0,0,0,0.4); padding: 8px; display: flex; flex-direction: column; gap: 6px;
+}
+.tp-search {
+  height: 24px; width: 100%; background: rgba(255,255,255,0.06);
+  border: 1px solid transparent; border-radius: 6px; padding: 0 6px;
+  color: #F5F5F5; font: 400 11px system-ui, sans-serif;
+}
+.tp-search:focus { border-color: #0D99FF; outline: none; }
+.tp-list { display: flex; flex-direction: column; max-height: 160px; overflow-y: auto; }
+.tp-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 4px 8px; border-radius: 4px; cursor: pointer; color: #D4D4D4; font-size: 11px;
+}
+.tp-row:hover, .tp-row-active { background: rgba(255,255,255,0.08); }
+.tp-row-px { color: #9A9A9A; font-size: 10.5px; margin-left: auto; }
 `
 
 export class Overlay {
@@ -188,6 +292,9 @@ export class Overlay {
   /** Pool of ripple-outline divs, reused across showRipples() calls instead of recreated. */
   private ripplePool: HTMLElement[] = []
   private rippleClearTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Pool of select-outline-multi divs (B6), reused across showSelectOutlines() calls. */
+  private selectOutlinePool: HTMLElement[] = []
 
   /** Max ripple outlines shown at once — keeps the effect legible when many siblings shift. */
   private static readonly RIPPLE_CAP = 8
@@ -234,6 +341,7 @@ export class Overlay {
     if (!on) {
       this.hideOutline()
       this.hideSelectOutline()
+      this.hideSelectOutlines()
       this.status.hidden = true
       this.clearRipples()
     }
@@ -261,6 +369,30 @@ export class Overlay {
 
   hideSelectOutline(): void {
     this.selectOutline.hidden = true
+  }
+
+  /**
+   * Draws one pooled `.select-outline-multi` div per rect (VisBug-style multi-select
+   * outlines) — pool pattern copied from showRipples: reused across calls, extra slots
+   * hidden rather than removed when the selection shrinks.
+   */
+  showSelectOutlines(rects: DOMRect[]): void {
+    while (this.selectOutlinePool.length < rects.length) {
+      const div = document.createElement('div')
+      div.className = 'select-outline-multi'
+      div.style.pointerEvents = 'none'
+      div.hidden = true
+      this.host.shadowRoot!.appendChild(div)
+      this.selectOutlinePool.push(div)
+    }
+    this.selectOutlinePool.forEach((div, i) => {
+      if (i < rects.length) this.place(div, rects[i])
+      else div.hidden = true
+    })
+  }
+
+  hideSelectOutlines(): void {
+    for (const div of this.selectOutlinePool) div.hidden = true
   }
 
   /**
