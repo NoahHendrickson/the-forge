@@ -150,10 +150,23 @@ Semantics:
   with a 404 fallthrough `next`. Header normalization before delegation only if N0 found
   the proxied `Host` fails `isAllowedHost` — normalize in the sidecar wrapper, never
   loosen the middleware.
-- Construction mirrors `src/vite.ts` `configureServer` verbatim: `Queue(root/.the-forge)`,
-  `migrateLegacyForgeDir`, `WatcherHub({ claim: () => queue.pull(), applying: () =>
-  queue.hasFreshClaims() })`, per-start `randomUUID()` secret, `writeEndpointFile(forgeDir,
-  port, '127.0.0.1', secret)` on listen, `removeEndpointFile` on close + `process.once('exit')`,
+- Runtime construction is EXTRACTED, not copied (pre-flight amendment — the review rubric
+  treats a duplicated logic block as a defect): new `src/server/runtime.ts` —
+
+```ts
+export interface ForgeRuntime { queue: Queue; hub: WatcherHub; secret: string; forgeDir: string }
+/** Hoists the queue/hub/secret construction that src/vite.ts configureServer builds today:
+ * Queue at <resolvedRoot>/.the-forge, migrateLegacyForgeDir(resolvedRoot, viteRoot, queue),
+ * WatcherHub({ claim: () => queue.pull(), applying: () => queue.hasFreshClaims() }),
+ * per-start randomUUID() secret. Endpoint-file lifecycle stays with each caller —
+ * listen/close hooks differ per server. */
+export function createForgeRuntime(resolvedRoot: string, viteRoot?: string): ForgeRuntime
+```
+
+  `src/vite.ts` switches to the helper — behavior identical, the existing suite is the
+  proof. The sidecar consumes the same helper, then adds its own lifecycle:
+  `writeEndpointFile(forgeDir, port, '127.0.0.1', secret)` on listen, `removeEndpointFile`
+  on close + `process.once('exit')`,
   `setupProjectConfig(root, <abs path to this package's dist/mcp.js>, root)`.
 - Missing-`ForgeDesignMode` hint (spec requirement: not silent, one line, no nagging):
   one-shot 60s timer from listen; cleared by the first `GET /__the-forge/client.js`;
