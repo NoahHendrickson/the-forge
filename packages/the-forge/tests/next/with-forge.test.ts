@@ -58,7 +58,9 @@ describe('withForge', () => {
     expect(result.turbopack).toBeDefined()
     expect(result.turbopack.rules).toBeDefined()
     const rule = result.turbopack.rules['*.{jsx,tsx}']
-    expect(rule.as).toBe('*.$1')
+    // No `as` key: Turbopack has no `$1` glob-capture — `as: '*.$1'` panics Turbopack on a
+    // real `next dev` (see the why-comment in src/next/index.ts; N6 smoke-gate finding).
+    expect(rule.as).toBeUndefined()
     expect(rule.loaders).toHaveLength(1)
     expect(rule.loaders[0].loader).toMatch(/next-loader\.cjs$/)
     expect(rule.loaders[0].options).toEqual({ root: expect.any(String) })

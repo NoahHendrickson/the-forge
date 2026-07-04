@@ -31,6 +31,22 @@ describe('forgeLoader', () => {
     expect(map).toBeTruthy()
   })
 
+  it('normalizes the map to absolute sources + inline sourcesContent (Turbopack requirement)', () => {
+    // Turbopack panics FATALLY on a map whose `sources` is a root-relative path with no
+    // `sourcesContent` (see the why-comment in src/next/loader.ts — N6 smoke-gate finding).
+    // Lock in the normalized shape so a regression is caught without a real bundler run.
+    const root = '/project'
+    const resourcePath = path.join(root, 'src/App.tsx')
+    const { ctx, callback } = makeContext(resourcePath, root)
+    const code = `export function App() {\n  return <div className="card">hi</div>\n}\n`
+
+    forgeLoader.call(ctx as any, code)
+
+    const [, , map] = callback.mock.calls[0]
+    expect(map.sources).toEqual([resourcePath])
+    expect(map.sourcesContent).toEqual([code])
+  })
+
   it('passes .ts (no x) sources through unchanged', () => {
     const root = '/project'
     const resourcePath = path.join(root, 'src/util.ts')

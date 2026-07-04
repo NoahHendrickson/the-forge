@@ -44,5 +44,16 @@ export default function forgeLoader(this: LoaderContext, source: string): void {
   const result = tagJsxSource(source, rel)
   if (result === null) return void this.callback(null, source, undefined)
 
-  this.callback(null, result.code, result.map)
+  // Turbopack (Next 16.2.10) FATALLY panics on a loader map whose `sources` holds a
+  // project-root-relative path with no `sourcesContent` — it tries to read the source off
+  // disk, mis-resolves the relative path, and dies with "reading file <...>/app — Is a
+  // directory", 500ing every page (found by the N6 fixture smoke gate; bisected with
+  // wrapper loaders: identical map with absolute `sources` + inline `sourcesContent`
+  // renders fine). webpack accepts either shape. The Vite plugin keeps the relative
+  // `sources` untouched (Vite resolves it against root; byte-for-byte unchanged is a
+  // milestone constraint) — this normalization is Next-loader-only.
+  const map = result.map as { sources: string[]; sourcesContent?: string[] }
+  map.sources = [file]
+  map.sourcesContent = [source]
+  this.callback(null, result.code, map)
 }

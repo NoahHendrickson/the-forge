@@ -116,7 +116,15 @@ export function withForge(nextConfig?: NextConfig | NextConfigFn, options: WithF
         ...resolved.turbopack,
         rules: {
           ...resolved.turbopack?.rules,
-          '*.{jsx,tsx}': { loaders: [loaderRule], as: '*.$1' },
+          // No `as` key — matches the N0 spike's verified-working config
+          // (docs/research/2026-07-04-next-spike-findings.md "Working `rules` syntax").
+          // N4 shipped `as: '*.$1'` believing it was copied from the findings doc, but no
+          // such syntax appears there and Turbopack has no `$1` glob-capture: on a real
+          // `next dev` (Next 16.2.10) it makes every matched module unprocessable
+          // ("Expected process result to be a module") — a FATAL Turbopack panic that
+          // 500s every page. Caught by the N6 fixture smoke gate; unit tests only assert
+          // config shape and cannot catch it.
+          '*.{jsx,tsx}': { loaders: [loaderRule] },
         },
       },
       webpack: chainWebpack(resolved.webpack, loaderRule),
