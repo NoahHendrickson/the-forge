@@ -103,10 +103,17 @@ button {
 
 #panel .panel-head { position: relative; padding: 12px 12px 10px; }
 #panel .panel-head-tag { font: 600 12px system-ui, sans-serif; color: #F5F5F5; }
+/* Dir + tail spans: the DIRECTORY ellipsizes while the filename:line:col tail keeps
+ * flex: none — the useful part of a source path is its end, which plain end-ellipsis
+ * used to cut first. (Chosen over a direction:rtl clip trick, which mangles
+ * punctuation, and over JS width-measuring truncation, which needs re-running on
+ * every resize.) */
 #panel .panel-head-src {
   font: 400 10px ui-monospace, monospace; color: #9A9A9A; margin-top: 2px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; min-width: 0;
 }
+#panel .panel-head-src .src-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+#panel .panel-head-src .src-tail { white-space: nowrap; flex: none; }
 #panel .panel-actions { display: flex; gap: 6px; padding: 0 12px 10px; }
 
 #panel .panel-section {
@@ -149,6 +156,7 @@ button {
 .nf-pill input {
   background: rgba(13,153,255,0.15); color: #7CC4FF; border-radius: 4px;
   padding: 1px 5px; width: auto; flex: 0 1 auto; font-size: 10.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 .seg-field { display: flex; align-items: center; gap: 4px; }
@@ -169,7 +177,7 @@ button {
 .seg {
   flex: 1; padding: 3px 0; text-align: center; border-radius: 4px;
   background: transparent; color: #B8B8B8; font-size: 10px; white-space: nowrap;
-  overflow: hidden; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
 .seg:hover { color: #F5F5F5; }
 .seg-active { background: rgba(255,255,255,0.16); color: #fff; }

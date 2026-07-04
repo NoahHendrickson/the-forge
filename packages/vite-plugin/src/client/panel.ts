@@ -223,7 +223,14 @@ export class Panel {
       this.headTag.textContent = data.tag
       if (data.source) {
         const srcText = `${data.source.file}:${data.source.line}:${data.source.col}`
-        this.headSrc.textContent = srcText
+        const slash = data.source.file.lastIndexOf('/')
+        const dirSpan = document.createElement('span')
+        dirSpan.className = 'src-dir'
+        dirSpan.textContent = slash === -1 ? '' : data.source.file.slice(0, slash + 1)
+        const tailSpan = document.createElement('span')
+        tailSpan.className = 'src-tail'
+        tailSpan.textContent = `${slash === -1 ? data.source.file : data.source.file.slice(slash + 1)}:${data.source.line}:${data.source.col}`
+        this.headSrc.replaceChildren(dirSpan, tailSpan)
         this.headSrc.title = srcText
         if (!this.headSrc.isConnected) this.head.append(this.headSrc)
       } else {

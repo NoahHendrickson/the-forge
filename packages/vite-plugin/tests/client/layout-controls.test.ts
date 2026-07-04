@@ -71,6 +71,16 @@ describe('SegmentField', () => {
     const label = sf.root.querySelector('.seg-field-label') as HTMLElement
     expect(label.nextElementSibling).toBe(track)
   })
+
+  it('every segment button carries a title so clipped labels are still discoverable', () => {
+    const field = new SegmentField({
+      label: 'Justify',
+      options: [{ value: 'space-between', label: 'Space between' }],
+      onInput: () => {},
+    })
+    const btn = field.root.querySelector('.seg') as HTMLElement
+    expect(btn.title).toBe('Space between')
+  })
 })
 
 describe('AlignMatrix', () => {

@@ -52,6 +52,18 @@ describe('Overlay CSS (Track A visibility correctness)', () => {
     expect(CSS).toMatch(/\[data-text-align\]\s*{\s*flex-direction:\s*column;\s*align-items:\s*stretch;\s*gap:\s*3px;?\s*}/)
     expect(CSS).toContain('[data-text-align] .seg-field-label { width: auto; }')
   })
+
+  it('seg labels ellipsize instead of hard-clipping', () => {
+    expect(CSS).toMatch(/\.seg\s*{[^}]*text-overflow:\s*ellipsis/s)
+  })
+  it('token pills ellipsize instead of hard-clipping', () => {
+    expect(CSS).toMatch(/\.nf-pill input\s*{[^}]*text-overflow:\s*ellipsis/s)
+  })
+  it('head-src is a flex row: dir ellipsizes, tail never shrinks', () => {
+    expect(CSS).toMatch(/\.panel-head-src\s*{[^}]*display:\s*flex/s)
+    expect(CSS).toMatch(/\.src-dir\s*{[^}]*text-overflow:\s*ellipsis/s)
+    expect(CSS).toMatch(/\.src-tail\s*{[^}]*flex:\s*none/s)
+  })
 })
 
 describe('Overlay (M2 additions)', () => {

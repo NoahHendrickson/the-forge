@@ -73,6 +73,17 @@ describe('Panel', () => {
     expect(srcEl).toBeFalsy()
   })
 
+  it('source path renders as dir + tail spans so the filename:line never gets cut', () => {
+    const { panel } = setup()
+    const src = panel.root.querySelector('.panel-head-src') as HTMLElement
+    const dir = src.querySelector('.src-dir') as HTMLElement
+    const tail = src.querySelector('.src-tail') as HTMLElement
+    expect(dir.textContent).toBe('src/')
+    expect(tail.textContent).toBe('Card.tsx:4:7')
+    expect(src.textContent).toBe('src/Card.tsx:4:7') // concatenation unchanged
+    expect(src.title).toBe('src/Card.tsx:4:7')
+  })
+
   it('wraps Compare/Reset buttons in a .panel-actions container', () => {
     const { panel } = setup()
     const actions = panel.root.querySelector('.panel-actions') as HTMLElement
