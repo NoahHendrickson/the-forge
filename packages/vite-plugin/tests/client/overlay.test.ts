@@ -1,9 +1,48 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { Overlay } from '../../src/client/overlay'
+import { Overlay, CSS } from '../../src/client/overlay'
 
 beforeEach(() => {
   document.body.innerHTML = ''
+})
+
+describe('Overlay CSS (Track A visibility correctness)', () => {
+  it('declares a shadow-root-wide [hidden] rule as the very first rule, forcing display:none regardless of other selectors', () => {
+    const trimmed = CSS.trim()
+    // Must be the first rule in the stylesheet so nothing declared later can outrank it.
+    expect(trimmed.startsWith('[hidden]')).toBe(true)
+    expect(trimmed).toMatch(/^\[hidden\]\s*{\s*display:\s*none\s*!important;?\s*}/)
+  })
+
+  it('no longer needs the now-redundant #panel .panel-section[hidden] guard', () => {
+    expect(CSS).not.toContain('.panel-section[hidden]')
+  })
+
+  it('declares the box-sizing: border-box reset as the SECOND rule, right after [hidden]', () => {
+    const rules = CSS.trim()
+      .split('}')
+      .map((r) => r.trim())
+      .filter(Boolean)
+    expect(rules[0]).toMatch(/^\[hidden\]/)
+    expect(rules[1]).toMatch(/^\*,\s*\*::before,\s*\*::after\s*{\s*box-sizing:\s*border-box;?/)
+  })
+
+  it('demotes the quiet #panel button rule to :where() so it cannot outrank later component button rules', () => {
+    // Regression test for the Critical specificity bug: a bare `#panel button { ... }`
+    // rule (1-0-1) was overriding `.seg`, `.seg-active`, `.am-dot`, `[data-add-layout]`,
+    // etc. (all 0-1-0/0-2-0) regardless of source order. :where() has zero specificity,
+    // so the later, more specific component rules always win.
+    expect(CSS).not.toMatch(/(?<!:where\()#panel button\s*{/)
+    expect(CSS).toContain(':where(#panel) button {')
+    expect(CSS).toContain(':where(#panel) button:hover {')
+    expect(CSS).toContain(':where(#panel) button:active {')
+  })
+
+  it('.layout-side .nf gets a fixed flex-basis so the Gap field does not stretch to ~60px tall', () => {
+    // .nf's own `flex: 1 1 40%` sets a 40% flex-basis that, inside the column-flex
+    // .layout-side, governs the field's HEIGHT — this override pins it back to content size.
+    expect(CSS).toMatch(/\.layout-side\s+\.nf\s*{\s*flex:\s*0\s+0\s+auto;?\s*}/)
+  })
 })
 
 describe('Overlay (M2 additions)', () => {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { Panel } from '../../src/client/panel'
+import { Panel, normalizeJustify, normalizeAlign } from '../../src/client/panel'
 import { DraftStore } from '../../src/client/drafts'
 import { buildInspectorData } from '../../src/client/inspector'
 
@@ -46,6 +46,38 @@ describe('Panel', () => {
     expect(fieldInput(panel, 'W').value).toBe('200')
     expect(fieldInput(panel, 'PX').value).toBe('8')
     expect(fieldInput(panel, 'PY').value).toBe('8')
+  })
+
+  it('renders the header as two separate nodes: tag and source', () => {
+    const { panel } = setup()
+    const tagEl = panel.root.querySelector('.panel-head-tag') as HTMLElement
+    const srcEl = panel.root.querySelector('.panel-head-src') as HTMLElement
+    expect(tagEl).toBeTruthy()
+    expect(srcEl).toBeTruthy()
+    expect(tagEl.textContent).toBe('div')
+    expect(srcEl.textContent).toBe('src/Card.tsx:4:7')
+    expect(srcEl.getAttribute('title')).toBe('src/Card.tsx:4:7')
+  })
+
+  it('header shows only the tag node when there is no source', () => {
+    document.body.innerHTML = `<div id="t" style="padding: 8px; width: 200px;"></div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    const tagEl = panel.root.querySelector('.panel-head-tag') as HTMLElement
+    const srcEl = panel.root.querySelector('.panel-head-src') as HTMLElement
+    expect(tagEl.textContent).toBe('div')
+    expect(srcEl).toBeFalsy()
+  })
+
+  it('wraps Compare/Reset buttons in a .panel-actions container', () => {
+    const { panel } = setup()
+    const actions = panel.root.querySelector('.panel-actions') as HTMLElement
+    expect(actions).toBeTruthy()
+    expect(actions.contains(panel.compareButton)).toBe(true)
+    expect(actions.contains(panel.resetButton)).toBe(true)
   })
 
   it('editing a linked padding field writes both longhands as drafts', () => {
@@ -132,8 +164,23 @@ describe('Panel', () => {
 
   it('section order is Layout, Size, Padding, Margin, Appearance regardless of visibility', () => {
     const { panel } = setup()
-    const titles = [...panel.root.querySelectorAll('.panel-section')].map((n) => n.textContent)
+    // Sections with an expand button now parent it inside the title row, so title row
+    // textContent includes the '⋯' glyph for expandable sections — compare the leading
+    // label text only (title row's first text-bearing segment) rather than exact equality.
+    const titles = [...panel.root.querySelectorAll('.panel-section')].map(
+      (n) => n.textContent?.replace('⋯', '').trim()
+    )
     expect(titles).toEqual(['Layout', 'Size', 'Padding', 'Margin', 'Appearance'])
+  })
+
+  it('expand button is parented inside the section title row, not the rows wrap', () => {
+    const { panel } = setup()
+    const sections = [...panel.root.querySelectorAll('.panel-section')]
+    const paddingTitle = sections.find((s) => s.textContent?.includes('Padding'))!
+    const btn = paddingTitle.querySelector('[data-expand="padding"]')
+    expect(btn).toBeTruthy()
+    // must NOT be inside a .panel-rows wrap
+    expect(paddingTitle.querySelector('.panel-rows [data-expand="padding"]')).toBeFalsy()
   })
 
   it('Layout section TITLE stays visible (but still first) for a non-flex element — empty state is title + add-auto-layout button, no floating headerless button', () => {
@@ -162,12 +209,43 @@ describe('Panel', () => {
     expect((sections[0] as HTMLElement).hidden).toBe(false)
   })
 
+  it('layout controls compose a layout-grid with a matrix-tile and a layout-side column', () => {
+    const { panel } = flexSetup()
+    const controlsWrap = panel.root.querySelector('.layout-controls') as HTMLElement
+    const grid = controlsWrap.querySelector('.layout-grid') as HTMLElement
+    expect(grid).toBeTruthy()
+    const tile = grid.querySelector('.matrix-tile') as HTMLElement
+    const side = grid.querySelector('.layout-side') as HTMLElement
+    expect(tile).toBeTruthy()
+    expect(side).toBeTruthy()
+    // matrix-tile wraps the align-matrix
+    expect(tile.querySelector('.align-matrix')).toBeTruthy()
+    // layout-side contains Gap (a .nf) then Wrap (a .seg-field), in that order
+    const gapField = side.querySelector('.nf')
+    const wrapField = [...side.querySelectorAll('.seg-field')].find(
+      (n) => n.querySelector('.seg-field-label')?.textContent === 'Wrap'
+    )
+    expect(gapField).toBeTruthy()
+    expect(wrapField).toBeTruthy()
+    // Direction segment field renders as a full row OUTSIDE the grid (before it)
+    const directionField = [...controlsWrap.querySelectorAll('.seg-field')].find(
+      (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
+    )!
+    expect(grid.contains(directionField)).toBe(false)
+  })
+
   it('non-flex element shows only the add-auto-layout button in Layout section', () => {
     const { el, panel, drafts } = setup()
     const btn = panel.root.querySelector('[data-add-layout]') as HTMLElement
     expect(btn).toBeTruthy()
     btn.click()
     expect(drafts.current(el, 'display')).toBe('flex')
+  })
+
+  it('add-auto-layout button label is prefixed with "+ " per the empty-state plan', () => {
+    const { panel } = setup()
+    const btn = panel.root.querySelector('[data-add-layout]') as HTMLElement
+    expect(btn.textContent).toBe('+ Add auto layout')
   })
 
   it('add-auto-layout reveals layout controls after refresh', () => {
@@ -217,6 +295,32 @@ describe('Panel', () => {
     expect(drafts.current(el, 'justify-content')).toBe('space-between')
     expect(drafts.current(el, 'gap')).toBeNull()
     expect(el.style.getPropertyValue('gap')).toBe('16px')
+  })
+
+  it('default flex container (computed justify/align normal or empty) shows an active dot at flex-start/flex-start', () => {
+    // flexSetup() sets only `display: flex` — no justify-content/align-items authored.
+    // jsdom's getComputedStyle reports '' for these (real browsers report 'normal'); both
+    // must normalize to flex-start so the matrix isn't stuck with zero active dots.
+    const { panel } = flexSetup()
+    const active = panel.root.querySelector('.am-dot.am-active') as HTMLElement
+    expect(active).toBeTruthy()
+    expect(active.dataset.j).toBe('flex-start')
+    expect(active.dataset.a).toBe('flex-start')
+  })
+
+  it('space-between with no explicit align-items shows active dot in 3-dot space-between mode with flex-start align', () => {
+    const { panel } = flexSetup('justify-content: space-between;')
+    const dots = [...panel.root.querySelectorAll('.am-dot')] as HTMLElement[]
+    expect(dots).toHaveLength(3)
+    const active = panel.root.querySelector('.am-dot.am-active') as HTMLElement
+    expect(active).toBeTruthy()
+    expect(active.dataset.a).toBe('flex-start')
+  })
+
+  it('explicit align-items: stretch shows no active dot (stretch is represented via Fill, not a matrix position)', () => {
+    const { panel } = flexSetup('align-items: stretch;')
+    const active = panel.root.querySelector('.am-dot.am-active')
+    expect(active).toBeNull()
   })
 
   it('align matrix click drafts justify-content and align-items', () => {
@@ -529,5 +633,48 @@ describe('Panel onBeforeEdit pre-hook (M2b Task 4)', () => {
     select.dispatchEvent(new Event('change', { bubbles: true }))
     expect(onBeforeEdit).toHaveBeenCalledWith(el)
     expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
+  })
+})
+
+describe('normalizeJustify', () => {
+  it('maps normal, start, left, and the jsdom empty string to flex-start', () => {
+    expect(normalizeJustify('normal')).toBe('flex-start')
+    expect(normalizeJustify('start')).toBe('flex-start')
+    expect(normalizeJustify('left')).toBe('flex-start')
+    expect(normalizeJustify('')).toBe('flex-start')
+  })
+
+  it('maps end and right to flex-end', () => {
+    expect(normalizeJustify('end')).toBe('flex-end')
+    expect(normalizeJustify('right')).toBe('flex-end')
+  })
+
+  it('passes through center and space-between unchanged', () => {
+    expect(normalizeJustify('center')).toBe('center')
+    expect(normalizeJustify('space-between')).toBe('space-between')
+  })
+})
+
+describe('normalizeAlign', () => {
+  it('maps normal, start, and the jsdom empty string to flex-start', () => {
+    expect(normalizeAlign('normal')).toBe('flex-start')
+    expect(normalizeAlign('start')).toBe('flex-start')
+    expect(normalizeAlign('')).toBe('flex-start')
+  })
+
+  it('maps end to flex-end', () => {
+    expect(normalizeAlign('end')).toBe('flex-end')
+  })
+
+  it('passes through center unchanged', () => {
+    expect(normalizeAlign('center')).toBe('center')
+  })
+
+  it('does NOT map stretch — it must match no dot in the align matrix', () => {
+    const result = normalizeAlign('stretch')
+    expect(result).toBe('stretch')
+    expect(result).not.toBe('flex-start')
+    expect(result).not.toBe('flex-end')
+    expect(result).not.toBe('center')
   })
 })
