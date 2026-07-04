@@ -9,19 +9,36 @@ const DESIGN_COMMAND = `Pull pending design edits from The Forge and apply them.
 `
 
 export function setupProjectConfig(root: string, mcpBinPath: string): void {
-  // .mcp.json — additive merge
+  // .mcp.json — additive merge. Distinguish "file doesn't exist" (proceed with {})
+  // from "file exists but isn't valid JSON" (skip the write entirely — clobbering a
+  // user's malformed-but-intentional file would destroy whatever they were mid-edit on).
   const mcpFile = path.join(root, '.mcp.json')
-  let config: { mcpServers?: Record<string, unknown> } = {}
+  let raw: string | null = null
   try {
-    config = JSON.parse(fs.readFileSync(mcpFile, 'utf8'))
+    raw = fs.readFileSync(mcpFile, 'utf8')
   } catch {
-    config = {}
+    raw = null
   }
-  const servers = (config.mcpServers ??= {})
-  const desired = { command: 'node', args: [mcpBinPath] }
-  if (JSON.stringify(servers['the-forge']) !== JSON.stringify(desired)) {
-    servers['the-forge'] = desired
-    fs.writeFileSync(mcpFile, JSON.stringify(config, null, 2) + '\n')
+
+  let config: { mcpServers?: Record<string, unknown> } | null = null
+  if (raw === null) {
+    config = {}
+  } else {
+    try {
+      config = JSON.parse(raw)
+    } catch {
+      console.warn('[the-forge] .mcp.json exists but is not valid JSON — skipping MCP registration')
+      config = null
+    }
+  }
+
+  if (config) {
+    const servers = (config.mcpServers ??= {})
+    const desired = { command: 'node', args: [mcpBinPath] }
+    if (JSON.stringify(servers['the-forge']) !== JSON.stringify(desired)) {
+      servers['the-forge'] = desired
+      fs.writeFileSync(mcpFile, JSON.stringify(config, null, 2) + '\n')
+    }
   }
 
   // /design command — write only when missing or different

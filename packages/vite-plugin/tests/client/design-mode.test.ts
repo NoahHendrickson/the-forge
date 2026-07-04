@@ -13,6 +13,7 @@ const liveModes: DesignMode[] = []
 
 beforeEach(() => {
   document.body.innerHTML = ''
+  document.head.innerHTML = ''
   vi.restoreAllMocks()
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
     cb(0)
@@ -331,6 +332,59 @@ describe('DesignMode send-to-agent (M4)', () => {
     await Promise.resolve()
     expect(onSendComplete).toHaveBeenCalledTimes(1)
   })
+
+  it('disables the send button while the POST is in flight, and re-enables on success', async () => {
+    let resolveFetch!: (v: { ok: boolean; json: () => Promise<{ id: string }> }) => void
+    const fetchMock = vi.fn().mockReturnValue(new Promise((resolve) => (resolveFetch = resolve)))
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+
+    overlay.sendButton.click()
+    await Promise.resolve()
+    expect(overlay.sendButton.disabled).toBe(true)
+
+    resolveFetch({ ok: true, json: async () => ({ id: 'q1' }) })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(overlay.sendButton.disabled).toBe(false)
+  })
+
+  it('disables the send button while the POST is in flight, and re-enables on failure', async () => {
+    let rejectFetch!: (e: Error) => void
+    const fetchMock = vi.fn().mockReturnValue(new Promise((_resolve, reject) => (rejectFetch = reject)))
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+
+    overlay.sendButton.click()
+    await Promise.resolve()
+    expect(overlay.sendButton.disabled).toBe(true)
+
+    rejectFetch(new Error('network down'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(overlay.sendButton.disabled).toBe(false)
+  })
+
+  it('two rapid clicks result in exactly one fetch (re-entrancy guard)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q1' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+
+    overlay.sendButton.click()
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('DesignMode verifier wiring (M4 Task 4)', () => {
@@ -349,6 +403,11 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
     const { overlay, mode, drafts } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
+    // the verifier neutralizes draft inline styles before measuring, so "the code
+    // adopted the value" must come from somewhere other than the draft itself
+    const style = document.createElement('style')
+    style.textContent = '.btn { padding-top: 24px; }'
+    document.head.appendChild(style)
     drafts.apply(btn, 'padding-top', '24px')
     overlay.sendButton.click()
     await Promise.resolve()
@@ -399,5 +458,33 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
     return vi.advanceTimersByTimeAsync(4000).then(() => {
       expect(fetchMock).not.toHaveBeenCalled()
     })
+  })
+
+  it('refreshes the panel and re-measures the selection outline when a verify update arrives', async () => {
+    const fetchMock = vi.fn()
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'q1' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    const style = document.createElement('style')
+    style.textContent = '.btn { padding-top: 24px; }'
+    document.head.appendChild(style)
+    drafts.apply(btn, 'padding-top', '24px')
+    mode.select(btn) // panel is showing this element, as it might be while awaiting verification
+
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const refreshSpy = vi.spyOn(panel, 'refresh')
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(refreshSpy).toHaveBeenCalled()
   })
 })

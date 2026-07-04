@@ -165,4 +165,26 @@ describe('DraftStore', () => {
     store.commit(d)
     expect(spy).not.toHaveBeenCalled()
   })
+
+  it('commit(el, props) removes only the given properties, leaving other drafts intact', () => {
+    const store = new DraftStore()
+    const d = el()
+    store.apply(d, 'padding-top', '12px')
+    store.apply(d, 'margin-top', '8px')
+    store.commit(d, ['padding-top'])
+    expect(d.style.getPropertyValue('padding-top')).toBe('')
+    expect(d.style.getPropertyValue('margin-top')).toBe('8px') // inline still applied
+    expect(store.current(d, 'margin-top')).toBe('8px') // draft still tracked
+    expect(store.current(d, 'padding-top')).toBeNull()
+    expect(store.hasDrafts(d)).toBe(true) // element not forgotten — margin-top draft remains
+  })
+
+  it('commit(el, props) forgets the element once its last targeted property empties the map', () => {
+    const store = new DraftStore()
+    const d = el()
+    store.apply(d, 'padding-top', '12px')
+    store.commit(d, ['padding-top'])
+    expect(store.hasDrafts(d)).toBe(false)
+    expect(store.elementCount()).toBe(0)
+  })
 })

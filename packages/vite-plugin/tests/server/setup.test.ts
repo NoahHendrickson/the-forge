@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -38,5 +38,27 @@ describe('setupProjectConfig', () => {
     const before = fs.statSync(file).mtimeMs
     setupProjectConfig(root, '/abs/dist/mcp.js')
     expect(fs.statSync(file).mtimeMs).toBe(before)
+  })
+
+  describe('malformed .mcp.json', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('leaves an existing malformed .mcp.json byte-identical and still creates design.md', () => {
+      const mcpFile = path.join(root, '.mcp.json')
+      const original = '{invalid'
+      fs.writeFileSync(mcpFile, original)
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+      setupProjectConfig(root, '/abs/dist/mcp.js')
+
+      expect(fs.readFileSync(mcpFile, 'utf8')).toBe(original)
+      const cmd = fs.readFileSync(path.join(root, '.claude', 'commands', 'design.md'), 'utf8')
+      expect(cmd).toContain('pull_design_edits')
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[the-forge] .mcp.json exists but is not valid JSON — skipping MCP registration'
+      )
+    })
   })
 })

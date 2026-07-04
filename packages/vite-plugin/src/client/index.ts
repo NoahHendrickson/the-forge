@@ -38,13 +38,21 @@ export class DesignMode {
     this.verifier = new Verifier(this.sent, this.drafts, (summary) => {
       this.verifierSummary = summary
       this.refreshStatus()
+      // a commit/mismatch may change the computed style of the element the panel is
+      // currently showing (or the selection outline's geometry) — refresh both.
+      this.panel.refresh()
+      this.remeasure()
     })
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
     overlay.sendButton.addEventListener('click', () => {
+      if (overlay.sendButton.disabled) return // re-entrancy guard: a POST is already in flight
       const originalLabel = 'Send to agent'
       const { request, elements } = buildChangeRequestWithElements(this.drafts)
       const md = renderMarkdown(request)
-      const onSendFailed = (): void => this.flashButton(overlay.sendButton, 'Send failed', originalLabel)
+      const onSendFailed = (): void => {
+        overlay.sendButton.disabled = false
+        this.flashButton(overlay.sendButton, 'Send failed', originalLabel)
+      }
       const onSendOk = (id: string): void => {
         const mapping = [...elements.entries()].map(([el, change]) => ({
           el,
@@ -53,9 +61,11 @@ export class DesignMode {
         }))
         this.sent.add(id, mapping)
         this.verifier.start()
+        overlay.sendButton.disabled = false
         this.flashButton(overlay.sendButton, 'Sent ✓', originalLabel)
         this.onSendComplete?.()
       }
+      overlay.sendButton.disabled = true
       // nesting is deliberate: the send test counts microtask ticks — re-check it before flattening to async/await
       fetch('/__the-forge/queue', {
         method: 'POST',
