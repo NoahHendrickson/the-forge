@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Queue } from './queue'
+import { dispatch as realDispatch, type DispatchOpts, type DispatchResult } from './dispatch'
 
 const MAX_BODY = 1024 * 1024
 
@@ -66,9 +67,22 @@ function isAllowedHost(host: string | undefined, allowedHosts: string[]): boolea
 
 // Mutating endpoints that require the shared secret when one is configured. GET /status is
 // deliberately excluded: it's read-only and only exposes ids/statuses, which are non-sensitive.
-const MUTATING_PATHS = new Set(['/__the-forge/queue', '/__the-forge/pull', '/__the-forge/mark'])
+const MUTATING_PATHS = new Set(['/__the-forge/queue', '/__the-forge/pull', '/__the-forge/mark', '/__the-forge/dispatch'])
 
-export function createForgeMiddleware(queue: Queue, allowedHosts: string[] = [], secret?: string) {
+export interface DispatchConfig {
+  agent: DispatchOpts['agent']
+  channelsFlag: boolean
+  /** Injectable for tests — defaults to the real dispatch ladder (dispatch.ts). Never invokes
+   * a real tmux/osascript/open in tests; production callers omit this and get the real thing. */
+  dispatchFn?: (opts: DispatchOpts) => Promise<DispatchResult>
+}
+
+export function createForgeMiddleware(
+  queue: Queue,
+  allowedHosts: string[] = [],
+  secret?: string,
+  dispatchConfig: DispatchConfig = { agent: 'claude-code', channelsFlag: false }
+) {
   return (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     const url = req.url ?? ''
     if (!url.startsWith('/__the-forge/')) return next()
@@ -138,6 +152,30 @@ export function createForgeMiddleware(queue: Queue, allowedHosts: string[] = [],
             return send(res, 400, { error: 'ids + status(applied|failed) required' })
           }
           send(res, 200, { marked: queue.mark(ids, status, note).map((i) => i.id) })
+        })
+        .catch((e: Error) => send(res, 400, { error: e.message }))
+      return
+    }
+
+    if (pathname === '/__the-forge/dispatch') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      readBody(req)
+        .then((body) => {
+          const { agent, markdown } = (body ?? {}) as { agent?: DispatchOpts['agent']; markdown?: string }
+          // Newest pending item by createdAt — the one the Send button that triggered this
+          // POST almost certainly just queued. Sorted explicitly rather than relying on
+          // queue.list()'s on-disk ordering, which is an implementation detail of Queue.
+          const pending = queue
+            .list()
+            .filter((i) => i.status === 'pending')
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]
+          const opts: DispatchOpts = {
+            agent: agent ?? dispatchConfig.agent,
+            channelsFlag: dispatchConfig.channelsFlag,
+            markdown: markdown ?? pending?.markdown ?? '',
+          }
+          const run = dispatchConfig.dispatchFn ?? realDispatch
+          return run(opts).then((result) => send(res, 200, result))
         })
         .catch((e: Error) => send(res, 400, { error: e.message }))
       return

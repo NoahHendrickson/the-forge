@@ -5,6 +5,7 @@ import os from 'node:os'
 import { EventEmitter } from 'node:events'
 import { Queue } from '../../src/server/queue'
 import { createForgeMiddleware, writeEndpointFile, removeEndpointFile } from '../../src/server/endpoints'
+import type { DispatchResult } from '../../src/server/dispatch'
 
 function fakeReq(method: string, url: string, body?: unknown, headers: Record<string, string> = {}) {
   const req = new EventEmitter() as EventEmitter & { method: string; url: string; headers: Record<string, string> }
@@ -257,6 +258,102 @@ describe('forge middleware', () => {
       await run(mw, fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { host: 'localhost:5173' }), res)
       expect(res.statusCode).toBe(200)
     })
+  })
+})
+
+describe('POST /__the-forge/dispatch', () => {
+  it('runs the injected dispatch function and returns its result as JSON', async () => {
+    const fakeResult: DispatchResult = { rung: 'tmux', detail: 'typed /design into tmux pane %1' }
+    let receivedOpts: unknown = null
+    const mwWithDispatch = createForgeMiddleware(queue, [], undefined, {
+      agent: 'claude-code',
+      channelsFlag: false,
+      dispatchFn: async (opts) => {
+        receivedOpts = opts
+        return fakeResult
+      },
+    })
+    const res = fakeRes()
+    await run(mwWithDispatch, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toEqual(fakeResult)
+    expect(receivedOpts).toMatchObject({ agent: 'claude-code', channelsFlag: false })
+  })
+
+  it('defaults markdown to the newest pending queue item (not the oldest)', async () => {
+    let clock = 1_000
+    const orderedQueue = new Queue(dir, () => (clock += 1_000))
+    orderedQueue.add({}, 'oldest markdown')
+    orderedQueue.add({}, 'newest markdown')
+    let receivedOpts: { markdown?: string } = {}
+    const mwWithDispatch = createForgeMiddleware(orderedQueue, [], undefined, {
+      agent: 'claude-code',
+      channelsFlag: false,
+      dispatchFn: async (opts) => {
+        receivedOpts = opts
+        return { rung: 'manual', detail: 'x' }
+      },
+    })
+    const res = fakeRes()
+    await run(mwWithDispatch, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(200)
+    expect(receivedOpts.markdown).toBe('newest markdown')
+  })
+
+  it('defaults the agent from plugin config but allows body.agent to override it', async () => {
+    let receivedOpts: { agent?: string } = {}
+    const mwWithDispatch = createForgeMiddleware(queue, [], undefined, {
+      agent: 'claude-code',
+      channelsFlag: false,
+      dispatchFn: async (opts) => {
+        receivedOpts = opts
+        return { rung: 'manual', detail: 'x' }
+      },
+    })
+    const res = fakeRes()
+    await run(mwWithDispatch, fakeReq('POST', '/__the-forge/dispatch', { agent: 'cursor' }, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(200)
+    expect(receivedOpts.agent).toBe('cursor')
+  })
+
+  it('rejects non-POST with 405', async () => {
+    const mwWithDispatch = createForgeMiddleware(queue, [], undefined, {
+      agent: 'claude-code',
+      channelsFlag: false,
+      dispatchFn: async () => ({ rung: 'manual', detail: 'x' }),
+    })
+    const res = fakeRes()
+    await run(mwWithDispatch, fakeReq('GET', '/__the-forge/dispatch', undefined, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(405)
+  })
+
+  it('is guarded by the shared secret like other mutating endpoints', async () => {
+    const SECRET = 'dispatch-secret'
+    const mwWithDispatch = createForgeMiddleware(queue, [], SECRET, {
+      agent: 'claude-code',
+      channelsFlag: false,
+      dispatchFn: async () => ({ rung: 'manual', detail: 'x' }),
+    })
+    const res = fakeRes()
+    await run(mwWithDispatch, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(403)
+
+    const ok = fakeRes()
+    await run(
+      mwWithDispatch,
+      fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173', 'x-forge-secret': SECRET }),
+      ok
+    )
+    expect(ok.statusCode).toBe(200)
+  })
+
+  it('uses the real dispatch ladder by default when no dispatchFn is injected (smoke — resolves without throwing)', async () => {
+    const mwDefault = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false })
+    const res = fakeRes()
+    await run(mwDefault, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(200)
+    const body = JSON.parse(res.body)
+    expect(typeof body.rung).toBe('string')
   })
 })
 
