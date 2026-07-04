@@ -50,29 +50,45 @@ function collapse(items: Map<string, { beforeCss: string; afterCss: string }>): 
   return out
 }
 
+function measureComputed(el: TaggedElement, props: Iterable<string>): Map<string, string> {
+  const computed = getComputedStyle(el)
+  const out = new Map<string, string>()
+  for (const prop of props) out.set(prop, computed.getPropertyValue(prop))
+  return out
+}
+
 export function buildChangeRequest(drafts: DraftStore, theme: Theme = readTheme()): ChangeRequest {
   const elements: ElementChange[] = []
 
   for (const [el, props] of drafts.entries()) {
+    if (!el.isConnected) continue
+
     const wasComparing = drafts.isComparing(el)
+    const inlineTransition = el.style.getPropertyValue('transition')
+    el.style.setProperty('transition', 'none')
 
-    // measure "after" (drafted) computed values
-    if (wasComparing) drafts.compare(el, false)
-    const afterComputed = getComputedStyle(el)
-    const afterCss = new Map<string, string>()
-    for (const prop of props.keys()) afterCss.set(prop, afterComputed.getPropertyValue(prop))
+    let raw: Map<string, { beforeCss: string; afterCss: string }>
+    try {
+      // measure "after" (drafted) computed values
+      if (wasComparing) drafts.compare(el, false)
+      const afterCss = measureComputed(el, props.keys())
 
-    // measure "before" (original) computed values
-    drafts.compare(el, true)
-    const beforeComputed = getComputedStyle(el)
-    const raw = new Map<string, { beforeCss: string; afterCss: string }>()
-    for (const prop of props.keys()) {
-      raw.set(prop, {
-        beforeCss: beforeComputed.getPropertyValue(prop),
-        afterCss: afterCss.get(prop)!,
-      })
+      // measure "before" (original) computed values
+      drafts.compare(el, true)
+      const beforeCss = measureComputed(el, props.keys())
+
+      raw = new Map<string, { beforeCss: string; afterCss: string }>()
+      for (const prop of props.keys()) {
+        raw.set(prop, {
+          beforeCss: beforeCss.get(prop)!,
+          afterCss: afterCss.get(prop)!,
+        })
+      }
+      drafts.compare(el, wasComparing)
+    } finally {
+      if (inlineTransition) el.style.setProperty('transition', inlineTransition)
+      else el.style.removeProperty('transition')
     }
-    drafts.compare(el, wasComparing)
 
     const className = typeof el.className === 'string' ? el.className : [...el.classList].join(' ')
     const changes: ChangeItem[] = []

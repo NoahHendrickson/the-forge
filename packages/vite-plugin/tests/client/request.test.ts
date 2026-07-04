@@ -82,6 +82,32 @@ describe('buildChangeRequest', () => {
     expect(c.beforeCss).toBe('10px')
     expect(c.afterCss).toBe('24px')
   })
+
+  it('suppresses and restores inline transitions during measurement', () => {
+    const el = makeButton()
+    el.style.setProperty('transition', 'opacity 0.3s')
+    const store = new DraftStore()
+    store.apply(el, 'padding-top', '24px')
+    buildChangeRequest(store, TW)
+    expect(el.style.getPropertyValue('transition')).toBe('opacity 0.3s')
+  })
+
+  it('leaves no inline transition behind when none existed', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    store.apply(el, 'padding-top', '24px')
+    buildChangeRequest(store, TW)
+    expect(el.style.getPropertyValue('transition')).toBe('')
+  })
+
+  it('skips elements detached from the document (e.g. replaced by HMR)', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    store.apply(el, 'padding-top', '24px')
+    el.remove()
+    const req = buildChangeRequest(store, TW)
+    expect(req.elements).toHaveLength(0)
+  })
 })
 
 describe('renderMarkdown', () => {
