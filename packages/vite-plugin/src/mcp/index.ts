@@ -1,21 +1,14 @@
 #!/usr/bin/env node
-import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
 import { handleMessage, type ForgeBackend, type JsonRpcMessage } from './protocol'
 import { baseUrl, type ForgeEndpoint } from './url'
+import { discoverEndpoint } from './discover'
 
 const NOT_RUNNING_MESSAGE = 'The Forge dev server is not running — start your Vite dev server first.'
 
 function readEndpoint(): ForgeEndpoint | null {
-  try {
-    const raw = fs.readFileSync(path.join(process.cwd(), '.the-forge', 'endpoint.json'), 'utf8')
-    const data = JSON.parse(raw) as { port?: number; host?: string }
-    if (typeof data.port !== 'number') return null
-    return { port: data.port, host: data.host }
-  } catch {
-    return null
-  }
+  return discoverEndpoint(path.join(process.cwd(), '.the-forge'))
 }
 
 function makeBackend(): ForgeBackend {

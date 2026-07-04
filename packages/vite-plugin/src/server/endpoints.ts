@@ -109,7 +109,17 @@ export function createForgeMiddleware(queue: Queue) {
   }
 }
 
-export function writeEndpointFile(dir: string, port: number, host?: string): void {
+export function writeEndpointFile(dir: string, port: number, host?: string): string {
   fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, 'endpoint.json'), JSON.stringify({ port, host, pid: process.pid }))
+  const filePath = path.join(dir, `endpoint-${process.pid}.json`)
+  fs.writeFileSync(filePath, JSON.stringify({ port, host, pid: process.pid }))
+  return filePath
+}
+
+export function removeEndpointFile(dir: string): void {
+  try {
+    fs.unlinkSync(path.join(dir, `endpoint-${process.pid}.json`))
+  } catch {
+    // ignore — file may not exist, or dir may not exist
+  }
 }

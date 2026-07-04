@@ -4,7 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { EventEmitter } from 'node:events'
 import { Queue } from '../../src/server/queue'
-import { createForgeMiddleware, writeEndpointFile } from '../../src/server/endpoints'
+import { createForgeMiddleware, writeEndpointFile, removeEndpointFile } from '../../src/server/endpoints'
 
 function fakeReq(method: string, url: string, body?: unknown, headers: Record<string, string> = {}) {
   const req = new EventEmitter() as EventEmitter & { method: string; url: string; headers: Record<string, string> }
@@ -145,17 +145,44 @@ describe('forge middleware', () => {
 })
 
 describe('writeEndpointFile', () => {
-  it('writes port and pid', () => {
-    writeEndpointFile(dir, 5199)
-    const data = JSON.parse(fs.readFileSync(path.join(dir, 'endpoint.json'), 'utf8'))
+  it('writes port and pid to a per-process file', () => {
+    const filePath = writeEndpointFile(dir, 5199)
+    expect(filePath).toBe(path.join(dir, `endpoint-${process.pid}.json`))
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'))
     expect(data.port).toBe(5199)
     expect(data.pid).toBe(process.pid)
   })
 
   it('writes host when provided (e.g. IPv6)', () => {
-    writeEndpointFile(dir, 5199, '::1')
-    const data = JSON.parse(fs.readFileSync(path.join(dir, 'endpoint.json'), 'utf8'))
+    const filePath = writeEndpointFile(dir, 5199, '::1')
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'))
     expect(data.port).toBe(5199)
     expect(data.host).toBe('::1')
+  })
+
+  it('second write from the same pid overwrites rather than duplicating', () => {
+    writeEndpointFile(dir, 5199)
+    writeEndpointFile(dir, 6000)
+    const files = fs.readdirSync(dir).filter((f) => f.startsWith('endpoint-'))
+    expect(files).toHaveLength(1)
+    const data = JSON.parse(fs.readFileSync(path.join(dir, files[0]), 'utf8'))
+    expect(data.port).toBe(6000)
+  })
+})
+
+describe('removeEndpointFile', () => {
+  it('deletes this process endpoint file', () => {
+    const filePath = writeEndpointFile(dir, 5199)
+    expect(fs.existsSync(filePath)).toBe(true)
+    removeEndpointFile(dir)
+    expect(fs.existsSync(filePath)).toBe(false)
+  })
+
+  it('ignores errors when the file does not exist', () => {
+    expect(() => removeEndpointFile(dir)).not.toThrow()
+  })
+
+  it('ignores errors when the directory does not exist', () => {
+    expect(() => removeEndpointFile(path.join(dir, 'nonexistent'))).not.toThrow()
   })
 })

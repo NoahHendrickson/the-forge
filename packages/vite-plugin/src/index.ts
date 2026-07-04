@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vite'
 import { tagJsxSource } from './transform'
 import { Queue } from './server/queue'
-import { createForgeMiddleware, writeEndpointFile } from './server/endpoints'
+import { createForgeMiddleware, writeEndpointFile, removeEndpointFile } from './server/endpoints'
 import { setupProjectConfig } from './server/setup'
 
 export const CLIENT_ID = '/@the-forge/client'
@@ -29,6 +29,8 @@ export function theForge(): Plugin {
         const address = server.httpServer?.address()
         if (address && typeof address === 'object') writeEndpointFile(forgeDir, address.port, address.address)
       })
+      server.httpServer?.once('close', () => removeEndpointFile(forgeDir))
+      process.once('exit', () => removeEndpointFile(forgeDir))
       const dir = path.dirname(fileURLToPath(import.meta.url))
       setupProjectConfig(root, path.join(dir, 'mcp.js'))
     },
