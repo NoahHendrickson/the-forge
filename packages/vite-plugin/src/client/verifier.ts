@@ -5,6 +5,12 @@ import type { TaggedElement } from './source'
 
 const POLL_MS = 2000
 
+/**
+ * Units: `verified` and `missing` are per-element counts (how many elements in the
+ * entry fully matched, or could not be located). `mismatched` is per-property — a
+ * single element with three drafted properties that all fail to match contributes
+ * three entries here, not one.
+ */
 export interface VerifyResult {
   verified: number
   mismatched: Array<{ property: string; expected: string; actual: string }>
@@ -20,6 +26,8 @@ function locate(el: TaggedElement, dcSource: string | null, doc: Document): Tagg
 /** Per-element verification outcome, used to decide whether that element's drafts can be committed. */
 interface ElementVerification {
   el: TaggedElement
+  /** properties this entry sent for this element — the only ones eligible for a targeted commit */
+  properties: string[]
   verified: number
   mismatched: Array<{ property: string; expected: string; actual: string }>
   missing: number
@@ -27,18 +35,44 @@ interface ElementVerification {
 
 function verifyElements(entry: SentEntry, doc: Document = document): ElementVerification[] {
   return entry.elements.map((el) => {
+    const properties = el.changes.map((c) => c.property)
     const target = locate(el.el, el.dcSource, doc)
-    if (!target) return { el: el.el, verified: 0, mismatched: [], missing: el.changes.length }
-    const computed = getComputedStyle(target)
+    if (!target) return { el: el.el, properties, verified: 0, mismatched: [], missing: el.changes.length }
+
+    // Neutralize the draft's inline styles before measuring — inline styles win the
+    // cascade, so if the sent draft is still applied as inline style (e.g. the DOM
+    // node survived Fast Refresh), getComputedStyle would just read back what WE put
+    // there, reporting "implemented" even if the underlying code never adopted the
+    // value. Stash and strip each sent property (plus transition, to avoid measuring
+    // mid-transition values), measure, then restore in a finally.
+    const inlineTransition = target.style.getPropertyValue('transition')
+    target.style.setProperty('transition', 'none')
+    const stashed = new Map<string, string>()
+    for (const change of el.changes) {
+      stashed.set(change.property, target.style.getPropertyValue(change.property))
+      target.style.removeProperty(change.property)
+    }
+
     const mismatched: ElementVerification['mismatched'] = []
     let verified = 0
-    for (const change of el.changes) {
-      const actual = computed.getPropertyValue(change.property).trim()
-      const expected = change.afterCss.trim()
-      if (actual === expected) verified++
-      else mismatched.push({ property: change.property, expected, actual })
+    try {
+      const computed = getComputedStyle(target)
+      for (const change of el.changes) {
+        const actual = computed.getPropertyValue(change.property).trim()
+        const expected = change.afterCss.trim()
+        if (actual === expected) verified++
+        else mismatched.push({ property: change.property, expected, actual })
+      }
+    } finally {
+      for (const [prop, value] of stashed) {
+        if (value) target.style.setProperty(prop, value)
+        else target.style.removeProperty(prop)
+      }
+      if (inlineTransition) target.style.setProperty('transition', inlineTransition)
+      else target.style.removeProperty('transition')
     }
-    return { el: el.el, verified, mismatched, missing: 0 }
+
+    return { el: el.el, properties, verified, mismatched, missing: 0 }
   })
 }
 
@@ -59,8 +93,9 @@ interface Counters {
   failed: number
 }
 
-function renderSummary(counters: Counters): string {
+function renderSummary(counters: Counters, pending = 0): string {
   const parts: string[] = []
+  if (pending > 0) parts.push(`${pending} applying…`)
   if (counters.implemented) parts.push(`${counters.implemented} implemented ✓`)
   if (counters.mismatch) parts.push(`${counters.mismatch} mismatch ⚠`)
   if (counters.unverified) parts.push(`${counters.unverified} applied (unverified)`)
@@ -105,7 +140,7 @@ export class Verifier {
           else if (item.status === 'failed') this.handleFailed(item.id)
         }
         if (this.sent.size() === 0) this.stop()
-        this.onUpdate(renderSummary(this.counters))
+        this.onUpdate(renderSummary(this.counters, this.sent.size()))
       })
       .catch(() => {
         // transient network errors during polling are silently retried next tick
@@ -124,7 +159,7 @@ export class Verifier {
       } else if (ev.mismatched.length > 0) {
         this.counters.mismatch += 1
       } else {
-        this.drafts.commit(ev.el)
+        this.drafts.commit(ev.el, ev.properties)
         this.counters.implemented += 1
       }
     }
