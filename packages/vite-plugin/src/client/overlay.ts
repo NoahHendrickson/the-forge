@@ -316,7 +316,7 @@ export class Overlay {
 
   private outline = document.createElement('div')
   private selectOutline = document.createElement('div')
-  private status = document.createElement('div')
+  status = document.createElement('div')
   private statusLabel = document.createElement('span')
   private sentLabel = document.createElement('span')
   private watchLabel = document.createElement('span')
