@@ -6,6 +6,7 @@ interface EndpointFileData {
   port?: number
   host?: string
   pid?: number
+  secret?: string
 }
 
 function isAlive(pid: number): boolean {
@@ -59,5 +60,5 @@ export function discoverEndpoint(dir: string): ForgeEndpoint | null {
   }
 
   if (!best) return null
-  return { port: best.data.port as number, host: best.data.host }
+  return { port: best.data.port as number, host: best.data.host, secret: best.data.secret }
 }

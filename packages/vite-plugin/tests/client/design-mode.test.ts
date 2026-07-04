@@ -486,6 +486,36 @@ describe('DesignMode send-to-agent (M4)', () => {
     expect(overlay.sendButton.textContent).toBe('Sent ✓')
   })
 
+  it('send includes X-Forge-Secret header when globalThis.__THE_FORGE__.secret is set', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q1' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    ;(globalThis as { __THE_FORGE__?: { secret?: string } }).__THE_FORGE__ = { secret: 'shh-secret' }
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    const headers = fetchMock.mock.calls[0][1].headers
+    expect(headers['X-Forge-Secret']).toBe('shh-secret')
+    delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
+  })
+
+  it('send omits X-Forge-Secret header when no secret is configured', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q1' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    const headers = fetchMock.mock.calls[0][1].headers
+    expect(headers['X-Forge-Secret']).toBeUndefined()
+  })
+
   it('send registers the live element mapping keyed by the server-assigned id', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q7' }) })
     vi.stubGlobal('fetch', fetchMock)

@@ -101,5 +101,39 @@ describe('theForge plugin', () => {
       server.httpServer.emit('close')
       expect(fs.existsSync(filePath)).toBe(false)
     })
+
+    it('writes a per-session secret into the endpoint file', () => {
+      const { plugin } = getPlugin(root)
+      const server = fakeServer(root)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+
+      const filePath = path.join(root, '.the-forge', `endpoint-${process.pid}.json`)
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+      expect(typeof data.secret).toBe('string')
+      expect(data.secret.length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('client bootstrap secret injection', () => {
+    let root: string
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-plugin-load-'))
+    })
+
+    it('prepends globalThis.__THE_FORGE__ with the session secret to the served client bundle', () => {
+      const { plugin } = getPlugin(root)
+      const server = fakeServer(root)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+
+      const filePath = path.join(root, '.the-forge', `endpoint-${process.pid}.json`)
+      const { secret } = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+
+      const code = (plugin.load as (id: string) => string | null)(CLIENT_ID)
+      expect(code).toBeTruthy()
+      expect(code!.startsWith(`globalThis.__THE_FORGE__ = ${JSON.stringify({ secret })};\n`)).toBe(true)
+    })
   })
 })

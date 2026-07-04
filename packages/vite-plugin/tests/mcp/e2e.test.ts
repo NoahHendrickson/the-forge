@@ -42,7 +42,7 @@ beforeAll(async () => {
       res.setHeader('Content-Type', 'application/json')
       res.end(JSON.stringify(data))
     }
-    if (req.method === 'GET' && req.url === '/__the-forge/pull') {
+    if (req.method === 'POST' && req.url === '/__the-forge/pull') {
       claimedIds.push(STUB_ITEM.id)
       return send200({ items: [STUB_ITEM] })
     }

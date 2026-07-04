@@ -281,6 +281,15 @@ describe('cssPath', () => {
     expect(cssPath(el)).toBe('button#save-btn')
   })
 
+  it('escapes ids containing CSS-special characters', () => {
+    document.body.innerHTML = `<div><button id="save:btn.1">Save</button></div>`
+    const el = document.querySelector('button')!
+    const path = cssPath(el)
+    expect(path).toBe('button#save\\:btn\\.1')
+    // The resulting selector must actually be parseable/matchable via querySelector.
+    expect(document.querySelector(path)).toBe(el)
+  })
+
   it('builds an nth-of-type chain up to 4 ancestors when there is no id', () => {
     document.body.innerHTML = `
       <div>

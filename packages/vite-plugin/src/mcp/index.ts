@@ -11,6 +11,10 @@ function readEndpoint(): ForgeEndpoint | null {
   return discoverEndpoint(path.join(process.cwd(), '.the-forge'))
 }
 
+function secretHeaders(endpoint: ForgeEndpoint): Record<string, string> {
+  return endpoint.secret ? { 'X-Forge-Secret': endpoint.secret } : {}
+}
+
 function makeBackend(): ForgeBackend {
   return {
     async pull() {
@@ -19,6 +23,9 @@ function makeBackend(): ForgeBackend {
       let res: Response
       try {
         res = await fetch(`${baseUrl(endpoint)}/__the-forge/pull`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...secretHeaders(endpoint) },
+          body: JSON.stringify({}),
           signal: AbortSignal.timeout(10_000),
         })
       } catch {
@@ -35,7 +42,7 @@ function makeBackend(): ForgeBackend {
       try {
         res = await fetch(`${baseUrl(endpoint)}/__the-forge/mark`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...secretHeaders(endpoint) },
           body: JSON.stringify({ ids, status, note }),
           signal: AbortSignal.timeout(10_000),
         })

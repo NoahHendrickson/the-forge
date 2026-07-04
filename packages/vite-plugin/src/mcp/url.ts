@@ -1,6 +1,7 @@
 export interface ForgeEndpoint {
   port: number
   host?: string
+  secret?: string
 }
 
 /**

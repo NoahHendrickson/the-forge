@@ -14,8 +14,17 @@ const RIPPLE_DEBOUNCE_MS = 300
 
 declare global {
   interface Window {
-    __THE_FORGE__?: { mode: DesignMode }
+    __THE_FORGE__?: { mode: DesignMode; secret?: string }
   }
+}
+
+/** Belt-and-braces against cross-origin/DNS-rebinding bypasses of the server's Origin/Host
+ * checks — same-origin page scripts are the user's own app and not the adversary. The secret
+ * is injected by the server into `globalThis.__THE_FORGE__` (see index.ts load()); read it
+ * lazily on each send so a value set after this module first evaluates is still picked up. */
+function forgeSecretHeaders(): Record<string, string> {
+  const secret = (globalThis as { __THE_FORGE__?: { secret?: string } }).__THE_FORGE__?.secret
+  return secret ? { 'X-Forge-Secret': secret } : {}
 }
 
 export class DesignMode {
@@ -95,7 +104,7 @@ export class DesignMode {
       // nesting is deliberate: the send test counts microtask ticks — re-check it before flattening to async/await
       fetch('/__the-forge/queue', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
         body: JSON.stringify({ request, markdown: md }),
       })
         .then((res) => {
@@ -329,7 +338,11 @@ function boot(): void {
   overlay.mount()
   const mode = new DesignMode(overlay)
   overlay.attachPanel(mode.panelRoot)
-  window.__THE_FORGE__ = { mode }
+  // The server-injected bootstrap (prepended to this bundle's source, see index.ts load())
+  // sets globalThis.__THE_FORGE__ = { secret } BEFORE this module runs — preserve it rather
+  // than clobbering it when we attach `mode`.
+  const secret = window.__THE_FORGE__?.secret
+  window.__THE_FORGE__ = { mode, secret }
 }
 
 if (typeof document !== 'undefined' && !import.meta.vitest) {

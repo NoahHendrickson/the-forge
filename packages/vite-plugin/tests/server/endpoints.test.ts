@@ -61,13 +61,21 @@ describe('forge middleware', () => {
     expect(queue.get(id)!.markdown).toBe('# md')
   })
 
-  it('pull claims and returns pending items', async () => {
+  it('pull claims and returns pending items via POST', async () => {
     queue.add({}, 'one')
     const res = fakeRes()
-    await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: 'localhost:5173' }), res)
+    await run(mw, fakeReq('POST', '/__the-forge/pull', {}, { host: 'localhost:5173' }), res)
     const { items } = JSON.parse(res.body)
     expect(items).toHaveLength(1)
     expect(queue.get(items[0].id)!.status).toBe('claimed')
+  })
+
+  it('GET /pull is rejected with 405', async () => {
+    queue.add({}, 'one')
+    const res = fakeRes()
+    await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(405)
+    expect(JSON.parse(res.body)).toEqual({ error: 'use POST' })
   })
 
   it('mark finalizes and status reports', async () => {
@@ -124,7 +132,7 @@ describe('forge middleware', () => {
 
     it('allows origin-less local tool requests', async () => {
       const res = fakeRes()
-      await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: 'localhost:5173' }), res)
+      await run(mw, fakeReq('POST', '/__the-forge/pull', {}, { host: 'localhost:5173' }), res)
       expect(res.statusCode).toBe(200)
     })
   })
@@ -143,39 +151,39 @@ describe('forge middleware', () => {
 
     it('403s when no Host header is present', async () => {
       const res = fakeRes()
-      await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, {}), res)
+      await run(mw, fakeReq('POST', '/__the-forge/pull', {}, {}), res)
       expect(res.statusCode).toBe(403)
       expect(JSON.parse(res.body)).toEqual({ error: 'host not allowed' })
     })
 
     it('allows Host: localhost:5173', async () => {
       const res = fakeRes()
-      await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: 'localhost:5173' }), res)
+      await run(mw, fakeReq('POST', '/__the-forge/pull', {}, { host: 'localhost:5173' }), res)
       expect(res.statusCode).toBe(200)
     })
 
     it('allows Host: 127.0.0.1:5173', async () => {
       const res = fakeRes()
-      await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: '127.0.0.1:5173' }), res)
+      await run(mw, fakeReq('POST', '/__the-forge/pull', {}, { host: '127.0.0.1:5173' }), res)
       expect(res.statusCode).toBe(200)
     })
 
     it('allows Host: [::1]:5173', async () => {
       const res = fakeRes()
-      await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: '[::1]:5173' }), res)
+      await run(mw, fakeReq('POST', '/__the-forge/pull', {}, { host: '[::1]:5173' }), res)
       expect(res.statusCode).toBe(200)
     })
 
     it('allows a subdomain of .localhost', async () => {
       const res = fakeRes()
-      await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: 'foo.localhost:5173' }), res)
+      await run(mw, fakeReq('POST', '/__the-forge/pull', {}, { host: 'foo.localhost:5173' }), res)
       expect(res.statusCode).toBe(200)
     })
 
     it('allows hosts present in the allowedHosts option', async () => {
       const mwWithAllowed = createForgeMiddleware(queue, ['my-tunnel.example.com'])
       const res = fakeRes()
-      await run(mwWithAllowed, fakeReq('GET', '/__the-forge/pull', undefined, { host: 'my-tunnel.example.com:443' }), res)
+      await run(mwWithAllowed, fakeReq('POST', '/__the-forge/pull', {}, { host: 'my-tunnel.example.com:443' }), res)
       expect(res.statusCode).toBe(200)
     })
   })
@@ -193,6 +201,63 @@ describe('forge middleware', () => {
     await run(mw, req, res)
     expect(res.statusCode).toBe(400)
   })
+
+  describe('shared secret', () => {
+    const SECRET = 'test-secret-abc'
+    let secured: ReturnType<typeof createForgeMiddleware>
+
+    beforeEach(() => {
+      secured = createForgeMiddleware(queue, [], SECRET)
+    })
+
+    it('403s POST /queue missing the X-Forge-Secret header', async () => {
+      const res = fakeRes()
+      await run(secured, fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(403)
+    })
+
+    it('403s POST /queue with a wrong X-Forge-Secret header', async () => {
+      const res = fakeRes()
+      await run(
+        secured,
+        fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { host: 'localhost:5173', 'x-forge-secret': 'wrong' }),
+        res
+      )
+      expect(res.statusCode).toBe(403)
+    })
+
+    it('allows POST /queue with a matching X-Forge-Secret header', async () => {
+      const res = fakeRes()
+      await run(
+        secured,
+        fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { host: 'localhost:5173', 'x-forge-secret': SECRET }),
+        res
+      )
+      expect(res.statusCode).toBe(200)
+    })
+
+    it('403s POST /pull and POST /mark missing the header', async () => {
+      const res1 = fakeRes()
+      await run(secured, fakeReq('POST', '/__the-forge/pull', {}, { host: 'localhost:5173' }), res1)
+      expect(res1.statusCode).toBe(403)
+
+      const res2 = fakeRes()
+      await run(secured, fakeReq('POST', '/__the-forge/mark', { ids: [], status: 'applied' }, { host: 'localhost:5173' }), res2)
+      expect(res2.statusCode).toBe(403)
+    })
+
+    it('leaves GET /status open without requiring the header', async () => {
+      const res = fakeRes()
+      await run(secured, fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+
+    it('does not require the header when no secret is configured (backward compatible)', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+  })
 })
 
 describe('writeEndpointFile', () => {
@@ -209,6 +274,12 @@ describe('writeEndpointFile', () => {
     const data = JSON.parse(fs.readFileSync(filePath, 'utf8'))
     expect(data.port).toBe(5199)
     expect(data.host).toBe('::1')
+  })
+
+  it('writes the secret when provided', () => {
+    const filePath = writeEndpointFile(dir, 5199, '127.0.0.1', 'my-secret')
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+    expect(data.secret).toBe('my-secret')
   })
 
   it('second write from the same pid overwrites rather than duplicating', () => {

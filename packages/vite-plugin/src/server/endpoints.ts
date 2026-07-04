@@ -64,7 +64,11 @@ function isAllowedHost(host: string | undefined, allowedHosts: string[]): boolea
   return allowedHosts.includes(hostname)
 }
 
-export function createForgeMiddleware(queue: Queue, allowedHosts: string[] = []) {
+// Mutating endpoints that require the shared secret when one is configured. GET /status is
+// deliberately excluded: it's read-only and only exposes ids/statuses, which are non-sensitive.
+const MUTATING_PATHS = new Set(['/__the-forge/queue', '/__the-forge/pull', '/__the-forge/mark'])
+
+export function createForgeMiddleware(queue: Queue, allowedHosts: string[] = [], secret?: string) {
   return (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     const url = req.url ?? ''
     if (!url.startsWith('/__the-forge/')) return next()
@@ -88,7 +92,19 @@ export function createForgeMiddleware(queue: Queue, allowedHosts: string[] = [])
 
     const [pathname, query = ''] = url.split('?')
 
-    if (req.method === 'POST' && pathname === '/__the-forge/queue') {
+    // Belt-and-braces against cross-origin/DNS-rebinding bypasses of the Origin/Host checks
+    // above — same-origin page scripts are the user's own app and not the adversary, so this
+    // only matters when a request slips past the Host/Origin gate. Enforced only when a secret
+    // was actually configured (older/degraded setups without one keep working unauthenticated).
+    if (secret && req.method === 'POST' && MUTATING_PATHS.has(pathname)) {
+      const provided = req.headers['x-forge-secret']
+      if (provided !== secret) {
+        return send(res, 403, { error: 'missing or invalid X-Forge-Secret' })
+      }
+    }
+
+    if (pathname === '/__the-forge/queue') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
       readBody(req)
         .then((body) => {
           const { request, markdown } = body as { request?: unknown; markdown?: string }
@@ -100,12 +116,14 @@ export function createForgeMiddleware(queue: Queue, allowedHosts: string[] = [])
       return
     }
 
-    if (req.method === 'GET' && pathname === '/__the-forge/pull') {
+    if (pathname === '/__the-forge/pull') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
       send(res, 200, { items: queue.pull() })
       return
     }
 
-    if (req.method === 'POST' && pathname === '/__the-forge/mark') {
+    if (pathname === '/__the-forge/mark') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
       readBody(req)
         .then((body) => {
           const { ids, status, note } = body as { ids?: string[]; status?: string; note?: string }
@@ -133,10 +151,10 @@ export function createForgeMiddleware(queue: Queue, allowedHosts: string[] = [])
   }
 }
 
-export function writeEndpointFile(dir: string, port: number, host?: string): string {
+export function writeEndpointFile(dir: string, port: number, host?: string, secret?: string): string {
   fs.mkdirSync(dir, { recursive: true })
   const filePath = path.join(dir, `endpoint-${process.pid}.json`)
-  fs.writeFileSync(filePath, JSON.stringify({ port, host, pid: process.pid }))
+  fs.writeFileSync(filePath, JSON.stringify({ port, host, pid: process.pid, secret }))
   return filePath
 }
 

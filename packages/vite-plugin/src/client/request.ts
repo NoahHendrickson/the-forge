@@ -107,6 +107,15 @@ function measureComputed(el: TaggedElement, props: Iterable<string>): Map<string
   return out
 }
 
+// `CSS.escape` is universally available in real browsers but some jsdom versions used in
+// tests don't expose it as a global — fall back to a minimal spec-compliant escape (per the
+// CSSOM spec: escape any char outside [a-zA-Z0-9_-] plus the leading-digit/hyphen-digit rules)
+// so the selector stays safe either way.
+function escapeCssIdent(value: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value)
+  return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`)
+}
+
 export function cssPath(start: TaggedElement): string {
   const parts: string[] = []
   let el: Element | null = start
@@ -114,7 +123,7 @@ export function cssPath(start: TaggedElement): string {
   while (el && depth < 4) {
     const tag = el.tagName.toLowerCase()
     if (el.id) {
-      parts.unshift(`${tag}#${el.id}`)
+      parts.unshift(`${tag}#${escapeCssIdent(el.id)}`)
       break
     }
     const parent: Element | null = el.parentElement

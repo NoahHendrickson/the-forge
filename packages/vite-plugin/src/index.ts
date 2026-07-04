@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { randomUUID } from 'node:crypto'
 import type { Plugin } from 'vite'
 import { tagJsxSource } from './transform'
 import { Queue } from './server/queue'
@@ -11,6 +12,11 @@ export const CLIENT_ID = '/@the-forge/client'
 
 export function theForge(): Plugin {
   let root = process.cwd()
+  // Generated once per server start — belt-and-braces against cross-origin/DNS-rebinding
+  // bypasses of the Origin/Host checks in the middleware; same-origin page scripts are the
+  // user's own app and not the adversary. Threaded to the client via the load() bootstrap
+  // below, and to the MCP bin via the endpoint file (writeEndpointFile).
+  const secret = randomUUID()
 
   return {
     name: 'the-forge',
@@ -25,10 +31,10 @@ export function theForge(): Plugin {
       const forgeDir = path.join(root, '.the-forge')
       const queue = new Queue(forgeDir)
       const allowedHosts = Array.isArray(server.config.server.allowedHosts) ? server.config.server.allowedHosts : []
-      server.middlewares.use(createForgeMiddleware(queue, allowedHosts))
+      server.middlewares.use(createForgeMiddleware(queue, allowedHosts, secret))
       server.httpServer?.once('listening', () => {
         const address = server.httpServer?.address()
-        if (address && typeof address === 'object') writeEndpointFile(forgeDir, address.port, address.address)
+        if (address && typeof address === 'object') writeEndpointFile(forgeDir, address.port, address.address, secret)
       })
       server.httpServer?.once('close', () => removeEndpointFile(forgeDir))
       process.once('exit', () => removeEndpointFile(forgeDir))
@@ -69,7 +75,8 @@ export function theForge(): Plugin {
           'the-forge: client bundle not found — run "npm run build -w @the-forge/vite"'
         )
       }
-      return fs.readFileSync(clientPath, 'utf8')
+      const bootstrap = `globalThis.__THE_FORGE__ = ${JSON.stringify({ secret })};\n`
+      return bootstrap + fs.readFileSync(clientPath, 'utf8')
     },
 
     transformIndexHtml() {
