@@ -2,12 +2,21 @@ import { defineConfig } from 'tsup'
 
 export default defineConfig([
   {
+    // `clean` is deliberately NOT set here (see the `build` script in package.json,
+    // which does `rm -rf dist` before invoking tsup): tsup runs every config-array
+    // entry concurrently in one process, and each `dts: true` entry's type rollup
+    // spins up a worker that unconditionally globs-and-deletes `**/*.d.ts` across the
+    // *shared* outDir on its own buildStart (tsup's `tsup:clean` rollup plugin, scoped
+    // to `options.clean` on THIS entry but not to files owned by this entry). With two
+    // `dts: true` entries (this one and design-mode below) sharing `dist/`, relying on
+    // `clean: true` here raced design-mode's DTS worker and silently deleted
+    // `dist/design-mode.d.ts` after it had already been written — reproduced locally,
+    // not a one-off flake. Pre-cleaning in the npm script sidesteps the race entirely.
     entry: { index: 'src/index.ts', vite: 'src/vite.ts', next: 'src/next/index.ts' },
     format: ['esm'],
     dts: true,
     platform: 'node',
     external: ['vite'],
-    clean: true,
   },
   {
     entry: { client: 'src/client/index.ts' },
@@ -19,6 +28,18 @@ export default defineConfig([
     entry: { mcp: 'src/mcp/index.ts' },
     format: ['esm'],
     platform: 'node',
+  },
+  {
+    // `platform: 'neutral'` + `external: ['react']`: this is the node-free boundary
+    // module (Pages Router compiles `_app.tsx` into the browser bundle). Neutral
+    // platform means esbuild adds no node/browser globals or shims, and leaves
+    // `process.env.NODE_ENV` as a literal untouched (verified by the boundary test in
+    // tests/next/design-mode.test.ts) instead of inlining it at OUR build time.
+    entry: { 'design-mode': 'src/design-mode/index.ts' },
+    format: ['esm'],
+    platform: 'neutral',
+    external: ['react'],
+    dts: true,
   },
   {
     // CJS per the N0 spike findings (docs/research/2026-07-04-next-spike-findings.md):
