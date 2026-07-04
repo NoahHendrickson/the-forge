@@ -15,6 +15,7 @@ function make(
     onRelative: (apply: (current: number) => number) => void
     onScrubStart: () => void
     onDetach: () => void
+    onTokenKey: () => void
   }> = {}
 ) {
   const onInput = vi.fn()
@@ -453,5 +454,33 @@ describe('NumberField v3 — pill API', () => {
     expect(input.readOnly).toBe(false)
     expect(nf.root.classList.contains('nf-pill')).toBe(false)
     expect(input.value).toBe('auto')
+  })
+})
+
+describe('NumberField — onTokenKey (`=` opens token picker)', () => {
+  it('`=` keydown fires onTokenKey and prevents default when not pill-bound', () => {
+    const onTokenKey = vi.fn()
+    const { input } = make({ onTokenKey })
+    const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
+    input.dispatchEvent(ev)
+    expect(onTokenKey).toHaveBeenCalledTimes(1)
+    expect(ev.defaultPrevented).toBe(true)
+  })
+
+  it('`=` keydown while pill-bound does nothing (no onTokenKey call)', () => {
+    const onTokenKey = vi.fn()
+    const { nf, input } = make({ onTokenKey })
+    nf.set(10)
+    nf.bindToken('p-4')
+    const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
+    input.dispatchEvent(ev)
+    expect(onTokenKey).not.toHaveBeenCalled()
+    expect(ev.defaultPrevented).toBe(false)
+  })
+
+  it('`=` keydown without onTokenKey wired is a harmless no-op', () => {
+    const { input } = make()
+    const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
+    expect(() => input.dispatchEvent(ev)).not.toThrow()
   })
 })

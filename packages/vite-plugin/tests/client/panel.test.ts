@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { Panel, normalizeJustify, normalizeAlign, hasDirectText } from '../../src/client/panel'
+import { Panel, normalizeJustify, normalizeAlign, hasDirectText, tokenEntriesFor } from '../../src/client/panel'
 import { DraftStore } from '../../src/client/drafts'
 import { buildInspectorData } from '../../src/client/inspector'
+import { resetTokensCache, type Theme, type Tokens } from '../../src/client/tokens'
 
 function setup(html = `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px; width: 200px;"></div>`) {
   document.body.innerHTML = html
@@ -744,6 +745,63 @@ describe('hasDirectText', () => {
   })
 })
 
+describe('tokenEntriesFor', () => {
+  const TW: Theme = { rootFontPx: 16, spacingBasePx: 4, radiusScale: { sm: 4, md: 6, lg: 8, xl: 12 } }
+  const PLAIN: Theme = { rootFontPx: 16, spacingBasePx: null, radiusScale: {} }
+  const TOKENS: Tokens = {
+    colors: [],
+    textScale: [
+      { name: 'sm', px: 14 },
+      { name: 'base', px: 16 },
+      { name: 'lg', px: 18 },
+    ],
+  }
+
+  it('spacing prop (padding-top) returns the Tailwind numeric scale x spacingBasePx', () => {
+    const entries = tokenEntriesFor({ props: ['padding-top'] }, TW, TOKENS)
+    expect(entries).not.toBeNull()
+    const four = entries!.find((e) => e.label === '4')
+    expect(four).toEqual({ label: '4', px: 16 }) // spot-check 4 -> 16px at base 4
+    // full Tailwind numeric scale is present
+    expect(entries!.map((e) => e.label)).toEqual(
+      ['0', '0.5', '1', '1.5', '2', '2.5', '3', '3.5', '4', '5', '6', '7', '8', '9', '10', '11', '12', '14', '16', '20', '24', '28', '32', '36', '40', '44', '48', '52', '56', '60', '64', '72', '80', '96']
+    )
+  })
+
+  it('spacing prop returns null when spacingBasePx is null (non-Tailwind project)', () => {
+    expect(tokenEntriesFor({ props: ['padding-top'] }, PLAIN, TOKENS)).toBeNull()
+  })
+
+  it('width/height/gap/margin props also resolve via the spacing scale', () => {
+    for (const props of [['width'], ['height'], ['gap'], ['margin-left', 'margin-right']]) {
+      expect(tokenEntriesFor({ props }, TW, TOKENS)).not.toBeNull()
+    }
+  })
+
+  it('radius prop returns theme.radiusScale entries', () => {
+    const entries = tokenEntriesFor({ props: ['border-top-left-radius'] }, TW, TOKENS)
+    expect(entries).toEqual([
+      { label: 'sm', px: 4 },
+      { label: 'md', px: 6 },
+      { label: 'lg', px: 8 },
+      { label: 'xl', px: 12 },
+    ])
+  })
+
+  it('font-size prop returns readTokens().textScale entries', () => {
+    const entries = tokenEntriesFor({ props: ['font-size'] }, TW, TOKENS)
+    expect(entries).toEqual([
+      { label: 'sm', px: 14 },
+      { label: 'base', px: 16 },
+      { label: 'lg', px: 18 },
+    ])
+  })
+
+  it('opacity (and other unmapped props) return null — no picker', () => {
+    expect(tokenEntriesFor({ props: ['opacity'] }, TW, TOKENS)).toBeNull()
+  })
+})
+
 describe('Panel Typography section', () => {
   function textSetup(styleExtra = '') {
     return setup(
@@ -1046,6 +1104,230 @@ describe('Panel Stroke section', () => {
     for (const side of ['top', 'right', 'bottom', 'left']) {
       expect(drafts.current(el, `border-${side}-color`)).toBe('rgb(1, 2, 3)')
     }
+  })
+})
+
+describe('Panel + TokenPicker (`=` token picker, B5)', () => {
+  function setupTailwind(html?: string) {
+    document.documentElement.style.setProperty('--spacing', '4px')
+    document.documentElement.style.setProperty('--radius-sm', '4px')
+    document.documentElement.style.setProperty('--radius-md', '6px')
+    document.documentElement.style.setProperty('--radius-lg', '8px')
+    return setup(html)
+  }
+
+  afterEach(() => {
+    document.documentElement.removeAttribute('style')
+    document.head.innerHTML = ''
+    resetTokensCache()
+  })
+
+  function pxField(panel: Panel, label: string): HTMLElement {
+    const nf = [...panel.root.querySelectorAll('.nf')].find(
+      (n) => n.querySelector('.nf-label')!.textContent === label
+    )
+    if (!nf) throw new Error(`no field labeled ${label}`)
+    return nf as HTMLElement
+  }
+
+  function pressEquals(input: HTMLInputElement): KeyboardEvent {
+    const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
+    input.dispatchEvent(ev)
+    return ev
+  }
+
+  it('`=` on a spacing field (PX) opens the token picker with the spacing scale entries', () => {
+    const { panel } = setupTailwind()
+    const input = pxField(panel, 'PX').querySelector('input') as HTMLInputElement
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    pressEquals(input)
+    expect(picker.root.hidden).toBe(false)
+    const rows = [...picker.root.querySelectorAll('.tp-row')]
+    expect(rows.some((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))).toBe(true)
+  })
+
+  it('`=` on the Opacity field (no scale) does nothing — tokenEntriesFor is null', () => {
+    const { panel } = setupTailwind()
+    const input = pxField(panel, 'O').querySelector('input') as HTMLInputElement
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    pressEquals(input)
+    expect(picker.root.hidden).toBe(true)
+  })
+
+  it('applying a spacing entry drafts px through the normal commit path and binds a full-utility pill', () => {
+    const { el, panel, drafts } = setupTailwind()
+    const field = pxField(panel, 'PX')
+    const input = field.querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+
+    expect(drafts.current(el, 'padding-left')).toBe('16px')
+    expect(drafts.current(el, 'padding-right')).toBe('16px')
+    expect(input.readOnly).toBe(true)
+    expect(input.value).toBe('px-4')
+    expect(field.classList.contains('nf-pill')).toBe(true)
+  })
+
+  it('applying a radius entry binds a rounded-<name> pill', () => {
+    const { el, panel, drafts } = setupTailwind()
+    const field = pxField(panel, 'R')
+    const input = field.querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('md'))!
+    ;(row as HTMLElement).click()
+
+    const radiusProps = [
+      'border-top-left-radius',
+      'border-top-right-radius',
+      'border-bottom-right-radius',
+      'border-bottom-left-radius',
+    ]
+    for (const prop of radiusProps) expect(drafts.current(el, prop)).toBe('6px')
+    expect(input.value).toBe('rounded-md')
+  })
+
+  it('applying a font-size entry binds a text-<name> pill', () => {
+    // readTokens() only discovers a --text-* NAME by scanning stylesheet rules (not inline
+    // style properties) — a real <style> declaration is required, mirroring tokens.test.ts.
+    const style = document.createElement('style')
+    style.textContent = `:root { --text-sm: 14px; }`
+    document.head.appendChild(style)
+    document.documentElement.style.setProperty('--text-sm', '14px')
+    const { el, panel, drafts } = setupTailwind(`<div data-dc-source="src/Card.tsx:4:7" id="t">Some text</div>`)
+    const input = fieldInput(panel, 'S')
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('sm'))!
+    ;(row as HTMLElement).click()
+
+    expect(drafts.current(el, 'font-size')).toBe('14px')
+    expect(input.value).toBe('text-sm')
+  })
+
+  it('Backspace on a pill-bound field detaches: numeric display returns, draft is unchanged', () => {
+    const { el, panel, drafts } = setupTailwind()
+    const field = pxField(panel, 'PX')
+    const input = field.querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+    expect(drafts.current(el, 'padding-left')).toBe('16px')
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }))
+
+    expect(field.classList.contains('nf-pill')).toBe(false)
+    expect(input.value).toBe('16')
+    expect(drafts.current(el, 'padding-left')).toBe('16px') // draft unchanged
+  })
+
+  it('a bound pill survives refresh() when the draft still equals the bound px', () => {
+    const { panel, onEdited } = setupTailwind()
+    const field = pxField(panel, 'PX')
+    const input = field.querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+    expect(input.value).toBe('px-4')
+
+    // An unrelated edit elsewhere triggers refresh(); the PX pill must survive since its
+    // draft (16px) still matches the bound entry (B1's set()/setMixed() clear pills, but
+    // Panel re-applies bindToken when the draft is unchanged).
+    onEdited.mockClear()
+    panel.refresh()
+    expect(input.value).toBe('px-4')
+    expect(field.classList.contains('nf-pill')).toBe(true)
+  })
+
+  it('a bound pill is cleared when the draft value diverges from the bound px', () => {
+    const { el, panel, drafts } = setupTailwind()
+    const field = pxField(panel, 'PX')
+    const input = field.querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+    expect(input.value).toBe('px-4')
+
+    drafts.apply(el, 'padding-left', '20px')
+    drafts.apply(el, 'padding-right', '20px')
+    panel.refresh()
+
+    expect(field.classList.contains('nf-pill')).toBe(false)
+    expect(input.value).toBe('20')
+  })
+
+  it('a bound pill on a sizeMode (W/H) field is dropped once the field switches to auto (Hug) display', () => {
+    // A pill bound while W is Fixed must not silently resurrect if the user switches to Hug
+    // and back to the exact same px later — refresh()'s early `setAuto()` continue must clear
+    // the bookkeeping too, not just the visible pill state.
+    const { el, panel, drafts } = setupTailwind()
+    const field = pxField(panel, 'W')
+    const input = field.querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+    expect(input.value).toBe('w-4')
+
+    drafts.apply(el, 'width', 'auto')
+    panel.refresh()
+    expect(input.value).toBe('auto')
+
+    drafts.apply(el, 'width', '16px')
+    panel.refresh()
+    expect(field.classList.contains('nf-pill')).toBe(false)
+    expect(input.value).toBe('16')
+  })
+
+  it('a bound pill is cleared on selection change (show() with a new element)', () => {
+    const { panel } = setupTailwind()
+    const field = pxField(panel, 'PX')
+    const input = field.querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+    expect(input.value).toBe('px-4')
+
+    const el2 = document.createElement('div')
+    el2.id = 't2'
+    el2.dataset.dcSource = 'src/Card.tsx:5:7'
+    el2.style.padding = '8px'
+    document.body.appendChild(el2)
+    panel.show(el2, buildInspectorData(el2))
+
+    const field2 = pxField(panel, 'PX')
+    expect(field2.classList.contains('nf-pill')).toBe(false)
+  })
+
+  it('show() closes any open token picker from a previous selection', () => {
+    const { panel } = setupTailwind()
+    const input = pxField(panel, 'PX').querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    expect(picker.root.hidden).toBe(false)
+
+    const el2 = document.createElement('div')
+    el2.id = 't2'
+    el2.dataset.dcSource = 'src/Card.tsx:5:7'
+    document.body.appendChild(el2)
+    panel.show(el2, buildInspectorData(el2))
+    expect(picker.root.hidden).toBe(true)
+  })
+
+  it('hide() closes any open token picker', () => {
+    const { panel } = setupTailwind()
+    const input = pxField(panel, 'PX').querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    expect(picker.root.hidden).toBe(false)
+    panel.hide()
+    expect(picker.root.hidden).toBe(true)
   })
 })
 

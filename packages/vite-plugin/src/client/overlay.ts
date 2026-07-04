@@ -242,6 +242,25 @@ button {
 .cp-swatch {
   width: 16px; height: 16px; border-radius: 4px; padding: 0; border: 1px solid rgba(255,255,255,0.15);
 }
+
+.token-popover {
+  position: absolute; right: 12px; width: 180px; z-index: 10;
+  background: #383838; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
+  box-shadow: 0 5px 24px rgba(0,0,0,0.4); padding: 8px; display: flex; flex-direction: column; gap: 6px;
+}
+.tp-search {
+  height: 24px; width: 100%; background: rgba(255,255,255,0.06);
+  border: 1px solid transparent; border-radius: 6px; padding: 0 6px;
+  color: #F5F5F5; font: 400 11px system-ui, sans-serif;
+}
+.tp-search:focus { border-color: #0D99FF; outline: none; }
+.tp-list { display: flex; flex-direction: column; max-height: 160px; overflow-y: auto; }
+.tp-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 4px 8px; border-radius: 4px; cursor: pointer; color: #D4D4D4; font-size: 11px;
+}
+.tp-row:hover, .tp-row-active { background: rgba(255,255,255,0.08); }
+.tp-row-px { color: #9A9A9A; font-size: 10.5px; margin-left: auto; }
 `
 
 export class Overlay {

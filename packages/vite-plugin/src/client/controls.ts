@@ -19,6 +19,8 @@ export interface NumberFieldOpts {
   onScrubStart?: () => void
   /** Fires when Backspace/Delete is pressed while the field is pill-bound (see bindToken()). */
   onDetach?: () => void
+  /** Fires on `=` keydown when the field is NOT pill-bound (preventDefault'd) — opens the token picker. */
+  onTokenKey?: () => void
 }
 
 /**
@@ -194,6 +196,11 @@ export class NumberField {
         e.preventDefault()
         this.opts.onDetach?.()
         this.detach()
+        return
+      }
+      if (e.key === '=' && !this.pillBound) {
+        e.preventDefault()
+        this.opts.onTokenKey?.()
         return
       }
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return

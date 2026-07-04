@@ -1,0 +1,216 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { TokenPicker, type TokenEntry } from '../../src/client/tokenpicker'
+
+const ENTRIES: TokenEntry[] = [
+  { label: '0', px: 0 },
+  { label: '1', px: 4 },
+  { label: '2', px: 8 },
+  { label: '4', px: 16 },
+  { label: '8', px: 32 },
+]
+
+function setupPicker() {
+  const panelRoot = document.createElement('div')
+  document.body.append(panelRoot)
+  const picker = new TokenPicker(panelRoot)
+  return { panelRoot, picker }
+}
+
+function anchorEl(): HTMLElement {
+  const anchor = document.createElement('div')
+  Object.defineProperty(anchor, 'offsetTop', { value: 100, configurable: true })
+  document.body.append(anchor)
+  return anchor
+}
+
+beforeEach(() => {
+  document.body.innerHTML = ''
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+describe('TokenPicker', () => {
+  it('root is hidden by default and appended to panel root', () => {
+    const { panelRoot, picker } = setupPicker()
+    expect(picker.root.isConnected).toBe(true)
+    expect(panelRoot.contains(picker.root)).toBe(true)
+    expect(picker.root.hidden).toBe(true)
+    expect(picker.root.className).toBe('token-popover')
+  })
+
+  it('open() shows the popover positioned near the anchor and renders all entries', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    expect(picker.root.hidden).toBe(false)
+    expect(picker.root.style.top).toBe('100px')
+    const rows = picker.root.querySelectorAll('.tp-row')
+    expect(rows.length).toBe(ENTRIES.length)
+  })
+
+  it('renders each row as "label — Npx"', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    const rows = [...picker.root.querySelectorAll('.tp-row')]
+    expect(rows[1].textContent).toContain('1')
+    expect(rows[1].textContent).toContain('4px')
+  })
+
+  it('close() hides the popover', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    picker.close()
+    expect(picker.root.hidden).toBe(true)
+  })
+
+  it('close() called defensively without a prior open() is a true no-op (no window listener churn)', () => {
+    const { picker } = setupPicker()
+    const removeSpy = vi.spyOn(window, 'removeEventListener')
+    picker.close()
+    expect(removeSpy).not.toHaveBeenCalled()
+  })
+
+  it('a second close() call in a row does not re-remove listeners', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    picker.close()
+    const removeSpy = vi.spyOn(window, 'removeEventListener')
+    picker.close()
+    expect(removeSpy).not.toHaveBeenCalledWith('keydown', expect.any(Function))
+    expect(removeSpy).not.toHaveBeenCalledWith('mousedown', expect.any(Function))
+  })
+
+  it('typing in the search input filters rows by label substring', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+    search.value = '4'
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    const rows = [...picker.root.querySelectorAll('.tp-row')]
+    expect(rows.length).toBe(1)
+    expect(rows[0].textContent).toContain('4')
+  })
+
+  it('search input is autofocused on open', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+    expect(document.activeElement).toBe(search)
+  })
+
+  it('clicking a row applies that entry via onApply and closes', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    const onApply = vi.fn()
+    picker.open({ anchor, entries: ENTRIES, onApply })
+    const rows = [...picker.root.querySelectorAll('.tp-row')]
+    ;(rows[2] as HTMLElement).click()
+    expect(onApply).toHaveBeenCalledWith(ENTRIES[2])
+    expect(picker.root.hidden).toBe(true)
+  })
+
+  it('ArrowDown/ArrowUp move a keyboard-active row, Enter applies it', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    const onApply = vi.fn()
+    picker.open({ anchor, entries: ENTRIES, onApply })
+    const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    // Two ArrowDown presses from nothing-active lands on index 1 (0 -> 1).
+    expect(onApply).toHaveBeenCalledWith(ENTRIES[1])
+  })
+
+  it('ArrowUp from the first row wraps or stays put (no throw) and Enter still applies the active row', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    const onApply = vi.fn()
+    picker.open({ anchor, entries: ENTRIES, onApply })
+    const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(onApply).toHaveBeenCalledWith(ENTRIES[0])
+  })
+
+  it('hovering a row marks it active (keyboard nav starts from the hovered row)', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    const rows = [...picker.root.querySelectorAll('.tp-row')]
+    rows[3].dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))
+    // renderList() rebuilds row DOM on every state change (mirrors ColorPicker's re-render
+    // pattern) — re-query rather than reuse the stale pre-hover node reference.
+    const rowsAfter = [...picker.root.querySelectorAll('.tp-row')]
+    expect(rowsAfter[3].classList.contains('tp-row-active')).toBe(true)
+  })
+
+  it('Escape closes the picker', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(picker.root.hidden).toBe(true)
+  })
+
+  it('outside pointerdown closes the picker', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    expect(picker.root.hidden).toBe(true)
+  })
+
+  it('pointerdown inside the picker does not close it', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    picker.root.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    expect(picker.root.hidden).toBe(false)
+  })
+
+  it('mousedown inside a real shadow root does not close the picker, but an outside mousedown does', () => {
+    // Regression test mirroring ColorPicker's shadow-DOM retargeting guard (composedPath()[0]).
+    const host = document.createElement('div')
+    document.body.append(host)
+    const shadow = host.attachShadow({ mode: 'open' })
+    const panelRoot = document.createElement('div')
+    shadow.append(panelRoot)
+    const picker = new TokenPicker(panelRoot)
+    const anchor = document.createElement('div')
+    Object.defineProperty(anchor, 'offsetTop', { value: 100, configurable: true })
+    shadow.append(anchor)
+
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    expect(picker.root.hidden).toBe(false)
+
+    picker.root.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, composed: true }))
+    expect(picker.root.hidden).toBe(false)
+
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, composed: true }))
+    expect(picker.root.hidden).toBe(true)
+  })
+
+  it('reselection (a second open()) resets the filter and keyboard-active state', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+    search.value = '4'
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(picker.root.querySelectorAll('.tp-row').length).toBe(1)
+
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    expect(picker.root.querySelectorAll('.tp-row').length).toBe(ENTRIES.length)
+    expect((picker.root.querySelector('.tp-search') as HTMLInputElement).value).toBe('')
+  })
+})

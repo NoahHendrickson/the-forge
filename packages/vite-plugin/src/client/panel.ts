@@ -4,7 +4,16 @@ import { DraftStore } from './drafts'
 import { NumberField } from './controls'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { ColorPicker } from './colorpicker'
-import { nearestColorToken, readTokens, parseColor as parseColorLocal } from './tokens'
+import { TokenPicker, type TokenEntry } from './tokenpicker'
+import {
+  nearestColorToken,
+  readTokens,
+  readTheme,
+  parseColor as parseColorLocal,
+  UTILITY_PREFIXES,
+  type Theme,
+  type Tokens,
+} from './tokens'
 
 interface RowSpec {
   label: string
@@ -48,6 +57,63 @@ const RADIUS = ['border-top-left-radius', 'border-top-right-radius', 'border-bot
 const BORDER_WIDTH_PROPS = ['border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width']
 const BORDER_STYLE_PROPS = ['border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style']
 const BORDER_COLOR_PROPS = ['border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color']
+
+// Tailwind's numeric spacing scale (padding/margin/gap/width/height) — each step n maps to
+// n * theme.spacingBasePx. Kept as a flat literal list (not generated) so the exact set —
+// including the half-steps (0.5, 1.5, ...) and the post-12 non-uniform stride (14, 16, 20, ...) —
+// is easy to eyeball against Tailwind's own docs.
+const SPACING_SCALE = [
+  0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64,
+  72, 80, 96,
+]
+
+// RowSpec.props arrays with length > 1 that correspond to a single Tailwind synthetic/shorthand
+// utility prefix not derivable from any individual longhand's own UTILITY_PREFIXES entry (e.g.
+// ['padding-left','padding-right'] should resolve to 'px', not 'pl' from props[0]). Keyed by the
+// joined prop list (order matches each RowSpec's own `props` array above). Stroke's W field
+// (BORDER_WIDTH_PROPS) has no entry here — border-width isn't part of Tailwind's linear spacing
+// scale (see tokens.ts's own separate BORDER_WIDTH_SCALE) and tokenEntriesFor returns null for
+// it, so buildField's onTokenKey never opens the picker for that field and pillLabelFor is
+// never reached for it either.
+const MULTI_PROP_SYNTHETIC: Record<string, string> = {
+  [['padding-left', 'padding-right'].join(',')]: 'padding-inline',
+  [['padding-top', 'padding-bottom'].join(',')]: 'padding-block',
+  [['margin-left', 'margin-right'].join(',')]: 'margin-inline',
+  [['margin-top', 'margin-bottom'].join(',')]: 'margin-block',
+  [RADIUS.join(',')]: 'border-radius',
+}
+
+/** Resolves a RowSpec's `props` array to its Tailwind utility prefix (e.g. 'px', 'rounded', 'w'). */
+function utilityPrefixFor(props: string[]): string | undefined {
+  if (props.length === 1) return UTILITY_PREFIXES[props[0]]
+  const synthetic = MULTI_PROP_SYNTHETIC[props.join(',')]
+  return synthetic ? UTILITY_PREFIXES[synthetic] : undefined
+}
+
+const RADIUS_PROP_SET = new Set(RADIUS)
+
+/**
+ * Scale source for the `=` token picker (B5), keyed by RowSpec.props. Spacing props (padding/
+ * margin/gap/width/height) resolve through Tailwind's numeric scale x theme.spacingBasePx;
+ * radius props through theme.radiusScale; font-size through the text scale; everything else
+ * (e.g. opacity) has no token picker and returns null.
+ */
+export function tokenEntriesFor(spec: { props: string[] }, theme: Theme, tokens: Tokens): TokenEntry[] | null {
+  if (spec.props.some((p) => p === 'font-size')) {
+    return tokens.textScale.map((t) => ({ label: t.name, px: t.px }))
+  }
+  if (spec.props.some((p) => RADIUS_PROP_SET.has(p))) {
+    return Object.entries(theme.radiusScale).map(([label, px]) => ({ label, px }))
+  }
+  const prefix = utilityPrefixFor(spec.props)
+  const isSpacingProp = prefix !== undefined && prefix !== 'opacity' && prefix !== 'border'
+  if (isSpacingProp) {
+    if (theme.spacingBasePx === null) return null
+    const base = theme.spacingBasePx
+    return SPACING_SCALE.map((n) => ({ label: String(n), px: n * base }))
+  }
+  return null
+}
 
 /** border-top-width -> border-top-style (matches each width longhand to its side's style longhand). */
 function styleForWidthProp(widthProp: string): string {
@@ -320,6 +386,18 @@ export class Panel {
   // selection changes (show()) so it never dangles pointing at a since-removed row.
   private colorPicker: ColorPicker
 
+  // Single Panel-level TokenPicker instance (B5) shared by every NumberField's `=` key —
+  // closed whenever the selection changes (show()/hide()), same lifecycle as colorPicker.
+  private tokenPicker: TokenPicker
+
+  // Bound token pills, keyed by the owning field's spec.props.join(',') (a stable per-field
+  // identity — see MULTI_PROP_SYNTHETIC above). B1's set()/setMixed()/setAuto() unconditionally
+  // clear a field's pill state, so a plain refresh() would silently drop every bound pill even
+  // when nothing about that field changed. This map lets refresh() re-apply bindToken() when
+  // the field's current (draft-or-computed) value still matches what was bound — cleared
+  // wholesale on selection change (show()), and per-entry when the value diverges (refresh()).
+  private boundTokens = new Map<string, { label: string; px: number }>()
+
   constructor(
     private drafts: DraftStore,
     private onEdited: () => void,
@@ -354,11 +432,14 @@ export class Panel {
     this.actions.append(this.compareButton, this.resetButton)
     this.root.append(this.head, this.actions, this.body)
     this.colorPicker = new ColorPicker(this.root)
+    this.tokenPicker = new TokenPicker(this.root)
   }
 
   show(el: TaggedElement, data: InspectorData): void {
     this.el = el
     this.colorPicker.close()
+    this.tokenPicker.close()
+    this.boundTokens.clear()
     this.root.hidden = false
     this.headTag.textContent = data.tag
     if (data.source) {
@@ -378,6 +459,7 @@ export class Panel {
     this.el = null
     this.root.hidden = true
     this.colorPicker.close()
+    this.tokenPicker.close()
   }
 
   refresh(): void {
@@ -398,10 +480,12 @@ export class Panel {
         const draft = this.drafts.isComparing(el) ? null : this.drafts.current(el, spec.props[0])
         if (draft === 'auto') {
           field.setAuto()
+          this.boundTokens.delete(spec.props.join(','))
           continue
         }
         if (draft === null && !this.drafts.isComparing(el) && el.style.getPropertyValue(spec.props[0]) === 'auto') {
           field.setAuto()
+          this.boundTokens.delete(spec.props.join(','))
           continue
         }
       }
@@ -411,6 +495,7 @@ export class Panel {
         const css = this.currentValue(el, spec.props[0], computed)
         if (css === (spec.autoCss ?? 'normal')) {
           field.setAuto()
+          this.boundTokens.delete(spec.props.join(','))
           continue
         }
       }
@@ -418,6 +503,18 @@ export class Panel {
       const mixed = values.some((v) => v !== values[0])
       if (mixed) field.setMixed()
       else field.set(values[0])
+
+      // B5: set() above unconditionally cleared any pill (B1 contract) — re-apply it when
+      // this field has a bound token AND the just-read value still equals the bound px
+      // (same-field refresh with an unchanged draft). A DIFFERING value (user edited the
+      // field directly, or a different draft arrived) leaves the pill cleared and drops
+      // the stale entry from boundTokens so it doesn't keep getting checked forever.
+      const key = spec.props.join(',')
+      const bound = this.boundTokens.get(key)
+      if (bound) {
+        if (!mixed && values[0] === bound.px) field.bindToken(bound.label)
+        else this.boundTokens.delete(key)
+      }
     }
 
     this.refreshLayoutSection(el, computed)
@@ -1111,23 +1208,35 @@ export class Panel {
     this.onEdited()
   }
 
+  /** Full Tailwind utility label for a token-picker entry applied to `spec` (e.g. `px-4`, `rounded-md`, `text-sm`). */
+  private pillLabelFor(spec: RowSpec, entry: TokenEntry): string {
+    if (spec.props.some((p) => p === 'font-size')) return `text-${entry.label}`
+    if (spec.props.some((p) => RADIUS_PROP_SET.has(p))) return `rounded-${entry.label}`
+    const prefix = utilityPrefixFor(spec.props) ?? spec.props[0]
+    return `${prefix}-${entry.label}`
+  }
+
   private buildField(spec: RowSpec): BoundField {
+    // Shared commit path — used by the field's own onInput AND by the token picker's
+    // onApply (per the brief: "call the SAME handler the field's onInput uses").
+    const commit = (n: number): void => {
+      if (!this.el) return
+      this.onBeforeEdit(this.el)
+      const css = (spec.toCss ?? px)(n)
+      for (const prop of spec.props) {
+        spec.onBeforeApply?.(this.el, prop, this.drafts)
+        this.drafts.apply(this.el, prop, css)
+      }
+      this.refresh()
+      this.onEdited()
+    }
+
     const field = new NumberField({
       label: spec.label,
       min: spec.min,
       max: spec.max,
       allowAuto: spec.sizeMode || spec.allowAuto,
-      onInput: (n) => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        const css = (spec.toCss ?? px)(n)
-        for (const prop of spec.props) {
-          spec.onBeforeApply?.(this.el, prop, this.drafts)
-          this.drafts.apply(this.el, prop, css)
-        }
-        this.refresh()
-        this.onEdited()
-      },
+      onInput: commit,
       onKeyword: spec.allowAuto
         ? (kw) => {
             if (!this.el || kw !== 'auto') return
@@ -1137,6 +1246,27 @@ export class Panel {
             this.onEdited()
           }
         : undefined,
+      onDetach: () => {
+        // Backspace on a pill: field.detach() (called by NumberField itself right after this)
+        // restores the numeric display — drafts are untouched. Just drop the bookkeeping so a
+        // later refresh() doesn't try to re-bind a pill the user explicitly detached.
+        this.boundTokens.delete(spec.props.join(','))
+      },
+      onTokenKey: () => {
+        if (!this.el) return
+        const entries = tokenEntriesFor(spec, readTheme(), readTokens())
+        if (!entries) return
+        this.tokenPicker.open({
+          anchor: field.root,
+          entries,
+          onApply: (entry) => {
+            commit(entry.px)
+            const label = this.pillLabelFor(spec, entry)
+            field.bindToken(label)
+            this.boundTokens.set(spec.props.join(','), { label, px: entry.px })
+          },
+        })
+      },
     })
     const bound: BoundField = { field, spec }
     this.fields.push(bound)
