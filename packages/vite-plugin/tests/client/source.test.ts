@@ -43,4 +43,10 @@ describe('findTaggedElement', () => {
     expect(findTaggedElement(document.getElementById('a'))).toBeNull()
     expect(findTaggedElement(null)).toBeNull()
   })
+
+  it('returns tagged SVG elements themselves', () => {
+    document.body.innerHTML = `<div data-dc-source="src/a.tsx:1:1"><svg><path data-dc-source="src/Icon.tsx:5:3" id="p"/></svg></div>`
+    const p = document.getElementById('p')!
+    expect(findTaggedElement(p)).toBe(p)
+  })
 })

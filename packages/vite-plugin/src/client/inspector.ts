@@ -1,4 +1,4 @@
-import { parseSourceAttr, type SourceLocation } from './source'
+import { parseSourceAttr, type SourceLocation, type TaggedElement } from './source'
 
 export const STYLE_PROPS = [
   'display',
@@ -22,7 +22,7 @@ export interface InspectorData {
   styles: Record<string, string>
 }
 
-export function buildInspectorData(el: HTMLElement): InspectorData {
+export function buildInspectorData(el: TaggedElement): InspectorData {
   const rect = el.getBoundingClientRect()
   const computed = getComputedStyle(el)
   const styles: Record<string, string> = {}

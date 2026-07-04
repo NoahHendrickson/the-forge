@@ -27,4 +27,13 @@ describe('buildInspectorData', () => {
     expect(data.classes).toEqual([])
     expect(data.width).toBe(0) // jsdom has no layout; rounds to 0
   })
+
+  it('inspects SVG elements', () => {
+    document.body.innerHTML = `<svg><circle data-dc-source="src/Icon.tsx:9:7" class="stroke-2" id="c"/></svg>`
+    const c = document.getElementById('c') as unknown as SVGElement
+    const data = buildInspectorData(c)
+    expect(data.tag).toBe('circle')
+    expect(data.source).toEqual({ file: 'src/Icon.tsx', line: 9, col: 7 })
+    expect(data.classes).toEqual(['stroke-2'])
+  })
 })
