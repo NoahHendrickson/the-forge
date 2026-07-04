@@ -351,7 +351,7 @@ describe('Verifier polling lifecycle', () => {
   })
 
   describe('manual rung: pending (unclaimed) items show the instruction, not "applying…"', () => {
-    it('renders "N queued — type /design in {agent}" while a sent item is still server-side pending', async () => {
+    it('renders "N queued — type /forge-design in {agent}" while a sent item is still server-side pending', async () => {
       const sent = new SentRegistry()
       const drafts = new DraftStore()
       const onUpdate = vi.fn()
@@ -371,7 +371,7 @@ describe('Verifier polling lifecycle', () => {
 
       expect(sent.size()).toBe(1) // still pending — not taken
       const lastSummary = onUpdate.mock.calls.at(-1)![0] as string
-      expect(lastSummary).toBe('1 queued — type /design in Claude Code')
+      expect(lastSummary).toBe('1 queued — type /forge-design in Claude Code')
     })
 
     it('does NOT render "applying…" for a pending item even though sent.size() > 0', async () => {
@@ -408,7 +408,7 @@ describe('Verifier polling lifecycle', () => {
       const verifier = new Verifier(sent, drafts, onUpdate)
       verifier.start()
       await vi.advanceTimersByTimeAsync(2000)
-      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /design in Cursor')
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-design in Cursor')
 
       fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ items: [{ id: 'q1', status: 'claimed', note: null }] }) })
       await vi.advanceTimersByTimeAsync(2000)
@@ -431,7 +431,7 @@ describe('Verifier polling lifecycle', () => {
       verifier.start()
       await vi.advanceTimersByTimeAsync(2000)
 
-      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /design in Claude Code')
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-design in Claude Code')
     })
 
     it('maps codex agent to the "Codex" display name in the instruction', async () => {
@@ -451,7 +451,7 @@ describe('Verifier polling lifecycle', () => {
       verifier.start()
       await vi.advanceTimersByTimeAsync(2000)
 
-      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /design in Codex')
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-design in Codex')
     })
   })
 

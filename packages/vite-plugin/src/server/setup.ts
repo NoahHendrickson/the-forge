@@ -8,6 +8,56 @@ const DESIGN_COMMAND = `Pull pending design edits from The Forge and apply them.
 3. After applying all edits, call \`mark_applied\` with each request id and status "applied" (or "failed" with a one-line reason if a change could not be applied).
 `
 
+/** Historical DESIGN_COMMAND texts (byte-exact), oldest first — used only to recognize OUR OWN
+ * legacy `.claude/commands/design.md` output for cleanup after the /forge-design rename. A file
+ * whose content doesn't match one of these exactly is treated as the user's own and left alone. */
+const HISTORICAL_DESIGN_COMMANDS = [
+  `Pull pending design edits from The Forge and apply them.
+
+1. Call the \`pull_design_edits\` tool from the \`the-forge\` MCP server.
+2. For each returned change request, apply the edits EXACTLY as its markdown specifies (file:line locations, before → after values, authored utility changes). Do not restyle anything else.
+3. After applying all edits, call \`mark_applied\` with each request id and status "applied" (or "failed" with a one-line reason if a change could not be applied).
+`,
+  DESIGN_COMMAND,
+]
+
+const GIT_WALK_MAX_LEVELS = 10
+
+/**
+ * Resolves the actual project root by walking up from Vite's config root looking for a
+ * directory containing `.git`, capped at GIT_WALK_MAX_LEVELS. Falls back to the vite root
+ * unchanged when no `.git` is found (keeps non-git projects working exactly as before).
+ * This matters because in a monorepo Vite's root is often a nested fixture/demo directory
+ * (e.g. fixtures/demo-app/) while the user's Claude Code session runs at the repo root — and
+ * only the repo root is where `.mcp.json` / `.claude/commands/` will actually be seen.
+ */
+export function resolveProjectRoot(viteRoot: string): string {
+  let dir = path.resolve(viteRoot)
+  for (let i = 0; i < GIT_WALK_MAX_LEVELS; i++) {
+    if (fs.existsSync(path.join(dir, '.git'))) return dir
+    const parent = path.dirname(dir)
+    if (parent === dir) break // reached filesystem root
+    dir = parent
+  }
+  return viteRoot
+}
+
+/** Removes a legacy `.claude/commands/design.md` at `root` IF its content byte-matches one of
+ * OUR historical DESIGN_COMMAND texts exactly. Leaves anything else (including files that don't
+ * exist, or don't match) untouched — a non-matching file belongs to the user. */
+function migrateLegacyDesignCommand(root: string): void {
+  const legacyFile = path.join(root, '.claude', 'commands', 'design.md')
+  let legacyContent: string | null = null
+  try {
+    legacyContent = fs.readFileSync(legacyFile, 'utf8')
+  } catch {
+    return
+  }
+  if (HISTORICAL_DESIGN_COMMANDS.includes(legacyContent)) {
+    fs.unlinkSync(legacyFile)
+  }
+}
+
 export function setupProjectConfig(root: string, mcpBinPath: string): void {
   // .mcp.json — additive merge. Distinguish "file doesn't exist" (proceed with {})
   // from "file exists but isn't valid JSON" (skip the write entirely — clobbering a
@@ -41,8 +91,8 @@ export function setupProjectConfig(root: string, mcpBinPath: string): void {
     }
   }
 
-  // /design command — write only when missing or different
-  const cmdFile = path.join(root, '.claude', 'commands', 'design.md')
+  // /forge-design command — write only when missing or different
+  const cmdFile = path.join(root, '.claude', 'commands', 'forge-design.md')
   let current: string | null = null
   try {
     current = fs.readFileSync(cmdFile, 'utf8')
@@ -53,4 +103,9 @@ export function setupProjectConfig(root: string, mcpBinPath: string): void {
     fs.mkdirSync(path.dirname(cmdFile), { recursive: true })
     fs.writeFileSync(cmdFile, DESIGN_COMMAND)
   }
+
+  // Migration: remove our OWN legacy /design command file (renamed to /forge-design to avoid
+  // colliding with a user's unrelated pre-existing /design command). Never touches a foreign
+  // design.md that doesn't byte-match one of our historical outputs.
+  migrateLegacyDesignCommand(root)
 }

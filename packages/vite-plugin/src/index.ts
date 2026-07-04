@@ -6,7 +6,7 @@ import type { Plugin } from 'vite'
 import { tagJsxSource } from './transform'
 import { Queue } from './server/queue'
 import { createForgeMiddleware, writeEndpointFile, removeEndpointFile } from './server/endpoints'
-import { setupProjectConfig } from './server/setup'
+import { setupProjectConfig, resolveProjectRoot } from './server/setup'
 import type { DispatchOpts } from './server/dispatch'
 
 export const CLIENT_ID = '/@the-forge/client'
@@ -51,7 +51,10 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       server.httpServer?.once('close', () => removeEndpointFile(forgeDir))
       process.once('exit', () => removeEndpointFile(forgeDir))
       const dir = path.dirname(fileURLToPath(import.meta.url))
-      setupProjectConfig(root, path.join(dir, 'mcp.js'))
+      // The user's Claude Code session runs at the actual project root, which in a monorepo
+      // is very often NOT Vite's config root (e.g. a nested fixtures/demo-app/ package) — walk
+      // up looking for .git so .mcp.json / the command file land where the session will see them.
+      setupProjectConfig(resolveProjectRoot(root), path.join(dir, 'mcp.js'))
     },
 
     transform(code, id) {

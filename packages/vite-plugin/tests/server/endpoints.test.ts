@@ -7,7 +7,7 @@ import { Queue } from '../../src/server/queue'
 import type { DispatchResult } from '../../src/server/dispatch'
 
 // The real dispatch ladder (real tmux/osascript) must NEVER run inside this suite — on a Mac
-// with automation permission + iTerm2/Terminal open it would type /design into the developer's
+// with automation permission + iTerm2/Terminal open it would type /forge-design into the developer's
 // actual front window. Mock the module-level `dispatch` export so the "no dispatchFn injected"
 // wiring test below can prove the fallback happens without ever invoking a real adapter.
 const dispatchSpy = vi.fn(async (): Promise<DispatchResult> => ({ rung: 'manual', detail: 'mocked — never the real ladder' }))
@@ -275,7 +275,7 @@ describe('forge middleware', () => {
 describe('POST /__the-forge/dispatch', () => {
   it('runs the injected dispatch function and returns its result as JSON', async () => {
     queue.add({}, 'some pending markdown') // a real dispatch only ever fires after a queue add
-    const fakeResult: DispatchResult = { rung: 'tmux', detail: 'typed /design into tmux pane %1' }
+    const fakeResult: DispatchResult = { rung: 'tmux', detail: 'typed /forge-design into tmux pane %1' }
     let receivedOpts: unknown = null
     const mwWithDispatch = createForgeMiddleware(queue, [], undefined, {
       agent: 'claude-code',

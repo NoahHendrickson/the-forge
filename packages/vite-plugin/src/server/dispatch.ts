@@ -43,8 +43,12 @@ export const defaultExec: ExecFileFn = (cmd, args, opts) =>
 
 /** The literal, constant text ever typed into a terminal on the user's behalf. Request content
  * (the change-request markdown) NEVER travels through tmux/AppleScript — only this literal
- * slash command reaches a terminal keystroke-by-keystroke. */
-const DESIGN_COMMAND = '/design'
+ * slash command reaches a terminal keystroke-by-keystroke.
+ *
+ * Named /forge-design (not /design) because /design collides with an unrelated command some
+ * users already have installed in their environment (e.g. "Usage: /design consent | /design
+ * revoke") — see the fix-command-install branch. */
+const DESIGN_COMMAND = '/forge-design'
 
 /** Shared mutable ref threaded through the ladder so `dispatch`'s overall-timeout callback can
  * flip `settled = true` and every adapter can check it immediately before a MUTATING exec call
@@ -57,7 +61,7 @@ export interface SettledRef {
 }
 
 /** tmux adapter: finds the first pane whose current command matches `paneCommand` exactly and
- * sends the literal `/design` + Enter into it. Any failure (missing tmux binary, no server
+ * sends the literal `/forge-design` + Enter into it. Any failure (missing tmux binary, no server
  * running, no matching pane, send-keys failing) resolves to null so the caller falls through
  * to the next rung — this adapter never throws. */
 async function tryTmux(paneCommand: 'claude' | 'codex', exec: ExecFileFn, settledRef: SettledRef): Promise<DispatchResult | null> {
@@ -95,23 +99,23 @@ async function tryTmux(paneCommand: 'claude' | 'codex', exec: ExecFileFn, settle
     return null
   }
 
-  return { rung: 'tmux', detail: `typed /design into tmux pane ${paneId}` }
+  return { rung: 'tmux', detail: `typed /forge-design into tmux pane ${paneId}` }
 }
 
 /** Best-effort AppleScript scripts — CONSTANTS, zero interpolation of any dynamic content
- * (request markdown never appears here; only the literal /design command and the literal
+ * (request markdown never appears here; only the literal /forge-design command and the literal
  * agent-name marker checked for in the title/session-name heuristic below). Tries iTerm2 first,
  * then Terminal.app.
  *
  * Controller ruling (brief conflict adjudication): keystroking into the front window is only
  * safe once we've verified that window actually belongs to the target agent session — otherwise
- * we'd type /design into an unrelated shell and still report success. Each script therefore
+ * we'd type /forge-design into an unrelated shell and still report success. Each script therefore
  * checks a title/session-name heuristic FIRST:
  *   - iTerm2: `name of current session of current window` contains the agent marker
  *     ("claude" or "codex" — two separate constants, one per agent).
  *   - Terminal: `name of front window` contains the agent marker.
  * If the check fails, the script returns the sentinel string "no-session" and types nothing.
- * If it passes, it types the literal /design + Enter and returns "ok". A denied automation
+ * If it passes, it types the literal /forge-design + Enter and returns "ok". A denied automation
  * permission, the app not running, or any other osascript failure moves on to the next app /
  * next rung — never throws. */
 const ITERM_CLAUDE_MARKER = 'claude'
@@ -130,7 +134,7 @@ tell application "iTerm2"
 end tell
 tell application "System Events"
   tell process "iTerm2"
-    keystroke "/design"
+    keystroke "/forge-design"
     keystroke return
   end tell
 end tell
@@ -148,7 +152,7 @@ tell application "iTerm2"
 end tell
 tell application "System Events"
   tell process "iTerm2"
-    keystroke "/design"
+    keystroke "/forge-design"
     keystroke return
   end tell
 end tell
@@ -166,7 +170,7 @@ tell application "Terminal"
 end tell
 tell application "System Events"
   tell process "Terminal"
-    keystroke "/design"
+    keystroke "/forge-design"
     keystroke return
   end tell
 end tell
@@ -184,7 +188,7 @@ tell application "Terminal"
 end tell
 tell application "System Events"
   tell process "Terminal"
-    keystroke "/design"
+    keystroke "/forge-design"
     keystroke return
   end tell
 end tell
@@ -225,7 +229,7 @@ async function tryAppleScript(
       const { stdout } = await exec('osascript', ['-e', script], { timeout: EXEC_TIMEOUT_MS })
       if (settledRef.settled) return null
       if (stdout.trim() !== 'ok') continue // verification failed (sentinel "no-session") — try next app
-      return { rung: 'applescript', detail: `typed /design into ${appName} via AppleScript` }
+      return { rung: 'applescript', detail: `typed /forge-design into ${appName} via AppleScript` }
     } catch {
       // try the next app
     }
@@ -289,7 +293,7 @@ async function runLadder(opts: DispatchOpts, exec: ExecFileFn, settledRef: Settl
   if (opts.agent === 'cursor') {
     const deeplink = await tryDeeplink(opts.markdown, exec, settledRef)
     if (deeplink) return deeplink
-    return { rung: 'manual', detail: 'deeplink unavailable — type /design in Cursor' }
+    return { rung: 'manual', detail: 'deeplink unavailable — type /forge-design in Cursor' }
   }
 
   const paneCommand = opts.agent === 'codex' ? 'codex' : 'claude'
@@ -305,7 +309,7 @@ async function runLadder(opts: DispatchOpts, exec: ExecFileFn, settledRef: Settl
   const appleScriptResult = await tryAppleScript(platform, paneCommand, exec, settledRef)
   if (appleScriptResult) return appleScriptResult
 
-  return { rung: 'manual', detail: `type /design in ${opts.agent === 'codex' ? 'Codex' : 'Claude Code'}` }
+  return { rung: 'manual', detail: `type /forge-design in ${opts.agent === 'codex' ? 'Codex' : 'Claude Code'}` }
 }
 
 /**
@@ -313,7 +317,7 @@ async function runLadder(opts: DispatchOpts, exec: ExecFileFn, settledRef: Settl
  * 'manual' if every automated rung fell through). NEVER spawns an agent CLI with an API key and
  * NEVER touches the Agent SDK — this only reaches for the user's already-RUNNING session via
  * tmux send-keys, AppleScript keystrokes, or (cursor) a deeplink. The only text ever typed into
- * a terminal is the literal `/design` + Enter; request content only ever travels (URL-encoded)
+ * a terminal is the literal `/forge-design` + Enter; request content only ever travels (URL-encoded)
  * through the Cursor deeplink.
  *
  * The whole ladder is capped at `opts.ladderTimeoutMs` (default 5000ms, injectable for tests) via
