@@ -16,6 +16,7 @@ const liveModes: DesignMode[] = []
 beforeEach(() => {
   document.body.innerHTML = ''
   document.head.innerHTML = ''
+  localStorage.clear()
   vi.restoreAllMocks()
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
     cb(0)
@@ -26,6 +27,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const mode of liveModes.splice(0)) mode.setActive(false)
   vi.unstubAllGlobals()
+  document.documentElement.style.marginRight = ''
 })
 
 function fullSetup() {
@@ -61,16 +63,25 @@ describe('DesignMode listener lifecycle (spec §10: zero idle listeners)', () =>
 
     mode.setActive(true)
     const added = [...addSpy.mock.calls.map((c) => c[0]), ...winAddSpy.mock.calls.map((c) => c[0])].sort()
-    expect(added).toEqual(['click', 'keydown', 'mousemove', 'resize', 'scroll'])
+    // Two 'resize' listeners now land on `window`: DesignMode's own onReflow (passive)
+    // AND the Dock's onWindowResize (docked by default — see dock.ts enter()), which
+    // carries no listener-options object at all.
+    expect(added).toEqual(['click', 'keydown', 'mousemove', 'resize', 'resize', 'scroll'])
     for (const call of addSpy.mock.calls) {
       if (call[0] === 'scroll') expect(call[2]).toEqual({ capture: true, passive: true })
       else expect(call[2]).toBe(true)
     }
-    for (const call of winAddSpy.mock.calls) expect(call[2]).toEqual({ passive: true })
+    // DesignMode's own resize listener is passive; Dock's onWindowResize is registered
+    // with no options object at all (dock.ts enter()) — assert both shapes are present
+    // rather than a uniform check across all window listeners.
+    expect(winAddSpy.mock.calls.some((call) => call[2] === undefined)).toBe(true)
+    expect(winAddSpy.mock.calls.some((call) => JSON.stringify(call[2]) === JSON.stringify({ passive: true }))).toBe(
+      true
+    )
 
     mode.setActive(false)
     const removed = [...removeSpy.mock.calls.map((c) => c[0]), ...winRemoveSpy.mock.calls.map((c) => c[0])].sort()
-    expect(removed).toEqual(['click', 'keydown', 'mousemove', 'resize', 'scroll'])
+    expect(removed).toEqual(['click', 'keydown', 'mousemove', 'resize', 'resize', 'scroll'])
   })
 
   it('toggle button flips design mode', () => {
@@ -457,14 +468,16 @@ describe('DesignMode multi-select (B6)', () => {
     expect(showSpy).toHaveBeenLastCalledWith([a, b], expect.objectContaining({ tag: 'button' }))
   })
 
-  it('deselecting hides the panel', () => {
+  it('deselecting shows the docked empty state (design mode still active — docked by default)', () => {
     const { overlay, mode } = multiSetup()
     mode.setActive(true)
     const a = document.getElementById('a')!
     click(a)
     click(document.body)
     const root = overlay.host.shadowRoot!
-    expect((root.getElementById('panel') as HTMLElement).hidden).toBe(true)
+    const panelEl = root.getElementById('panel') as HTMLElement
+    expect(panelEl.hidden).toBe(false)
+    expect((panelEl.querySelector('.panel-empty') as HTMLElement).hidden).toBe(false)
   })
 })
 
@@ -1421,5 +1434,39 @@ describe('DesignMode layout-ripple multi-select (B6 follow-up)', () => {
     // Neither co-selected element may ripple, even though each moved and each sits
     // in the other's snapshot scope.
     expect(rects.some((r) => r.height === 60)).toBe(false)
+  })
+})
+
+describe('Dock integration (docked-panel spec)', () => {
+  it('activating design mode docks by default: html margin set, panel visible with empty state', () => {
+    const { mode, panel } = fullSetup()
+    mode.setActive(true)
+    expect(document.documentElement.style.marginRight).toBe('320px')
+    expect(panel.root.hidden).toBe(false)
+    expect((panel.root.querySelector('.panel-empty') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('deactivating restores the html margin and hides the panel', () => {
+    const { mode, panel } = fullSetup()
+    mode.setActive(true)
+    mode.setActive(false)
+    expect(document.documentElement.style.marginRight).toBe('')
+    expect(panel.root.hidden).toBe(true)
+  })
+
+  it('Escape-out (deselect then deactivate) also restores the margin — single setActive(false) path', () => {
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) // no selection -> deactivates
+    expect(mode.active).toBe(false)
+    expect(document.documentElement.style.marginRight).toBe('')
+  })
+
+  it('adds no document-level listeners while inactive (idle-zero preserved with Dock constructed)', () => {
+    const addSpy = vi.spyOn(document, 'addEventListener')
+    const overlay = new Overlay()
+    overlay.mount()
+    new DesignMode(overlay)
+    expect(addSpy).not.toHaveBeenCalled()
   })
 })

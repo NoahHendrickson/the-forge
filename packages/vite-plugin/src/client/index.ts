@@ -3,6 +3,7 @@ import { findTaggedElement, type TaggedElement } from './source'
 import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
+import { Dock } from './dock'
 import { buildChangeRequestWithElements, renderMarkdown } from './request'
 import { SentRegistry } from './sent'
 import { Verifier } from './verifier'
@@ -42,6 +43,7 @@ export class DesignMode {
   private lastMove: MouseEvent | null = null
   private drafts: DraftStore
   private panel: Panel
+  private dock: Dock
   private verifier: Verifier
   private verifierSummary = ''
   /** Watcher-state poller — runs ONLY while design mode is on (started/stopped in
@@ -67,7 +69,8 @@ export class DesignMode {
   constructor(
     private overlay: Overlay,
     panel?: Panel,
-    drafts?: DraftStore
+    drafts?: DraftStore,
+    dock?: Dock
   ) {
     this.drafts = drafts ?? new DraftStore()
     this.panel =
@@ -77,6 +80,7 @@ export class DesignMode {
         () => this.handleEdited(),
         (el) => this.handleBeforeEdit(el)
       )
+    this.dock = dock ?? new Dock(overlay.host, this.panel, overlay.status, overlay.toggle)
     this.verifier = new Verifier(this.sent, this.drafts, (summary) => {
       this.verifierSummary = summary
       this.refreshStatus()
@@ -179,6 +183,7 @@ export class DesignMode {
     this.active = on
     this.overlay.setActive(on)
     if (on) {
+      this.dock.enter()
       // Tokens (colors, text scale) are memoized module-globally (readTokens) for cheap
       // repeat access during a session — but that means a theme edit made while design
       // mode was INACTIVE (author tweaks CSS, HMR reloads styles) would otherwise be
@@ -210,6 +215,7 @@ export class DesignMode {
       this.selection = []
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
+      this.dock.exit()
       this.verifier.stop()
       this.watch.stop()
     }
