@@ -1563,3 +1563,286 @@ describe('Panel + ColorPicker lifecycle', () => {
     expect(picker.root.hidden).toBe(true)
   })
 })
+
+describe('Panel multi-select (B6)', () => {
+  function multiSetup(htmlA?: string, htmlB?: string) {
+    document.body.innerHTML = `
+      <div data-dc-source="src/A.tsx:1:1" id="a" style="${htmlA ?? 'padding: 10px; width: 100px;'}"></div>
+      <div data-dc-source="src/B.tsx:2:2" id="b" style="${htmlB ?? 'padding: 20px; width: 100px;'}"></div>
+    `
+    const a = document.getElementById('a')! as HTMLElement
+    const b = document.getElementById('b')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const panel = new Panel(drafts, onEdited)
+    document.body.appendChild(panel.root)
+    panel.show([a, b], buildInspectorData(a))
+    return { a, b, drafts, panel, onEdited }
+  }
+
+  it('header shows "N selected" and hides the source line', () => {
+    const { panel } = multiSetup()
+    const tagEl = panel.root.querySelector('.panel-head-tag') as HTMLElement
+    const srcEl = panel.root.querySelector('.panel-head-src') as HTMLElement | null
+    expect(tagEl.textContent).toBe('2 selected')
+    expect(srcEl).toBeFalsy()
+  })
+
+  it('a field with equal values across the selection shows that value', () => {
+    const { panel } = multiSetup('width: 100px;', 'width: 100px;')
+    expect(fieldInput(panel, 'W').value).toBe('100')
+  })
+
+  it('a field with divergent values across the selection shows Mixed', () => {
+    const { panel } = multiSetup('padding: 10px;', 'padding: 20px;')
+    expect(fieldInput(panel, 'PX').value).toBe('Mixed')
+  })
+
+  it('a plain typed number applies the same absolute css to every element', () => {
+    const { a, b, panel, drafts } = multiSetup()
+    commit(fieldInput(panel, 'W'), '250')
+    expect(drafts.current(a, 'width')).toBe('250px')
+    expect(drafts.current(b, 'width')).toBe('250px')
+  })
+
+  it('a relative delta (+8) applies per-element against each own current value', () => {
+    const { a, b, panel, drafts } = multiSetup('width: 10px;', 'width: 20px;')
+    commit(fieldInput(panel, 'W'), '+8')
+    expect(drafts.current(a, 'width')).toBe('18px')
+    expect(drafts.current(b, 'width')).toBe('28px')
+  })
+
+  it('a relative multiply (*2) applies per-element too', () => {
+    const { a, b, panel, drafts } = multiSetup('width: 10px;', 'width: 20px;')
+    commit(fieldInput(panel, 'W'), '*2')
+    expect(drafts.current(a, 'width')).toBe('20px')
+    expect(drafts.current(b, 'width')).toBe('40px')
+  })
+
+  it('scrub: onScrubStart snapshots per-element baselines; subsequent onRelative calls replace, not accumulate', () => {
+    const { a, b, panel, drafts } = multiSetup('width: 10px;', 'width: 20px;')
+    const input = fieldInput(panel, 'W')
+    const label = input.closest('.nf')!.querySelector('.nf-label') as HTMLElement
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 0 }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 5 }))
+    expect(drafts.current(a, 'width')).toBe('15px')
+    expect(drafts.current(b, 'width')).toBe('25px')
+    // second move REPLACES the first against the SAME baseline (10/20), not 15/25
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 12 }))
+    expect(drafts.current(a, 'width')).toBe('22px')
+    expect(drafts.current(b, 'width')).toBe('32px')
+    window.dispatchEvent(new MouseEvent('mouseup'))
+  })
+
+  it('Compare acts on every element in the selection', () => {
+    const { a, b, panel, drafts } = multiSetup()
+    commit(fieldInput(panel, 'W'), '250')
+    panel.compareButton.click()
+    expect(drafts.isComparing(a)).toBe(true)
+    expect(drafts.isComparing(b)).toBe(true)
+  })
+
+  it('Reset acts on every element in the selection', () => {
+    const { a, b, panel, drafts } = multiSetup()
+    commit(fieldInput(panel, 'W'), '250')
+    panel.resetButton.click()
+    expect(drafts.hasDrafts(a)).toBe(false)
+    expect(drafts.hasDrafts(b)).toBe(false)
+  })
+
+  it('Layout section is hidden entirely in multi-select', () => {
+    const { panel } = multiSetup()
+    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Layout')!
+    expect((layoutTitle as HTMLElement).hidden).toBe(true)
+  })
+
+  it('size-mode selects are hidden in multi-select', () => {
+    const { panel } = multiSetup()
+    const selects = [...panel.root.querySelectorAll('.size-row .size-mode')] as HTMLElement[]
+    expect(selects.length).toBeGreaterThan(0)
+    expect(selects.every((s) => s.hidden)).toBe(true)
+  })
+
+  it('flex-child controls (.flex-child-controls) are hidden in multi-select', () => {
+    const { panel } = multiSetup()
+    const wrap = panel.root.querySelector('.flex-child-controls') as HTMLElement
+    expect(wrap.hidden).toBe(true)
+  })
+
+  it('single-element show() remains unaffected: Layout visibility follows single-el rules', () => {
+    document.body.innerHTML = `<div data-dc-source="src/Card.tsx:4:7" id="t" style="width: 200px;"></div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Layout')!
+    expect((layoutTitle as HTMLElement).hidden).toBe(false)
+  })
+})
+
+describe('Panel multi-select Typography (B6)', () => {
+  function multiSetup(styleA: string, styleB: string) {
+    document.body.innerHTML = `
+      <div data-dc-source="src/A.tsx:1:1" id="a" style="${styleA}">Hello</div>
+      <div data-dc-source="src/B.tsx:2:2" id="b" style="${styleB}">World</div>
+    `
+    const a = document.getElementById('a')! as HTMLElement
+    const b = document.getElementById('b')! as HTMLElement
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show([a, b], buildInspectorData(a))
+    return { a, b, drafts, panel }
+  }
+
+  it('shows only S/LH/LS number fields; family/weight/align selects are hidden', () => {
+    const { panel } = multiSetup('font-size: 16px;', 'font-size: 16px;')
+    expect(panel.root.querySelector('.type-family')).toBeFalsy()
+    expect(panel.root.querySelector('.type-weight')).toBeFalsy()
+    expect(panel.root.querySelector('[data-text-align]')).toBeFalsy()
+    expect(fieldInput(panel, 'S')).toBeTruthy()
+    expect(fieldInput(panel, 'LH')).toBeTruthy()
+    expect(fieldInput(panel, 'LS')).toBeTruthy()
+  })
+
+  it('font-size is Mixed-capable: divergent sizes across selection show Mixed', () => {
+    const { panel } = multiSetup('font-size: 16px;', 'font-size: 24px;')
+    expect(fieldInput(panel, 'S').value).toBe('Mixed')
+  })
+})
+
+describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', () => {
+  function multiSetup(styleA: string, styleB: string) {
+    document.body.innerHTML = `
+      <div data-dc-source="src/A.tsx:1:1" id="a" style="${styleA}"></div>
+      <div data-dc-source="src/B.tsx:2:2" id="b" style="${styleB}"></div>
+    `
+    const a = document.getElementById('a')! as HTMLElement
+    const b = document.getElementById('b')! as HTMLElement
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show([a, b], buildInspectorData(a))
+    return { a, b, drafts, panel }
+  }
+
+  function sectionTitles(panel: Panel): string[] {
+    return [...panel.root.querySelectorAll('.panel-section')].map((n) => n.textContent?.replace('⋯', '').trim() ?? '')
+  }
+
+  it('Fill and Stroke section titles are hidden in multi-select', () => {
+    const { panel } = multiSetup('background-color: red;', 'background-color: blue;')
+    const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Fill')!
+    const strokeTitleEl = [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+    )!
+    expect((fillTitle as HTMLElement).hidden).toBe(true)
+    expect((strokeTitleEl as HTMLElement).hidden).toBe(true)
+  })
+
+  it('a "Selection colors" section is present and visible only in multi-select', () => {
+    const { panel } = multiSetup('background-color: red;', 'background-color: blue;')
+    expect(sectionTitles(panel)).toContain('Selection colors')
+    const scTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Selection colors')!
+    expect((scTitle as HTMLElement).hidden).toBe(false)
+  })
+
+  it('single-select never shows Selection colors', () => {
+    document.body.innerHTML = `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: red;"></div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    expect(sectionTitles(panel)).not.toContain('Selection colors')
+  })
+
+  function scRows(panel: Panel): HTMLElement[] {
+    const scTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Selection colors')!
+    return [...(scTitle.parentElement!.querySelector('.sc-rows') as HTMLElement).querySelectorAll('.sc-row')] as HTMLElement[]
+  }
+
+  it('groups identical colors into one row with a count; distinct colors get distinct rows', () => {
+    // border-top-color defaults to currentColor (the `color` value) when not set explicitly —
+    // pin it to a third, distinct color on both elements so counts aren't accidentally aliased
+    // by that cascade default.
+    const { panel } = multiSetup(
+      'background-color: rgb(255, 0, 0); color: rgb(255, 0, 0); border-top-color: rgb(9, 9, 9);',
+      'background-color: rgb(255, 0, 0); color: rgb(0, 0, 255); border-top-color: rgb(9, 9, 9);'
+    )
+    const rows = scRows(panel)
+    // usages: a.bg=red, a.color=red, a.border=gray, b.bg=red, b.color=blue, b.border=gray
+    // => red x3, blue x1, gray x2
+    const counts = rows.map((r) => (r.querySelector('.sc-count') as HTMLElement).textContent)
+    expect(counts.sort()).toEqual(['×1', '×2', '×3'])
+  })
+
+  it('skips fully-transparent colors', () => {
+    const { panel } = multiSetup(
+      'background-color: transparent; color: rgb(1, 2, 3); border-top-color: rgb(1, 2, 3);',
+      'background-color: transparent; color: rgb(1, 2, 3); border-top-color: rgb(1, 2, 3);'
+    )
+    const rows = scRows(panel)
+    expect(rows).toHaveLength(1)
+    expect((rows[0].querySelector('.sc-count') as HTMLElement).textContent).toBe('×4')
+  })
+
+  it('clicking a row opens the ColorPicker with contrastAgainst null', () => {
+    const { panel } = multiSetup('background-color: rgb(255, 0, 0);', 'background-color: rgb(255, 0, 0);')
+    const openSpy = vi.fn()
+    ;(panel as unknown as { colorPicker: { open: typeof openSpy } }).colorPicker.open = openSpy
+    const rows = scRows(panel)
+    ;(rows[0].querySelector('.swatch') as HTMLElement).click()
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(openSpy.mock.calls[0][0].contrastAgainst).toBeNull()
+  })
+
+  it('picking a color replaces it on exactly the elements/props that had it', () => {
+    const { a, b, panel, drafts } = multiSetup(
+      'background-color: rgb(255, 0, 0); color: rgb(255, 0, 0); border-top-color: rgb(10, 10, 10);',
+      'background-color: rgb(0, 255, 0); color: rgb(10, 10, 10); border-top-color: rgb(10, 10, 10);'
+    )
+    let onPick: ((css: string, meta: { token?: string }) => void) | null = null
+    ;(panel as unknown as { colorPicker: { open: (opts: any) => void } }).colorPicker.open = (opts) => {
+      onPick = opts.onPick
+    }
+    const rows = scRows(panel)
+    const redRow = rows.find((r) => (r.querySelector('.sc-count') as HTMLElement).textContent === '×2')!
+    ;(redRow.querySelector('.swatch') as HTMLElement).click()
+    onPick!('rgb(9, 9, 9)', {})
+    // a's bg and color were both red -> both replaced
+    expect(drafts.current(a, 'background-color')).toBe('rgb(9, 9, 9)')
+    expect(drafts.current(a, 'color')).toBe('rgb(9, 9, 9)')
+    // b's bg was green and color/border were the OTHER shared color (gray) -> untouched
+    expect(drafts.current(b, 'background-color')).toBeNull()
+    expect(drafts.current(b, 'color')).toBeNull()
+  })
+
+  it('picking a border-top-color usage applies all four border color longhands for that element', () => {
+    const { a, panel, drafts } = multiSetup(
+      'border-style: solid; border-width: 1px; border-color: rgb(255, 0, 0); color: rgb(20, 20, 20); background-color: rgb(20, 20, 20);',
+      'background-color: rgb(0, 255, 0); color: rgb(20, 20, 20);'
+    )
+    let onPick: ((css: string, meta: { token?: string }) => void) | null = null
+    ;(panel as unknown as { colorPicker: { open: (opts: any) => void } }).colorPicker.open = (opts) => {
+      onPick = opts.onPick
+    }
+    const rows = scRows(panel)
+    const redRow = rows.find((r) => (r.querySelector('.sc-count') as HTMLElement).textContent === '×1')!
+    ;(redRow.querySelector('.swatch') as HTMLElement).click()
+    onPick!('rgb(9, 9, 9)', {})
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(a, `border-${side}-color`)).toBe('rgb(9, 9, 9)')
+    }
+  })
+
+  it('refresh regroups after an edit', () => {
+    const { a, panel, drafts } = multiSetup('background-color: rgb(255, 0, 0);', 'background-color: rgb(0, 255, 0);')
+    expect(scRows(panel)).toHaveLength(2)
+    drafts.apply(a, 'background-color', 'rgb(0, 255, 0)')
+    panel.refresh()
+    expect(scRows(panel)).toHaveLength(1)
+    expect((scRows(panel)[0].querySelector('.sc-count') as HTMLElement).textContent).toBe('×2')
+  })
+})

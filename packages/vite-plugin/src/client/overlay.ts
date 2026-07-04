@@ -200,6 +200,8 @@ button {
  */
 .swatch-color { position: absolute; inset: 0; background-color: currentColor; }
 .color-value { color: #9A9A9A; font-size: 10.5px; }
+.sc-row { justify-content: space-between; }
+.sc-count { color: #9A9A9A; font-size: 10.5px; margin-left: auto; }
 .stroke-style { flex: 1 1 40%; }
 
 .color-popover {
