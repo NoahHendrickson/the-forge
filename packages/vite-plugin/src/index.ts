@@ -54,7 +54,7 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       // The user's Claude Code session runs at the actual project root, which in a monorepo
       // is very often NOT Vite's config root (e.g. a nested fixtures/demo-app/ package) — walk
       // up looking for .git so .mcp.json / the command file land where the session will see them.
-      setupProjectConfig(resolveProjectRoot(root), path.join(dir, 'mcp.js'))
+      setupProjectConfig(resolveProjectRoot(root), path.join(dir, 'mcp.js'), root)
     },
 
     transform(code, id) {

@@ -33,7 +33,7 @@ const GIT_WALK_MAX_LEVELS = 10
  */
 export function resolveProjectRoot(viteRoot: string): string {
   let dir = path.resolve(viteRoot)
-  for (let i = 0; i < GIT_WALK_MAX_LEVELS; i++) {
+  for (let i = 0; i <= GIT_WALK_MAX_LEVELS; i++) {
     if (fs.existsSync(path.join(dir, '.git'))) return dir
     const parent = path.dirname(dir)
     if (parent === dir) break // reached filesystem root
@@ -58,7 +58,39 @@ function migrateLegacyDesignCommand(root: string): void {
   }
 }
 
-export function setupProjectConfig(root: string, mcpBinPath: string): void {
+/** Removes the `the-forge` entry from a legacy `.mcp.json` at `root` IF it exists, parses as
+ * JSON, and its `mcpServers['the-forge']` matches our shape exactly (command 'node', a single
+ * arg ending in `mcp.js`). Other entries in the file — the user's own MCP servers — are left
+ * intact, and the file itself is never deleted. An unparseable file is left untouched entirely,
+ * same caution as setupProjectConfig's main .mcp.json handling. */
+function migrateLegacyMcpEntry(root: string): void {
+  const mcpFile = path.join(root, '.mcp.json')
+  let raw: string
+  try {
+    raw = fs.readFileSync(mcpFile, 'utf8')
+  } catch {
+    return
+  }
+
+  let config: { mcpServers?: Record<string, unknown> } | null = null
+  try {
+    config = JSON.parse(raw)
+  } catch {
+    return
+  }
+  if (!config) return
+
+  const entry = config.mcpServers?.['the-forge'] as { command?: unknown; args?: unknown } | undefined
+  if (!entry || entry.command !== 'node') return
+  if (!Array.isArray(entry.args) || entry.args.length !== 1) return
+  const [arg] = entry.args
+  if (typeof arg !== 'string' || !arg.endsWith('mcp.js')) return
+
+  delete config.mcpServers!['the-forge']
+  fs.writeFileSync(mcpFile, JSON.stringify(config, null, 2) + '\n')
+}
+
+export function setupProjectConfig(root: string, mcpBinPath: string, viteRoot?: string): void {
   // .mcp.json — additive merge. Distinguish "file doesn't exist" (proceed with {})
   // from "file exists but isn't valid JSON" (skip the write entirely — clobbering a
   // user's malformed-but-intentional file would destroy whatever they were mid-edit on).
@@ -108,4 +140,14 @@ export function setupProjectConfig(root: string, mcpBinPath: string): void {
   // colliding with a user's unrelated pre-existing /design command). Never touches a foreign
   // design.md that doesn't byte-match one of our historical outputs.
   migrateLegacyDesignCommand(root)
+
+  // Migration: pre-fix installs wrote .claude/commands/design.md and .mcp.json at Vite's config
+  // root instead of the resolved project root. When resolveProjectRoot walked up to a different
+  // directory, those vite-root artifacts are now orphaned — a Claude Code session opened at the
+  // vite root would still pick up the stale /design command and MCP entry. Clean both up there
+  // too, using the same conservative byte/shape matching as the resolved-root migrations above.
+  if (viteRoot && path.resolve(viteRoot) !== path.resolve(root)) {
+    migrateLegacyDesignCommand(viteRoot)
+    migrateLegacyMcpEntry(viteRoot)
+  }
 }

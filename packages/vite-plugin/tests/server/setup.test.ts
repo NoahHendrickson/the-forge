@@ -110,6 +110,91 @@ describe('setupProjectConfig', () => {
   })
 })
 
+describe('setupProjectConfig — vite-root legacy migration', () => {
+  let viteRoot: string
+
+  beforeEach(() => {
+    viteRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-viteroot-'))
+  })
+
+  it('removes a legacy design.md at the vite root (our content) while installing at the resolved root', () => {
+    // Produce our current DESIGN_COMMAND content via a throwaway install, then place it as the
+    // legacy design.md at the (different) vite root.
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-scratch-'))
+    setupProjectConfig(scratch, '/abs/dist/mcp.js')
+    const ourContent = fs.readFileSync(path.join(scratch, '.claude', 'commands', 'forge-design.md'), 'utf8')
+
+    const legacyFile = path.join(viteRoot, '.claude', 'commands', 'design.md')
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true })
+    fs.writeFileSync(legacyFile, ourContent)
+
+    setupProjectConfig(root, '/abs/dist/mcp.js', viteRoot)
+
+    expect(fs.existsSync(legacyFile)).toBe(false)
+    // resolved root still gets the real install
+    expect(fs.existsSync(path.join(root, '.claude', 'commands', 'forge-design.md'))).toBe(true)
+  })
+
+  it('removes only the the-forge entry from a legacy .mcp.json at the vite root, preserving foreign entries', () => {
+    const mcpFile = path.join(viteRoot, '.mcp.json')
+    fs.writeFileSync(
+      mcpFile,
+      JSON.stringify({
+        mcpServers: {
+          'the-forge': { command: 'node', args: ['/some/path/to/mcp.js'] },
+          other: { command: 'x' },
+        },
+      })
+    )
+
+    setupProjectConfig(root, '/abs/dist/mcp.js', viteRoot)
+
+    const parsed = JSON.parse(fs.readFileSync(mcpFile, 'utf8'))
+    expect(parsed.mcpServers['the-forge']).toBeUndefined()
+    expect(parsed.mcpServers.other).toEqual({ command: 'x' })
+  })
+
+  it('leaves an unparseable legacy .mcp.json at the vite root untouched', () => {
+    const mcpFile = path.join(viteRoot, '.mcp.json')
+    const original = '{not valid json'
+    fs.writeFileSync(mcpFile, original)
+
+    setupProjectConfig(root, '/abs/dist/mcp.js', viteRoot)
+
+    expect(fs.readFileSync(mcpFile, 'utf8')).toBe(original)
+  })
+
+  it('leaves a legacy .mcp.json at the vite root untouched when the the-forge entry does not match our shape', () => {
+    const mcpFile = path.join(viteRoot, '.mcp.json')
+    fs.writeFileSync(
+      mcpFile,
+      JSON.stringify({
+        mcpServers: {
+          'the-forge': { command: 'python', args: ['/some/other/thing.py'] },
+        },
+      })
+    )
+
+    setupProjectConfig(root, '/abs/dist/mcp.js', viteRoot)
+
+    const parsed = JSON.parse(fs.readFileSync(mcpFile, 'utf8'))
+    expect(parsed.mcpServers['the-forge']).toEqual({ command: 'python', args: ['/some/other/thing.py'] })
+  })
+
+  it('does nothing at the vite root when the resolved root and vite root are the same', () => {
+    const legacyFile = path.join(root, '.claude', 'commands', 'design.md')
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true })
+    const userContent = 'Usage: /design consent | /design revoke\n'
+    fs.writeFileSync(legacyFile, userContent)
+
+    setupProjectConfig(root, '/abs/dist/mcp.js', root)
+
+    // Untouched because it doesn't match our content, AND because resolvedRoot === viteRoot
+    // means no separate vite-root migration pass runs (it's the same pass as the main install).
+    expect(fs.readFileSync(legacyFile, 'utf8')).toBe(userContent)
+  })
+})
+
 describe('resolveProjectRoot', () => {
   let base: string
 
@@ -142,5 +227,27 @@ describe('resolveProjectRoot', () => {
     const resolved = resolveProjectRoot(base)
 
     expect(resolved).toBe(base)
+  })
+
+  it('finds a .git directory exactly at the walk cap (10 levels up)', () => {
+    fs.mkdirSync(path.join(base, '.git'))
+    const segments = Array.from({ length: 10 }, (_, i) => `d${i}`)
+    const nested = path.join(base, ...segments)
+    fs.mkdirSync(nested, { recursive: true })
+
+    const resolved = resolveProjectRoot(nested)
+
+    expect(resolved).toBe(base)
+  })
+
+  it('falls back to the vite root when .git is one level beyond the walk cap (11 levels up)', () => {
+    fs.mkdirSync(path.join(base, '.git'))
+    const segments = Array.from({ length: 11 }, (_, i) => `d${i}`)
+    const nested = path.join(base, ...segments)
+    fs.mkdirSync(nested, { recursive: true })
+
+    const resolved = resolveProjectRoot(nested)
+
+    expect(resolved).toBe(nested)
   })
 })
