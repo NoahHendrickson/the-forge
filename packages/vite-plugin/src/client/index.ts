@@ -14,8 +14,10 @@ export class DesignMode {
   active = false
   selected: TaggedElement | null = null
 
-  private rafId = 0
+  private moveRaf = 0
+  private reflowRaf = 0
   private lastMove: MouseEvent | null = null
+  private moveWasQueued = false
   private drafts: DraftStore
   private panel: Panel
 
@@ -62,9 +64,12 @@ export class DesignMode {
       document.removeEventListener('keydown', this.onKey, true)
       document.removeEventListener('scroll', this.onReflow, true)
       window.removeEventListener('resize', this.onReflow)
-      if (this.rafId) cancelAnimationFrame(this.rafId)
-      this.rafId = 0
+      if (this.moveRaf) cancelAnimationFrame(this.moveRaf)
+      if (this.reflowRaf) cancelAnimationFrame(this.reflowRaf)
+      this.moveRaf = 0
+      this.reflowRaf = 0
       this.lastMove = null
+      this.moveWasQueued = false
       this.selected = null
       this.panel.hide()
     }
@@ -88,15 +93,16 @@ export class DesignMode {
 
   private onMove = (e: MouseEvent): void => {
     this.lastMove = e
-    if (this.rafId) return
-    this.rafId = requestAnimationFrame(() => {
-      this.rafId = 0
+    if (this.moveRaf) return
+    this.moveRaf = requestAnimationFrame(() => {
+      this.moveRaf = 0
       const ev = this.lastMove
       if (!this.active || !ev || this.overlay.contains(ev.target)) return
       const el = findTaggedElement(ev.target as Element)
       if (el && el !== this.selected) this.overlay.showOutline(el.getBoundingClientRect())
       else this.overlay.hideOutline()
     })
+    this.moveWasQueued = true
   }
 
   private onClick = (e: MouseEvent): void => {
@@ -116,12 +122,13 @@ export class DesignMode {
   }
 
   private onReflow = (): void => {
-    if (this.rafId) return
-    this.rafId = requestAnimationFrame(() => {
-      this.rafId = 0
+    if (this.reflowRaf) return
+    this.reflowRaf = requestAnimationFrame(() => {
+      this.reflowRaf = 0
       if (!this.active) return
       this.remeasure()
-      this.overlay.hideOutline()
+      if (!this.moveWasQueued) this.overlay.hideOutline()
+      this.moveWasQueued = false
     })
   }
 }

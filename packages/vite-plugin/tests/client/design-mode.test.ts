@@ -164,4 +164,38 @@ describe('DesignMode selection (M2)', () => {
     expect(drafts.elementCount()).toBe(0)
     expect(status.hidden).toBe(true)
   })
+
+  it('concurrent scroll and hover neither drop nor stomp each other', () => {
+    // Collect RAFs to verify both move and reflow are queued
+    const rafs: Array<{ type: string; callback: FrameRequestCallback }> = []
+    const originalRAF = globalThis.requestAnimationFrame
+    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+      // Capture the call stack to determine if it's from onMove or onReflow
+      const stack = new Error().stack || ''
+      const type = stack.includes('onMove') ? 'move' : 'reflow'
+      rafs.push({ type, callback: cb })
+      return rafs.length
+    }) as typeof requestAnimationFrame
+
+    const { overlay, mode } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')!
+    btn.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+    document.dispatchEvent(new Event('scroll'))
+
+    // Verify both move and reflow were queued
+    const moveRAFs = rafs.filter(r => r.type === 'move')
+    const reflowRAFs = rafs.filter(r => r.type === 'reflow')
+    expect(moveRAFs.length).toBeGreaterThan(0) // move was queued
+    expect(reflowRAFs.length).toBeGreaterThan(0) // reflow was queued (not dropped)
+
+    // Execute the callbacks
+    for (const raf of rafs) raf.callback(0)
+
+    // Verify outline is shown (not stomped)
+    const outline = overlay.host.shadowRoot!.getElementById('outline') as HTMLElement
+    expect(outline.hidden).toBe(false) // reflow did not stomp the hover outline
+
+    globalThis.requestAnimationFrame = originalRAF
+  })
 })
