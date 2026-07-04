@@ -1,11 +1,22 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { EventEmitter } from 'node:events'
 import { Queue } from '../../src/server/queue'
-import { createForgeMiddleware, writeEndpointFile, removeEndpointFile } from '../../src/server/endpoints'
 import type { DispatchResult } from '../../src/server/dispatch'
+
+// The real dispatch ladder (real tmux/osascript) must NEVER run inside this suite — on a Mac
+// with automation permission + iTerm2/Terminal open it would type /design into the developer's
+// actual front window. Mock the module-level `dispatch` export so the "no dispatchFn injected"
+// wiring test below can prove the fallback happens without ever invoking a real adapter.
+const dispatchSpy = vi.fn(async (): Promise<DispatchResult> => ({ rung: 'manual', detail: 'mocked — never the real ladder' }))
+vi.mock('../../src/server/dispatch', async () => {
+  const actual = await vi.importActual<typeof import('../../src/server/dispatch')>('../../src/server/dispatch')
+  return { ...actual, dispatch: dispatchSpy }
+})
+
+const { createForgeMiddleware, writeEndpointFile, removeEndpointFile } = await import('../../src/server/endpoints')
 
 function fakeReq(method: string, url: string, body?: unknown, headers: Record<string, string> = {}) {
   const req = new EventEmitter() as EventEmitter & { method: string; url: string; headers: Record<string, string> }
@@ -327,6 +338,44 @@ describe('POST /__the-forge/dispatch', () => {
     expect(res.statusCode).toBe(405)
   })
 
+  describe('agent allowlist validation', () => {
+    it('400s when body.agent is not one of the known agents', async () => {
+      const dispatchFn = vi.fn(async () => ({ rung: 'manual' as const, detail: 'x' }))
+      const mwWithDispatch = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code',
+        channelsFlag: false,
+        dispatchFn,
+      })
+      const res = fakeRes()
+      await run(mwWithDispatch, fakeReq('POST', '/__the-forge/dispatch', { agent: 'not-a-real-agent' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(400)
+      expect(JSON.parse(res.body)).toEqual({ error: 'unknown agent' })
+      expect(dispatchFn).not.toHaveBeenCalled()
+    })
+
+    it.each(['claude-code', 'cursor', 'codex'])('allows body.agent = %s', async (agent) => {
+      const mwWithDispatch = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code',
+        channelsFlag: false,
+        dispatchFn: async () => ({ rung: 'manual', detail: 'x' }),
+      })
+      const res = fakeRes()
+      await run(mwWithDispatch, fakeReq('POST', '/__the-forge/dispatch', { agent }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+
+    it('allows an omitted body.agent (falls back to configured agent, no validation error)', async () => {
+      const mwWithDispatch = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code',
+        channelsFlag: false,
+        dispatchFn: async () => ({ rung: 'manual', detail: 'x' }),
+      })
+      const res = fakeRes()
+      await run(mwWithDispatch, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+  })
+
   it('is guarded by the shared secret like other mutating endpoints', async () => {
     const SECRET = 'dispatch-secret'
     const mwWithDispatch = createForgeMiddleware(queue, [], SECRET, {
@@ -347,13 +396,14 @@ describe('POST /__the-forge/dispatch', () => {
     expect(ok.statusCode).toBe(200)
   })
 
-  it('uses the real dispatch ladder by default when no dispatchFn is injected (smoke — resolves without throwing)', async () => {
+  it('falls back to the dispatch.ts ladder export when no dispatchFn is injected (module mocked — never the real ladder)', async () => {
+    dispatchSpy.mockClear()
     const mwDefault = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false })
     const res = fakeRes()
     await run(mwDefault, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
     expect(res.statusCode).toBe(200)
-    const body = JSON.parse(res.body)
-    expect(typeof body.rung).toBe('string')
+    expect(dispatchSpy).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'mocked — never the real ladder' })
   })
 })
 

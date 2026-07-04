@@ -586,6 +586,21 @@ describe('DesignMode send-to-agent (M4)', () => {
       delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
     })
 
+    it('falls back to the manual label for an unrecognized rung value (defensive default, not the typed-into-session label)', async () => {
+      // The client's Rung union is a compile-time-only guarantee — the value actually arrives
+      // over the network as untyped JSON, so a server bug/future rung/typo must not silently
+      // fall into the "typed /design into your session" bucket (which would misreport that a
+      // terminal was actually typed into).
+      stubQueueThenDispatch({ rung: 'not-a-real-rung', detail: 'x' })
+      const { overlay, mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      overlay.sendButton.click()
+      await flushSend()
+      expect(overlay.sendButton.textContent).toBe('Sent — type /design in Claude Code')
+    })
+
     it('still registers the send as successful (pending id tracked) even if /dispatch POST fails', async () => {
       const fetchMock = vi.fn((url: string) => {
         if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })

@@ -18,18 +18,22 @@ export interface DispatchOpts {
   platform?: NodeJS.Platform
   /** Injectable cwd for the channels marker-file check. Defaults to process.cwd(). */
   cwd?: string
+  /** Injectable overall ladder timeout (ms) — never a hardcoded real 5s wait in tests. Defaults
+   * to LADDER_TIMEOUT_MS (5000). */
+  ladderTimeoutMs?: number
 }
 
 export type ExecFileFn = (cmd: string, args: string[], opts?: { timeout?: number }) => Promise<{ stdout: string }>
 
 const EXEC_TIMEOUT_MS = 2000
 const DEEPLINK_MAX_ENCODED_LENGTH = 6000
+const LADDER_TIMEOUT_MS = 5000
 
 /** Default ExecFileFn — always invoked as an argv array (execFile), NEVER a shell string.
  * This is the only place real child processes are spawned; every adapter below takes its
  * exec function as a parameter so tests can inject a fake and assert exact argv with zero
  * real tmux/osascript/open invocations. */
-const defaultExec: ExecFileFn = (cmd, args, opts) =>
+export const defaultExec: ExecFileFn = (cmd, args, opts) =>
   new Promise((resolve, reject) => {
     execFile(cmd, args, { timeout: opts?.timeout ?? EXEC_TIMEOUT_MS }, (err, stdout) => {
       if (err) reject(err)
@@ -80,44 +84,125 @@ async function tryTmux(paneCommand: 'claude' | 'codex', exec: ExecFileFn): Promi
 }
 
 /** Best-effort AppleScript scripts — CONSTANTS, zero interpolation of any dynamic content
- * (request markdown never appears here; only the literal /design command). Tries iTerm2 first,
- * then Terminal.app. A denied automation permission, the app not running, or any other osascript
- * failure moves on to the next app / next rung — never throws. */
-const ITERM_SCRIPT = `
+ * (request markdown never appears here; only the literal /design command and the literal
+ * agent-name marker checked for in the title/session-name heuristic below). Tries iTerm2 first,
+ * then Terminal.app.
+ *
+ * Controller ruling (brief conflict adjudication): keystroking into the front window is only
+ * safe once we've verified that window actually belongs to the target agent session — otherwise
+ * we'd type /design into an unrelated shell and still report success. Each script therefore
+ * checks a title/session-name heuristic FIRST:
+ *   - iTerm2: `name of current session of current window` contains the agent marker
+ *     ("claude" or "codex" — two separate constants, one per agent).
+ *   - Terminal: `name of front window` contains the agent marker.
+ * If the check fails, the script returns the sentinel string "no-session" and types nothing.
+ * If it passes, it types the literal /design + Enter and returns "ok". A denied automation
+ * permission, the app not running, or any other osascript failure moves on to the next app /
+ * next rung — never throws. */
+const ITERM_CLAUDE_MARKER = 'claude'
+const ITERM_CODEX_MARKER = 'codex'
+const TERMINAL_CLAUDE_MARKER = 'claude'
+const TERMINAL_CODEX_MARKER = 'codex'
+
+const ITERM_SCRIPT_CLAUDE = `
 tell application "System Events"
   if not (exists process "iTerm2") then error "iTerm2 not running"
 end tell
-tell application "iTerm2" to activate
+tell application "iTerm2"
+  set sessionName to name of current session of current window
+  if sessionName does not contain "${ITERM_CLAUDE_MARKER}" then return "no-session"
+  activate
+end tell
 tell application "System Events"
   tell process "iTerm2"
     keystroke "/design"
     keystroke return
   end tell
 end tell
+return "ok"
 `
 
-const TERMINAL_SCRIPT = `
+const ITERM_SCRIPT_CODEX = `
+tell application "System Events"
+  if not (exists process "iTerm2") then error "iTerm2 not running"
+end tell
+tell application "iTerm2"
+  set sessionName to name of current session of current window
+  if sessionName does not contain "${ITERM_CODEX_MARKER}" then return "no-session"
+  activate
+end tell
+tell application "System Events"
+  tell process "iTerm2"
+    keystroke "/design"
+    keystroke return
+  end tell
+end tell
+return "ok"
+`
+
+const TERMINAL_SCRIPT_CLAUDE = `
 tell application "System Events"
   if not (exists process "Terminal") then error "Terminal not running"
 end tell
-tell application "Terminal" to activate
+tell application "Terminal"
+  set windowName to name of front window
+  if windowName does not contain "${TERMINAL_CLAUDE_MARKER}" then return "no-session"
+  activate
+end tell
 tell application "System Events"
   tell process "Terminal"
     keystroke "/design"
     keystroke return
   end tell
 end tell
+return "ok"
 `
 
-async function tryAppleScript(platform: NodeJS.Platform, exec: ExecFileFn): Promise<DispatchResult | null> {
+const TERMINAL_SCRIPT_CODEX = `
+tell application "System Events"
+  if not (exists process "Terminal") then error "Terminal not running"
+end tell
+tell application "Terminal"
+  set windowName to name of front window
+  if windowName does not contain "${TERMINAL_CODEX_MARKER}" then return "no-session"
+  activate
+end tell
+tell application "System Events"
+  tell process "Terminal"
+    keystroke "/design"
+    keystroke return
+  end tell
+end tell
+return "ok"
+`
+
+/** Note on "CONSTANTS, zero interpolation": the four scripts above are fixed, hardcoded string
+ * literals selected by agent — never built via runtime string interpolation of request content
+ * or any other dynamic/user-controlled value. The `${...}` occurrences are TypeScript template
+ * literal syntax splicing in OTHER top-level string CONSTANTS (the marker words themselves), not
+ * dynamic data; the resulting script text is identical on every run for a given agent. */
+async function tryAppleScript(
+  platform: NodeJS.Platform,
+  paneCommand: 'claude' | 'codex',
+  exec: ExecFileFn
+): Promise<DispatchResult | null> {
   if (platform !== 'darwin') return null
 
-  for (const [appName, script] of [
-    ['iTerm2', ITERM_SCRIPT],
-    ['Terminal', TERMINAL_SCRIPT],
-  ] as const) {
+  const scripts =
+    paneCommand === 'codex'
+      ? ([
+          ['iTerm2', ITERM_SCRIPT_CODEX],
+          ['Terminal', TERMINAL_SCRIPT_CODEX],
+        ] as const)
+      : ([
+          ['iTerm2', ITERM_SCRIPT_CLAUDE],
+          ['Terminal', TERMINAL_SCRIPT_CLAUDE],
+        ] as const)
+
+  for (const [appName, script] of scripts) {
     try {
-      await exec('osascript', ['-e', script], { timeout: EXEC_TIMEOUT_MS })
+      const { stdout } = await exec('osascript', ['-e', script], { timeout: EXEC_TIMEOUT_MS })
+      if (stdout.trim() !== 'ok') continue // verification failed (sentinel "no-session") — try next app
       return { rung: 'applescript', detail: `typed /design into ${appName} via AppleScript` }
     } catch {
       // try the next app
@@ -165,15 +250,9 @@ async function tryChannels(cwd: string): Promise<DispatchResult | null> {
   return null
 }
 
-/**
- * Runs the dispatch ladder for the configured agent and returns the rung that succeeded (or
- * 'manual' if every automated rung fell through). NEVER spawns an agent CLI with an API key and
- * NEVER touches the Agent SDK — this only reaches for the user's already-RUNNING session via
- * tmux send-keys, AppleScript keystrokes, or (cursor) a deeplink. The only text ever typed into
- * a terminal is the literal `/design` + Enter; request content only ever travels (URL-encoded)
- * through the Cursor deeplink.
- */
-export async function dispatch(opts: DispatchOpts, exec: ExecFileFn = defaultExec): Promise<DispatchResult> {
+/** The actual per-agent ladder walk — factored out so `dispatch` can race it against the overall
+ * timeout below without duplicating the ladder logic. */
+async function runLadder(opts: DispatchOpts, exec: ExecFileFn): Promise<DispatchResult> {
   const platform = opts.platform ?? process.platform
   const cwd = opts.cwd ?? process.cwd()
 
@@ -193,8 +272,36 @@ export async function dispatch(opts: DispatchOpts, exec: ExecFileFn = defaultExe
   const tmuxResult = await tryTmux(paneCommand, exec)
   if (tmuxResult) return tmuxResult
 
-  const appleScriptResult = await tryAppleScript(platform, exec)
+  const appleScriptResult = await tryAppleScript(platform, paneCommand, exec)
   if (appleScriptResult) return appleScriptResult
 
   return { rung: 'manual', detail: `type /design in ${opts.agent === 'codex' ? 'Codex' : 'Claude Code'}` }
+}
+
+/**
+ * Runs the dispatch ladder for the configured agent and returns the rung that succeeded (or
+ * 'manual' if every automated rung fell through). NEVER spawns an agent CLI with an API key and
+ * NEVER touches the Agent SDK — this only reaches for the user's already-RUNNING session via
+ * tmux send-keys, AppleScript keystrokes, or (cursor) a deeplink. The only text ever typed into
+ * a terminal is the literal `/design` + Enter; request content only ever travels (URL-encoded)
+ * through the Cursor deeplink.
+ *
+ * The whole ladder is capped at `opts.ladderTimeoutMs` (default 5000ms, injectable for tests) via
+ * Promise.race — a hung adapter (e.g. an execFile call whose timeout option was somehow bypassed,
+ * or an unexpected OS-level hang) must never leave the caller (the /dispatch HTTP endpoint)
+ * waiting forever. On a timeout this resolves to the manual rung with detail 'dispatch timed
+ * out' rather than rejecting, so callers can treat it exactly like any other fallthrough.
+ */
+export async function dispatch(opts: DispatchOpts, exec: ExecFileFn = defaultExec): Promise<DispatchResult> {
+  const timeoutMs = opts.ladderTimeoutMs ?? LADDER_TIMEOUT_MS
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<DispatchResult>((resolve) => {
+    timer = setTimeout(() => resolve({ rung: 'manual', detail: 'dispatch timed out' }), timeoutMs)
+  })
+
+  try {
+    return await Promise.race([runLadder(opts, exec), timeout])
+  } finally {
+    clearTimeout(timer!)
+  }
 }

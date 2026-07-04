@@ -31,8 +31,12 @@ const AGENT_DISPLAY_NAME: Record<AgentName, string> = {
  * only the fixed per-rung copy and (for 'manual') the configured agent's display name. */
 function sentLabelFor(rung: Rung, agent: AgentName): string {
   if (rung === 'deeplink') return 'Sent — opened in Cursor'
-  if (rung === 'manual' || rung === 'channels') return `Sent — type /design in ${AGENT_DISPLAY_NAME[agent]}`
-  return 'Sent — typed /design into your session' // tmux / applescript
+  // Explicit allowlist for the "typed into your session" copy — the rung value actually arrives
+  // over the network as untyped JSON (see the /dispatch fetch handler below), so any value that
+  // isn't recognizably tmux/applescript (a typo, a future rung, a server bug) must default to
+  // the manual label rather than falsely claiming a terminal was typed into.
+  if (rung === 'tmux' || rung === 'applescript') return 'Sent — typed /design into your session'
+  return `Sent — type /design in ${AGENT_DISPLAY_NAME[agent]}` // manual / channels / unrecognized
 }
 
 /** Belt-and-braces against cross-origin/DNS-rebinding bypasses of the server's Origin/Host

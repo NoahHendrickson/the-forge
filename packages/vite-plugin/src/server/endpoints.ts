@@ -6,6 +6,8 @@ import { dispatch as realDispatch, type DispatchOpts, type DispatchResult } from
 
 const MAX_BODY = 1024 * 1024
 
+const KNOWN_AGENTS = new Set<DispatchOpts['agent']>(['claude-code', 'cursor', 'codex'])
+
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
@@ -162,6 +164,9 @@ export function createForgeMiddleware(
       readBody(req)
         .then((body) => {
           const { agent, markdown } = (body ?? {}) as { agent?: DispatchOpts['agent']; markdown?: string }
+          if (agent !== undefined && !KNOWN_AGENTS.has(agent)) {
+            return send(res, 400, { error: 'unknown agent' })
+          }
           // Newest pending item by createdAt — the one the Send button that triggered this
           // POST almost certainly just queued. Sorted explicitly rather than relying on
           // queue.list()'s on-disk ordering, which is an implementation detail of Queue.
