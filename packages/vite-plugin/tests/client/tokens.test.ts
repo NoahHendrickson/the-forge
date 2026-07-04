@@ -80,6 +80,19 @@ describe('suggestUtility', () => {
     expect(suggestUtility('padding-top', '24px', PLAIN)).toBeNull()
     expect(suggestUtility('made-up-prop', 'red', TW)).toBeNull()
   })
+
+  it('maps border-width to the fixed Tailwind border scale (0/1/2/4/8), arbitrary otherwise', () => {
+    expect(suggestUtility('border-width', '1px', TW)).toEqual({ utility: 'border', tokenExact: true })
+    expect(suggestUtility('border-width', '0px', TW)).toEqual({ utility: 'border-0', tokenExact: true })
+    expect(suggestUtility('border-width', '2px', TW)).toEqual({ utility: 'border-2', tokenExact: true })
+    expect(suggestUtility('border-width', '4px', TW)).toEqual({ utility: 'border-4', tokenExact: true })
+    expect(suggestUtility('border-width', '8px', TW)).toEqual({ utility: 'border-8', tokenExact: true })
+    expect(suggestUtility('border-width', '3px', TW)).toEqual({ utility: 'border-[3px]', tokenExact: false })
+  })
+
+  it('border-style has no utility mapping (left as a CSS-only line)', () => {
+    expect(suggestUtility('border-style', 'dashed', TW)).toBeNull()
+  })
 })
 
 describe('findExistingUtility', () => {
@@ -117,6 +130,15 @@ describe('findExistingUtility', () => {
     expect(findExistingUtility('border-t-2 p-2', 'border-color')).toBeNull()
     expect(findExistingUtility('border-r border-b border-l', 'border-color')).toBeNull()
     expect(findExistingUtility('border-slate-400', 'border-color')).toBe('border-slate-400')
+  })
+
+  it('finds border-width utilities, including the bare `border` (1px default) class', () => {
+    expect(findExistingUtility('border p-2', 'border-width')).toBe('border')
+    expect(findExistingUtility('border-2 p-2', 'border-width')).toBe('border-2')
+  })
+
+  it('skips color utilities when looking for border-width', () => {
+    expect(findExistingUtility('border-slate-400', 'border-width')).toBeNull()
   })
 })
 

@@ -330,6 +330,19 @@ export const UTILITY_PREFIXES: Record<string, string> = {
   'border-bottom-left-radius': 'rounded-bl',
   opacity: 'opacity',
   gap: 'gap',
+  'border-width': 'border',
+}
+
+// Tailwind's border-width scale is a small fixed set (0, 2, 4, 8px), plus a bare `border`
+// utility standing in for the 1px default — not a linear multiple of the spacing scale like
+// padding/margin, so it gets its own lookup table rather than routing through the generic
+// steps-of-spacingBasePx math below.
+const BORDER_WIDTH_SCALE: Record<number, string> = {
+  0: 'border-0',
+  1: 'border',
+  2: 'border-2',
+  4: 'border-4',
+  8: 'border-8',
 }
 
 // color-bearing props → utility prefix (kept separate from UTILITY_PREFIXES so
@@ -403,6 +416,12 @@ export function suggestUtility(
 
   const px = Number.parseFloat(css)
 
+  if (prop === 'border-width') {
+    const scaled = BORDER_WIDTH_SCALE[px]
+    if (scaled) return { utility: scaled, tokenExact: true }
+    return { utility: `border-[${px}px]`, tokenExact: false }
+  }
+
   if (RADIUS_PROPS.has(prop)) {
     if (px >= 999) return { utility: `${prefix}-full`, tokenExact: true }
     for (const [name, value] of Object.entries(theme.radiusScale)) {
@@ -434,6 +453,8 @@ export function findExistingUtility(className: string, prop: string): string | n
     if (cls.includes(':')) continue // variant-prefixed — out of scope for detection
     const bare = cls.startsWith('-') ? cls.slice(1) : cls
     if (prefix === 'rounded' && bare === 'rounded') return cls
+    // bare `border` (no suffix) is the 1px-default WIDTH utility, not a color
+    if (prop === 'border-width' && bare === 'border') return cls
     if (!bare.startsWith(`${prefix}-`)) continue
     const suffix = bare.slice(prefix.length + 1)
     // guard: 'rounded-' must not match 'rounded-tl-…' (a longer registered prefix)
@@ -443,6 +464,11 @@ export function findExistingUtility(className: string, prop: string): string | n
       // 'border-2' (width) and 'border-t'/'border-t-2' (side width) are not colors
       if (/^\d+$/.test(suffix)) continue
       if (BORDER_SIDE_SUFFIX.test(suffix)) continue
+    }
+    if (prop === 'border-width') {
+      // only numeric widths and side-width variants are WIDTH utilities — 'border-slate-400'
+      // (a color) must not match here
+      if (!/^\d+$/.test(suffix) && !BORDER_SIDE_SUFFIX.test(suffix)) continue
     }
     return cls
   }

@@ -72,6 +72,18 @@ const COLLAPSE: Array<{ into: string; parts: string[] }> = [
   { into: 'padding-inline', parts: ['padding-left', 'padding-right'] },
   { into: 'margin-block', parts: ['margin-top', 'margin-bottom'] },
   { into: 'margin-inline', parts: ['margin-left', 'margin-right'] },
+  {
+    into: 'border-width',
+    parts: ['border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width'],
+  },
+  {
+    into: 'border-style',
+    parts: ['border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style'],
+  },
+  {
+    into: 'border-color',
+    parts: ['border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color'],
+  },
 ]
 
 function collapse(items: Map<string, { beforeCss: string; afterCss: string }>): Map<string, { beforeCss: string; afterCss: string }> {

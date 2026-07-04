@@ -50,6 +50,52 @@ describe('buildChangeRequest', () => {
     ])
   })
 
+  it('collapses four equal border widths into a single border-width line', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      store.apply(el, `border-${side}-width`, '2px')
+    }
+    const req = buildChangeRequest(store, TW)
+    expect(req.elements[0].changes).toEqual([
+      expect.objectContaining({ property: 'border-width', afterCss: '2px', afterUtility: 'border-2' }),
+    ])
+  })
+
+  it('collapses four equal border styles into a single border-style line', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      store.apply(el, `border-${side}-style`, 'dashed')
+    }
+    const req = buildChangeRequest(store, TW)
+    expect(req.elements[0].changes).toEqual([
+      expect.objectContaining({ property: 'border-style', afterCss: 'dashed', afterUtility: null }),
+    ])
+  })
+
+  it('collapses four equal border colors into a single border-color line', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      store.apply(el, `border-${side}-color`, 'rgb(255, 0, 0)')
+    }
+    const req = buildChangeRequest(store, TW)
+    expect(req.elements[0].changes).toEqual([
+      expect.objectContaining({ property: 'border-color', afterCss: 'rgb(255, 0, 0)' }),
+    ])
+  })
+
+  it('keeps unequal border-width longhands separate', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    store.apply(el, 'border-top-width', '2px')
+    store.apply(el, 'border-bottom-width', '4px')
+    const req = buildChangeRequest(store, TW)
+    const props = req.elements[0].changes.map((c) => c.property).sort()
+    expect(props).toEqual(['border-bottom-width', 'border-top-width'])
+  })
+
   it('keeps unequal longhands separate', () => {
     const el = makeButton()
     const store = new DraftStore()
