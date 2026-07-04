@@ -897,7 +897,11 @@ describe('Panel Fill section', () => {
     const fillRow = rows[0]
     const swatch = fillRow.querySelector('.swatch') as HTMLElement
     expect(swatch).toBeTruthy()
-    expect(swatch.style.color).toBe('rgb(255, 0, 0)')
+    // Color lives on the `.swatch-color` child stacked over the checkerboard base —
+    // see overlay.ts's `.swatch`/`.swatch-color` split.
+    const swatchColor = swatch.querySelector('.swatch-color') as HTMLElement
+    expect(swatchColor).toBeTruthy()
+    expect(swatchColor.style.color).toBe('rgb(255, 0, 0)')
   })
 
   it('Text row is hidden for an element with no direct text child', () => {

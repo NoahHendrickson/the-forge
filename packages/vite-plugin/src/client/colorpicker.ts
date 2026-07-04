@@ -112,7 +112,13 @@ export class ColorPicker {
 
   private outsideMousedown = (e: Event): void => {
     if (this.root.hidden) return
-    if (e.target instanceof Node && this.root.contains(e.target)) return
+    // The picker lives inside the overlay's OPEN shadow root. A window-level listener
+    // receives the RETARGETED event, whose `target` is the shadow HOST — not the actual
+    // element under the cursor — so `this.root.contains(e.target)` is always false for a
+    // click anywhere inside the shadow tree. `composedPath()[0]` gives the true original
+    // target regardless of shadow boundaries; fall back to `e.target` where unavailable.
+    const target = typeof e.composedPath === 'function' ? e.composedPath()[0] : e.target
+    if (target instanceof Node && this.root.contains(target)) return
     this.close()
   }
 
@@ -298,24 +304,60 @@ export class ColorPicker {
     return hex
   }
 
+  /** Family key for grouping: name minus a trailing `-<digits>` shade suffix (e.g. `red-500` -> `red`). Shadeless names (e.g. `white`, `black`) group under this sentinel into one final row. */
+  private static readonly SHADELESS = Symbol('shadeless')
+
+  private familyKey(name: string): string | typeof ColorPicker.SHADELESS {
+    const m = /^(.*)-\d+$/.exec(name)
+    return m ? m[1] : ColorPicker.SHADELESS
+  }
+
   private renderPalette(): void {
     this.paletteEl.replaceChildren()
+
+    // Group tokens by family, preserving first-seen order — shadeless tokens (no
+    // trailing -<digits>) are collected separately and appended as one final row,
+    // per the brief ("shadeless like white/black in one final row").
+    const families = new Map<string, Array<{ name: string; value: string }>>()
+    const shadeless: Array<{ name: string; value: string }> = []
     for (const token of this.getTokens().colors) {
-      const swatch = document.createElement('button')
-      swatch.type = 'button'
-      swatch.className = 'cp-swatch'
-      swatch.title = token.name
-      swatch.style.backgroundColor = token.value
-      swatch.addEventListener('click', () => {
-        const parsed = parseColor(token.value)
-        if (parsed) {
-          this.hsv = rgbToHsv(parsed.r, parsed.g, parsed.b)
-          this.alpha = parsed.a
-        }
-        this.renderAll()
-        this.onPick?.(token.value, { token: token.name })
-      })
-      this.paletteEl.append(swatch)
+      const key = this.familyKey(token.name)
+      if (key === ColorPicker.SHADELESS) {
+        shadeless.push(token)
+        continue
+      }
+      let group = families.get(key)
+      if (!group) {
+        group = []
+        families.set(key, group)
+      }
+      group.push(token)
+    }
+
+    const rows = [...families.values()]
+    if (shadeless.length > 0) rows.push(shadeless)
+
+    for (const row of rows) {
+      const rowEl = document.createElement('div')
+      rowEl.className = 'cp-palette-row'
+      for (const token of row) {
+        const swatch = document.createElement('button')
+        swatch.type = 'button'
+        swatch.className = 'cp-swatch'
+        swatch.title = token.name
+        swatch.style.backgroundColor = token.value
+        swatch.addEventListener('click', () => {
+          const parsed = parseColor(token.value)
+          if (parsed) {
+            this.hsv = rgbToHsv(parsed.r, parsed.g, parsed.b)
+            this.alpha = parsed.a
+          }
+          this.renderAll()
+          this.onPick?.(token.value, { token: token.name })
+        })
+        rowEl.append(swatch)
+      }
+      this.paletteEl.append(rowEl)
     }
   }
 

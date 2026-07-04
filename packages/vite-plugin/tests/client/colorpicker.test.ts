@@ -92,6 +92,31 @@ describe('ColorPicker', () => {
     expect(titles).toContain('white')
   })
 
+  it('renderPalette groups swatches by family into one .cp-palette-row per family, shadeless tokens in a final row', () => {
+    const { panelRoot } = setupPicker()
+    const tokens: Tokens = {
+      colors: [
+        { name: 'red-500', value: '#ef4444' },
+        { name: 'red-600', value: '#dc2626' },
+        { name: 'blue-500', value: '#3b82f6' },
+        { name: 'white', value: '#ffffff' },
+        { name: 'black', value: '#000000' },
+      ],
+      textScale: [],
+    }
+    const picker = new ColorPicker(panelRoot, () => tokens)
+    const anchor = anchorEl()
+    picker.open({ anchor, initial: '#ff0000', contrastAgainst: null, onPick: vi.fn() })
+
+    const rows = picker.root.querySelectorAll('.cp-palette-row')
+    expect(rows.length).toBe(3) // red, blue, shadeless(white/black)
+
+    const rowNames = [...rows].map((row) => [...row.querySelectorAll('[title]')].map((s) => s.getAttribute('title')))
+    expect(rowNames).toContainEqual(['red-500', 'red-600'])
+    expect(rowNames).toContainEqual(['blue-500'])
+    expect(rowNames).toContainEqual(['white', 'black'])
+  })
+
   it('close() hides the popover', () => {
     const { picker } = setupPicker()
     const anchor = anchorEl()
@@ -237,6 +262,36 @@ describe('ColorPicker', () => {
     picker.open({ anchor, initial: '#ff0000', contrastAgainst: null, onPick: vi.fn() })
     picker.root.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
     expect(picker.root.hidden).toBe(false)
+  })
+
+  it('mousedown inside a real shadow root does not close the picker, but an outside mousedown does', () => {
+    // Regression test for the shadow-DOM retargeting bug: window-level listeners see
+    // `e.target` retargeted to the shadow HOST, not the true element under the cursor.
+    // This mounts the picker inside an actual attached (open) shadow root — unlike
+    // `setupPicker()`, which appends straight to `document.body` and never exercises
+    // shadow retargeting — so a naive `e.target` check would incorrectly close the
+    // picker on its very first in-popover mousedown.
+    const host = document.createElement('div')
+    document.body.append(host)
+    const shadow = host.attachShadow({ mode: 'open' })
+    const panelRoot = document.createElement('div')
+    shadow.append(panelRoot)
+    const picker = new ColorPicker(panelRoot, () => TOKENS)
+    const anchor = document.createElement('div')
+    Object.defineProperty(anchor, 'offsetTop', { value: 100, configurable: true })
+    shadow.append(anchor)
+
+    picker.open({ anchor, initial: '#ff0000', contrastAgainst: null, onPick: vi.fn() })
+    expect(picker.root.hidden).toBe(false)
+
+    // mousedown inside the popover (composed, so it crosses the shadow boundary and
+    // reaches the window listener retargeted to `host`) must NOT close it.
+    picker.root.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, composed: true }))
+    expect(picker.root.hidden).toBe(false)
+
+    // mousedown truly outside (on document.body, outside the shadow tree entirely) must close it.
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, composed: true }))
+    expect(picker.root.hidden).toBe(true)
   })
 
   it('reselection (a second open()) closes any active drag listeners from the SV area', () => {

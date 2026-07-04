@@ -869,8 +869,15 @@ export class Panel {
 
     const swatch = document.createElement('button')
     swatch.type = 'button'
-    swatch.className = 'swatch swatch-fill'
+    swatch.className = 'swatch'
     row.append(swatch)
+
+    // Color lives on a child element stacked on top of the parent's checkerboard —
+    // see the `.swatch`/`.swatch-color` comment in overlay.ts for why (background-color
+    // on the parent itself would paint beneath the checkerboard background-image layers).
+    const swatchColor = document.createElement('span')
+    swatchColor.className = 'swatch-color'
+    swatch.append(swatchColor)
 
     const valueEl = document.createElement('span')
     valueEl.className = 'color-value'
@@ -881,7 +888,10 @@ export class Panel {
         anchor: row,
         initial: opts.getCss(),
         contrastAgainst: opts.getContrastAgainst(),
-        onPick: (css) => {
+        // `meta.token` (the exact token name, when the pick came from a palette swatch
+        // or nearest-token hint) is intentionally unused here — reserved surface for B5's
+        // token pills (showing which colors are backed by a design token) rather than dead code.
+        onPick: (css, _meta) => {
           if (!this.el) return
           this.onBeforeEdit(this.el)
           opts.onPick(css)
@@ -893,7 +903,7 @@ export class Panel {
 
     ;(row as HTMLElement & { __refresh?: () => void }).__refresh = () => {
       const css = opts.getCss()
-      swatch.style.color = css
+      swatchColor.style.color = css
       valueEl.textContent = this.colorLabel(css)
     }
     return row

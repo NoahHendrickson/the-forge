@@ -180,14 +180,21 @@ button {
 .color-row { display: flex; align-items: center; gap: 6px; flex: 1 1 100%; }
 .swatch {
   width: 16px; height: 16px; border-radius: 4px; padding: 0; flex: none;
-  border: 1px solid rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.15); position: relative; overflow: hidden;
   background-image: linear-gradient(45deg, rgba(255,255,255,0.12) 25%, transparent 25%),
     linear-gradient(-45deg, rgba(255,255,255,0.12) 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.12) 75%),
     linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.12) 75%);
   background-size: 8px 8px; background-position: 0 0, 0 4px, 4px -4px, -4px 0;
 }
-.swatch-fill { background-color: currentColor; background-blend-mode: normal; }
+/*
+ * The swatch's own background-color (if any) would paint BENEATH the checkerboard
+ * background-image layers above, inverting the design intent (checker base should
+ * only ever show through actual transparency). So the color lives on a separate
+ * CHILD element stacked on top instead — the parent keeps the checkerboard as its
+ * only background.
+ */
+.swatch-color { position: absolute; inset: 0; background-color: currentColor; }
 .color-value { color: #9A9A9A; font-size: 10.5px; }
 .stroke-style { flex: 1 1 40%; }
 
@@ -212,6 +219,10 @@ button {
   appearance: none; -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
   background: #fff; border: 1px solid rgba(0,0,0,0.3);
 }
+.cp-hue::-moz-range-thumb {
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 1px solid rgba(0,0,0,0.3);
+}
 .cp-hex-row { display: flex; }
 .cp-hex {
   width: 100%; height: 24px; background: rgba(255,255,255,0.06); border: 1px solid transparent;
@@ -225,8 +236,9 @@ button {
 .cp-contrast { font-size: 10.5px; color: #D4D4D4; }
 .cp-contrast.cp-fail { color: #F87171; }
 .cp-palette {
-  display: flex; flex-wrap: wrap; gap: 3px; max-height: 120px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 3px; max-height: 120px; overflow-y: auto;
 }
+.cp-palette-row { display: flex; gap: 2px; }
 .cp-swatch {
   width: 16px; height: 16px; border-radius: 4px; padding: 0; border: 1px solid rgba(255,255,255,0.15);
 }
