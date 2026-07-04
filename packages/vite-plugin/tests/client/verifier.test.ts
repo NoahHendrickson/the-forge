@@ -530,6 +530,38 @@ describe('Verifier polling lifecycle', () => {
     expect(fetchMock).toHaveBeenCalledTimes(6)
   })
 
+  it('stop() then start() while a poll is in flight does not double-schedule', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [] }]))
+
+    let resolveFetch!: (v: unknown) => void
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve
+        })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000) // first poll fires; its fetch is still in flight
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    verifier.stop()
+    verifier.start() // schedules a fresh chain while the old poll's fetch is still pending
+
+    // settle the stale poll's fetch — its .finally must NOT chain a second timer
+    resolveFetch({ ok: true, json: async () => ({ items: [{ id: 'q1', status: 'pending', note: null }] }) })
+    await vi.advanceTimersByTimeAsync(0) // flush microtasks
+
+    // one base interval later exactly ONE poll fires (a double-schedule would give two)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
   it('a successful poll resets the failure counter and restores the 2s cadence', async () => {
     const sent = new SentRegistry()
     const drafts = new DraftStore()

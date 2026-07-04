@@ -122,6 +122,9 @@ export class Verifier {
   private timer: ReturnType<typeof setTimeout> | null = null
   private consecutiveFailures = 0
   private delayMs = POLL_MS
+  /** Bumped by every start()/stop() — a poll chained under an older generation is dead and
+   * must not reschedule, even if a newer chain has since made this.timer non-null again. */
+  private generation = 0
 
   constructor(
     private sent: SentRegistry,
@@ -132,22 +135,26 @@ export class Verifier {
   start(): void {
     if (this.timer) return
     if (this.sent.size() === 0) return
+    this.generation++
     this.consecutiveFailures = 0
     this.delayMs = POLL_MS
     this.schedule()
   }
 
   stop(): void {
+    this.generation++
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
   }
 
   /** Chained setTimeout instead of setInterval so the delay can stretch under backoff. */
   private schedule(): void {
-    this.timer = setTimeout(() => this.poll(), this.delayMs)
+    const gen = this.generation
+    this.timer = setTimeout(() => this.poll(gen), this.delayMs)
   }
 
-  private poll(): void {
+  private poll(gen: number): void {
+    if (gen !== this.generation) return // belt-and-braces: a stale chain must not touch state
     const ids = this.sent.pendingIds()
     if (ids.length === 0) {
       this.stop()
@@ -189,9 +196,10 @@ export class Verifier {
         }
       })
       .finally(() => {
-        // stop() (external, or stop-on-empty inside the then-branch) nulls the timer — only
-        // chain the next poll if nobody stopped us while this one was in flight.
-        if (this.timer !== null) this.schedule()
+        // A stop() or stop()+start() while this poll's fetch was in flight bumps the generation —
+        // this chain is then dead and must not reschedule, or two concurrent chains would race
+        // (and stop() could only ever clear one of them).
+        if (this.timer !== null && gen === this.generation) this.schedule()
       })
   }
 
