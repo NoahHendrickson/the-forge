@@ -218,5 +218,45 @@ describe('Queue', () => {
       expect(remaining.has(ids[0])).toBe(false)
       expect(remaining.has(ids[ids.length - 1])).toBe(true)
     })
+
+    it('prunes a stale terminal item known only via disk-merge from another instance', () => {
+      let now = 0
+      const a = new Queue(dir, () => now)
+      const oldItem = a.add({}, 'old-terminal-from-a')
+      a.pull()
+      a.mark([oldItem.id], 'applied')
+      // a's persist wrote oldItem to disk; now advance time past PRUNE_AFTER_MS
+
+      now += PRUNE_AFTER_MS + 1
+      const b = new Queue(dir, () => now) // b loads disk state including stale oldItem
+      const newItem = b.add({}, 'new-from-b') // b's persist must prune the stale disk item
+
+      const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'queue.json'), 'utf8'))
+      const ids = onDisk.map((i: { id: string }) => i.id)
+      expect(ids).not.toContain(oldItem.id) // should be pruned despite coming from disk-merge
+      expect(ids).toContain(newItem.id)
+    })
+
+    it('sorts merged queue by createdAt ascending so queue.json preserves creation order', () => {
+      let now = 0
+      const a = new Queue(dir, () => now)
+      const aItem1 = a.add({}, 'a-first')
+      now += 100
+
+      const b = new Queue(dir, () => now)
+      const bItem1 = b.add({}, 'b-first')
+      now += 100
+
+      const aItem2 = a.add({}, 'a-second')
+      // now a's next persist sees bItem1 on disk (unknown to a yet)
+
+      a.pull() // triggers persist with merge
+      const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'queue.json'), 'utf8'))
+      const createdAtOrder = onDisk.map((i: { createdAt: string }) => new Date(i.createdAt).getTime())
+
+      // verify chronological order: aItem1 < bItem1 < aItem2
+      expect(createdAtOrder[0]).toBeLessThan(createdAtOrder[1])
+      expect(createdAtOrder[1]).toBeLessThan(createdAtOrder[2])
+    })
   })
 })

@@ -157,13 +157,39 @@ export class Queue {
   }
 
   private persist(): void {
-    this.prune()
     fs.mkdirSync(this.dir, { recursive: true })
     const merged = this.mergeWithDisk()
+
+    // Apply pruning rules to the merged array (stale disk items must also be pruned)
+    const nowMs = this.now()
+    const prunedMerged = merged.filter((i) => {
+      if (i.status !== 'applied' && i.status !== 'failed') return true
+      return nowMs - Queue.finishedBasis(i) <= PRUNE_AFTER_MS
+    })
+
+    // Apply overflow cap (oldest terminal items dropped first)
+    const overflow = prunedMerged.length - MAX_STORED_ITEMS
+    let finalMerged = prunedMerged
+    if (overflow > 0) {
+      const terminalOldestFirst = prunedMerged
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => item.status === 'applied' || item.status === 'failed')
+        .sort((a, b) => Queue.finishedBasis(a.item) - Queue.finishedBasis(b.item))
+
+      const toDrop = new Set(terminalOldestFirst.slice(0, overflow).map(({ index }) => index))
+      finalMerged = prunedMerged.filter((_, index) => !toDrop.has(index))
+    }
+
+    // Sort by createdAt ascending so queue.json preserves creation order
+    finalMerged.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+
+    // Also prune this.items in-memory to keep instance state consistent
+    this.prune()
+
     // Scoped by pid: two server processes writing concurrently must not share a tmp path, or one
     // process's partial write/rename could race with the other's.
     const tmpFile = `${this.file}.tmp.${process.pid}`
-    fs.writeFileSync(tmpFile, JSON.stringify(merged, null, 2))
+    fs.writeFileSync(tmpFile, JSON.stringify(finalMerged, null, 2))
     fs.renameSync(tmpFile, this.file)
   }
 }
