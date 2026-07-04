@@ -13,8 +13,9 @@ Early development — building in the open. Current milestones on `main`:
 - **M1 — See:** dev-only Vite plugin tags every element with its source location (`data-dc-source="src/App.tsx:7:9"`); shadow-DOM overlay with hover outlines and a click-to-inspect panel.
 - **M2a — Edit:** draft engine (edits preview as inline styles, framework untouched), scrubbing numeric controls, editable Size / Padding / Margin / Radius / Opacity sections with linked rows and per-corner expansion, before/after compare, reset.
 - **M3 — Package:** Tailwind v4 token mapper, change-request builder with exact before→after deltas, and a "Copy for agent" button — the full loop (draft → request → agent edits source → verified) is proven.
+- **M4 — Deliver:** a **Send to agent** button queues change requests in the dev server; a zero-dependency MCP server + auto-installed `/design` command let your running Claude Code session pull and apply them; the browser verifies computed styles post-HMR and flips drafts to **Implemented**.
 
-Next: **M4** — companion CLI with an MCP server and `/design` command so your running agent session pulls edits automatically. Then broader panel sections (typography, fill, stroke, layout) and multi-select.
+Next: **M5** — auto-dispatch (the Send button reaching your open session with zero keystrokes) and broader panel sections (typography, fill, stroke, layout) with multi-select.
 
 ## Try it
 
@@ -24,7 +25,7 @@ npm run build
 npm run dev -w demo-app
 ```
 
-Open the printed URL, hit the **Design** toggle (bottom-right), click an element, and start scrubbing. When you have drafts, hit **Copy for agent** and paste into your agent of choice.
+Open the printed URL, hit the **Design** toggle (bottom-right), click an element, and start scrubbing. When you have drafts, hit **Copy for agent** and paste into your agent of choice. Or hit **Send to agent**, then type /design in a Claude Code session opened in the same project — it pulls the queued edits over MCP, applies them, and the browser marks your drafts Implemented once computed styles match.
 
 To use it on your own Vite + React project:
 

@@ -68,6 +68,8 @@ Three pieces, installed with one command (`npx the-forge` from the project root)
 
 ### 3.3 Companion CLI
 
+**M4 amendment (2026-07-04):** for M4, the queue, HTTP endpoints (`/__the-forge/*`), endpoint-discovery file, and project-config setup are hosted by the Vite plugin's dev server (`configureServer`) rather than a separate CLI process — the dev server is already the long-running local process the browser can reach same-origin. A dependency-free stdio MCP server (`dist/mcp.js`, registered in `.mcp.json`) proxies `pull_design_edits`/`mark_applied` to the dev server over HTTP. The standalone `npx the-forge` CLI arrives with M5 (auto-dispatch needs process control the plugin shouldn't own). Cross-origin browser requests to the endpoints are rejected via Origin/Host checking.
+
 - Node process started alongside the dev server; owns everything that needs filesystem or process access.
 - **Token mapper:** loads the project's Tailwind config/theme and CSS custom properties; converts raw CSS deltas to the nearest token (`padding: 12px → p-3`), falling back to arbitrary values (`p-[13px]`) with a flag in the change request.
 - **Queue:** pending change requests persisted under `.the-forge/` (gitignored) so nothing is lost if the agent isn't running yet.
