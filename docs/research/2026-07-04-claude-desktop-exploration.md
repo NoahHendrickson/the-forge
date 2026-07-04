@@ -199,9 +199,24 @@ technically the response to a request the session itself made.
    instruction in every result (S).
 4. `setup.ts` — write `/forge-watch` command file (same additive/migration care as
    `/forge-design`) (S).
-5. Client copy — Send flash + verifier prefix for the delivered rung ("delivered to your
-   Claude Code session"); watcher-dropped state ("watch session disconnected — type
-   /forge-watch again") (S).
+5. Client copy + watcher-state messaging (user-ratified 2026-07-04: the panel MUST tell the
+   user when the watcher goes idle, so they know to wake it):
+   - Persistent linked indicator in the panel while a watcher is live ("● Linked to
+     Claude Code"). Ratifies former open decision #1 — required, since "watcher asleep"
+     is only legible if linked state was visible in the first place.
+   - The moment the watcher idles out or drops (heartbeat gone), the indicator flips:
+     "Watcher asleep — type /forge-watch in Claude Code to wake it." Proactive, not
+     discovered-at-next-Send.
+   - Send with no watcher: flash + sent-status use the wake copy ("Sent — watcher asleep,
+     type /forge-watch in Claude Code to apply") instead of the generic manual copy. The
+     item is queued regardless; waking delivers everything pending — copy should convey
+     nothing is lost.
+   - Session-side mirror: the auto-stop tool result tells the agent to inform the user
+     in-chat ("Watching paused after N idle minutes — run /forge-watch to resume") so
+     panel and session agree on what happened.
+   - Mechanism: watcher state rides the existing `/status` response (verifier already
+     polls it); panel adds a light status poll while design mode is ON — compatible with
+     the zero-idle-overhead constraint, which governs design-mode-off only. (M)
 6. Docs: README, CLAUDE.md MCP contract, gotchas (S).
 
 Nothing touches the panel, drafts, request builder, or queue semantics. Terminal UX without
@@ -209,9 +224,9 @@ a watcher is unchanged by construction — the new rung sees no watcher and fall
 
 ## Open design decisions (user call)
 
-1. **Watch-session copy/framing** — what the session says while watching, and what the panel
-   shows while linked (e.g. a persistent "linked to Claude Code" indicator vs. only
-   per-Send flash copy).
+1. ~~Watch-session copy/framing~~ — RATIFIED 2026-07-04: persistent linked indicator +
+   proactive "watcher asleep — wake it" messaging (see item 5 in the proposed shape).
+   Exact wording still open for the plan/visual pass.
 2. **Should `/forge-design` remain the documented manual path** in desktop sessions (it
    works there today — the session loads `.mcp.json`/commands normally), with
    `/forge-watch` as the recommended flow? (Proposed: yes, keep both.)
