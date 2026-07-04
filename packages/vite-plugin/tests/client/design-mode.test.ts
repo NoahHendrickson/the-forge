@@ -164,6 +164,24 @@ describe('DesignMode selection (M2)', () => {
     expect(appEsc).not.toHaveBeenCalled()
   })
 
+  it('Escape from inside the overlay host does NOT deselect', () => {
+    const { overlay, mode } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')!
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(mode.selected).toBe(btn)
+    // Dispatch Escape with the overlay host as the target (shadow retargeting)
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+    Object.defineProperty(ev, 'target', { value: overlay.host, configurable: true })
+    document.dispatchEvent(ev)
+    // Selection should remain
+    expect(mode.selected).toBe(btn)
+    expect(mode.active).toBe(true)
+    // But Escape from document should still deselect
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(mode.selected).toBeNull()
+  })
+
   it('drafts survive deactivation but chrome hides', () => {
     const { mode, drafts } = fullSetup()
     mode.setActive(true)

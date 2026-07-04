@@ -267,6 +267,7 @@ export class DesignMode {
 
   private onKey = (e: KeyboardEvent): void => {
     if (e.key !== 'Escape') return
+    if (this.overlay.contains(e.target)) return
     e.stopPropagation()
     if (this.selected) this.deselect()
     else this.setActive(false)
