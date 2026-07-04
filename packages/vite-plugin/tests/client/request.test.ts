@@ -178,6 +178,56 @@ describe('buildChangeRequest — keyword drafts (M2b-1 Fix 1)', () => {
   })
 })
 
+describe('buildChangeRequest — keyword allowlist (B0)', () => {
+  it('a color draft ("red") is NOT passed through verbatim — it is measured via computed style', () => {
+    document.body.innerHTML = `<div data-dc-source="src/Box.tsx:1:1" id="box" style="color: rgb(0, 0, 0);">hi</div>`
+    const el = document.getElementById('box')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(el, 'color', 'red')
+    const req = buildChangeRequest(store, TW)
+    const c = req.elements[0].changes.find((x) => x.property === 'color')!
+    expect(c.afterCss).not.toBe('red')
+    expect(c.afterCss).toBe('rgb(255, 0, 0)')
+  })
+
+  it('"blue" (another color keyword) is also measured, not passed through', () => {
+    document.body.innerHTML = `<div data-dc-source="src/Box.tsx:1:1" id="box" style="color: rgb(0, 0, 0);">hi</div>`
+    const el = document.getElementById('box')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(el, 'color', 'blue')
+    const req = buildChangeRequest(store, TW)
+    const c = req.elements[0].changes.find((x) => x.property === 'color')!
+    expect(c.afterCss).not.toBe('blue')
+    expect(c.afterCss).toBe('rgb(0, 0, 255)')
+  })
+
+  it('"auto" (an allowlisted layout keyword) still passes through verbatim', () => {
+    document.body.innerHTML = `
+      <div data-dc-source="src/Parent.tsx:1:1" id="parent" style="display: flex; width: 400px;">
+        <div data-dc-source="src/Child.tsx:2:2" id="child" style="width: 240px;"></div>
+      </div>`
+    const child = document.getElementById('child')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(child, 'width', 'auto')
+    const req = buildChangeRequest(store, TW)
+    const c = req.elements[0].changes.find((x) => x.property === 'width')!
+    expect(c.afterCss).toBe('auto')
+  })
+
+  it('is case-insensitive: "AUTO" still passes through verbatim', () => {
+    document.body.innerHTML = `
+      <div data-dc-source="src/Parent.tsx:1:1" id="parent" style="display: flex; width: 400px;">
+        <div data-dc-source="src/Child.tsx:2:2" id="child" style="width: 240px;"></div>
+      </div>`
+    const child = document.getElementById('child')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(child, 'width', 'AUTO')
+    const req = buildChangeRequest(store, TW)
+    const c = req.elements[0].changes.find((x) => x.property === 'width')!
+    expect(c.afterCss).toBe('AUTO')
+  })
+})
+
 describe('cssPath', () => {
   it('uses the id when present', () => {
     document.body.innerHTML = `<div><button id="save-btn">Save</button></div>`

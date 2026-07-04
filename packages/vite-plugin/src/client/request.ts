@@ -28,6 +28,41 @@ export interface ChangeRequest {
   elements: ElementChange[]
 }
 
+// Keywords that are safe to pass through verbatim as an "after" value instead of the
+// getComputedStyle-measured px/rgb/etc equivalent. Restricted to layout/box-model keywords
+// (sizing, flex, alignment, border-style) where the computed value would silently invert the
+// user's intent (e.g. Hug width 'auto' -> a hardcoded px). Deliberately excludes color keywords
+// like 'red' — those DO round-trip meaningfully through getComputedStyle (-> 'rgb(255, 0, 0)')
+// and must be measured, not passed through, once COLOR drafts exist (M2b-2).
+export const KEYWORD_PASSTHROUGH = new Set([
+  'auto',
+  'fit-content',
+  'min-content',
+  'max-content',
+  'flex',
+  'inline-flex',
+  'row',
+  'column',
+  'row-reverse',
+  'column-reverse',
+  'wrap',
+  'nowrap',
+  'wrap-reverse',
+  'flex-start',
+  'flex-end',
+  'center',
+  'space-between',
+  'space-around',
+  'space-evenly',
+  'stretch',
+  'baseline',
+  'normal',
+  'none',
+  'solid',
+  'dashed',
+  'dotted',
+])
+
 const COLLAPSE: Array<{ into: string; parts: string[] }> = [
   {
     into: 'border-radius',
@@ -110,11 +145,14 @@ export function buildChangeRequestWithElements(
 
       raw = new Map<string, { beforeCss: string; afterCss: string }>()
       for (const [prop, draft] of props) {
-        // A drafted keyword (currently just 'auto', e.g. Hug width/height) never round-trips
-        // through the computed style — getComputedStyle resolves it to a px measurement, which
-        // would silently invert the user's intent (Hug -> a hardcoded px). Pass such keywords
-        // through verbatim as the "after" value; "before" stays a real measurement.
-        const isKeyword = /^[a-z-]+$/i.test(draft.value)
+        // A drafted layout keyword (e.g. 'auto' for Hug width/height) never round-trips through
+        // the computed style — getComputedStyle resolves it to a px measurement, which would
+        // silently invert the user's intent (Hug -> a hardcoded px). Pass such keywords through
+        // verbatim as the "after" value; "before" stays a real measurement. Restricted to an
+        // explicit allowlist (KEYWORD_PASSTHROUGH) rather than a keyword-shape regex, so that
+        // color keywords like 'red' are NOT passed through — those must be measured, since
+        // getComputedStyle legitimately resolves them to 'rgb(...)'.
+        const isKeyword = KEYWORD_PASSTHROUGH.has(draft.value.toLowerCase())
         raw.set(prop, {
           beforeCss: beforeCss.get(prop)!,
           afterCss: isKeyword ? draft.value : afterCss.get(prop)!,
