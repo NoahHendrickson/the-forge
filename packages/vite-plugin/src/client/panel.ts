@@ -42,7 +42,7 @@ function isFlex(el: TaggedElement): boolean {
  * An untouched flex container reports 'normal' (real browsers) or '' (jsdom) rather than
  * 'flex-start', so without this the matrix would show zero active dots by default.
  */
-function normalizeJustify(justify: string): string {
+export function normalizeJustify(justify: string): string {
   if (justify === 'normal' || justify === 'start' || justify === 'left' || justify === '') return 'flex-start'
   if (justify === 'end' || justify === 'right') return 'flex-end'
   return justify
@@ -54,7 +54,7 @@ function normalizeJustify(justify: string): string {
  * represented by the child's W/H size mode being Fill, not a matrix position, so it must
  * continue to produce no active dot.
  */
-function normalizeAlign(align: string): string {
+export function normalizeAlign(align: string): string {
   if (align === 'normal' || align === 'start' || align === '') return 'flex-start'
   if (align === 'end') return 'flex-end'
   return align
@@ -414,7 +414,7 @@ export class Panel {
     wrap.className = 'panel-rows layout-section'
 
     const addBtn = document.createElement('button')
-    addBtn.textContent = 'Add auto layout'
+    addBtn.textContent = '+ Add auto layout'
     addBtn.setAttribute('data-add-layout', '')
     addBtn.addEventListener('click', () => {
       if (!this.el) return

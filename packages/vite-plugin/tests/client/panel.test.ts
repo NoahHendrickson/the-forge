@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { Panel } from '../../src/client/panel'
+import { Panel, normalizeJustify, normalizeAlign } from '../../src/client/panel'
 import { DraftStore } from '../../src/client/drafts'
 import { buildInspectorData } from '../../src/client/inspector'
 
@@ -240,6 +240,12 @@ describe('Panel', () => {
     expect(btn).toBeTruthy()
     btn.click()
     expect(drafts.current(el, 'display')).toBe('flex')
+  })
+
+  it('add-auto-layout button label is prefixed with "+ " per the empty-state plan', () => {
+    const { panel } = setup()
+    const btn = panel.root.querySelector('[data-add-layout]') as HTMLElement
+    expect(btn.textContent).toBe('+ Add auto layout')
   })
 
   it('add-auto-layout reveals layout controls after refresh', () => {
@@ -627,5 +633,48 @@ describe('Panel onBeforeEdit pre-hook (M2b Task 4)', () => {
     select.dispatchEvent(new Event('change', { bubbles: true }))
     expect(onBeforeEdit).toHaveBeenCalledWith(el)
     expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
+  })
+})
+
+describe('normalizeJustify', () => {
+  it('maps normal, start, left, and the jsdom empty string to flex-start', () => {
+    expect(normalizeJustify('normal')).toBe('flex-start')
+    expect(normalizeJustify('start')).toBe('flex-start')
+    expect(normalizeJustify('left')).toBe('flex-start')
+    expect(normalizeJustify('')).toBe('flex-start')
+  })
+
+  it('maps end and right to flex-end', () => {
+    expect(normalizeJustify('end')).toBe('flex-end')
+    expect(normalizeJustify('right')).toBe('flex-end')
+  })
+
+  it('passes through center and space-between unchanged', () => {
+    expect(normalizeJustify('center')).toBe('center')
+    expect(normalizeJustify('space-between')).toBe('space-between')
+  })
+})
+
+describe('normalizeAlign', () => {
+  it('maps normal, start, and the jsdom empty string to flex-start', () => {
+    expect(normalizeAlign('normal')).toBe('flex-start')
+    expect(normalizeAlign('start')).toBe('flex-start')
+    expect(normalizeAlign('')).toBe('flex-start')
+  })
+
+  it('maps end to flex-end', () => {
+    expect(normalizeAlign('end')).toBe('flex-end')
+  })
+
+  it('passes through center unchanged', () => {
+    expect(normalizeAlign('center')).toBe('center')
+  })
+
+  it('does NOT map stretch — it must match no dot in the align matrix', () => {
+    const result = normalizeAlign('stretch')
+    expect(result).toBe('stretch')
+    expect(result).not.toBe('flex-start')
+    expect(result).not.toBe('flex-end')
+    expect(result).not.toBe('center')
   })
 })

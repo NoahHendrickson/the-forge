@@ -83,13 +83,13 @@ button {
 
 #panel .panel-rows { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 10px; align-items: center; }
 
-#panel button {
+:where(#panel) button {
   font: 500 11px system-ui, sans-serif; color: #D4D4D4;
   background: rgba(255,255,255,0.06); border: none; border-radius: 6px; padding: 4px 8px;
   cursor: pointer;
 }
-#panel button:hover { background: rgba(255,255,255,0.12); }
-#panel button:active { background: rgba(255,255,255,0.16); }
+:where(#panel) button:hover { background: rgba(255,255,255,0.12); }
+:where(#panel) button:active { background: rgba(255,255,255,0.16); }
 
 [data-add-layout] {
   width: 100%; text-align: center; padding: 6px 0; background: transparent;
@@ -131,6 +131,7 @@ button {
 
 .layout-grid { display: flex; gap: 8px; width: 100%; }
 .layout-side { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.layout-side .nf { flex: 0 0 auto; }
 
 .matrix-tile {
   width: 88px; height: 88px; background: rgba(255,255,255,0.05);
