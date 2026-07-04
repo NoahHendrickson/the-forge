@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { EventEmitter } from 'node:events'
-import { theForge, CLIENT_ID } from '../src/index'
+import { theForge, CLIENT_ID } from '../src/vite'
 
 type TransformHook = (code: string, id: string) => { code: string } | null
 

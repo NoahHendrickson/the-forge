@@ -50,14 +50,14 @@ cd -
 
 If `../the-forge` already exists, `git pull && npm install && npm run build` in it instead.
 
-The build must produce `packages/vite-plugin/dist/` containing `index.js`, `client.js`, and `mcp.js`. Verify those three files exist before continuing.
+The build must produce `packages/the-forge/dist/` containing `index.js`, `vite.js`, `client.js`, and `mcp.js`. Verify those files exist before continuing.
 
 ### 2. Install it in the host project
 
 From the host project root:
 
 ```bash
-npm install -D file:../the-forge/packages/vite-plugin
+npm install -D file:../the-forge/packages/the-forge
 ```
 
 Adjust the relative path if you cloned somewhere else. npm links folder dependencies, so rebuilding the checkout later updates the host project automatically.
@@ -69,7 +69,7 @@ In `vite.config.ts`, import `theForge` and add it to `plugins` — **before** th
 ```ts
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { theForge } from '@the-forge/vite'
+import { theForge } from 'the-forge/vite'
 
 export default defineConfig({
   plugins: [theForge(), react()],

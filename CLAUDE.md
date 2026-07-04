@@ -1,21 +1,21 @@
 # The Forge — agent guide
 
-A dev-only Vite plugin (`@the-forge/vite`) that gives any Vite + React app a Figma-style design mode: click an element in the running app, edit properties live in a floating panel, and send deterministic, token-aware change requests to the AI coding agent you already use (Claude Code / Cursor / Codex) via a bundled stdio MCP server. Product pitch: [README.md](README.md). Spec: [docs/specs/2026-07-03-the-forge-design.md](docs/specs/2026-07-03-the-forge-design.md). Process conventions and working agreements: [docs/HANDOFF.md](docs/HANDOFF.md). One dated plan per milestone in [docs/plans/](docs/plans/).
+A dev-only Vite plugin (`the-forge`, imported as `the-forge/vite`) that gives any Vite + React app a Figma-style design mode: click an element in the running app, edit properties live in a floating panel, and send deterministic, token-aware change requests to the AI coding agent you already use (Claude Code / Cursor / Codex) via a bundled stdio MCP server. Product pitch: [README.md](README.md). Spec: [docs/specs/2026-07-03-the-forge-design.md](docs/specs/2026-07-03-the-forge-design.md). Process conventions and working agreements: [docs/HANDOFF.md](docs/HANDOFF.md). One dated plan per milestone in [docs/plans/](docs/plans/).
 
 ## Commands
 
 ```bash
 npm install && npm run build          # build the plugin (tsup)
 npm test                              # root gate: typecheck + full vitest suite
-npm run test:watch -w @the-forge/vite # vitest watch mode
-npm run typecheck -w @the-forge/vite  # tsc --noEmit only
+npm run test:watch -w the-forge       # vitest watch mode
+npm run typecheck -w the-forge        # tsc --noEmit only
 npm run dev -w demo-app               # demo app (fixtures/demo-app); Design toggle bottom-right
 ./scripts/check-prod-clean.sh         # prod build has zero plugin traces + 250KB package budget
 ```
 
-Single test file: `npx vitest run tests/client/panel.test.ts` from `packages/vite-plugin/`.
+Single test file: `npx vitest run tests/client/panel.test.ts` from `packages/the-forge/`.
 
-The build produces three bundles in `packages/vite-plugin/dist/`: `index.js` (the node-side Vite plugin), `client.js` (the browser overlay, served only under `vite dev`), and `mcp.js` (the stdio MCP bin agents launch). The npm package ships `dist/` only.
+The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub that throws — import a subpath instead), `vite.js` (the node-side Vite plugin), `client.js` (the browser overlay, served only under `vite dev`), and `mcp.js` (the stdio MCP bin agents launch). The npm package ships `dist/` only.
 
 ## Architecture — the loop
 

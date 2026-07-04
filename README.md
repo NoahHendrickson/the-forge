@@ -39,7 +39,7 @@ npm run dev -w demo-app
 
 Open the printed URL, hit the **Design** toggle (bottom-right), click an element, and start scrubbing. When you have drafts, hit **Copy for agent** and paste into your agent of choice. Or hit **Send to agent**, then type /forge-design in a Claude Code session opened in the same project — it pulls the queued edits over MCP, applies them, and the browser marks your drafts Implemented once computed styles match.
 
-To use it on your own Vite + React project, see [SETUP.md](SETUP.md) — the package isn't on npm yet, so it installs from a local checkout (`npm install -D file:../the-forge/packages/vite-plugin`) and one line in `vite.config.ts`.
+To use it on your own Vite + React project, see [SETUP.md](SETUP.md) — the package isn't on npm yet, so it installs from a local checkout (`npm install -D file:../the-forge/packages/the-forge`) and one line in `vite.config.ts`.
 
 ## Guarantees
 
