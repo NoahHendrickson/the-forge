@@ -412,8 +412,10 @@ export class Panel {
         this.drafts.apply(this.el, 'justify-content', 'space-between')
         // Figma semantics: switching gap to Auto means "space it out for me" —
         // any explicit gap draft is cleared (not just zeroed) so justify-content
-        // alone controls spacing.
-        if (this.drafts.current(this.el, 'gap') !== null) this.drafts.commit(this.el, ['gap'])
+        // alone controls spacing. Use a targeted discard (not commit) so a
+        // pre-existing inline gap the app itself authored is restored rather
+        // than silently destroyed.
+        if (this.drafts.current(this.el, 'gap') !== null) this.drafts.discard(this.el, ['gap'])
         this.refresh()
         this.onEdited()
       },

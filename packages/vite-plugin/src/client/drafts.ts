@@ -76,12 +76,27 @@ export class DraftStore {
     return this.drafts
   }
 
-  discard(el: TaggedElement): void {
-    const props = this.drafts.get(el)
-    if (!props) return
-    for (const [prop, d] of props) writeInline(el, prop, d.original)
-    this.drafts.delete(el)
-    this.showingOriginal.delete(el)
+  discard(el: TaggedElement, props?: string[]): void {
+    const draftProps = this.drafts.get(el)
+    if (!draftProps) return
+    if (props) {
+      // targeted discard: restore only the listed properties' recorded originals —
+      // an un-targeted draft on the same element must survive untouched.
+      for (const prop of props) {
+        const d = draftProps.get(prop)
+        if (!d) continue
+        writeInline(el, prop, d.original)
+        draftProps.delete(prop)
+      }
+      if (draftProps.size === 0) {
+        this.drafts.delete(el)
+        this.showingOriginal.delete(el)
+      }
+    } else {
+      for (const [prop, d] of draftProps) writeInline(el, prop, d.original)
+      this.drafts.delete(el)
+      this.showingOriginal.delete(el)
+    }
     this.emit()
   }
 

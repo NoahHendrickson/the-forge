@@ -188,6 +188,27 @@ describe('DraftStore', () => {
     expect(store.elementCount()).toBe(0)
   })
 
+  it('targeted discard restores originals and keeps other drafts', () => {
+    const store = new DraftStore()
+    const d = el()
+    d.style.setProperty('gap', '16px')
+    store.apply(d, 'gap', '24px')
+    store.apply(d, 'padding-top', '8px')
+    store.discard(d, ['gap'])
+    expect(d.style.getPropertyValue('gap')).toBe('16px')
+    expect(store.current(d, 'padding-top')).toBe('8px')
+    expect(store.hasDrafts(d)).toBe(true)
+  })
+
+  it('targeted discard forgets the element once its last prop empties the map', () => {
+    const store = new DraftStore()
+    const d = el()
+    store.apply(d, 'gap', '24px')
+    store.discard(d, ['gap'])
+    expect(store.hasDrafts(d)).toBe(false)
+    expect(store.elementCount()).toBe(0)
+  })
+
   it('sequential targeted commits across two requests compose correctly', () => {
     const store = new DraftStore()
     const d = el()

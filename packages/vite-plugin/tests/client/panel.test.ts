@@ -196,6 +196,16 @@ describe('Panel', () => {
     expect(fieldInput(panel, 'Gap').value).toBe('auto')
   })
 
+  it('gap auto restores a pre-existing inline gap instead of destroying it', () => {
+    const { el, panel, drafts } = flexSetup('gap: 16px;')
+    commit(fieldInput(panel, 'Gap'), '24')
+    expect(drafts.current(el, 'gap')).toBe('24px')
+    commit(fieldInput(panel, 'Gap'), 'auto')
+    expect(drafts.current(el, 'justify-content')).toBe('space-between')
+    expect(drafts.current(el, 'gap')).toBeNull()
+    expect(el.style.getPropertyValue('gap')).toBe('16px')
+  })
+
   it('align matrix click drafts justify-content and align-items', () => {
     const { el, panel, drafts } = flexSetup()
     const dot = panel.root.querySelector('.am-dot') as HTMLElement
