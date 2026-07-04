@@ -400,7 +400,7 @@ describe('buildChangeRequestWithElements', () => {
 })
 
 describe('renderMarkdown', () => {
-  it('renders location, authored delta, scope note, and verify instruction', () => {
+  it('renders location, authored delta, scope note, and no-preview instruction', () => {
     const el = makeButton()
     const store = new DraftStore()
     store.apply(el, 'padding-top', '24px')
@@ -411,7 +411,8 @@ describe('renderMarkdown', () => {
     expect(md).toContain('padding-block: 10px → 24px')
     expect(md).toContain('this call site only')
     expect(md).toContain('EXACTLY')
-    expect(md).toContain('verify')
+    expect(md).toContain('Do not run the app')
+    expect(md).not.toContain('After applying, verify')
   })
 
   it('renders css-only lines when not Tailwind', () => {

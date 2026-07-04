@@ -271,6 +271,9 @@ export function renderMarkdown(req: ChangeRequest): string {
   })
 
   lines.push('Scope: apply to this call site only. If a change would modify a shared component rendered elsewhere, pause and confirm first.')
-  lines.push('After applying, verify each computed value matches the "after" value.')
+  // No verification ask here on purpose: the browser-side verifier (verifier.ts) checks computed
+  // styles post-HMR itself. Telling the agent to "verify" makes it spin up dev servers/screenshots
+  // to preview the result the user is already watching live.
+  lines.push('Do not run the app, take screenshots, or preview the result — the user is watching the live app, and The Forge verifies the changes automatically.')
   return lines.join('\n')
 }
