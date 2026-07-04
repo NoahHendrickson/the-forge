@@ -3,6 +3,7 @@ import { findTaggedElement, type TaggedElement } from './source'
 import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
+import { buildChangeRequest, renderMarkdown } from './request'
 
 declare global {
   interface Window {
@@ -19,6 +20,7 @@ export class DesignMode {
   private lastMove: MouseEvent | null = null
   private drafts: DraftStore
   private panel: Panel
+  private copyTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(
     private overlay: Overlay,
@@ -28,6 +30,13 @@ export class DesignMode {
     this.drafts = drafts ?? new DraftStore()
     this.panel = panel ?? new Panel(this.drafts, () => this.remeasure())
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
+    overlay.copyButton.addEventListener('click', () => {
+      const md = renderMarkdown(buildChangeRequest(this.drafts))
+      navigator.clipboard
+        .writeText(md)
+        .then(() => this.flashCopyLabel('Copied ✓'))
+        .catch(() => this.flashCopyLabel('Copy failed'))
+    })
     overlay.compareAllButton.addEventListener('click', () => {
       this.drafts.compareAll(!this.drafts.isComparingAll())
       this.panel.refresh()
@@ -89,6 +98,16 @@ export class DesignMode {
 
   private remeasure(): void {
     if (this.selected) this.overlay.showSelectOutline(this.selected.getBoundingClientRect())
+  }
+
+  private flashCopyLabel(label: string): void {
+    const btn = this.overlay.copyButton
+    btn.textContent = label
+    if (this.copyTimer) clearTimeout(this.copyTimer)
+    this.copyTimer = setTimeout(() => {
+      btn.textContent = 'Copy for agent'
+      this.copyTimer = null
+    }, 1500)
   }
 
   private onMove = (e: MouseEvent): void => {
