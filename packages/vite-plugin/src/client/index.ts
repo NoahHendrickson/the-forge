@@ -17,7 +17,6 @@ export class DesignMode {
   private moveRaf = 0
   private reflowRaf = 0
   private lastMove: MouseEvent | null = null
-  private moveWasQueued = false
   private drafts: DraftStore
   private panel: Panel
 
@@ -69,7 +68,6 @@ export class DesignMode {
       this.moveRaf = 0
       this.reflowRaf = 0
       this.lastMove = null
-      this.moveWasQueued = false
       this.selected = null
       this.panel.hide()
     }
@@ -102,7 +100,6 @@ export class DesignMode {
       if (el && el !== this.selected) this.overlay.showOutline(el.getBoundingClientRect())
       else this.overlay.hideOutline()
     })
-    this.moveWasQueued = true
   }
 
   private onClick = (e: MouseEvent): void => {
@@ -127,8 +124,9 @@ export class DesignMode {
       this.reflowRaf = 0
       if (!this.active) return
       this.remeasure()
-      if (!this.moveWasQueued) this.overlay.hideOutline()
-      this.moveWasQueued = false
+      // hover position is stale after scroll/resize — hide; next mousemove redraws
+      this.overlay.hideOutline()
+      this.lastMove = null
     })
   }
 }

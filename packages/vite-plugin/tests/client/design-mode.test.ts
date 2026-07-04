@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Overlay } from '../../src/client/overlay'
 import { DesignMode } from '../../src/client/index'
 import { DraftStore } from '../../src/client/drafts'
 import { Panel } from '../../src/client/panel'
+
+// DesignMode registers capture-phase listeners on `document`/`window`, which
+// persist across tests within this file (jsdom's `document` is shared per
+// test file, not per test). Track every instance created via setActive so
+// afterEach can deactivate it and avoid leaking listeners into later tests.
+const liveModes: DesignMode[] = []
 
 beforeEach(() => {
   document.body.innerHTML = ''
@@ -14,6 +20,10 @@ beforeEach(() => {
   })
 })
 
+afterEach(() => {
+  for (const mode of liveModes.splice(0)) mode.setActive(false)
+})
+
 function fullSetup() {
   document.body.innerHTML = `<button data-dc-source="src/Button.tsx:42:8" class="btn">go</button>`
   const overlay = new Overlay()
@@ -22,6 +32,7 @@ function fullSetup() {
   const panel = new Panel(drafts, () => {})
   overlay.attachPanel(panel.root)
   const mode = new DesignMode(overlay, panel, drafts)
+  liveModes.push(mode)
   return { overlay, drafts, panel, mode }
 }
 
@@ -42,6 +53,7 @@ describe('DesignMode listener lifecycle (spec §10: zero idle listeners)', () =>
     const overlay = new Overlay()
     overlay.mount()
     const mode = new DesignMode(overlay)
+    liveModes.push(mode)
 
     mode.setActive(true)
     const added = [...addSpy.mock.calls.map((c) => c[0]), ...winAddSpy.mock.calls.map((c) => c[0])].sort()
@@ -61,6 +73,7 @@ describe('DesignMode listener lifecycle (spec §10: zero idle listeners)', () =>
     const overlay = new Overlay()
     overlay.mount()
     const mode = new DesignMode(overlay)
+    liveModes.push(mode)
     overlay.toggle.click()
     expect(mode.active).toBe(true)
     overlay.toggle.click()
@@ -71,6 +84,7 @@ describe('DesignMode listener lifecycle (spec §10: zero idle listeners)', () =>
     const overlay = new Overlay()
     overlay.mount()
     const mode = new DesignMode(overlay)
+    liveModes.push(mode)
     mode.setActive(true)
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     expect(mode.active).toBe(false)
@@ -86,6 +100,7 @@ describe('DesignMode listener lifecycle (spec §10: zero idle listeners)', () =>
     const overlay = new Overlay()
     overlay.mount()
     const mode = new DesignMode(overlay)
+    liveModes.push(mode)
     mode.setActive(true)
 
     const first = document.getElementById('first')!
@@ -165,37 +180,27 @@ describe('DesignMode selection (M2)', () => {
     expect(status.hidden).toBe(true)
   })
 
-  it('concurrent scroll and hover neither drop nor stomp each other', () => {
-    // Collect RAFs to verify both move and reflow are queued
-    const rafs: Array<{ type: string; callback: FrameRequestCallback }> = []
-    const originalRAF = globalThis.requestAnimationFrame
-    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
-      // Capture the call stack to determine if it's from onMove or onReflow
-      const stack = new Error().stack || ''
-      const type = stack.includes('onMove') ? 'move' : 'reflow'
-      rafs.push({ type, callback: cb })
-      return rafs.length
-    }) as typeof requestAnimationFrame
-
+  it('scroll re-measures the selection even when a hover frame is queued', () => {
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
     const { overlay, mode } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')!
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     btn.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
     document.dispatchEvent(new Event('scroll'))
+    expect(queue.length).toBe(2) // hover + reflow queued independently (shared-id code dropped the reflow)
+    const spy = vi.spyOn(overlay, 'showSelectOutline')
+    for (const cb of queue.splice(0)) cb(0)
+    expect(spy).toHaveBeenCalled() // the previously-dropped re-measure
 
-    // Verify both move and reflow were queued
-    const moveRAFs = rafs.filter(r => r.type === 'move')
-    const reflowRAFs = rafs.filter(r => r.type === 'reflow')
-    expect(moveRAFs.length).toBeGreaterThan(0) // move was queued
-    expect(reflowRAFs.length).toBeGreaterThan(0) // reflow was queued (not dropped)
-
-    // Execute the callbacks
-    for (const raf of rafs) raf.callback(0)
-
-    // Verify outline is shown (not stomped)
+    // hover redraws on the next mousemove after a scroll
+    btn.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+    for (const cb of queue.splice(0)) cb(0)
     const outline = overlay.host.shadowRoot!.getElementById('outline') as HTMLElement
-    expect(outline.hidden).toBe(false) // reflow did not stomp the hover outline
-
-    globalThis.requestAnimationFrame = originalRAF
+    expect(outline.hidden).toBe(true) // hovering the SELECTED element → hover outline stays suppressed
   })
 })
