@@ -48,6 +48,38 @@ describe('Panel', () => {
     expect(fieldInput(panel, 'PY').value).toBe('8')
   })
 
+  it('renders the header as two separate nodes: tag and source', () => {
+    const { panel } = setup()
+    const tagEl = panel.root.querySelector('.panel-head-tag') as HTMLElement
+    const srcEl = panel.root.querySelector('.panel-head-src') as HTMLElement
+    expect(tagEl).toBeTruthy()
+    expect(srcEl).toBeTruthy()
+    expect(tagEl.textContent).toBe('div')
+    expect(srcEl.textContent).toBe('src/Card.tsx:4:7')
+    expect(srcEl.getAttribute('title')).toBe('src/Card.tsx:4:7')
+  })
+
+  it('header shows only the tag node when there is no source', () => {
+    document.body.innerHTML = `<div id="t" style="padding: 8px; width: 200px;"></div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    const tagEl = panel.root.querySelector('.panel-head-tag') as HTMLElement
+    const srcEl = panel.root.querySelector('.panel-head-src') as HTMLElement
+    expect(tagEl.textContent).toBe('div')
+    expect(srcEl).toBeFalsy()
+  })
+
+  it('wraps Compare/Reset buttons in a .panel-actions container', () => {
+    const { panel } = setup()
+    const actions = panel.root.querySelector('.panel-actions') as HTMLElement
+    expect(actions).toBeTruthy()
+    expect(actions.contains(panel.compareButton)).toBe(true)
+    expect(actions.contains(panel.resetButton)).toBe(true)
+  })
+
   it('editing a linked padding field writes both longhands as drafts', () => {
     const { el, panel, drafts, onEdited } = setup()
     commit(fieldInput(panel, 'PX'), '16')
@@ -132,8 +164,23 @@ describe('Panel', () => {
 
   it('section order is Layout, Size, Padding, Margin, Appearance regardless of visibility', () => {
     const { panel } = setup()
-    const titles = [...panel.root.querySelectorAll('.panel-section')].map((n) => n.textContent)
+    // Sections with an expand button now parent it inside the title row, so title row
+    // textContent includes the '⋯' glyph for expandable sections — compare the leading
+    // label text only (title row's first text-bearing segment) rather than exact equality.
+    const titles = [...panel.root.querySelectorAll('.panel-section')].map(
+      (n) => n.textContent?.replace('⋯', '').trim()
+    )
     expect(titles).toEqual(['Layout', 'Size', 'Padding', 'Margin', 'Appearance'])
+  })
+
+  it('expand button is parented inside the section title row, not the rows wrap', () => {
+    const { panel } = setup()
+    const sections = [...panel.root.querySelectorAll('.panel-section')]
+    const paddingTitle = sections.find((s) => s.textContent?.includes('Padding'))!
+    const btn = paddingTitle.querySelector('[data-expand="padding"]')
+    expect(btn).toBeTruthy()
+    // must NOT be inside a .panel-rows wrap
+    expect(paddingTitle.querySelector('.panel-rows [data-expand="padding"]')).toBeFalsy()
   })
 
   it('Layout section TITLE stays visible (but still first) for a non-flex element — empty state is title + add-auto-layout button, no floating headerless button', () => {
@@ -160,6 +207,31 @@ describe('Panel', () => {
     const sections = [...panel.root.querySelectorAll('.panel-section')]
     expect(sections[0].textContent).toBe('Layout')
     expect((sections[0] as HTMLElement).hidden).toBe(false)
+  })
+
+  it('layout controls compose a layout-grid with a matrix-tile and a layout-side column', () => {
+    const { panel } = flexSetup()
+    const controlsWrap = panel.root.querySelector('.layout-controls') as HTMLElement
+    const grid = controlsWrap.querySelector('.layout-grid') as HTMLElement
+    expect(grid).toBeTruthy()
+    const tile = grid.querySelector('.matrix-tile') as HTMLElement
+    const side = grid.querySelector('.layout-side') as HTMLElement
+    expect(tile).toBeTruthy()
+    expect(side).toBeTruthy()
+    // matrix-tile wraps the align-matrix
+    expect(tile.querySelector('.align-matrix')).toBeTruthy()
+    // layout-side contains Gap (a .nf) then Wrap (a .seg-field), in that order
+    const gapField = side.querySelector('.nf')
+    const wrapField = [...side.querySelectorAll('.seg-field')].find(
+      (n) => n.querySelector('.seg-field-label')?.textContent === 'Wrap'
+    )
+    expect(gapField).toBeTruthy()
+    expect(wrapField).toBeTruthy()
+    // Direction segment field renders as a full row OUTSIDE the grid (before it)
+    const directionField = [...controlsWrap.querySelectorAll('.seg-field')].find(
+      (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
+    )!
+    expect(grid.contains(directionField)).toBe(false)
   })
 
   it('non-flex element shows only the add-auto-layout button in Layout section', () => {

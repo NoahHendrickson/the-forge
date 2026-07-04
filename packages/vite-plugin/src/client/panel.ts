@@ -153,6 +153,9 @@ export class Panel {
   resetButton = document.createElement('button')
 
   private head = document.createElement('div')
+  private headTag = document.createElement('div')
+  private headSrc = document.createElement('div')
+  private actions = document.createElement('div')
   private body = document.createElement('div')
   private fields: BoundField[] = []
   private sectionEls: Array<{ spec: SectionSpec; el: HTMLElement }> = []
@@ -184,6 +187,10 @@ export class Panel {
     this.root.id = 'panel'
     this.root.hidden = true
     this.head.className = 'panel-head'
+    this.headTag.className = 'panel-head-tag'
+    this.headSrc.className = 'panel-head-src'
+    this.head.append(this.headTag)
+    this.actions.className = 'panel-actions'
     this.compareButton.textContent = 'Compare'
     this.resetButton.textContent = 'Reset'
     this.compareButton.addEventListener('click', () => {
@@ -198,15 +205,22 @@ export class Panel {
       this.refresh()
       this.onEdited()
     })
-    this.root.append(this.head, this.compareButton, this.resetButton, this.body)
+    this.actions.append(this.compareButton, this.resetButton)
+    this.root.append(this.head, this.actions, this.body)
   }
 
   show(el: TaggedElement, data: InspectorData): void {
     this.el = el
     this.root.hidden = false
-    this.head.textContent = data.source
-      ? `<${data.tag}> — ${data.source.file}:${data.source.line}:${data.source.col}`
-      : `<${data.tag}>`
+    this.headTag.textContent = data.tag
+    if (data.source) {
+      const srcText = `${data.source.file}:${data.source.line}:${data.source.col}`
+      this.headSrc.textContent = srcText
+      this.headSrc.title = srcText
+      if (!this.headSrc.isConnected) this.head.append(this.headSrc)
+    } else {
+      this.headSrc.remove()
+    }
     // rebuilds all fields per selection; expand state resets by design (revisit in M2b)
     this.buildBody()
     this.refresh()
@@ -388,7 +402,7 @@ export class Panel {
         btn.addEventListener('click', () => {
           expandWrap.hidden = !expandWrap.hidden
         })
-        rowWrap.append(btn)
+        title.append(btn)
         for (const row of section.expandRows) expandWrap.append(this.buildRow(row))
         this.body.append(expandWrap)
       }
@@ -432,6 +446,28 @@ export class Panel {
     })
     controls.append(this.directionField.root)
 
+    const grid = document.createElement('div')
+    grid.className = 'layout-grid'
+
+    const tile = document.createElement('div')
+    tile.className = 'matrix-tile'
+
+    this.alignMatrix = new AlignMatrix({
+      onInput: ({ justify, align }) => {
+        if (!this.el) return
+        this.onBeforeEdit(this.el)
+        this.drafts.apply(this.el, 'justify-content', justify)
+        this.drafts.apply(this.el, 'align-items', align)
+        this.refresh()
+        this.onEdited()
+      },
+    })
+    tile.append(this.alignMatrix.root)
+    grid.append(tile)
+
+    const side = document.createElement('div')
+    side.className = 'layout-side'
+
     this.gapField = new NumberField({
       label: 'Gap',
       min: 0,
@@ -457,19 +493,7 @@ export class Panel {
         this.onEdited()
       },
     })
-    controls.append(this.gapField.root)
-
-    this.alignMatrix = new AlignMatrix({
-      onInput: ({ justify, align }) => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        this.drafts.apply(this.el, 'justify-content', justify)
-        this.drafts.apply(this.el, 'align-items', align)
-        this.refresh()
-        this.onEdited()
-      },
-    })
-    controls.append(this.alignMatrix.root)
+    side.append(this.gapField.root)
 
     this.wrapField = new SegmentField({
       label: 'Wrap',
@@ -485,7 +509,10 @@ export class Panel {
         this.onEdited()
       },
     })
-    controls.append(this.wrapField.root)
+    side.append(this.wrapField.root)
+
+    grid.append(side)
+    controls.append(grid)
 
     wrap.append(controls)
     return wrap

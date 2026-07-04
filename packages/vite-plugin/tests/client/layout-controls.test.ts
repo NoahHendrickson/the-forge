@@ -59,6 +59,18 @@ describe('SegmentField', () => {
     buttons[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(buttons[0].classList.contains('seg-active')).toBe(true)
   })
+
+  it('wraps the segment buttons in a .seg-track appended after the label', () => {
+    const { sf, buttons } = make()
+    const track = sf.root.querySelector('.seg-track') as HTMLElement
+    expect(track).toBeTruthy()
+    for (const button of buttons) {
+      expect(track.contains(button)).toBe(true)
+    }
+    // label is a direct child of root, preceding the track
+    const label = sf.root.querySelector('.seg-field-label') as HTMLElement
+    expect(label.nextElementSibling).toBe(track)
+  })
 })
 
 describe('AlignMatrix', () => {
@@ -136,5 +148,26 @@ describe('AlignMatrix', () => {
     const { am } = make()
     am.set('space-between', 'center', 'column', true)
     expect(dots(am)).toHaveLength(3)
+  })
+
+  it('spaceBetween in row direction adds the am-sb-col modifier class (cross axis stacks vertically)', () => {
+    const { am } = make()
+    am.set('space-between', 'center', 'row', true)
+    expect(am.root.classList.contains('am-sb-col')).toBe(true)
+    expect(am.root.classList.contains('am-sb-row')).toBe(false)
+  })
+
+  it('spaceBetween in column direction adds the am-sb-row modifier class (transpose)', () => {
+    const { am } = make()
+    am.set('space-between', 'center', 'column', true)
+    expect(am.root.classList.contains('am-sb-row')).toBe(true)
+    expect(am.root.classList.contains('am-sb-col')).toBe(false)
+  })
+
+  it('non-spaceBetween mode carries neither sb modifier class', () => {
+    const { am } = make()
+    am.set('center', 'center', 'row', false)
+    expect(am.root.classList.contains('am-sb-col')).toBe(false)
+    expect(am.root.classList.contains('am-sb-row')).toBe(false)
   })
 })

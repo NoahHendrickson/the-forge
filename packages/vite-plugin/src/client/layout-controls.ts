@@ -18,6 +18,10 @@ export class SegmentField {
     labelEl.textContent = opts.label
     this.root.append(labelEl)
 
+    const track = document.createElement('div')
+    track.className = 'seg-track'
+    this.root.append(track)
+
     for (const option of opts.options) {
       const button = document.createElement('button')
       button.type = 'button'
@@ -28,7 +32,7 @@ export class SegmentField {
         this.setActiveValue(option.value)
         this.opts.onInput(option.value)
       })
-      this.root.append(button)
+      track.append(button)
       this.buttons.push(button)
     }
   }
@@ -103,6 +107,10 @@ export class AlignMatrix {
     // since spaceBetween only needs the align keyword, we render the same
     // 3 keywords regardless of direction — direction only affects layout,
     // never the emitted semantics here.
+    // Display-only modifier class: 'row' direction stacks the 3 dots in a single
+    // column (cross axis is vertical); 'column' direction transposes them into a
+    // single row (cross axis is horizontal).
+    this.root.classList.add(direction === 'row' ? 'am-sb-col' : 'am-sb-row')
     for (const a of KEYWORDS) {
       const dot = this.makeDot('space-between', a)
       if (a === align) dot.classList.add('am-active')
@@ -111,8 +119,6 @@ export class AlignMatrix {
       })
       this.root.append(dot)
     }
-    // direction is accepted for API symmetry / future layout-only styling hooks.
-    void direction
   }
 
   private mapPosition(row: number, col: number, direction: 'row' | 'column'): { j: Keyword; a: Keyword } {
