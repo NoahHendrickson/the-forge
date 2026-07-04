@@ -166,6 +166,17 @@ describe('DesignMode selection (M2)', () => {
     expect(btn.style.getPropertyValue('padding-top')).toBe('20px')
   })
 
+  it('exiting design mode while comparing restores draft previews', () => {
+    const { mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '20px')
+    drafts.compareAll(true)
+    expect(btn.style.getPropertyValue('padding-top')).toBe('')
+    mode.setActive(false)
+    expect(btn.style.getPropertyValue('padding-top')).toBe('20px')
+  })
+
   it('draft changes drive the status strip and compare-all button', () => {
     const { overlay, mode, drafts } = fullSetup()
     mode.setActive(true)

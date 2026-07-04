@@ -38,6 +38,7 @@ export class DesignMode {
       this.remeasure()
     })
     this.drafts.onChange = () => {
+      if (!this.active) return
       this.overlay.updateStatus(this.drafts.elementCount(), this.drafts.isComparingAll())
     }
   }
@@ -69,6 +70,7 @@ export class DesignMode {
       this.reflowRaf = 0
       this.lastMove = null
       this.selected = null
+      this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
     }
   }
