@@ -2149,4 +2149,21 @@ describe('Docked mode structure (docked-panel spec)', () => {
     expect(body.querySelector('.color-popover')).not.toBeNull()
     expect(body.querySelector('.token-popover')).not.toBeNull()
   })
+
+  it('popovers survive buildBody() on show() — regression for the body-rebuild wipeout', () => {
+    // buildBody() runs on every show() and used to unconditionally replaceChildren() the
+    // body, which also wiped the constructor-created popover roots living in that same
+    // container (they're only ever appended once, at construction). Guard both the first
+    // rebuild and a second one (re-selection), since the first show() was the one that
+    // silently destroyed the popovers in production.
+    const panel = freshPanel()
+    const body = panel.root.querySelector('.panel-body') as HTMLElement
+    const el = makeTagged()
+    panel.show(el, buildInspectorData(el))
+    expect(body.querySelector('.color-popover')).not.toBeNull()
+    expect(body.querySelector('.token-popover')).not.toBeNull()
+    panel.show(el, buildInspectorData(el))
+    expect(body.querySelector('.color-popover')).not.toBeNull()
+    expect(body.querySelector('.token-popover')).not.toBeNull()
+  })
 })

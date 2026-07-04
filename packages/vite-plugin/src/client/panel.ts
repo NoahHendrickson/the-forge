@@ -560,7 +560,12 @@ export class Panel {
     // previous selection's baselines.
     this.scrubbingField = null
     this.scrubBaselines = null
-    this.body.replaceChildren()
+    // colorPicker.root/tokenPicker.root are constructor-created singletons appended into
+    // this.body exactly once (see the constructor's why-comment on scrolled-coordinate-space
+    // tracking) — replaceChildren() would otherwise wipe them along with the rebuilt sections
+    // on every selection change, leaving popovers permanently detached from the document
+    // after the very first show(). Re-seed the body with them so they survive the rebuild.
+    this.body.replaceChildren(this.colorPicker.root, this.tokenPicker.root)
     this.fields = []
     this.sectionEls = []
     this.directionField = null
