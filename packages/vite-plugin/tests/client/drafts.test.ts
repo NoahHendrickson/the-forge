@@ -101,4 +101,16 @@ describe('DraftStore', () => {
     store.discard(d)
     expect(spy).toHaveBeenCalledTimes(3)
   })
+
+  it('applying while comparing reapplies ALL drafted properties, not just the edited one', () => {
+    const store = new DraftStore()
+    const d = el()
+    store.apply(d, 'width', '100px')
+    store.apply(d, 'height', '50px')
+    store.compare(d, true)
+    expect(d.style.getPropertyValue('height')).toBe('')
+    store.apply(d, 'width', '120px')
+    expect(d.style.getPropertyValue('width')).toBe('120px')
+    expect(d.style.getPropertyValue('height')).toBe('50px')
+  })
 })
