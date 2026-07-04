@@ -48,15 +48,17 @@ The build produces three bundles in `packages/vite-plugin/dist/`: `index.js` (th
 | `sent.ts` | registry of sent-but-unverified change requests |
 | `request.ts` | change-request builder: before/after CSS + utility deltas, markdown |
 | `verifier.ts` | post-send polling, computed-style verification, backoff when server is gone |
+| `watch.ts` | watcher-state poller (design-mode-on only) for the linked-session indicator |
 
 ## MCP contract
 
-- **Two tools** (server name `the-forge`, bin `dist/mcp.js`):
+- **Three tools** (server name `the-forge`, bin `dist/mcp.js`):
   - `pull_design_edits` — no args; claims all pending items (and re-claims stale ones) and returns their change-request markdown.
   - `mark_applied` — `{ ids: string[], status: 'applied' | 'failed', note? }`.
+  - `wait_for_design_edits` — no args; the `/forge-watch` loop (long-poll `POST /__the-forge/wait`, ~20s hold). Lifecycle: wait → apply → mark → re-wait; the server tells the loop to stop after 20 idle minutes (idle auto-stop), on preemption by another watch session, or when no dev server is found. A live watcher makes `/dispatch` return the `watcher` rung and skip the keystroke ladder entirely (`WatcherHub` in `src/server/watchers.ts`).
 - **Endpoint discovery:** the plugin resolves the project root by walking up from Vite's root to the nearest `.git` (`resolveProjectRoot` in `src/server/setup.ts`, monorepo-safe) and writes `.the-forge/endpoint-<pid>.json` (`{port, host, pid, secret}`, written by `writeEndpointFile` in `src/server/endpoints.ts`). The bin (`src/mcp/discover.ts`) reads `<cwd>/.the-forge/`, filters entries to live pids, newest mtime wins; legacy `endpoint.json` is only used when no per-pid file exists.
-- **Auth:** mutating endpoints (`POST /__the-forge/pull`, `/mark`, `/queue`, `/dispatch`) require the `X-Forge-Secret` header from the endpoint file.
-- **Install side-effects (auto, idempotent):** the plugin writes a `the-forge` entry into `.mcp.json` and a `/forge-design` command at `.claude/commands/forge-design.md`, both at the git root. `.the-forge/` is gitignored runtime state.
+- **Auth:** mutating endpoints (`POST /__the-forge/pull`, `/mark`, `/queue`, `/dispatch`, `/wait`) require the `X-Forge-Secret` header from the endpoint file.
+- **Install side-effects (auto, idempotent):** the plugin writes a `the-forge` entry into `.mcp.json` and the `/forge-design` + `/forge-watch` commands at `.claude/commands/`, all at the git root. `.the-forge/` is gitignored runtime state.
 - **Queue lifecycle:** `pending` → `claimed` (stale claims re-queue after 5 min) → `applied`/`failed`; terminal items pruned after 24h, 200-item cap; corrupt `queue.json` is quarantined to `queue.json.corrupt-<ts>`, never silently discarded.
 - The MCP server is a hand-rolled zero-dependency JSON-RPC subset (`src/mcp/protocol.ts`). **Do not replace it with `@modelcontextprotocol/sdk`** — zero runtime dependencies is a deliberate, headline footprint feature.
 
@@ -84,3 +86,5 @@ The build produces three bundles in `packages/vite-plugin/dist/`: `index.js` (th
 - Stale dev servers cause phantom bugs — check `lsof -iTCP:5173` and kill before E2E. The dev server often binds IPv6 (`[::1]:5173`).
 - The MCP bin resolves `.the-forge/` from `process.cwd()` — the agent session must run at the git root (the plugin writes the endpoint file there for exactly this reason).
 - Items stay queued until `mark_applied` — but an immediate re-pull returns nothing (pull flips them to `claimed`; a dropped claim only re-queues after 5 min). The `/forge-design` flow is pull → apply → mark in one pass.
+- Watcher liveness (`/forge-watch`) is per-dev-server-process in-memory state — with two dev servers on one project, the watcher belongs to whichever server the MCP bin discovered (newest live endpoint file), while the browser may be talking to the other. Kill stale servers (same rule as E2E).
+- The watch loop's per-cycle texts (WATCH_COMMAND in `setup.ts`, canned wait texts in `mcp/protocol.ts`) are a per-tick token cost — keep them terse, and never interpolate server data into them.

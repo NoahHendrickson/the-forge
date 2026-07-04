@@ -9,6 +9,7 @@ import { Verifier } from './verifier'
 import { snapshotRects, diffRects } from './ripple'
 import { resetTokensCache } from './tokens'
 import { AGENT_DISPLAY_NAME, type AgentName } from './agent'
+import { WatchStatus, type WatcherState } from './watch'
 
 /** Rapid edits (e.g. dragging a number field) within this window reuse the first snapshot. */
 const RIPPLE_DEBOUNCE_MS = 300
@@ -19,18 +20,32 @@ declare global {
   }
 }
 
-type Rung = 'channels' | 'tmux' | 'applescript' | 'deeplink' | 'manual'
+type Rung = 'watcher' | 'channels' | 'tmux' | 'applescript' | 'deeplink' | 'manual'
 
 /** Maps a dispatch rung to the Send button's flash label. Request content never appears here —
- * only the fixed per-rung copy and (for 'manual') the configured agent's display name. */
-function sentLabelFor(rung: Rung, agent: AgentName): string {
+ * only the fixed per-rung copy and (for manual-family rungs) the configured agent's display
+ * name. Exported for direct unit coverage of the per-rung/per-watcher-state copy matrix. */
+export function sentLabelFor(rung: Rung, agent: AgentName, watcherState: WatcherState = 'none'): string {
   if (rung === 'deeplink') return 'Sent — opened in Cursor'
-  // Explicit allowlist for the "typed into your session" copy — the rung value actually arrives
-  // over the network as untyped JSON (see the /dispatch fetch handler below), so any value that
-  // isn't recognizably tmux/applescript (a typo, a future rung, a server bug) must default to
-  // the manual label rather than falsely claiming a terminal was typed into.
+  // Explicit allowlist for the "typed into your session" / "delivered" copy — the rung value
+  // actually arrives over the network as untyped JSON (see the /dispatch fetch handler below),
+  // so any value that isn't recognizably watcher/tmux/applescript (a typo, a future rung, a
+  // server bug) must default to the manual label rather than falsely claiming delivery.
+  if (rung === 'watcher') return `Sent — delivered to your ${AGENT_DISPLAY_NAME[agent]} session`
   if (rung === 'tmux' || rung === 'applescript') return 'Sent — typed /forge-design into your session'
-  return `Sent — type /forge-design in ${AGENT_DISPLAY_NAME[agent]}` // manual / channels / unrecognized
+  // Manual / channels / unrecognized. A watcher that WAS linked but has gone asleep gets the
+  // wake copy — the request is safely queued, so waking the watcher delivers it (nothing lost).
+  if (watcherState === 'asleep') return `Sent — watcher asleep, type /forge-watch in ${AGENT_DISPLAY_NAME[agent]} to apply`
+  return `Sent — type /forge-design in ${AGENT_DISPLAY_NAME[agent]}`
+}
+
+/** The persistent watch indicator's strip content per watcher state — 'none' renders nothing
+ * (terminal-only users must see zero change from watch mode existing). */
+export function watchIndicatorFor(state: WatcherState, agent: AgentName): { text: string; live: boolean } | undefined {
+  if (state === 'live') return { text: `● Linked to ${AGENT_DISPLAY_NAME[agent]}`, live: true }
+  if (state === 'asleep')
+    return { text: `Watcher asleep — type /forge-watch in ${AGENT_DISPLAY_NAME[agent]} to wake it`, live: false }
+  return undefined
 }
 
 /** Belt-and-braces against cross-origin/DNS-rebinding bypasses of the server's Origin/Host
@@ -57,6 +72,9 @@ export class DesignMode {
   private panel: Panel
   private verifier: Verifier
   private verifierSummary = ''
+  /** Watcher-state poller — runs ONLY while design mode is on (started/stopped in
+   * setActive), so watch mode adds zero idle overhead to the page. */
+  private watch = new WatchStatus(() => this.refreshStatus())
   private buttonTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>()
 
   // Layout-ripple state: idle-zero — only populated during the post-edit window.
@@ -110,10 +128,11 @@ export class DesignMode {
       // dispatch failure (network hiccup, non-200) must NOT undo the send: the request is
       // already safely queued, so we degrade to the same copy as rung 'manual'.
       const agent: AgentName = window.__THE_FORGE__?.agent ?? 'claude-code'
-      const manualLabel = sentLabelFor('manual', agent)
       const onDispatchSettled = (rung: Rung | null): void => {
         overlay.sendButton.disabled = false
-        this.flashButton(overlay.sendButton, rung ? sentLabelFor(rung, agent) : manualLabel, originalLabel)
+        // Watcher state read at settle time (not captured at click) — the poller may have
+        // learned the watcher fell asleep while the queue/dispatch round-trip was in flight.
+        this.flashButton(overlay.sendButton, sentLabelFor(rung ?? 'manual', agent, this.watch.current()), originalLabel)
         this.onSendComplete?.()
       }
       const onSendOk = (id: string): void => {
@@ -200,6 +219,7 @@ export class DesignMode {
       document.addEventListener('scroll', this.onReflow, { capture: true, passive: true })
       window.addEventListener('resize', this.onReflow, { passive: true })
       if (this.sent.size() > 0) this.verifier.start()
+      this.watch.start()
       this.refreshStatus()
     } else {
       document.removeEventListener('mousemove', this.onMove, true)
@@ -219,12 +239,19 @@ export class DesignMode {
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
       this.verifier.stop()
+      this.watch.stop()
     }
   }
 
   private refreshStatus(): void {
     if (!this.active) return
-    this.overlay.updateStatus(this.drafts.elementCount(), this.drafts.isComparingAll(), this.verifierSummary || undefined)
+    const agent: AgentName = window.__THE_FORGE__?.agent ?? 'claude-code'
+    this.overlay.updateStatus(
+      this.drafts.elementCount(),
+      this.drafts.isComparingAll(),
+      this.verifierSummary || undefined,
+      watchIndicatorFor(this.watch.current(), agent)
+    )
   }
 
   /** Replaces the selection with just `el` (plain click / programmatic single-select). */

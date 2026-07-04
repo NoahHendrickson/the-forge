@@ -455,6 +455,46 @@ describe('Verifier polling lifecycle', () => {
     })
   })
 
+  describe('watcher-aware pending copy (watch mode)', () => {
+    function pendingVerifier(watcher: unknown) {
+      const sent = new SentRegistry()
+      const drafts = new DraftStore()
+      const onUpdate = vi.fn()
+      sent.add('q1', makeEntry([{ el: el(), dcSource: null, draftProps: [], changes: [] }]))
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ items: [{ id: 'q1', status: 'pending', note: null }], watcher }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      vi.stubGlobal('__THE_FORGE__', { agent: 'claude-code' })
+      const verifier = new Verifier(sent, drafts, onUpdate)
+      verifier.start()
+      return onUpdate
+    }
+
+    it('live watcher: pending items read as delivering, never an instruction to type anything', async () => {
+      const onUpdate = pendingVerifier('live')
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — delivering to your Claude Code session…')
+    })
+
+    it('asleep watcher: pending items read as the wake instruction (/forge-watch, not /forge-design)', async () => {
+      const onUpdate = pendingVerifier('asleep')
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — watcher asleep, type /forge-watch in Claude Code to wake it')
+    })
+
+    it('no watcher field (older server) or unrecognized value: pre-watch-mode copy verbatim', async () => {
+      const onUpdate = pendingVerifier(undefined)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-design in Claude Code')
+
+      const onUpdate2 = pendingVerifier('something-new')
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(onUpdate2.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-design in Claude Code')
+    })
+  })
+
   it('summary counts are cumulative across multiple poll cycles', async () => {
     const sent = new SentRegistry()
     const drafts = new DraftStore()

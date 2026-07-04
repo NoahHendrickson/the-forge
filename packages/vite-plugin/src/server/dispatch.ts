@@ -2,7 +2,11 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export type Rung = 'channels' | 'tmux' | 'applescript' | 'deeplink' | 'manual'
+/** 'watcher' is produced by the /dispatch endpoint's linked-session short-circuit (see
+ * endpoints.ts + server/watchers.ts), never by the ladder below — a live watcher means the
+ * change request is delivered over the authenticated wait channel, so no keystroke rung
+ * (nor this module) is ever consulted. */
+export type Rung = 'watcher' | 'channels' | 'tmux' | 'applescript' | 'deeplink' | 'manual'
 
 export interface DispatchResult {
   rung: Rung

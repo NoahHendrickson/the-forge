@@ -24,7 +24,7 @@ Track A (panel visual cleanup), Track B (M2b-2: typography/fill/stroke/color pic
 1. Effects section (box-shadow, blur/backdrop-filter) — biggest remaining Figma-parity gap (spec §6 v2 tier).
 2. Gradients / background-image in Fill; Position section (spec v2, partial).
 3. Quick-apply mode (spec §7, optional, deliberately not primary).
-4. Real Channels adapter — blocked on the Claude Code preview flag; the rung is an inert stub behind `experimentalChannels`.
+4. Real Channels adapter — blocked on the Claude Code preview flag; the rung is an inert stub behind `experimentalChannels`. Superseded in practice by watch mode (`/forge-watch` + `wait_for_design_edits` long-poll, 2026-07-04): a linked session already gets zero-keystroke delivery without the preview. Revisit only if Channels ships something the long-poll can't do.
 5. panel.ts Stage-2 split (section modules behind a PanelContext interface) — do BEFORE the next panel-feature milestone; Stage 1 (panel-specs/panel-readers) landed 2026-07-04.
 6. Deferred nits (review-ledger minors): multi-select Compare keyed to first element; `auto`/`normal` displays as 0 in multi fields; `double`/`groove` border styles read as "None"; Cursor deeplink untested against real Cursor (6000-char cap is a chosen constant); tmux rung assumes `pane_current_command` reports `claude`/`codex` (wrapper-launched agents may report `node`).
 
