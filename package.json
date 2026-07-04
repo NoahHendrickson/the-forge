@@ -3,7 +3,7 @@
   "private": true,
   "workspaces": ["packages/*", "fixtures/*"],
   "scripts": {
-    "test": "npm run test -w @design-companion/vite",
+    "test": "npm run typecheck -w @design-companion/vite && npm run test -w @design-companion/vite",
     "build": "npm run build -w @design-companion/vite"
   }
 }
