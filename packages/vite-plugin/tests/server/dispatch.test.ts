@@ -412,17 +412,27 @@ describe('dispatch', () => {
       expect(sendKeysCalls).toHaveLength(0)
     })
 
-    it('a hung osascript keystroke call that resolves post-timeout must not be acted on further (no follow-up mutating exec)', async () => {
-      let resolveOsascript!: (v: { stdout: string }) => void
-      const execCallsAfterTimeout: string[] = []
-      let timedOut = false
+    it('osascript guard: settled prevents retry loop when first app returns "no-session"', async () => {
+      // Mutation proof (line 223): without the settled guard before the loop,
+      // first osascript returning "no-session" triggers `continue` (line 227), which proceeds
+      // to Terminal. This test verifies the settled flag (set by timeout) blocks the Terminal
+      // attempt.  Strategy: first osascript hangs → timeout fires (settled=true) → hung osascript
+      // resolves with "no-session" post-timeout → settled guard at line 223 prevents loop from
+      // continuing to Terminal.
+      let osascriptCallsMade = 0
+      let resolveFirstOsascript!: (v: { stdout: string }) => void
       const exec: ExecFileFn = vi.fn(async (cmd, args) => {
         if (cmd === 'tmux') throw new Error('no tmux')
         if (cmd === 'osascript') {
-          if (timedOut) execCallsAfterTimeout.push(cmd)
-          return new Promise<{ stdout: string }>((resolve) => {
-            resolveOsascript = resolve
-          })
+          osascriptCallsMade++
+          if (osascriptCallsMade === 1 && args[1].includes('iTerm')) {
+            // Hang the first osascript — timeout will fire while we wait.
+            return new Promise<{ stdout: string }>((resolve) => {
+              resolveFirstOsascript = resolve
+            })
+          }
+          // Second osascript (Terminal) should never be called due to settled guard.
+          throw new Error(`Terminal osascript call #${osascriptCallsMade}: settled should have blocked it`)
         }
         throw new Error(`unexpected exec: ${cmd}`)
       })
@@ -431,40 +441,64 @@ describe('dispatch', () => {
         { ...opts({ agent: 'claude-code', platform: 'darwin' }), ladderTimeoutMs: 20 } as DispatchOpts,
         exec
       )
+
+      // Wait for timeout to fire and dispatch to settle.
       await new Promise((r) => setTimeout(r, 50))
       const result = await dispatchPromise
       expect(result).toEqual({ rung: 'manual', detail: 'dispatch timed out' })
-      timedOut = true
 
-      resolveOsascript({ stdout: 'ok' })
+      // Now resolve the hung first osascript with "no-session" AFTER the timeout has fired.
+      // The settled guard check at line 223 (before next loop iteration) should prevent Terminal.
+      resolveFirstOsascript({ stdout: 'no-session' })
+      // Give the ladder time to respond to the resolution (even though it's abandoned by race).
       await new Promise((r) => setTimeout(r, 50))
 
-      // The single osascript call was already in flight before timeout (that's fine/unavoidable —
-      // it can't be un-invoked), but the settled flag must prevent the adapter from proceeding to
-      // try a SECOND app's script (e.g. Terminal after iTerm2) once it resolves post-timeout.
-      expect(execCallsAfterTimeout).toHaveLength(0)
+      // Proof: only ONE osascript call made, Terminal was blocked by settled guard.
+      expect(osascriptCallsMade).toBe(1)
     })
 
-    it('a hung cursor deeplink open() that resolves post-timeout leaves exec called only once', async () => {
+    it('cursor deeplink guard: settled guard blocks open() after timeout fires mid-execution', async () => {
+      // Mutation proof: without the settled guard at line 244, open() WOULD be invoked and
+      // could complete even after the ladder timed out. This test verifies the guard prevents
+      // it by hanging the open() call (so it's still pending when timeout fires) and confirming
+      // no further exec happens (the settled check stops the loop before trying open).
+      //
+      // Strategy: make tryDeeplink's exec hang, let the timeout fire, then verify that when
+      // open() eventually resolves post-timeout, no second exec attempt (retry or fallthrough) happens.
       let resolveOpen!: (v: { stdout: string }) => void
+      const openCallCount = { value: 0 }
       const exec: ExecFileFn = vi.fn(async (cmd) => {
         if (cmd === 'open') {
-          return new Promise<{ stdout: string }>((resolve) => {
-            resolveOpen = resolve
-          })
+          openCallCount.value++
+          if (openCallCount.value === 1) {
+            // Hang the first open() call — timeout will fire while we're waiting.
+            return new Promise<{ stdout: string }>((resolve) => {
+              resolveOpen = resolve
+            })
+          }
+          // Any second call should be caught by the test (should never reach here).
+          throw new Error('second open() call should never happen — settled guard must block it')
         }
         throw new Error(`unexpected exec: ${cmd}`)
       })
 
-      const dispatchPromise = dispatch({ ...opts({ agent: 'cursor' }), ladderTimeoutMs: 20 } as DispatchOpts, exec)
+      const dispatchPromise = dispatch(
+        { ...opts({ agent: 'cursor' }), ladderTimeoutMs: 20 } as DispatchOpts,
+        exec
+      )
+      // Wait for timeout to fire.
       await new Promise((r) => setTimeout(r, 50))
       const result = await dispatchPromise
       expect(result).toEqual({ rung: 'manual', detail: 'dispatch timed out' })
 
+      // Now resolve the open() call — WITHOUT the settled guard, the call would complete and
+      // might trigger further code paths. With the guard, the check at line 244 has already
+      // returned null and the ladder stopped.
       resolveOpen({ stdout: '' })
       await new Promise((r) => setTimeout(r, 50))
 
-      expect(exec).toHaveBeenCalledTimes(1) // only the original in-flight open() — no retry/second call
+      // Only the original in-flight open() should have been attempted.
+      expect(openCallCount.value).toBe(1)
     })
   })
 })
