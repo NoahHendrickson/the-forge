@@ -241,6 +241,10 @@ async function tryAppleScript(
 async function tryDeeplink(markdown: string, exec: ExecFileFn, settledRef: SettledRef): Promise<DispatchResult | null> {
   const encoded = encodeURIComponent(markdown)
   if (encoded.length > DEEPLINK_MAX_ENCODED_LENGTH) return null
+  // Defensive only: deeplink is the FIRST rung of the cursor ladder and makes a single
+  // exec call, so settled-before-entry is unreachable through dispatch() by construction
+  // (mutation-untestable via the public API — unlike the tmux/osascript guards, which are
+  // mutation-proven). Kept because a future ladder reordering would silently need it.
   if (settledRef.settled) return null
 
   const url = `cursor://anysphere.cursor-deeplink/prompt?text=${encoded}`
