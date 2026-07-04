@@ -125,6 +125,10 @@ describe('evaluateExpression', () => {
   it('parses a plain number', () => {
     expect(evaluateExpression('42', null)).toBe(42)
   })
+
+  it('tolerates surrounding whitespace in a standalone expression', () => {
+    expect(evaluateExpression(' 60 + 12 ', null)).toBe(72)
+  })
 })
 
 describe('NumberField v2 — math expressions', () => {
@@ -206,6 +210,26 @@ describe('NumberField v2 — Mixed and auto', () => {
     expect(input.value).toBe('Mixed')
     nf.setAuto()
     input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(input.value).toBe('auto')
+    expect(nf.get()).toBeNull()
+  })
+
+  it('garbage input from a Mixed field reverts back to "Mixed", not a blank field', () => {
+    const { nf, onInput, input } = make()
+    nf.setMixed()
+    input.value = 'garbage'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onInput).not.toHaveBeenCalled()
+    expect(input.value).toBe('Mixed')
+    expect(nf.get()).toBeNull()
+  })
+
+  it('a failed expression from an auto field reverts back to "auto", not a blank field', () => {
+    const { nf, onInput, input } = make({ allowAuto: true })
+    nf.setAuto()
+    input.value = '+8' // leading-operator expression against a null current -> null result
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onInput).not.toHaveBeenCalled()
     expect(input.value).toBe('auto')
     expect(nf.get()).toBeNull()
   })

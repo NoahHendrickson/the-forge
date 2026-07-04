@@ -218,7 +218,7 @@ export class NumberField {
     if (/[-+*/()]/.test(raw)) {
       const result = evaluateExpression(raw, this.lastValid)
       if (result === null) {
-        this.render(this.lastValid)
+        this.revert()
       } else {
         this.commit(result)
       }
@@ -226,7 +226,18 @@ export class NumberField {
     }
 
     // Garbage — revert.
-    this.render(this.lastValid)
+    this.revert()
+  }
+
+  /**
+   * Restores the display the field had before this invalid edit. Plain render(lastValid)
+   * would blank the field whenever the prior state was Mixed/auto (lastValid is null in
+   * both), so invalid input from those states must re-show the keyword, not an empty box.
+   */
+  private revert(): void {
+    if (this.displayState === 'mixed') this.setMixed()
+    else if (this.displayState === 'auto') this.setAuto()
+    else this.render(this.lastValid)
   }
 
   private onScrub = (e: MouseEvent): void => {
