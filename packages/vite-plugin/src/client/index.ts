@@ -7,7 +7,7 @@ import { buildChangeRequest, renderMarkdown } from './request'
 
 declare global {
   interface Window {
-    __DESIGN_COMPANION__?: { mode: DesignMode }
+    __THE_FORGE__?: { mode: DesignMode }
   }
 }
 
@@ -157,7 +157,7 @@ function boot(): void {
   overlay.mount()
   const mode = new DesignMode(overlay)
   overlay.attachPanel(mode.panelRoot)
-  window.__DESIGN_COMPANION__ = { mode }
+  window.__THE_FORGE__ = { mode }
 }
 
 if (typeof document !== 'undefined' && !import.meta.vitest) {

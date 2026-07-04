@@ -1,8 +1,8 @@
-# Design Companion — Design Doc
+# The Forge — Design Doc
 
 **Date:** 2026-07-03
 **Status:** Draft for review
-**Working name:** `design-companion` (name TBD)
+**Working name:** `the-forge` (name TBD)
 
 ## 1. Overview
 
@@ -29,7 +29,7 @@ A product designer runs `npm run dev` on a React + Vite + Tailwind project and s
 
 ## 3. Architecture
 
-Three pieces, installed with one command (`npx design-companion` from the project root):
+Three pieces, installed with one command (`npx the-forge` from the project root):
 
 ```
 ┌─────────────────────────── browser (localhost) ───────────────────────────┐
@@ -43,7 +43,7 @@ Three pieces, installed with one command (`npx design-companion` from the projec
 └─────────────────────────────────┼─────────────────────────────────────────┘
                                   │
 ┌──────────────── companion CLI (local process) ──────────────────┐
-│  ├─ change-request queue (persisted to .design-companion/)      │
+│  ├─ change-request queue (persisted to .the-forge/)      │
 │  ├─ token mapper (reads Tailwind config / CSS vars)             │
 │  ├─ screenshot capture                                          │
 │  ├─ MCP server (stdio/HTTP) — tools: pull_design_edits,         │
@@ -52,7 +52,7 @@ Three pieces, installed with one command (`npx design-companion` from the projec
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.1 Build plugin (`@design-companion/vite`)
+### 3.1 Build plugin (`@the-forge/vite`)
 
 - Vite plugin, one line in `vite.config.ts`.
 - Dev-mode only. Injects `data-dc-source="<relative-file>:<line>:<col>"` on every JSX element (Babel/SWC transform), plus the toolbar script into `index.html`.
@@ -70,7 +70,7 @@ Three pieces, installed with one command (`npx design-companion` from the projec
 
 - Node process started alongside the dev server; owns everything that needs filesystem or process access.
 - **Token mapper:** loads the project's Tailwind config/theme and CSS custom properties; converts raw CSS deltas to the nearest token (`padding: 12px → p-3`), falling back to arbitrary values (`p-[13px]`) with a flag in the change request.
-- **Queue:** pending change requests persisted under `.design-companion/` (gitignored) so nothing is lost if the agent isn't running yet.
+- **Queue:** pending change requests persisted under `.the-forge/` (gitignored) so nothing is lost if the agent isn't running yet.
 - **MCP server:** registered into the project's agent config at init (`.mcp.json`, `.cursor/mcp.json`, `.codex/config.toml`). Tools:
   - `pull_design_edits` — returns and claims pending change requests
   - `mark_applied(ids, commit-ish?)` — agent reports completion
@@ -103,8 +103,8 @@ One request = one batch of edits (a "send"). JSON on the wire and in the queue; 
       ]
     }
   ],
-  "screenshots": { "before": ".design-companion/shots/dc_01H_before.png",
-                    "after":  ".design-companion/shots/dc_01H_after.png" },
+  "screenshots": { "before": ".the-forge/shots/dc_01H_before.png",
+                    "after":  ".the-forge/shots/dc_01H_after.png" },
   "instructions": "Apply exactly the authored-value changes. If a change conflicts with a variant/prop system, prefer the project's convention and explain."
 }
 ```
@@ -172,7 +172,7 @@ Stack: React 18/19 + Vite + Tailwind (v3/v4). Agent: Claude Code. Testbed: one o
 
 1. **M1 — See:** Vite plugin injects source attributes + toolbar; hover/select; inspector shows computed + authored values + source location. (Proves the mapping spine.)
 2. **M2 — Edit:** v1 panel sections (§6); draft preview engine; before/after toggle.
-3. **M3 — Package:** token mapper; change-request builder; screenshots; queue + `.design-companion/` persistence.
+3. **M3 — Package:** token mapper; change-request builder; screenshots; queue + `.the-forge/` persistence.
 4. **M4 — Deliver:** MCP server + `/design` command; manual-pull flow end-to-end with Claude Code; verifier + Implemented state.
 5. **M5 — Automate:** tmux/AppleScript injection; Channels experiment behind a flag.
 6. **M6 — Broaden:** Cursor deeplink adapter; Codex adapter; quick-apply mode.

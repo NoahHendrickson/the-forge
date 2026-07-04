@@ -4,13 +4,13 @@ import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vite'
 import { tagJsxSource } from './transform'
 
-export const CLIENT_ID = '/@design-companion/client'
+export const CLIENT_ID = '/@the-forge/client'
 
-export function designCompanion(): Plugin {
+export function theForge(): Plugin {
   let root = process.cwd()
 
   return {
-    name: 'design-companion',
+    name: 'the-forge',
     apply: 'serve',
     enforce: 'pre',
 
@@ -48,7 +48,7 @@ export function designCompanion(): Plugin {
           : null
       if (!clientPath) {
         throw new Error(
-          'design-companion: client bundle not found — run "npm run build -w @design-companion/vite"'
+          'the-forge: client bundle not found — run "npm run build -w @the-forge/vite"'
         )
       }
       return fs.readFileSync(clientPath, 'utf8')
@@ -66,4 +66,4 @@ export function designCompanion(): Plugin {
   }
 }
 
-export default designCompanion
+export default theForge

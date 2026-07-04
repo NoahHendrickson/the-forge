@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { designCompanion, CLIENT_ID } from '../src/index'
+import { theForge, CLIENT_ID } from '../src/index'
 
 type TransformHook = (code: string, id: string) => { code: string } | null
 
 function getPlugin() {
-  const plugin = designCompanion()
+  const plugin = theForge()
   // simulate vite calling configResolved with a root
   ;(plugin.configResolved as (c: { root: string }) => void)({ root: '/proj' })
   const transform = plugin.transform as unknown as TransformHook
   return { plugin, transform }
 }
 
-describe('designCompanion plugin', () => {
+describe('theForge plugin', () => {
   it('is dev-only and runs before other transforms', () => {
     const { plugin } = getPlugin()
     expect(plugin.apply).toBe('serve')
