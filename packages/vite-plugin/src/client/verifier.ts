@@ -5,6 +5,10 @@ import type { TaggedElement } from './source'
 import { AGENT_DISPLAY_NAME, currentAgent } from './agent'
 
 const POLL_MS = 2000
+/** After this many consecutive failed polls the verifier surfaces "paused" and starts backing off. */
+export const PAUSE_AFTER_FAILURES = 5
+/** Backoff ceiling — a dead dev server costs one request per 30s, not one per 2s forever. */
+export const MAX_POLL_MS = 30_000
 
 /**
  * Units: `verified` and `missing` are per-element counts (how many elements in the
@@ -115,7 +119,12 @@ function renderSummary(counters: Counters, claimed: number, pendingManual: numbe
 
 export class Verifier {
   private counters: Counters = { implemented: 0, mismatch: 0, unverified: 0, failed: 0 }
-  private timer: ReturnType<typeof setInterval> | null = null
+  private timer: ReturnType<typeof setTimeout> | null = null
+  private consecutiveFailures = 0
+  private delayMs = POLL_MS
+  /** Bumped by every start()/stop() — a poll chained under an older generation is dead and
+   * must not reschedule, even if a newer chain has since made this.timer non-null again. */
+  private generation = 0
 
   constructor(
     private sent: SentRegistry,
@@ -126,25 +135,52 @@ export class Verifier {
   start(): void {
     if (this.timer) return
     if (this.sent.size() === 0) return
-    this.timer = setInterval(() => {
-      this.poll()
-    }, POLL_MS)
+    this.generation++
+    this.consecutiveFailures = 0
+    this.delayMs = POLL_MS
+    this.schedule()
   }
 
   stop(): void {
-    if (this.timer) clearInterval(this.timer)
+    this.generation++
+    if (this.timer) clearTimeout(this.timer)
     this.timer = null
   }
 
-  private poll(): void {
+  /** Chained setTimeout instead of setInterval so the delay can stretch under backoff. */
+  private schedule(): void {
+    const gen = this.generation
+    this.timer = setTimeout(() => this.poll(gen), this.delayMs)
+  }
+
+  private poll(gen: number): void {
+    if (gen !== this.generation) return // belt-and-braces: a stale chain must not touch state
     const ids = this.sent.pendingIds()
     if (ids.length === 0) {
       this.stop()
       return
     }
     fetch(`/__the-forge/status?ids=${ids.join(',')}`)
-      .then((res) => (res.ok ? res.json() : { items: [] }))
-      .then((body: { items: Array<{ id: string; status: string; note: string | null }> }) => {
+      .then((res) => {
+        // A server that ANSWERS but errors (500s from a broken dev server, 404/HTML from some
+        // other process squatting on the port) is just as stuck as an unreachable one — before
+        // this branch existed, a non-ok response read as an empty success below, resetting the
+        // failure counter and polling at the base cadence forever. Distinct message from the
+        // catch path: this server IS reachable, so "unreachable" would be a lie.
+        if (!res.ok) {
+          this.consecutiveFailures++
+          if (this.consecutiveFailures >= PAUSE_AFTER_FAILURES) {
+            this.delayMs = Math.min(this.delayMs * 2, MAX_POLL_MS)
+            this.onUpdate('verification paused — dev server not responding')
+          }
+          return null
+        }
+        return res.json() as Promise<{ items: Array<{ id: string; status: string; note: string | null }> }>
+      })
+      .then((body: { items: Array<{ id: string; status: string; note: string | null }> } | null) => {
+        if (body === null) return
+        this.consecutiveFailures = 0
+        this.delayMs = POLL_MS
         const statusById = new Map(body.items.map((item) => [item.id, item.status]))
         for (const item of body.items) {
           if (item.status === 'applied') this.handleApplied(item.id)
@@ -166,7 +202,20 @@ export class Verifier {
         this.onUpdate(renderSummary(this.counters, claimed, pendingManual, agentDisplayName))
       })
       .catch(() => {
-        // transient network errors during polling are silently retried next tick
+        // Transient blips retry silently at the base cadence; a RUN of failures means the dev
+        // server is gone — say so instead of freezing on a stale "applying…" line, and back off
+        // so a dead server costs one request per MAX_POLL_MS, not one per 2s forever.
+        this.consecutiveFailures++
+        if (this.consecutiveFailures >= PAUSE_AFTER_FAILURES) {
+          this.delayMs = Math.min(this.delayMs * 2, MAX_POLL_MS)
+          this.onUpdate('verification paused — dev server unreachable')
+        }
+      })
+      .finally(() => {
+        // A stop() or stop()+start() while this poll's fetch was in flight bumps the generation —
+        // this chain is then dead and must not reschedule, or two concurrent chains would race
+        // (and stop() could only ever clear one of them).
+        if (this.timer !== null && gen === this.generation) this.schedule()
       })
   }
 

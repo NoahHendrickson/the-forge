@@ -325,5 +325,39 @@ describe('Queue', () => {
       expect(createdAtOrder[0]).toBeLessThan(createdAtOrder[1])
       expect(createdAtOrder[1]).toBeLessThan(createdAtOrder[2])
     })
+
+    it('quarantines a corrupt queue.json (renamed with timestamp) instead of silently discarding it', () => {
+      fs.writeFileSync(path.join(dir, 'queue.json'), '{definitely not json')
+      const q = new Queue(dir, () => 1751600000000)
+      expect(q.list()).toEqual([])
+      const corrupt = path.join(dir, 'queue.json.corrupt-1751600000000')
+      expect(fs.existsSync(corrupt)).toBe(true)
+      expect(fs.readFileSync(corrupt, 'utf8')).toBe('{definitely not json')
+      expect(fs.existsSync(path.join(dir, 'queue.json'))).toBe(false)
+    })
+
+    it('treats parseable-but-non-array queue.json as corrupt (quarantined, not silently ignored)', () => {
+      fs.writeFileSync(path.join(dir, 'queue.json'), '{"items": []}')
+      const q = new Queue(dir, () => 1751600000000)
+      expect(q.list()).toEqual([])
+      expect(fs.existsSync(path.join(dir, 'queue.json.corrupt-1751600000000'))).toBe(true)
+    })
+
+    it('quarantines a file that becomes corrupt mid-session on the next persist (mergeWithDisk path)', () => {
+      const q = new Queue(dir)
+      q.add({}, 'a')
+      fs.writeFileSync(path.join(dir, 'queue.json'), 'garbage-written-by-something-else')
+      q.add({}, 'b')
+      const names = fs.readdirSync(dir)
+      expect(names.some((n) => /^queue\.json\.corrupt-\d+$/.test(n))).toBe(true)
+      const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'queue.json'), 'utf8'))
+      expect(onDisk).toHaveLength(2)
+    })
+
+    it('a missing queue.json is NOT corruption — no quarantine file appears', () => {
+      const q = new Queue(dir)
+      expect(q.list()).toEqual([])
+      expect(fs.readdirSync(dir).filter((n) => n.includes('corrupt'))).toEqual([])
+    })
   })
 })

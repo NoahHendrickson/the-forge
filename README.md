@@ -15,7 +15,10 @@ Early development — building in the open. Current milestones on `main`:
 - **M3 — Package:** Tailwind v4 token mapper, change-request builder with exact before→after deltas, and a "Copy for agent" button — the full loop (draft → request → agent edits source → verified) is proven.
 - **M4 — Deliver:** a **Send to agent** button queues change requests in the dev server; a zero-dependency MCP server + auto-installed `/forge-design` command let your running Claude Code session pull and apply them; the browser verifies computed styles post-HMR and flips drafts to **Implemented**.
 
-Next: **M5** — auto-dispatch (the Send button reaching your open session with zero keystrokes) and broader panel sections (typography, fill, stroke, layout) with multi-select.
+- **M2b — Panel depth:** Figma-style Layout section (9-dot align matrix, gap, size modes), Typography, Fill/Stroke with a popover color picker, `=` token picker with bound-value pills, and multi-select with relative deltas.
+- **M5 — Dispatch:** the Send button reaches your open agent session with zero keystrokes where the environment allows (tmux → AppleScript → deeplink ladder, manual `/forge-design` fallback), plus queue hardening (claim timeouts, atomic writes, pruning, shared-secret endpoints).
+
+Next: Effects (shadow, blur), gradients, and the rest of the open backlog in [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ## Try it
 
