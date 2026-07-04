@@ -78,4 +78,8 @@ describe('findExistingUtility', () => {
   it('ignores variant-prefixed utilities and returns null when absent', () => {
     expect(findExistingUtility('md:pt-8 text-sm', 'padding-top')).toBeNull()
   })
+
+  it('detects the bare rounded class', () => {
+    expect(findExistingUtility('rounded p-2', 'border-radius')).toBe('rounded')
+  })
 })

@@ -96,6 +96,7 @@ export function findExistingUtility(className: string, prop: string): string | n
   for (const cls of className.split(/\s+/)) {
     if (cls.includes(':')) continue // variant-prefixed — out of scope for detection
     const bare = cls.startsWith('-') ? cls.slice(1) : cls
+    if (prefix === 'rounded' && bare === 'rounded') return cls
     if (!bare.startsWith(`${prefix}-`)) continue
     const suffix = bare.slice(prefix.length + 1)
     // guard: 'rounded-' must not match 'rounded-tl-…' (a longer registered prefix)
