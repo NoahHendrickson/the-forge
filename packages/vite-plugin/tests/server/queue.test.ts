@@ -42,6 +42,21 @@ describe('Queue', () => {
     expect(q.mark(['nope'], 'applied')).toEqual([]) // unknown ids ignored
   })
 
+  it('does not let a stale mark() clobber an item already in a terminal state (double-claim)', () => {
+    const q = new Queue(dir)
+    const a = q.add({}, 'a')
+    q.pull()
+    const firstMark = q.mark([a.id], 'applied', 'first-claimer-succeeded')
+    expect(firstMark.map((i) => i.id)).toEqual([a.id])
+
+    // a second (stale) claimer tries to mark the same item failed after the fact
+    const secondMark = q.mark([a.id], 'failed', 'second-claimer-thinks-it-failed')
+    expect(secondMark).toEqual([]) // not actually marked — already terminal
+
+    expect(q.get(a.id)!.status).toBe('applied')
+    expect(q.get(a.id)!.note).toBe('first-claimer-succeeded')
+  })
+
   it('reloads persisted state across instances', () => {
     const q1 = new Queue(dir)
     const a = q1.add({}, 'a')
@@ -92,6 +107,70 @@ describe('Queue', () => {
       q.mark([a.id], 'applied')
       now += CLAIM_TIMEOUT_MS + 1
       expect(q.pull()).toEqual([])
+    })
+  })
+
+  describe('concurrent instances', () => {
+    it('scopes the tmp file by pid so two instances never collide on the same tmp path', () => {
+      const q = new Queue(dir)
+      q.add({}, 'a')
+      expect(fs.existsSync(path.join(dir, `queue.json.tmp.${process.pid}`))).toBe(false)
+      expect(fs.existsSync(path.join(dir, 'queue.json'))).toBe(true)
+    })
+
+    it('a persist by instance B does not drop items added by instance A (merge-on-persist)', () => {
+      const a = new Queue(dir)
+      const itemA = a.add({}, 'from-a')
+
+      const b = new Queue(dir) // loads state at this point, includes itemA
+      const itemB = b.add({}, 'from-b') // b persists here — must merge, not overwrite
+
+      // a persists again (e.g. via pull/mark) without having seen itemB
+      a.pull()
+
+      const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'queue.json'), 'utf8'))
+      const ids = onDisk.map((i: { id: string }) => i.id)
+      expect(ids).toContain(itemA.id)
+      expect(ids).toContain(itemB.id)
+    })
+
+    it('in-memory items win over disk for ids known to this instance', () => {
+      const a = new Queue(dir)
+      const itemA = a.add({}, 'from-a')
+
+      const b = new Queue(dir)
+      b.mark([itemA.id], 'applied', 'b-was-here') // b knows itemA too; persists its view
+
+      const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'queue.json'), 'utf8'))
+      const found = onDisk.find((i: { id: string }) => i.id === itemA.id)
+      expect(found.status).toBe('applied')
+      expect(found.note).toBe('b-was-here')
+    })
+  })
+
+  describe('pruning basis (finishedAt)', () => {
+    it('does not prune an item created 25h ago but marked terminal just now', () => {
+      let now = 0
+      const q = new Queue(dir, () => now)
+      const a = q.add({}, 'old-but-just-finished')
+      q.pull()
+      now = 25 * 60 * 60 * 1000 // 25h later
+      q.mark([a.id], 'applied') // finishedAt stamped "now" (25h), not createdAt (0h)
+      const b = q.add({}, 'trigger-persist') // triggers another persist/prune pass
+      const ids = q.list().map((i) => i.id)
+      expect(ids).toContain(a.id)
+      expect(ids).toContain(b.id)
+    })
+
+    it('prunes an item that was marked terminal 25h ago, even if created even earlier', () => {
+      let now = 0
+      const q = new Queue(dir, () => now)
+      const a = q.add({}, 'created-early')
+      q.pull()
+      q.mark([a.id], 'applied') // finishedAt stamped at now=0
+      now = PRUNE_AFTER_MS + 1
+      q.add({}, 'trigger-persist') // triggers persist/prune — finishedAt is now stale
+      expect(q.list().map((i) => i.id)).not.toContain(a.id)
     })
   })
 

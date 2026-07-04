@@ -96,6 +96,13 @@ export function createForgeMiddleware(queue: Queue, allowedHosts: string[] = [],
     // above — same-origin page scripts are the user's own app and not the adversary, so this
     // only matters when a request slips past the Host/Origin gate. Enforced only when a secret
     // was actually configured (older/degraded setups without one keep working unauthenticated).
+    //
+    // Threat model scope: this guards against a browser-borne cross-origin attacker. It does
+    // NOT defend against another local user on a shared/multi-user machine — this endpoint file
+    // (and the queue dir it manages) is written with mode 644, readable by any local account, so
+    // a co-resident local user can already read the secret and the queue contents directly from
+    // disk. Local-multi-user hardening (e.g. tighter file perms, per-user dirs) is out of scope
+    // for this single-user dev tool.
     if (secret && req.method === 'POST' && MUTATING_PATHS.has(pathname)) {
       const provided = req.headers['x-forge-secret']
       if (provided !== secret) {

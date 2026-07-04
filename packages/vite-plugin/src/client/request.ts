@@ -113,7 +113,21 @@ function measureComputed(el: TaggedElement, props: Iterable<string>): Map<string
 // so the selector stays safe either way.
 function escapeCssIdent(value: string): string {
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value)
-  return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`)
+
+  let out = value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`)
+
+  // CSSOM numeric-escape rule: a leading digit, or a leading '-' followed by a digit, cannot be
+  // represented as a literal/backslash-escaped character — it must use the \HH (code point hex)
+  // escape form, e.g. CSS.escape('0abc') === '\\30 abc'. Without this, `#0abc` is a syntactically
+  // invalid selector even though no "special" characters were present to trigger the regex above.
+  const leadMatch = /^(-?)([0-9])/.exec(out)
+  if (leadMatch) {
+    const [, hyphen, digit] = leadMatch
+    const hex = digit.codePointAt(0)!.toString(16)
+    out = `${hyphen}\\${hex} ${out.slice(hyphen.length + 1)}`
+  }
+
+  return out
 }
 
 export function cssPath(start: TaggedElement): string {

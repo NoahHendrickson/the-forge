@@ -290,6 +290,28 @@ describe('cssPath', () => {
     expect(document.querySelector(path)).toBe(el)
   })
 
+  it('escapes a leading digit per the CSSOM numeric-escape rule so the bare-id selector round-trips', () => {
+    document.body.innerHTML = `<div><button id="0abc">Save</button></div>`
+    const el = document.querySelector('button')!
+    const path = cssPath(el)
+    // A tag-prefixed selector (e.g. "button#0abc") is tolerated by some selector parsers even
+    // when the ident portion is technically invalid, masking the bug. Strip the tag prefix to
+    // exercise the id as a standalone CSS identifier, where the numeric-escape rule matters.
+    const idSelector = '#' + path.split('#')[1]
+    expect(document.querySelector(idSelector)).toBe(el)
+  })
+
+  it('escapes a leading hyphen followed by a digit per the CSSOM numeric-escape rule', () => {
+    document.body.innerHTML = `<div><button id="-1x">Save</button></div>`
+    const el = document.querySelector('button')!
+    const path = cssPath(el)
+    const idSelector = '#' + path.split('#')[1]
+    expect(document.querySelector(idSelector)).toBe(el)
+    // jsdom's selector engine tolerates the unescaped form too, so also assert the escape
+    // itself was produced (spec: CSS.escape('-1x') === '-\\31 x').
+    expect(idSelector).toBe('#-\\31 x')
+  })
+
   it('builds an nth-of-type chain up to 4 ancestors when there is no id', () => {
     document.body.innerHTML = `
       <div>
