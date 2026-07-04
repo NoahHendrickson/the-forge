@@ -92,7 +92,7 @@ export function buildChangeRequest(drafts: DraftStore, theme: Theme = readTheme(
       tag: el.tagName.toLowerCase(),
       source: el.dataset.dcSource ? parseSourceAttr(el.dataset.dcSource) : null,
       className,
-      text: (el.textContent ?? '').trim().slice(0, 80),
+      text: (el.textContent ?? '').replace(/[`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80),
       changes,
     })
   }

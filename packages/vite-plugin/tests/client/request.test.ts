@@ -107,4 +107,15 @@ describe('renderMarkdown', () => {
     expect(md).toContain('padding-top: 10px → 24px')
     expect(md).not.toContain('→ `')
   })
+
+  it('sanitizes newlines and backticks out of element text', () => {
+    document.body.innerHTML = `<button data-dc-source="src/A.tsx:1:1" style="padding-top: 4px;">line1
+line2 \`code\`</button>`
+    const el = document.querySelector('button')!
+    const store = new DraftStore()
+    store.apply(el, 'padding-top', '8px')
+    const md = renderMarkdown(buildChangeRequest(store, PLAIN))
+    const textLine = md.split('\n').find((l) => l.startsWith('Text:'))!
+    expect(textLine).toBe('Text: "line1 line2 code"')
+  })
 })
