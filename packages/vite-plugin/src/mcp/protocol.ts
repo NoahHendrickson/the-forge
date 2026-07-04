@@ -4,9 +4,20 @@ export interface QueueItemLike {
   createdAt: string
 }
 
+/** Outcome of one wait_for_design_edits cycle. A discriminated union, NOT free text from
+ * the server: callTool maps each kind to a CONSTANT agent-facing instruction below, so
+ * server response fields only ever SELECT between canned texts — they are never spliced
+ * into the instructions the agent will follow. */
+export type WaitOutcome =
+  | { kind: 'items'; items: QueueItemLike[] }
+  | { kind: 'empty' }
+  | { kind: 'stop'; reason: 'idle' | 'replaced' | 'no-server' }
+  | { kind: 'unreachable' }
+
 export interface ForgeBackend {
   pull(): Promise<QueueItemLike[]>
   mark(ids: string[], status: string, note?: string): Promise<string[]>
+  wait(): Promise<WaitOutcome>
 }
 
 export interface JsonRpcMessage {
@@ -43,22 +54,63 @@ const TOOLS = [
       required: ['ids', 'status'],
     },
   },
+  {
+    name: 'wait_for_design_edits',
+    description:
+      'Long-poll The Forge for design change requests (the /forge-watch loop). Blocks until edits arrive or a short hold expires. Apply any returned edits, then follow the result text: call this tool again to keep watching, or stop when it says watching has ended.',
+    inputSchema: { type: 'object', properties: {} },
+  },
 ]
+
+/** Canned wait-loop instruction texts — constants by the same rule as the dispatch
+ * AppleScript scripts (see server/dispatch.ts): nothing dynamic is ever interpolated into
+ * text the agent treats as instructions. The one templated value is the applied-items id
+ * list, which mirrors pull_design_edits' existing reminder format. */
+const WAIT_EMPTY_TEXT =
+  'No design edits yet. Call wait_for_design_edits again now to keep watching. Do not add commentary between calls.'
+const WAIT_STOP_TEXTS: Record<'idle' | 'replaced' | 'no-server', string> = {
+  idle: 'Watching stopped — no design activity for a while. Tell the user: watching paused; run /forge-watch to resume. Do not call wait_for_design_edits again unless the user asks.',
+  replaced:
+    'Watching stopped — another session took over watching this project. Do not call wait_for_design_edits again unless the user asks.',
+  'no-server':
+    'No running dev server found. Tell the user to start their Vite dev server, then run /forge-watch again. Do not call wait_for_design_edits until then.',
+}
+const WAIT_UNREACHABLE_TEXT =
+  'The dev server did not respond. Wait a few seconds, then call wait_for_design_edits once more; if it fails again, stop watching and tell the user to run /forge-watch when the dev server is back.'
 
 function textResult(text: string, isError?: boolean): { content: Array<{ type: 'text'; text: string }>; isError?: true } {
   return isError ? { content: [{ type: 'text', text }], isError: true } : { content: [{ type: 'text', text }] }
+}
+
+/** Shared change-request rendering for pull_design_edits and the wait loop's items case —
+ * one format, so the /forge-design and /forge-watch apply steps read identically. */
+function renderItems(items: QueueItemLike[]): { body: string; ids: string } {
+  const body = items
+    .map((i) => `--- request ${i.id} (created ${i.createdAt}) ---\n${i.markdown}`)
+    .join('\n\n')
+  const ids = items.map((i) => i.id).join(', ')
+  return { body, ids }
 }
 
 async function callTool(name: string, args: Record<string, unknown>, backend: ForgeBackend) {
   if (name === 'pull_design_edits') {
     const items = await backend.pull()
     if (items.length === 0) return textResult('No pending design edits.')
-    const body = items
-      .map((i) => `--- request ${i.id} (created ${i.createdAt}) ---\n${i.markdown}`)
-      .join('\n\n')
-    const ids = items.map((i) => i.id).join(', ')
+    const { body, ids } = renderItems(items)
     const reminder = `\n\nAfter applying these edits, call mark_applied with ids: ${ids}.`
     return textResult(body + reminder)
+  }
+
+  if (name === 'wait_for_design_edits') {
+    const outcome = await backend.wait()
+    if (outcome.kind === 'items') {
+      const { body, ids } = renderItems(outcome.items)
+      const reminder = `\n\nAfter applying these edits, call mark_applied with ids: ${ids}. Then call wait_for_design_edits again immediately to keep watching.`
+      return textResult(body + reminder)
+    }
+    if (outcome.kind === 'stop') return textResult(WAIT_STOP_TEXTS[outcome.reason])
+    if (outcome.kind === 'unreachable') return textResult(WAIT_UNREACHABLE_TEXT)
+    return textResult(WAIT_EMPTY_TEXT)
   }
 
   if (name === 'mark_applied') {

@@ -806,8 +806,17 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
   })
 
   it('starts the verifier after a successful send and reflects the summary in the status strip', async () => {
-    const fetchMock = vi.fn()
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'q1' }) })
+    // URL-dispatched mock (not a mockResolvedValueOnce sequence): the WatchStatus poller's
+    // `?ids=` probe now interleaves with the verifier's `?ids=q1` polls on the same fake
+    // timers, so a consumed-in-order mock queue would misroute responses between the two.
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch')
+        return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      if (url === '/__the-forge/status?ids=q1')
+        return Promise.resolve({ ok: true, json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
     vi.stubGlobal('fetch', fetchMock)
     const { overlay, mode, drafts } = fullSetup()
     mode.setActive(true)
@@ -822,10 +831,6 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
     await Promise.resolve()
     await Promise.resolve()
 
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
-    })
     await vi.advanceTimersByTimeAsync(2000)
 
     const sentLabel = overlay.host.shadowRoot!.getElementById('sent') as HTMLElement
@@ -858,20 +863,35 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
     expect(fetchMock).toHaveBeenCalledWith('/__the-forge/status?ids=q1')
   })
 
-  it('does not start polling on activate when there are no pending sends', () => {
-    const fetchMock = vi.fn()
+  it('does not start VERIFIER polling on activate when there are no pending sends', () => {
+    // The watch-status probe (`?ids=`) legitimately polls while design mode is on — this
+    // test guards the VERIFIER staying quiet, so assert no per-id status calls instead of
+    // no calls at all.
+    const fetchMock = vi.fn((url: string) => {
+      void url
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
     vi.stubGlobal('fetch', fetchMock)
     const { mode } = fullSetup()
     mode.setActive(true)
     expect(mode.sent.size()).toBe(0)
     return vi.advanceTimersByTimeAsync(4000).then(() => {
-      expect(fetchMock).not.toHaveBeenCalled()
+      const urls = fetchMock.mock.calls.map((c) => c[0])
+      expect(urls.length).toBeGreaterThan(0) // the watch probe DID poll…
+      expect(urls.every((u) => u === '/__the-forge/status?ids=')).toBe(true) // …and nothing else did
     })
   })
 
   it('refreshes the panel and re-measures the selection outline when a verify update arrives', async () => {
-    const fetchMock = vi.fn()
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'q1' }) })
+    // URL-dispatched mock — see the summary-strip test above for why.
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch')
+        return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      if (url === '/__the-forge/status?ids=q1')
+        return Promise.resolve({ ok: true, json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
     vi.stubGlobal('fetch', fetchMock)
     const { overlay, mode, drafts, panel } = fullSetup()
     mode.setActive(true)
@@ -888,10 +908,6 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
 
     const refreshSpy = vi.spyOn(panel, 'refresh')
 
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
-    })
     await vi.advanceTimersByTimeAsync(2000)
 
     expect(refreshSpy).toHaveBeenCalled()

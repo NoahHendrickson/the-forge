@@ -5,8 +5,20 @@ function backend(overrides: Partial<ForgeBackend> = {}): ForgeBackend {
   return {
     pull: async () => [],
     mark: async (ids) => ids,
+    wait: async () => ({ kind: 'empty' }),
     ...overrides,
   }
+}
+
+/** Runs a tools/call for wait_for_design_edits and returns the result text. */
+async function waitCallText(be: ForgeBackend): Promise<string> {
+  const res = await handleMessage(
+    { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'wait_for_design_edits', arguments: {} } },
+    be
+  )
+  const result = (res as { result: { content: Array<{ type: string; text: string }>; isError?: boolean } }).result
+  expect(result.isError).toBeUndefined()
+  return result.content[0].text
 }
 
 describe('handleMessage', () => {
@@ -28,12 +40,12 @@ describe('handleMessage', () => {
     expect(res).toBeNull()
   })
 
-  it('tools/list returns both tools with schemas', async () => {
+  it('tools/list returns all three tools with schemas', async () => {
     const res = await handleMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, backend())
     expect(res?.id).toBe(2)
     const tools = (res as { result: { tools: Array<{ name: string; description: string; inputSchema: unknown }> } })
       .result.tools
-    expect(tools).toHaveLength(2)
+    expect(tools).toHaveLength(3)
 
     const pull = tools.find((t) => t.name === 'pull_design_edits')
     expect(pull).toBeDefined()
@@ -50,6 +62,11 @@ describe('handleMessage', () => {
         note: expect.any(Object),
       },
     })
+
+    const wait = tools.find((t) => t.name === 'wait_for_design_edits')
+    expect(wait).toBeDefined()
+    expect(wait?.description).toContain('/forge-watch')
+    expect(wait?.inputSchema).toEqual({ type: 'object', properties: {} })
   })
 
   it('tools/call pull_design_edits joins markdown with separators and a mark_applied reminder', async () => {
@@ -96,6 +113,53 @@ describe('handleMessage', () => {
     )
     const result = (res as { result: { content: Array<{ type: string; text: string }> } }).result
     expect(result.content[0].text).toBe('Marked 2 request(s) as applied.')
+  })
+
+  describe('wait_for_design_edits outcomes', () => {
+    it('items: renders the same per-request blocks as pull, plus mark + re-arm instructions', async () => {
+      const text = await waitCallText(
+        backend({
+          wait: async () => ({
+            kind: 'items',
+            items: [{ id: 'w1', markdown: '## Watched change', createdAt: '2026-01-03T00:00:00.000Z' }],
+          }),
+        })
+      )
+      expect(text).toContain('--- request w1 (created 2026-01-03T00:00:00.000Z) ---\n## Watched change')
+      expect(text).toContain('call mark_applied with ids: w1')
+      expect(text).toContain('call wait_for_design_edits again immediately to keep watching')
+    })
+
+    it('empty: standing re-arm instruction with no commentary invitation', async () => {
+      const text = await waitCallText(backend({ wait: async () => ({ kind: 'empty' }) }))
+      expect(text).toBe(
+        'No design edits yet. Call wait_for_design_edits again now to keep watching. Do not add commentary between calls.'
+      )
+    })
+
+    it('stop/idle: tells the user watching paused and forbids re-calling', async () => {
+      const text = await waitCallText(backend({ wait: async () => ({ kind: 'stop', reason: 'idle' }) }))
+      expect(text).toContain('watching paused; run /forge-watch to resume')
+      expect(text).toContain('Do not call wait_for_design_edits again unless the user asks')
+    })
+
+    it('stop/replaced: forbids re-calling (no ping-pong between two watch sessions)', async () => {
+      const text = await waitCallText(backend({ wait: async () => ({ kind: 'stop', reason: 'replaced' }) }))
+      expect(text).toContain('another session took over')
+      expect(text).toContain('Do not call wait_for_design_edits again unless the user asks')
+    })
+
+    it('stop/no-server: points at the dev server, forbids re-calling until then', async () => {
+      const text = await waitCallText(backend({ wait: async () => ({ kind: 'stop', reason: 'no-server' }) }))
+      expect(text).toContain('start their Vite dev server')
+      expect(text).toContain('Do not call wait_for_design_edits until then')
+    })
+
+    it('unreachable: exactly one retry then stop', async () => {
+      const text = await waitCallText(backend({ wait: async () => ({ kind: 'unreachable' }) }))
+      expect(text).toContain('call wait_for_design_edits once more')
+      expect(text).toContain('if it fails again, stop watching')
+    })
   })
 
   it('unknown method returns a JSON-RPC -32601 error', async () => {

@@ -6,6 +6,7 @@ import type { Plugin } from 'vite'
 import { tagJsxSource } from './transform'
 import { Queue } from './server/queue'
 import { createForgeMiddleware, writeEndpointFile, removeEndpointFile } from './server/endpoints'
+import { WatcherHub } from './server/watchers'
 import { setupProjectConfig, resolveProjectRoot, migrateLegacyForgeDir } from './server/setup'
 import type { DispatchOpts } from './server/dispatch'
 
@@ -52,8 +53,17 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       const queue = new Queue(forgeDir)
       migrateLegacyForgeDir(resolvedRoot, root, queue)
       const allowedHosts = Array.isArray(server.config.server.allowedHosts) ? server.config.server.allowedHosts : []
+      // The watch-mode long-poll registry (/forge-watch linked sessions). Per dev-server
+      // process by design — the MCP bin discovers the newest live server, so the watcher
+      // follows it; a hub is pure in-memory state and costs nothing until a session watches.
+      // `applying` keeps the watcher live through its apply window (claimed items in
+      // flight), when it is neither parked nor heartbeating — see WatcherHubOpts.applying.
+      const hub = new WatcherHub({
+        claim: () => queue.pull(),
+        applying: () => queue.hasFreshClaims(),
+      })
       server.middlewares.use(
-        createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels, cwd: resolvedRoot })
+        createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels, cwd: resolvedRoot }, hub)
       )
       server.httpServer?.once('listening', () => {
         const address = server.httpServer?.address()

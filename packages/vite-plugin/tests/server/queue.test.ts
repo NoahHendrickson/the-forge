@@ -109,6 +109,40 @@ describe('Queue', () => {
       expect(q.pull()).toEqual([])
     })
 
+    describe('hasFreshClaims (the watcher-liveness apply signal)', () => {
+      it('false for empty/pending, true right after a pull, false again after mark', () => {
+        let now = 1_000_000
+        const q = new Queue(dir, () => now)
+        expect(q.hasFreshClaims()).toBe(false)
+        const a = q.add({}, 'a')
+        expect(q.hasFreshClaims()).toBe(false) // pending is queued, not mid-apply
+        q.pull()
+        expect(q.hasFreshClaims()).toBe(true)
+        q.mark([a.id], 'applied')
+        expect(q.hasFreshClaims()).toBe(false)
+      })
+
+      it('goes false once the claim exceeds CLAIM_TIMEOUT_MS WITHOUT anyone calling pull() — a dead watcher never pulls, so the age bound must be intrinsic', () => {
+        let now = 1_000_000
+        const q = new Queue(dir, () => now)
+        q.add({}, 'a')
+        q.pull() // watcher claims, then dies mid-apply
+        expect(q.hasFreshClaims()).toBe(true)
+        now += CLAIM_TIMEOUT_MS + 1
+        expect(q.hasFreshClaims()).toBe(false) // no pull() happened — still must decay
+      })
+
+      it('treats a claimed item with missing or unparseable claimedAt as stale, same as pull()', () => {
+        const legacy = [
+          { id: 'l1', createdAt: new Date(0).toISOString(), status: 'claimed', markdown: 'x', request: null },
+          { id: 'l2', createdAt: new Date(0).toISOString(), status: 'claimed', claimedAt: 'not-a-date', markdown: 'y', request: null },
+        ]
+        fs.writeFileSync(path.join(dir, 'queue.json'), JSON.stringify(legacy))
+        const q = new Queue(dir, () => 1_000_000)
+        expect(q.hasFreshClaims()).toBe(false)
+      })
+    })
+
     it('re-claims a legacy `claimed` item with a MISSING claimedAt immediately (stale — no way to know its age)', () => {
       // Legacy M4 queue.json shape: a claimed item persisted before claimedAt existed at all.
       const legacyItem = {

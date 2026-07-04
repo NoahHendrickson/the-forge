@@ -17,6 +17,7 @@ Early development — building in the open. Current milestones on `main`:
 
 - **M2b — Panel depth:** Figma-style Layout section (9-dot align matrix, gap, size modes), Typography, Fill/Stroke with a popover color picker, `=` token picker with bound-value pills, and multi-select with relative deltas.
 - **M5 — Dispatch:** the Send button reaches your open agent session with zero keystrokes where the environment allows (tmux → AppleScript → deeplink ladder, manual `/forge-design` fallback), plus queue hardening (claim timeouts, atomic writes, pruning, shared-secret endpoints).
+- **Watch mode:** type `/forge-watch` once in any Claude Code session — including the Claude Code **desktop app**, where terminal injection can't reach — and that session becomes the linked watcher: every Send is delivered into it instantly over MCP long-poll, zero keystrokes per Send. The panel shows "● Linked" while it's live and tells you how to wake it (`/forge-watch`) if it goes idle; watchers auto-stop after 20 idle minutes so a forgotten session never ticks overnight. No watcher → the M5 ladder runs exactly as before.
 
 Next: Effects (shadow, blur), gradients, and the rest of the open backlog in [docs/HANDOFF.md](docs/HANDOFF.md).
 

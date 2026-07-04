@@ -3,6 +3,7 @@ import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Queue } from './queue'
 import { dispatch as realDispatch, type DispatchOpts, type DispatchResult } from './dispatch'
+import { WatcherHub } from './watchers'
 
 const MAX_BODY = 1024 * 1024
 
@@ -69,7 +70,13 @@ function isAllowedHost(host: string | undefined, allowedHosts: string[]): boolea
 
 // Mutating endpoints that require the shared secret when one is configured. GET /status is
 // deliberately excluded: it's read-only and only exposes ids/statuses, which are non-sensitive.
-const MUTATING_PATHS = new Set(['/__the-forge/queue', '/__the-forge/pull', '/__the-forge/mark', '/__the-forge/dispatch'])
+const MUTATING_PATHS = new Set([
+  '/__the-forge/queue',
+  '/__the-forge/pull',
+  '/__the-forge/mark',
+  '/__the-forge/dispatch',
+  '/__the-forge/wait',
+])
 
 export interface DispatchConfig {
   agent: DispatchOpts['agent']
@@ -89,8 +96,17 @@ export function createForgeMiddleware(
   queue: Queue,
   allowedHosts: string[] = [],
   secret?: string,
-  dispatchConfig: DispatchConfig = { agent: 'claude-code', channelsFlag: false }
+  dispatchConfig: DispatchConfig = { agent: 'claude-code', channelsFlag: false },
+  hub?: WatcherHub
 ) {
+  // Optional param so existing callers/tests stand unchanged; the plugin (src/index.ts)
+  // constructs and passes one explicitly so the wiring is visible at the composition root.
+  const watcherHub =
+    hub ??
+    new WatcherHub({
+      claim: () => queue.pull(),
+      applying: () => queue.hasFreshClaims(),
+    })
   return (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     const url = req.url ?? ''
     if (!url.startsWith('/__the-forge/')) return next()
@@ -140,6 +156,8 @@ export function createForgeMiddleware(
           if (typeof markdown !== 'string') return send(res, 400, { error: 'markdown required' })
           const item = queue.add(request ?? null, markdown)
           send(res, 200, { id: item.id })
+          // After the 200 — delivery to a parked watcher must never delay or fail the Send.
+          watcherHub.notify()
         })
         .catch((e: Error) => send(res, 400, { error: e.message }))
       return
@@ -165,6 +183,22 @@ export function createForgeMiddleware(
       return
     }
 
+    if (pathname === '/__the-forge/wait') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      // Long-poll: the response is held open until a change request lands, the hold window
+      // expires (agent re-arms), or the hub tells this watcher to stop (idle / replaced).
+      // The request body is irrelevant (no parameters) and deliberately not read — parking
+      // must not depend on body parsing. The optional X-Forge-Watcher header carries the
+      // bin's per-process identity for the hub's mechanical no-ping-pong guarantee.
+      const watcherToken = req.headers['x-forge-watcher']
+      const { promise, cancel } = watcherHub.wait(typeof watcherToken === 'string' ? watcherToken : undefined)
+      // The bin vanished mid-hold (agent killed, session closed): free the slot so a
+      // re-armed watcher isn't blocked by a ghost. No-op after normal completion.
+      res.on('close', cancel)
+      promise.then((waitResponse) => send(res, 200, waitResponse))
+      return
+    }
+
     if (pathname === '/__the-forge/dispatch') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
       readBody(req)
@@ -172,6 +206,15 @@ export function createForgeMiddleware(
           const { agent, markdown } = (body ?? {}) as { agent?: DispatchOpts['agent']; markdown?: string }
           if (agent !== undefined && !KNOWN_AGENTS.has(agent)) {
             return send(res, 400, { error: 'unknown agent' })
+          }
+          // Linked-session short-circuit, BEFORE the pending-item check and the ladder: a
+          // live watcher already received this Send through its parked /wait (queue →
+          // notify), or will claim it within one hold window — so by the time /dispatch
+          // runs there is often nothing pending, and "nothing pending" + live watcher
+          // means DELIVERED, not manual. The keystroke ladder must not also fire (it
+          // would type /forge-design into a terminal for a request the watcher owns).
+          if (watcherHub.isLive()) {
+            return send(res, 200, { rung: 'watcher', detail: 'delivered to your linked session' })
           }
           // Newest pending item by createdAt — the one the Send button that triggered this
           // POST almost certainly just queued. Sorted explicitly rather than relying on
@@ -201,13 +244,15 @@ export function createForgeMiddleware(
     }
 
     if (req.method === 'GET' && pathname === '/__the-forge/status') {
+      // A PRESENT-but-empty ids param (`?ids=`) means "no items, thanks" — it's the watch
+      // poller's cheap watcher-state probe. Only an ABSENT param returns everything.
       const idsParam = new URLSearchParams(query).get('ids')
-      const wanted = idsParam ? new Set(idsParam.split(',')) : null
+      const wanted = idsParam === null ? null : new Set(idsParam.split(',').filter(Boolean))
       const items = queue
         .list()
         .filter((i) => !wanted || wanted.has(i.id))
         .map(({ id, status, note }) => ({ id, status, note }))
-      send(res, 200, { items })
+      send(res, 200, { items, watcher: watcherHub.state() })
       return
     }
 

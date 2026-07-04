@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { EventEmitter } from 'node:events'
 import { Queue } from '../../src/server/queue'
+import { WatcherHub } from '../../src/server/watchers'
 import type { DispatchResult } from '../../src/server/dispatch'
 
 // The real dispatch ladder (real tmux/osascript) must NEVER run inside this suite — on a Mac
@@ -35,6 +36,15 @@ function fakeRes() {
     statusCode: 0,
     body: '',
     headers: {} as Record<string, string>,
+    // The /wait handler registers a 'close' listener (long-poll cleanup); other handlers
+    // never call res.on. Stored so tests can simulate the client vanishing mid-hold.
+    listeners: {} as Record<string, () => void>,
+    on(event: string, cb: () => void) {
+      this.listeners[event] = cb
+    },
+    emitClose() {
+      this.listeners['close']?.()
+    },
     setHeader(k: string, v: string) {
       this.headers[k] = v
     },
@@ -454,6 +464,163 @@ describe('POST /__the-forge/dispatch', () => {
     expect(res.statusCode).toBe(200)
     expect(dispatchSpy).toHaveBeenCalledTimes(1)
     expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'mocked — never the real ladder' })
+  })
+})
+
+describe('watch mode (POST /__the-forge/wait + watcher-aware dispatch/status)', () => {
+  it('GET /wait is rejected with 405', async () => {
+    const res = fakeRes()
+    await run(mw, fakeReq('GET', '/__the-forge/wait', undefined, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(405)
+  })
+
+  it('/wait is guarded by the shared secret like other mutating endpoints', async () => {
+    const secured = createForgeMiddleware(queue, [], 'wait-secret')
+    const res = fakeRes()
+    await run(secured, fakeReq('POST', '/__the-forge/wait', {}, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('a queue POST resolves a parked /wait with the item, already claimed', async () => {
+    const hub = new WatcherHub({ claim: () => queue.pull(), holdMs: 5_000 })
+    const mwWatch = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, hub)
+
+    const waitRes = fakeRes()
+    const waiting = run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, { host: 'localhost:5173' }), waitRes)
+    await new Promise((r) => setTimeout(r, 10)) // let the wait park before the Send lands
+
+    const queueRes = fakeRes()
+    await run(mwWatch, fakeReq('POST', '/__the-forge/queue', { markdown: '# via watcher' }, { host: 'localhost:5173' }), queueRes)
+    const { id } = JSON.parse(queueRes.body)
+
+    await waiting
+    const body = JSON.parse(waitRes.body)
+    expect(body.stop).toBe(false)
+    expect(body.items).toHaveLength(1)
+    expect(body.items[0].id).toBe(id)
+    expect(queue.get(id)!.status).toBe('claimed')
+  })
+
+  it('hold expiry resolves {stop:false, items:[]} — the re-arm tick', async () => {
+    const hub = new WatcherHub({ claim: () => queue.pull(), holdMs: 10 })
+    const mwWatch = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, hub)
+    const res = fakeRes()
+    await run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, { host: 'localhost:5173' }), res)
+    expect(JSON.parse(res.body)).toEqual({ stop: false, items: [] })
+  })
+
+  it('dispatch short-circuits to the watcher rung when a watcher is live — the ladder is never invoked', async () => {
+    const dispatchFn = vi.fn(async () => ({ rung: 'tmux' as const, detail: 'must never run' }))
+    const hub = new WatcherHub({ claim: () => queue.pull(), holdMs: 5_000 })
+    const mwWatch = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false, dispatchFn }, hub)
+
+    const waitRes = fakeRes()
+    void run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, { host: 'localhost:5173' }), waitRes)
+    await new Promise((r) => setTimeout(r, 10)) // parked → hub is live
+
+    // Deliberately NOTHING pending: a live watcher usually consumed the Send already by
+    // dispatch time, and that must still report delivered — not 'nothing pending'/manual.
+    const res = fakeRes()
+    await run(mwWatch, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({ rung: 'watcher', detail: 'delivered to your linked session' })
+    expect(dispatchFn).not.toHaveBeenCalled()
+
+    waitRes.emitClose() // free the parked waiter so no timer outlives the test
+  })
+
+  it('dispatch runs the normal ladder when the watcher is asleep (stopped/disconnected)', async () => {
+    const hub = new WatcherHub({ claim: () => queue.pull(), holdMs: 10, freshMs: 0 })
+    const mwWatch = createForgeMiddleware(
+      queue,
+      [],
+      undefined,
+      { agent: 'claude-code', channelsFlag: false, dispatchFn: async () => ({ rung: 'manual', detail: 'ladder ran' }) },
+      hub
+    )
+    // Watch once, let the hold expire; freshMs 0 makes the heartbeat stale immediately.
+    const waitRes = fakeRes()
+    await run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, { host: 'localhost:5173' }), waitRes)
+    expect(hub.state()).toBe('asleep')
+
+    queue.add({}, 'pending markdown')
+    const res = fakeRes()
+    await run(mwWatch, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+    expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'ladder ran' })
+  })
+
+  it('a closed connection frees the slot: the item is delivered to the NEXT wait instead of lost', async () => {
+    const hub = new WatcherHub({ claim: () => queue.pull(), holdMs: 5_000 })
+    const mwWatch = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, hub)
+
+    const dead = fakeRes()
+    void run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, { host: 'localhost:5173' }), dead)
+    await new Promise((r) => setTimeout(r, 10))
+    dead.emitClose() // bin vanished mid-hold
+
+    queue.add({}, 'queued while nobody watched')
+    const next = fakeRes()
+    await run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, { host: 'localhost:5173' }), next)
+    const body = JSON.parse(next.body)
+    expect(body.items).toHaveLength(1)
+    expect(dead.body).toBe('') // the dead response was never written to
+  })
+
+  it('threads X-Forge-Watcher through to the hub: a replaced token retrying is absorbed, the winner keeps the slot', async () => {
+    const hub = new WatcherHub({ claim: () => queue.pull(), holdMs: 5_000 })
+    const mwWatch = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, hub)
+    const headersFor = (token: string) => ({ host: 'localhost:5173', 'x-forge-watcher': token })
+
+    const resA = fakeRes()
+    const waitingA = run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, headersFor('bin-a')), resA)
+    await new Promise((r) => setTimeout(r, 10))
+    const resB = fakeRes()
+    void run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, headersFor('bin-b')), resB)
+    await waitingA
+    expect(JSON.parse(resA.body)).toEqual({ stop: true, reason: 'replaced' })
+
+    // A's disobedient retry is absorbed without bumping B…
+    const resARetry = fakeRes()
+    await run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, headersFor('bin-a')), resARetry)
+    expect(JSON.parse(resARetry.body)).toEqual({ stop: true, reason: 'replaced' })
+
+    // …and B still receives the next Send.
+    await run(mwWatch, fakeReq('POST', '/__the-forge/queue', { markdown: '# for B' }, { host: 'localhost:5173' }), fakeRes())
+    await new Promise((r) => setTimeout(r, 10))
+    const bBody = JSON.parse(resB.body)
+    expect(bBody.stop).toBe(false)
+    expect(bBody.items).toHaveLength(1)
+  })
+
+  it('GET /status reports watcher state and supports the empty-ids probe', async () => {
+    queue.add({}, 'an item')
+    // Absent ids param → all items, watcher 'none' on a pristine hub.
+    const all = fakeRes()
+    await run(mw, fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }), all)
+    const allBody = JSON.parse(all.body)
+    expect(allBody.items).toHaveLength(1)
+    expect(allBody.watcher).toBe('none')
+
+    // Present-but-empty ids (`?ids=`) → zero items: the watch poller's cheap probe.
+    const probe = fakeRes()
+    await run(mw, fakeReq('GET', '/__the-forge/status?ids=', undefined, { host: 'localhost:5173' }), probe)
+    const probeBody = JSON.parse(probe.body)
+    expect(probeBody.items).toHaveLength(0)
+    expect(probeBody.watcher).toBe('none')
+  })
+
+  it('GET /status reports live while a wait is parked', async () => {
+    const hub = new WatcherHub({ claim: () => queue.pull(), holdMs: 5_000 })
+    const mwWatch = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, hub)
+    const waitRes = fakeRes()
+    void run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, { host: 'localhost:5173' }), waitRes)
+    await new Promise((r) => setTimeout(r, 10))
+
+    const res = fakeRes()
+    await run(mwWatch, fakeReq('GET', '/__the-forge/status?ids=', undefined, { host: 'localhost:5173' }), res)
+    expect(JSON.parse(res.body).watcher).toBe('live')
+
+    waitRes.emitClose()
   })
 })
 

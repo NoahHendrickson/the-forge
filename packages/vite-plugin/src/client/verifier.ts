@@ -3,6 +3,7 @@ import { SentRegistry } from './sent'
 import type { DraftStore } from './drafts'
 import type { TaggedElement } from './source'
 import { AGENT_DISPLAY_NAME, currentAgent } from './agent'
+import { queuedLineFor, type WatcherState } from './watch'
 
 const POLL_MS = 2000
 /** After this many consecutive failed polls the verifier surfaces "paused" and starts backing off. */
@@ -105,10 +106,19 @@ interface Counters {
  * server-side `pending` (queued, not yet claimed by the agent), the whole prefix must be the
  * manual instruction rather than a possibly-false "applying…" claim. Only once every sent item
  * has been claimed does "N applying…" (N = claimed count) become accurate.
+ *
+ * Watch mode refines the pending copy via queuedLineFor — the live/asleep/none message
+ * matrix lives in watch.ts alongside the other watcher copy, not here.
  */
-function renderSummary(counters: Counters, claimed: number, pendingManual: number, agentDisplayName: string): string {
+function renderSummary(
+  counters: Counters,
+  claimed: number,
+  pendingManual: number,
+  agentDisplayName: string,
+  watcherState: WatcherState = 'none'
+): string {
   const parts: string[] = []
-  if (pendingManual > 0) parts.push(`${pendingManual} queued — type /forge-design in ${agentDisplayName}`)
+  if (pendingManual > 0) parts.push(queuedLineFor(pendingManual, agentDisplayName, watcherState))
   else if (claimed > 0) parts.push(`${claimed} applying…`)
   if (counters.implemented) parts.push(`${counters.implemented} implemented ✓`)
   if (counters.mismatch) parts.push(`${counters.mismatch} mismatch ⚠`)
@@ -175,9 +185,12 @@ export class Verifier {
           }
           return null
         }
-        return res.json() as Promise<{ items: Array<{ id: string; status: string; note: string | null }> }>
+        return res.json() as Promise<{
+          items: Array<{ id: string; status: string; note: string | null }>
+          watcher?: unknown
+        }>
       })
-      .then((body: { items: Array<{ id: string; status: string; note: string | null }> } | null) => {
+      .then((body: { items: Array<{ id: string; status: string; note: string | null }>; watcher?: unknown } | null) => {
         if (body === null) return
         this.consecutiveFailures = 0
         this.delayMs = POLL_MS
@@ -199,7 +212,9 @@ export class Verifier {
         }
         if (this.sent.size() === 0) this.stop()
         const agentDisplayName = AGENT_DISPLAY_NAME[currentAgent()]
-        this.onUpdate(renderSummary(this.counters, claimed, pendingManual, agentDisplayName))
+        const watcherState: WatcherState =
+          body.watcher === 'live' || body.watcher === 'asleep' ? body.watcher : 'none'
+        this.onUpdate(renderSummary(this.counters, claimed, pendingManual, agentDisplayName, watcherState))
       })
       .catch(() => {
         // Transient blips retry silently at the base cadence; a RUN of failures means the dev

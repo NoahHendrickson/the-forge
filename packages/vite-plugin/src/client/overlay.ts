@@ -42,6 +42,8 @@ button {
   font: 500 11px system-ui, sans-serif; padding: 4px 8px;
 }
 #status button:hover { background: rgba(255,255,255,0.12); }
+#watch { color: #A8A8A8; }
+#watch.live { color: #62C073; }
 #outline {
   position: fixed; z-index: 2147483645; pointer-events: none;
   border: 1.5px solid rgba(13,153,255,0.75); border-radius: 2px;
@@ -288,6 +290,7 @@ export class Overlay {
   private status = document.createElement('div')
   private statusLabel = document.createElement('span')
   private sentLabel = document.createElement('span')
+  private watchLabel = document.createElement('span')
 
   /** Pool of ripple-outline divs, reused across showRipples() calls instead of recreated. */
   private ripplePool: HTMLElement[] = []
@@ -317,7 +320,11 @@ export class Overlay {
     this.resetAllButton.textContent = 'Reset all'
     this.sentLabel.id = 'sent'
     this.sentLabel.hidden = true
-    this.status.append(this.statusLabel, this.sendButton, this.copyButton, this.compareAllButton, this.resetAllButton, this.sentLabel)
+    this.watchLabel.id = 'watch'
+    this.watchLabel.hidden = true
+    // Watch indicator leads the strip — it's ambient session state ("● Linked…"), read
+    // before the per-draft controls and per-send summary.
+    this.status.append(this.watchLabel, this.statusLabel, this.sendButton, this.copyButton, this.compareAllButton, this.resetAllButton, this.sentLabel)
     this.outline.hidden = true
     this.selectOutline.hidden = true
     this.status.hidden = true
@@ -442,9 +449,13 @@ export class Overlay {
     }, Overlay.RIPPLE_FADE_MS)
   }
 
-  updateStatus(draftCount: number, comparingAll: boolean, sentText?: string): void {
-    // Strip is visible when there are drafts OR a non-empty summary
-    this.status.hidden = draftCount === 0 && !sentText
+  updateStatus(draftCount: number, comparingAll: boolean, sentText?: string, watch?: { text: string; live: boolean }): void {
+    // Strip is visible when there are drafts OR a non-empty summary OR a watch indicator
+    // (the linked/asleep state is persistent messaging — user-ratified in the watch-mode
+    // plan — so it keeps the strip up even with zero drafts). No watcher (`watch`
+    // undefined) renders nothing: terminal-only users see the strip behave exactly as
+    // before watch mode existed.
+    this.status.hidden = draftCount === 0 && !sentText && !watch
     // Draft-count label and controls are hidden when no drafts (they act on drafts)
     this.statusLabel.hidden = draftCount === 0
     this.sendButton.hidden = draftCount === 0
@@ -458,5 +469,9 @@ export class Overlay {
     // Sent summary label
     this.sentLabel.hidden = !sentText
     this.sentLabel.textContent = sentText ?? ''
+    // Watch indicator (linked / asleep)
+    this.watchLabel.hidden = !watch
+    this.watchLabel.textContent = watch?.text ?? ''
+    this.watchLabel.classList.toggle('live', watch?.live === true)
   }
 }
