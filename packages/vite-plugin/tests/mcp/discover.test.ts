@@ -67,4 +67,16 @@ describe('discoverEndpoint', () => {
     fs.writeFileSync(path.join(dir, 'endpoint-123.json'), '{not json')
     expect(discoverEndpoint(dir)).toBeNull()
   })
+
+  it('includes the secret when present in the endpoint file', () => {
+    writeFixture(`endpoint-${process.pid}.json`, { port: 5001, host: '127.0.0.1', pid: process.pid, secret: 'sekret' })
+    expect(discoverEndpoint(dir)).toEqual({ port: 5001, host: '127.0.0.1', secret: 'sekret' })
+  })
+
+  it('omits secret when absent from the endpoint file', () => {
+    writeFixture(`endpoint-${process.pid}.json`, { port: 5001, host: '127.0.0.1', pid: process.pid })
+    const result = discoverEndpoint(dir)
+    expect(result).not.toBeNull()
+    expect(result!.secret).toBeUndefined()
+  })
 })

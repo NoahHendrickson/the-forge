@@ -8,14 +8,38 @@ import { SentRegistry } from './sent'
 import { Verifier } from './verifier'
 import { snapshotRects, diffRects } from './ripple'
 import { resetTokensCache } from './tokens'
+import { AGENT_DISPLAY_NAME, type AgentName } from './agent'
 
 /** Rapid edits (e.g. dragging a number field) within this window reuse the first snapshot. */
 const RIPPLE_DEBOUNCE_MS = 300
 
 declare global {
   interface Window {
-    __THE_FORGE__?: { mode: DesignMode }
+    __THE_FORGE__?: { mode: DesignMode; secret?: string; agent?: AgentName }
   }
+}
+
+type Rung = 'channels' | 'tmux' | 'applescript' | 'deeplink' | 'manual'
+
+/** Maps a dispatch rung to the Send button's flash label. Request content never appears here —
+ * only the fixed per-rung copy and (for 'manual') the configured agent's display name. */
+function sentLabelFor(rung: Rung, agent: AgentName): string {
+  if (rung === 'deeplink') return 'Sent — opened in Cursor'
+  // Explicit allowlist for the "typed into your session" copy — the rung value actually arrives
+  // over the network as untyped JSON (see the /dispatch fetch handler below), so any value that
+  // isn't recognizably tmux/applescript (a typo, a future rung, a server bug) must default to
+  // the manual label rather than falsely claiming a terminal was typed into.
+  if (rung === 'tmux' || rung === 'applescript') return 'Sent — typed /design into your session'
+  return `Sent — type /design in ${AGENT_DISPLAY_NAME[agent]}` // manual / channels / unrecognized
+}
+
+/** Belt-and-braces against cross-origin/DNS-rebinding bypasses of the server's Origin/Host
+ * checks — same-origin page scripts are the user's own app and not the adversary. The secret
+ * is injected by the server into `globalThis.__THE_FORGE__` (see index.ts load()); read it
+ * lazily on each send so a value set after this module first evaluates is still picked up. */
+function forgeSecretHeaders(): Record<string, string> {
+  const secret = (globalThis as { __THE_FORGE__?: { secret?: string } }).__THE_FORGE__?.secret
+  return secret ? { 'X-Forge-Secret': secret } : {}
 }
 
 export class DesignMode {
@@ -78,6 +102,17 @@ export class DesignMode {
         overlay.sendButton.disabled = false
         this.flashButton(overlay.sendButton, 'Send failed', originalLabel)
       }
+      // Dispatch reaches for the user's already-RUNNING agent session (tmux/AppleScript/Cursor
+      // deeplink) so they never have to type anything but Enter — see server/dispatch.ts. A
+      // dispatch failure (network hiccup, non-200) must NOT undo the send: the request is
+      // already safely queued, so we degrade to the same copy as rung 'manual'.
+      const agent: AgentName = window.__THE_FORGE__?.agent ?? 'claude-code'
+      const manualLabel = sentLabelFor('manual', agent)
+      const onDispatchSettled = (rung: Rung | null): void => {
+        overlay.sendButton.disabled = false
+        this.flashButton(overlay.sendButton, rung ? sentLabelFor(rung, agent) : manualLabel, originalLabel)
+        this.onSendComplete?.()
+      }
       const onSendOk = (id: string): void => {
         const mapping = [...elements.entries()].map(([el, change]) => ({
           el,
@@ -87,15 +122,25 @@ export class DesignMode {
         }))
         this.sent.add(id, mapping)
         this.verifier.start()
-        overlay.sendButton.disabled = false
-        this.flashButton(overlay.sendButton, 'Sent ✓', originalLabel)
-        this.onSendComplete?.()
+        fetch('/__the-forge/dispatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+          body: JSON.stringify({}),
+        })
+          .then((res) => {
+            if (!res.ok) return onDispatchSettled(null)
+            res
+              .json()
+              .then((body: { rung: Rung }) => onDispatchSettled(body.rung))
+              .catch(() => onDispatchSettled(null))
+          })
+          .catch(() => onDispatchSettled(null))
       }
       overlay.sendButton.disabled = true
       // nesting is deliberate: the send test counts microtask ticks — re-check it before flattening to async/await
       fetch('/__the-forge/queue', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
         body: JSON.stringify({ request, markdown: md }),
       })
         .then((res) => {
@@ -329,7 +374,12 @@ function boot(): void {
   overlay.mount()
   const mode = new DesignMode(overlay)
   overlay.attachPanel(mode.panelRoot)
-  window.__THE_FORGE__ = { mode }
+  // The server-injected bootstrap (prepended to this bundle's source, see index.ts load())
+  // sets globalThis.__THE_FORGE__ = { secret, agent } BEFORE this module runs — preserve it
+  // rather than clobbering it when we attach `mode`.
+  const secret = window.__THE_FORGE__?.secret
+  const agent = window.__THE_FORGE__?.agent
+  window.__THE_FORGE__ = { mode, secret, agent }
 }
 
 if (typeof document !== 'undefined' && !import.meta.vitest) {

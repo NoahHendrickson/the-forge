@@ -2,6 +2,7 @@ import type { SentEntry } from './sent'
 import { SentRegistry } from './sent'
 import type { DraftStore } from './drafts'
 import type { TaggedElement } from './source'
+import { AGENT_DISPLAY_NAME, currentAgent } from './agent'
 
 const POLL_MS = 2000
 
@@ -94,9 +95,17 @@ interface Counters {
   failed: number
 }
 
-function renderSummary(counters: Counters, pending = 0): string {
+/**
+ * Renders the sent-status prefix. Manual rung (spec): nothing applies to the user's code until
+ * they actually type /design into their agent session — so as long as ANY sent item is still
+ * server-side `pending` (queued, not yet claimed by the agent), the whole prefix must be the
+ * manual instruction rather than a possibly-false "applying…" claim. Only once every sent item
+ * has been claimed does "N applying…" (N = claimed count) become accurate.
+ */
+function renderSummary(counters: Counters, claimed: number, pendingManual: number, agentDisplayName: string): string {
   const parts: string[] = []
-  if (pending > 0) parts.push(`${pending} applying…`)
+  if (pendingManual > 0) parts.push(`${pendingManual} queued — type /design in ${agentDisplayName}`)
+  else if (claimed > 0) parts.push(`${claimed} applying…`)
   if (counters.implemented) parts.push(`${counters.implemented} implemented ✓`)
   if (counters.mismatch) parts.push(`${counters.mismatch} mismatch ⚠`)
   if (counters.unverified) parts.push(`${counters.unverified} applied (unverified)`)
@@ -136,12 +145,25 @@ export class Verifier {
     fetch(`/__the-forge/status?ids=${ids.join(',')}`)
       .then((res) => (res.ok ? res.json() : { items: [] }))
       .then((body: { items: Array<{ id: string; status: string; note: string | null }> }) => {
+        const statusById = new Map(body.items.map((item) => [item.id, item.status]))
         for (const item of body.items) {
           if (item.status === 'applied') this.handleApplied(item.id)
           else if (item.status === 'failed') this.handleFailed(item.id)
         }
+        // Manual rung: nothing applies until the user types /design, so any sent item the server
+        // still reports (or simply hasn't reported back yet, i.e. missing from the response) as
+        // `pending` — as opposed to `claimed` — must surface the manual instruction, not a false
+        // "applying…" claim. Only items confirmed `claimed` count toward "applying…".
+        let claimed = 0
+        let pendingManual = 0
+        for (const id of this.sent.pendingIds()) {
+          const status = statusById.get(id)
+          if (status === 'claimed') claimed++
+          else pendingManual++ // status === 'pending', or unknown/missing from the response
+        }
         if (this.sent.size() === 0) this.stop()
-        this.onUpdate(renderSummary(this.counters, this.sent.size()))
+        const agentDisplayName = AGENT_DISPLAY_NAME[currentAgent()]
+        this.onUpdate(renderSummary(this.counters, claimed, pendingManual, agentDisplayName))
       })
       .catch(() => {
         // transient network errors during polling are silently retried next tick

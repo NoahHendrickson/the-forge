@@ -8,7 +8,7 @@ if [ ! -d fixtures/demo-app/dist ]; then
   echo "FAIL: fixtures/demo-app/dist does not exist" >&2
   exit 1
 fi
-if grep -rq "data-dc-source\|the-forge" fixtures/demo-app/dist/; then
+if grep -riq "data-dc-source\|the-forge\|__THE_FORGE__" fixtures/demo-app/dist/; then
   echo "FAIL: companion artifacts found in production build" >&2
   exit 1
 fi

@@ -1,16 +1,34 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { randomUUID } from 'node:crypto'
 import type { Plugin } from 'vite'
 import { tagJsxSource } from './transform'
 import { Queue } from './server/queue'
 import { createForgeMiddleware, writeEndpointFile, removeEndpointFile } from './server/endpoints'
 import { setupProjectConfig } from './server/setup'
+import type { DispatchOpts } from './server/dispatch'
 
 export const CLIENT_ID = '/@the-forge/client'
 
-export function theForge(): Plugin {
+export interface TheForgeOptions {
+  /** Which agent CLI's RUNNING session the dispatch ladder should reach for on Send.
+   * Defaults to 'claude-code'. */
+  agent?: DispatchOpts['agent']
+  /** Opt-in to the experimental Channels rung (claude-code only). Tonight this rung is a stub
+   * that always falls through — see server/dispatch.ts. Defaults to false. */
+  experimentalChannels?: boolean
+}
+
+export function theForge(options: TheForgeOptions = {}): Plugin {
+  const agent = options.agent ?? 'claude-code'
+  const experimentalChannels = options.experimentalChannels ?? false
   let root = process.cwd()
+  // Generated once per server start — belt-and-braces against cross-origin/DNS-rebinding
+  // bypasses of the Origin/Host checks in the middleware; same-origin page scripts are the
+  // user's own app and not the adversary. Threaded to the client via the load() bootstrap
+  // below, and to the MCP bin via the endpoint file (writeEndpointFile).
+  const secret = randomUUID()
 
   return {
     name: 'the-forge',
@@ -25,10 +43,10 @@ export function theForge(): Plugin {
       const forgeDir = path.join(root, '.the-forge')
       const queue = new Queue(forgeDir)
       const allowedHosts = Array.isArray(server.config.server.allowedHosts) ? server.config.server.allowedHosts : []
-      server.middlewares.use(createForgeMiddleware(queue, allowedHosts))
+      server.middlewares.use(createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels }))
       server.httpServer?.once('listening', () => {
         const address = server.httpServer?.address()
-        if (address && typeof address === 'object') writeEndpointFile(forgeDir, address.port, address.address)
+        if (address && typeof address === 'object') writeEndpointFile(forgeDir, address.port, address.address, secret)
       })
       server.httpServer?.once('close', () => removeEndpointFile(forgeDir))
       process.once('exit', () => removeEndpointFile(forgeDir))
@@ -69,7 +87,8 @@ export function theForge(): Plugin {
           'the-forge: client bundle not found — run "npm run build -w @the-forge/vite"'
         )
       }
-      return fs.readFileSync(clientPath, 'utf8')
+      const bootstrap = `globalThis.__THE_FORGE__ = ${JSON.stringify({ secret, agent })};\n`
+      return bootstrap + fs.readFileSync(clientPath, 'utf8')
     },
 
     transformIndexHtml() {

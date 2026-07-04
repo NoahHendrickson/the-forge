@@ -7,8 +7,8 @@ import { theForge, CLIENT_ID } from '../src/index'
 
 type TransformHook = (code: string, id: string) => { code: string } | null
 
-function getPlugin(root = '/proj') {
-  const plugin = theForge()
+function getPlugin(root = '/proj', options?: Parameters<typeof theForge>[0]) {
+  const plugin = theForge(options)
   // simulate vite calling configResolved with a root
   ;(plugin.configResolved as (c: { root: string }) => void)({ root })
   const transform = plugin.transform as unknown as TransformHook
@@ -100,6 +100,66 @@ describe('theForge plugin', () => {
 
       server.httpServer.emit('close')
       expect(fs.existsSync(filePath)).toBe(false)
+    })
+
+    it('writes a per-session secret into the endpoint file', () => {
+      const { plugin } = getPlugin(root)
+      const server = fakeServer(root)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+
+      const filePath = path.join(root, '.the-forge', `endpoint-${process.pid}.json`)
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+      expect(typeof data.secret).toBe('string')
+      expect(data.secret.length).toBeGreaterThan(0)
+    })
+  })
+
+  describe('agent / experimentalChannels options', () => {
+    let root: string
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-plugin-agent-'))
+    })
+
+    it('defaults to claude-code / experimentalChannels: false in the client bootstrap', () => {
+      const { plugin } = getPlugin(root)
+      const server = fakeServer(root)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+      const code = (plugin.load as (id: string) => string | null)(CLIENT_ID)!
+      expect(code).toContain('"agent":"claude-code"')
+    })
+
+    it('threads a configured agent/experimentalChannels into the client bootstrap', () => {
+      const { plugin } = getPlugin(root, { agent: 'cursor', experimentalChannels: true })
+      const server = fakeServer(root)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+      const code = (plugin.load as (id: string) => string | null)(CLIENT_ID)!
+      expect(code).toContain('"agent":"cursor"')
+    })
+  })
+
+  describe('client bootstrap secret injection', () => {
+    let root: string
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-plugin-load-'))
+    })
+
+    it('prepends globalThis.__THE_FORGE__ with the session secret to the served client bundle', () => {
+      const { plugin } = getPlugin(root)
+      const server = fakeServer(root)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+
+      const filePath = path.join(root, '.the-forge', `endpoint-${process.pid}.json`)
+      const { secret } = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+
+      const code = (plugin.load as (id: string) => string | null)(CLIENT_ID)
+      expect(code).toBeTruthy()
+      expect(code!.startsWith(`globalThis.__THE_FORGE__ = ${JSON.stringify({ secret, agent: 'claude-code' })};\n`)).toBe(true)
     })
   })
 })

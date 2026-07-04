@@ -42,7 +42,7 @@ beforeAll(async () => {
       res.setHeader('Content-Type', 'application/json')
       res.end(JSON.stringify(data))
     }
-    if (req.method === 'GET' && req.url === '/__the-forge/pull') {
+    if (req.method === 'POST' && req.url === '/__the-forge/pull') {
       claimedIds.push(STUB_ITEM.id)
       return send200({ items: [STUB_ITEM] })
     }
@@ -124,5 +124,146 @@ describe('mcp stdio server (built bin)', () => {
     expect(res.result.content[0].text).toBe('Marked 1 request(s) as applied.')
     expect(markCalls).toHaveLength(1)
     expect(markCalls[0]).toMatchObject({ ids: [STUB_ITEM.id], status: 'applied' })
+  })
+})
+
+describe('mcp stdio server: non-ok HTTP vs unreachable server', () => {
+  let rejectingServer: Server
+  let rejectingPort: number
+  let rejectingTempDir: string
+  let rejectingChild: ChildProcessWithoutNullStreams
+  let rejStdoutBuf = ''
+  const rejPending = new Map<number, { resolve: (v: unknown) => void }>()
+
+  function rejSend(msg: unknown): void {
+    rejectingChild.stdin.write(JSON.stringify(msg) + '\n')
+  }
+
+  function rejRequest<T = unknown>(id: number, method: string, params?: unknown): Promise<T> {
+    return new Promise((resolve) => {
+      rejPending.set(id, { resolve: resolve as (v: unknown) => void })
+      rejSend({ jsonrpc: '2.0', id, method, params })
+    })
+  }
+
+  beforeAll(async () => {
+    // A real, reachable HTTP server that always answers with a non-2xx status — simulates a
+    // stale/mismatched dev server (e.g. restarted, plugin/bin version skew), as opposed to
+    // "nothing is listening at all" (connection failure).
+    rejectingServer = http.createServer((req, res) => {
+      res.statusCode = 500
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: 'boom' }))
+    })
+    await new Promise<void>((resolve) => rejectingServer.listen(0, resolve))
+    rejectingPort = (rejectingServer.address() as { port: number }).port
+
+    rejectingTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-mcp-e2e-rej-'))
+    fs.mkdirSync(path.join(rejectingTempDir, '.the-forge'), { recursive: true })
+    fs.writeFileSync(
+      path.join(rejectingTempDir, '.the-forge', 'endpoint.json'),
+      JSON.stringify({ port: rejectingPort, host: '127.0.0.1', pid: process.pid })
+    )
+
+    rejectingChild = spawn('node', [MCP_BIN], { cwd: rejectingTempDir, stdio: ['pipe', 'pipe', 'pipe'] })
+    rejectingChild.stdout.on('data', (chunk: Buffer) => {
+      rejStdoutBuf += chunk.toString('utf8')
+      let idx: number
+      while ((idx = rejStdoutBuf.indexOf('\n')) >= 0) {
+        const line = rejStdoutBuf.slice(0, idx)
+        rejStdoutBuf = rejStdoutBuf.slice(idx + 1)
+        if (!line.trim()) continue
+        const msg = JSON.parse(line) as { id?: number }
+        if (msg.id !== undefined && rejPending.has(msg.id)) {
+          rejPending.get(msg.id)!.resolve(msg)
+          rejPending.delete(msg.id)
+        }
+      }
+    })
+
+    await rejRequest(1, 'initialize', {})
+    rejSend({ jsonrpc: '2.0', method: 'notifications/initialized' })
+  })
+
+  afterAll(() => {
+    rejectingChild?.kill()
+    rejectingServer?.close()
+  })
+
+  it('reports a distinct "server rejected the request (HTTP <status>)" error for a reachable-but-non-ok server', async () => {
+    const res = (await rejRequest(2, 'tools/call', { name: 'pull_design_edits', arguments: {} })) as {
+      result: { content: Array<{ type: string; text: string }>; isError?: boolean }
+    }
+    expect(res.result.isError).toBe(true)
+    const text = res.result.content[0].text
+    expect(text).toContain('HTTP 500')
+    expect(text).toContain('rejected the request')
+    expect(text).not.toContain('is not running')
+  })
+})
+
+describe('mcp stdio server: genuinely unreachable server keeps the NOT_RUNNING_MESSAGE', () => {
+  let unreachableTempDir: string
+  let unreachableChild: ChildProcessWithoutNullStreams
+  let unreachableStdoutBuf = ''
+  const unreachablePending = new Map<number, { resolve: (v: unknown) => void }>()
+
+  function uSend(msg: unknown): void {
+    unreachableChild.stdin.write(JSON.stringify(msg) + '\n')
+  }
+
+  function uRequest<T = unknown>(id: number, method: string, params?: unknown): Promise<T> {
+    return new Promise((resolve) => {
+      unreachablePending.set(id, { resolve: resolve as (v: unknown) => void })
+      uSend({ jsonrpc: '2.0', id, method, params })
+    })
+  }
+
+  beforeAll(async () => {
+    // Bind a real server just to reserve a port, then close it — the endpoint file points at a
+    // port nothing is listening on, so fetch() rejects with a connection error (not an HTTP
+    // response at all).
+    const probe = http.createServer()
+    await new Promise<void>((resolve) => probe.listen(0, resolve))
+    const unreachablePort = (probe.address() as { port: number }).port
+    await new Promise<void>((resolve) => probe.close(() => resolve()))
+
+    unreachableTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-mcp-e2e-unreachable-'))
+    fs.mkdirSync(path.join(unreachableTempDir, '.the-forge'), { recursive: true })
+    fs.writeFileSync(
+      path.join(unreachableTempDir, '.the-forge', 'endpoint.json'),
+      JSON.stringify({ port: unreachablePort, host: '127.0.0.1', pid: process.pid })
+    )
+
+    unreachableChild = spawn('node', [MCP_BIN], { cwd: unreachableTempDir, stdio: ['pipe', 'pipe', 'pipe'] })
+    unreachableChild.stdout.on('data', (chunk: Buffer) => {
+      unreachableStdoutBuf += chunk.toString('utf8')
+      let idx: number
+      while ((idx = unreachableStdoutBuf.indexOf('\n')) >= 0) {
+        const line = unreachableStdoutBuf.slice(0, idx)
+        unreachableStdoutBuf = unreachableStdoutBuf.slice(idx + 1)
+        if (!line.trim()) continue
+        const msg = JSON.parse(line) as { id?: number }
+        if (msg.id !== undefined && unreachablePending.has(msg.id)) {
+          unreachablePending.get(msg.id)!.resolve(msg)
+          unreachablePending.delete(msg.id)
+        }
+      }
+    })
+
+    await uRequest(1, 'initialize', {})
+    uSend({ jsonrpc: '2.0', method: 'notifications/initialized' })
+  })
+
+  afterAll(() => {
+    unreachableChild?.kill()
+  })
+
+  it('keeps the "dev server is not running" message when the connection itself fails', async () => {
+    const res = (await uRequest(2, 'tools/call', { name: 'pull_design_edits', arguments: {} })) as {
+      result: { content: Array<{ type: string; text: string }>; isError?: boolean }
+    }
+    expect(res.result.isError).toBe(true)
+    expect(res.result.content[0].text).toBe('The Forge dev server is not running — start your Vite dev server first.')
   })
 })

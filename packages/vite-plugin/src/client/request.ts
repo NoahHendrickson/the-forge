@@ -107,6 +107,29 @@ function measureComputed(el: TaggedElement, props: Iterable<string>): Map<string
   return out
 }
 
+// `CSS.escape` is universally available in real browsers but some jsdom versions used in
+// tests don't expose it as a global — fall back to a minimal spec-compliant escape (per the
+// CSSOM spec: escape any char outside [a-zA-Z0-9_-] plus the leading-digit/hyphen-digit rules)
+// so the selector stays safe either way.
+function escapeCssIdent(value: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value)
+
+  let out = value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`)
+
+  // CSSOM numeric-escape rule: a leading digit, or a leading '-' followed by a digit, cannot be
+  // represented as a literal/backslash-escaped character — it must use the \HH (code point hex)
+  // escape form, e.g. CSS.escape('0abc') === '\\30 abc'. Without this, `#0abc` is a syntactically
+  // invalid selector even though no "special" characters were present to trigger the regex above.
+  const leadMatch = /^(-?)([0-9])/.exec(out)
+  if (leadMatch) {
+    const [, hyphen, digit] = leadMatch
+    const hex = digit.codePointAt(0)!.toString(16)
+    out = `${hyphen}\\${hex} ${out.slice(hyphen.length + 1)}`
+  }
+
+  return out
+}
+
 export function cssPath(start: TaggedElement): string {
   const parts: string[] = []
   let el: Element | null = start
@@ -114,7 +137,7 @@ export function cssPath(start: TaggedElement): string {
   while (el && depth < 4) {
     const tag = el.tagName.toLowerCase()
     if (el.id) {
-      parts.unshift(`${tag}#${el.id}`)
+      parts.unshift(`${tag}#${escapeCssIdent(el.id)}`)
       break
     }
     const parent: Element | null = el.parentElement

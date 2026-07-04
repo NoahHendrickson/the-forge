@@ -317,7 +317,7 @@ describe('Verifier polling lifecycle', () => {
     expect(lastSummary).not.toContain('mismatch')
   })
 
-  it('prepends a pending "applying…" segment while entries remain in the sent registry', async () => {
+  it('prepends a pending "applying…" segment for CLAIMED entries remaining in the sent registry', async () => {
     const sent = new SentRegistry()
     const drafts = new DraftStore()
     const onUpdate = vi.fn()
@@ -326,12 +326,17 @@ describe('Verifier polling lifecycle', () => {
     styleRule('pending-btn1', 'padding-top', '24px')
     drafts.apply(btn1, 'padding-top', '24px')
     sent.add('q1', makeEntry([{ el: btn1, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
-    // q2 stays pending — server has not marked it yet
+    // q2 is claimed — the agent has started working on it, but the server hasn't marked it done yet
     sent.add('q2', makeEntry([{ el: el(), dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '10px' }] }]))
 
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+      json: async () => ({
+        items: [
+          { id: 'q1', status: 'applied', note: null },
+          { id: 'q2', status: 'claimed', note: null },
+        ],
+      }),
     })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -339,10 +344,115 @@ describe('Verifier polling lifecycle', () => {
     verifier.start()
     await vi.advanceTimersByTimeAsync(2000)
 
-    expect(sent.size()).toBe(1) // q2 still pending
+    expect(sent.size()).toBe(1) // q2 still pending removal (claimed, not yet terminal)
     const lastSummary = onUpdate.mock.calls.at(-1)![0] as string
     expect(lastSummary.startsWith('1 applying…')).toBe(true)
     expect(lastSummary).toContain('implemented')
+  })
+
+  describe('manual rung: pending (unclaimed) items show the instruction, not "applying…"', () => {
+    it('renders "N queued — type /design in {agent}" while a sent item is still server-side pending', async () => {
+      const sent = new SentRegistry()
+      const drafts = new DraftStore()
+      const onUpdate = vi.fn()
+      const btn = el()
+      sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ items: [{ id: 'q1', status: 'pending', note: null }] }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      vi.stubGlobal('__THE_FORGE__', { agent: 'claude-code' })
+
+      const verifier = new Verifier(sent, drafts, onUpdate)
+      verifier.start()
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(sent.size()).toBe(1) // still pending — not taken
+      const lastSummary = onUpdate.mock.calls.at(-1)![0] as string
+      expect(lastSummary).toBe('1 queued — type /design in Claude Code')
+    })
+
+    it('does NOT render "applying…" for a pending item even though sent.size() > 0', async () => {
+      const sent = new SentRegistry()
+      const drafts = new DraftStore()
+      const onUpdate = vi.fn()
+      sent.add('q1', makeEntry([{ el: el(), dcSource: null, draftProps: [], changes: [] }]))
+
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ items: [{ id: 'q1', status: 'pending', note: null }] }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const verifier = new Verifier(sent, drafts, onUpdate)
+      verifier.start()
+      await vi.advanceTimersByTimeAsync(2000)
+
+      const lastSummary = onUpdate.mock.calls.at(-1)![0] as string
+      expect(lastSummary).not.toContain('applying…')
+    })
+
+    it('flips from the manual instruction to "1 applying…" once the item transitions to claimed', async () => {
+      const sent = new SentRegistry()
+      const drafts = new DraftStore()
+      const onUpdate = vi.fn()
+      sent.add('q1', makeEntry([{ el: el(), dcSource: null, draftProps: [], changes: [] }]))
+
+      const fetchMock = vi.fn()
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ items: [{ id: 'q1', status: 'pending', note: null }] }) })
+      vi.stubGlobal('fetch', fetchMock)
+      vi.stubGlobal('__THE_FORGE__', { agent: 'cursor' })
+
+      const verifier = new Verifier(sent, drafts, onUpdate)
+      verifier.start()
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /design in Cursor')
+
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ items: [{ id: 'q1', status: 'claimed', note: null }] }) })
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(onUpdate.mock.calls.at(-1)![0].startsWith('1 applying…')).toBe(true)
+    })
+
+    it('defaults the agent display name to Claude Code when __THE_FORGE__.agent is unset', async () => {
+      const sent = new SentRegistry()
+      const drafts = new DraftStore()
+      const onUpdate = vi.fn()
+      sent.add('q1', makeEntry([{ el: el(), dcSource: null, draftProps: [], changes: [] }]))
+
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ items: [{ id: 'q1', status: 'pending', note: null }] }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const verifier = new Verifier(sent, drafts, onUpdate)
+      verifier.start()
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /design in Claude Code')
+    })
+
+    it('maps codex agent to the "Codex" display name in the instruction', async () => {
+      const sent = new SentRegistry()
+      const drafts = new DraftStore()
+      const onUpdate = vi.fn()
+      sent.add('q1', makeEntry([{ el: el(), dcSource: null, draftProps: [], changes: [] }]))
+
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ items: [{ id: 'q1', status: 'pending', note: null }] }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      vi.stubGlobal('__THE_FORGE__', { agent: 'codex' })
+
+      const verifier = new Verifier(sent, drafts, onUpdate)
+      verifier.start()
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /design in Codex')
+    })
   })
 
   it('summary counts are cumulative across multiple poll cycles', async () => {
