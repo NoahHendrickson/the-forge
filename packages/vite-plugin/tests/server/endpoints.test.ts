@@ -292,6 +292,24 @@ describe('POST /__the-forge/dispatch', () => {
     expect(receivedOpts).toMatchObject({ agent: 'claude-code', channelsFlag: false })
   })
 
+  it('threads dispatchConfig.cwd through to DispatchOpts.cwd (BUG fix: Channels marker check must use the resolved forgeDir, not process.cwd())', async () => {
+    queue.add({}, 'some pending markdown')
+    let receivedOpts: unknown = null
+    const mwWithDispatch = createForgeMiddleware(queue, [], undefined, {
+      agent: 'claude-code',
+      channelsFlag: true,
+      cwd: '/resolved/project/root',
+      dispatchFn: async (opts) => {
+        receivedOpts = opts
+        return { rung: 'manual', detail: 'x' }
+      },
+    })
+    const res = fakeRes()
+    await run(mwWithDispatch, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(200)
+    expect(receivedOpts).toMatchObject({ cwd: '/resolved/project/root' })
+  })
+
   it('short-circuits to the manual rung WITHOUT invoking the ladder when there is no pending item and no markdown override', async () => {
     // queue is empty (nothing added in this test) — no markdown body override either.
     const dispatchFn = vi.fn(async () => ({ rung: 'tmux' as const, detail: 'should never be reached' }))

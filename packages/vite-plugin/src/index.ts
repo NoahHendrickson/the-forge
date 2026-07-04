@@ -6,7 +6,7 @@ import type { Plugin } from 'vite'
 import { tagJsxSource } from './transform'
 import { Queue } from './server/queue'
 import { createForgeMiddleware, writeEndpointFile, removeEndpointFile } from './server/endpoints'
-import { setupProjectConfig, resolveProjectRoot } from './server/setup'
+import { setupProjectConfig, resolveProjectRoot, migrateLegacyForgeDir } from './server/setup'
 import type { DispatchOpts } from './server/dispatch'
 
 export const CLIENT_ID = '/@the-forge/client'
@@ -40,10 +40,21 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
     },
 
     configureServer(server) {
-      const forgeDir = path.join(root, '.the-forge')
+      // The user's Claude Code session (and the MCP bin's endpoint-file discovery, which reads
+      // from process.cwd()/.the-forge) runs at the actual project root, which in a monorepo is
+      // very often NOT Vite's config root (e.g. a nested fixtures/demo-app/ package) — walk up
+      // looking for .git so the queue dir / endpoint file / .mcp.json / command file all land
+      // where the MCP bin and the session will actually see them. Using the vite root here was
+      // the root cause of "dev server not running": the plugin wrote the endpoint file (and its
+      // shared secret) at the vite root while the MCP bin only ever looked at the resolved root.
+      const resolvedRoot = resolveProjectRoot(root)
+      const forgeDir = path.join(resolvedRoot, '.the-forge')
       const queue = new Queue(forgeDir)
+      migrateLegacyForgeDir(resolvedRoot, root, queue)
       const allowedHosts = Array.isArray(server.config.server.allowedHosts) ? server.config.server.allowedHosts : []
-      server.middlewares.use(createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels }))
+      server.middlewares.use(
+        createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels, cwd: resolvedRoot })
+      )
       server.httpServer?.once('listening', () => {
         const address = server.httpServer?.address()
         if (address && typeof address === 'object') writeEndpointFile(forgeDir, address.port, address.address, secret)
@@ -51,10 +62,7 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       server.httpServer?.once('close', () => removeEndpointFile(forgeDir))
       process.once('exit', () => removeEndpointFile(forgeDir))
       const dir = path.dirname(fileURLToPath(import.meta.url))
-      // The user's Claude Code session runs at the actual project root, which in a monorepo
-      // is very often NOT Vite's config root (e.g. a nested fixtures/demo-app/ package) — walk
-      // up looking for .git so .mcp.json / the command file land where the session will see them.
-      setupProjectConfig(resolveProjectRoot(root), path.join(dir, 'mcp.js'), root)
+      setupProjectConfig(resolvedRoot, path.join(dir, 'mcp.js'), root)
     },
 
     transform(code, id) {

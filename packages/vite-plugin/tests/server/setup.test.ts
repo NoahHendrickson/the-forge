@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { setupProjectConfig, resolveProjectRoot } from '../../src/server/setup'
+import { setupProjectConfig, resolveProjectRoot, migrateLegacyForgeDir } from '../../src/server/setup'
+import { Queue } from '../../src/server/queue'
 
 let root: string
 
@@ -249,5 +250,114 @@ describe('resolveProjectRoot', () => {
     const resolved = resolveProjectRoot(nested)
 
     expect(resolved).toBe(nested)
+  })
+})
+
+describe('migrateLegacyForgeDir (BUG: forgeDir/.the-forge moves from vite root to resolved git root)', () => {
+  let repoRoot: string
+  let viteRoot: string
+
+  beforeEach(() => {
+    repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-migrate-root-'))
+    viteRoot = path.join(repoRoot, 'fixtures', 'demo-app')
+    fs.mkdirSync(viteRoot, { recursive: true })
+  })
+
+  it('does nothing when resolvedRoot === viteRoot', () => {
+    const legacyDir = path.join(repoRoot, '.the-forge')
+    fs.mkdirSync(legacyDir, { recursive: true })
+    fs.writeFileSync(path.join(legacyDir, 'queue.json'), JSON.stringify([{ id: 'a', createdAt: new Date().toISOString(), status: 'pending', markdown: 'x', request: null }]))
+
+    const queue = new Queue(path.join(repoRoot, '.the-forge'))
+    migrateLegacyForgeDir(repoRoot, repoRoot, queue)
+
+    // legacy file untouched (never even considered, since resolvedRoot === viteRoot means there's
+    // no separate "legacy" location at all)
+    expect(fs.existsSync(path.join(legacyDir, 'queue.json'))).toBe(true)
+  })
+
+  it('merges legacy queue items into the new-location queue and deletes the legacy queue.json', () => {
+    const legacyDir = path.join(viteRoot, '.the-forge')
+    fs.mkdirSync(legacyDir, { recursive: true })
+    const legacyItem = { id: 'legacy-a', createdAt: new Date(0).toISOString(), status: 'pending', markdown: 'legacy-md', request: null }
+    fs.writeFileSync(path.join(legacyDir, 'queue.json'), JSON.stringify([legacyItem]))
+
+    const newDir = path.join(repoRoot, '.the-forge')
+    const queue = new Queue(newDir)
+    const freshItem = queue.add({}, 'fresh')
+
+    migrateLegacyForgeDir(repoRoot, viteRoot, queue)
+
+    const ids = queue.list().map((i) => i.id)
+    expect(ids).toContain('legacy-a')
+    expect(ids).toContain(freshItem.id)
+    expect(queue.get('legacy-a')!.markdown).toBe('legacy-md')
+    expect(fs.existsSync(path.join(legacyDir, 'queue.json'))).toBe(false)
+  })
+
+  it('dedupes by id — in-memory/new-location item wins on collision', () => {
+    const legacyDir = path.join(viteRoot, '.the-forge')
+    fs.mkdirSync(legacyDir, { recursive: true })
+
+    const newDir = path.join(repoRoot, '.the-forge')
+    const queue = new Queue(newDir)
+    const item = queue.add({}, 'new-version')
+    queue.mark([item.id], 'applied', 'new-note')
+
+    // legacy file has a stale copy of the SAME id with different content
+    const staleCopy = { ...queue.get(item.id)!, markdown: 'stale-version', status: 'pending', note: undefined }
+    fs.writeFileSync(path.join(legacyDir, 'queue.json'), JSON.stringify([staleCopy]))
+
+    migrateLegacyForgeDir(repoRoot, viteRoot, queue)
+
+    expect(queue.get(item.id)!.markdown).toBe('new-version')
+    expect(queue.get(item.id)!.status).toBe('applied')
+  })
+
+  it('skips silently when the legacy queue.json is corrupt, leaving it in place', () => {
+    const legacyDir = path.join(viteRoot, '.the-forge')
+    fs.mkdirSync(legacyDir, { recursive: true })
+    fs.writeFileSync(path.join(legacyDir, 'queue.json'), 'not valid json')
+
+    const newDir = path.join(repoRoot, '.the-forge')
+    const queue = new Queue(newDir)
+
+    expect(() => migrateLegacyForgeDir(repoRoot, viteRoot, queue)).not.toThrow()
+    expect(fs.existsSync(path.join(legacyDir, 'queue.json'))).toBe(true)
+    expect(fs.readFileSync(path.join(legacyDir, 'queue.json'), 'utf8')).toBe('not valid json')
+  })
+
+  it('does nothing (no throw) when no legacy queue.json exists at all', () => {
+    const newDir = path.join(repoRoot, '.the-forge')
+    const queue = new Queue(newDir)
+    expect(() => migrateLegacyForgeDir(repoRoot, viteRoot, queue)).not.toThrow()
+  })
+
+  it('removes the legacy .the-forge dir once empty after queue.json deletion', () => {
+    const legacyDir = path.join(viteRoot, '.the-forge')
+    fs.mkdirSync(legacyDir, { recursive: true })
+    fs.writeFileSync(path.join(legacyDir, 'queue.json'), JSON.stringify([]))
+
+    const newDir = path.join(repoRoot, '.the-forge')
+    const queue = new Queue(newDir)
+    migrateLegacyForgeDir(repoRoot, viteRoot, queue)
+
+    expect(fs.existsSync(legacyDir)).toBe(false)
+  })
+
+  it('leaves the legacy .the-forge dir in place (and endpoint files untouched) when endpoint files remain', () => {
+    const legacyDir = path.join(viteRoot, '.the-forge')
+    fs.mkdirSync(legacyDir, { recursive: true })
+    fs.writeFileSync(path.join(legacyDir, 'queue.json'), JSON.stringify([]))
+    const endpointFile = path.join(legacyDir, 'endpoint-99999.json')
+    fs.writeFileSync(endpointFile, JSON.stringify({ port: 1, pid: 99999 }))
+
+    const newDir = path.join(repoRoot, '.the-forge')
+    const queue = new Queue(newDir)
+    migrateLegacyForgeDir(repoRoot, viteRoot, queue)
+
+    expect(fs.existsSync(path.join(legacyDir, 'queue.json'))).toBe(false)
+    expect(fs.existsSync(endpointFile)).toBe(true)
+    expect(fs.existsSync(legacyDir)).toBe(true)
   })
 })

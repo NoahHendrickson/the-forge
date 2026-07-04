@@ -74,6 +74,12 @@ const MUTATING_PATHS = new Set(['/__the-forge/queue', '/__the-forge/pull', '/__t
 export interface DispatchConfig {
   agent: DispatchOpts['agent']
   channelsFlag: boolean
+  /** The resolved project root (see resolveProjectRoot in server/setup.ts) — passed through as
+   * DispatchOpts.cwd so the experimental Channels rung's marker-file check
+   * (`<cwd>/.the-forge/channel-<pid>`) looks in the SAME `.the-forge` directory the Queue and
+   * endpoint file actually live in, rather than defaulting to process.cwd(). Optional: omitted
+   * in most existing tests, which fall back to dispatch.ts's own process.cwd() default. */
+  cwd?: string
   /** Injectable for tests — defaults to the real dispatch ladder (dispatch.ts). Never invokes
    * a real tmux/osascript/open in tests; production callers omit this and get the real thing. */
   dispatchFn?: (opts: DispatchOpts) => Promise<DispatchResult>
@@ -185,6 +191,7 @@ export function createForgeMiddleware(
             agent: agent ?? dispatchConfig.agent,
             channelsFlag: dispatchConfig.channelsFlag,
             markdown: markdown ?? pending?.markdown ?? '',
+            ...(dispatchConfig.cwd !== undefined ? { cwd: dispatchConfig.cwd } : {}),
           }
           const run = dispatchConfig.dispatchFn ?? realDispatch
           return run(opts).then((result) => send(res, 200, result))

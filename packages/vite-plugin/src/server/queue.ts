@@ -144,6 +144,21 @@ export class Queue {
     return [...this.items]
   }
 
+  /**
+   * Merges externally-sourced items (e.g. a legacy queue.json from a since-relocated queue
+   * directory — see the forge-dir-root migration) into this instance and persists the result.
+   * Dedupes by id using the same rule as mergeWithDisk: items already known to this instance
+   * (in-memory) always win over an incoming item with the same id, since they reflect this
+   * instance's more current view. Items with unknown ids are appended as-is.
+   */
+  mergeItems(items: QueueItem[]): void {
+    const knownIds = new Set(this.items.map((i) => i.id))
+    const toAdd = items.filter((i) => !knownIds.has(i.id))
+    if (toAdd.length === 0) return
+    this.items.push(...toAdd)
+    this.persist()
+  }
+
   get(id: string): QueueItem | undefined {
     return this.items.find((i) => i.id === id)
   }
