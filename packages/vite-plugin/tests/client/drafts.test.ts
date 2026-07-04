@@ -123,4 +123,86 @@ describe('DraftStore', () => {
     expect(entries.size).toBe(1)
     expect(entries.get(d)!.get('width')).toEqual({ original: '50px', value: '100px' })
   })
+
+  it('commit removes inline styles without restoring originals and forgets the element', () => {
+    const store = new DraftStore()
+    const d = el()
+    d.style.setProperty('padding-top', '4px')
+    store.apply(d, 'padding-top', '12px')
+    store.commit(d)
+    expect(d.style.getPropertyValue('padding-top')).toBe('') // NOT 4px — code owns it now
+    expect(store.hasDrafts(d)).toBe(false)
+  })
+
+  it('commit clears compare state and fires onChange', () => {
+    const store = new DraftStore()
+    const d = el()
+    store.apply(d, 'width', '100px')
+    store.compare(d, true)
+    const spy = vi.fn()
+    store.onChange = spy
+    store.commit(d)
+    expect(store.isComparing(d)).toBe(false)
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('commit on an element with multiple drafted properties clears all of them', () => {
+    const store = new DraftStore()
+    const d = el()
+    store.apply(d, 'width', '100px')
+    store.apply(d, 'height', '50px')
+    store.commit(d)
+    expect(d.style.getPropertyValue('width')).toBe('')
+    expect(d.style.getPropertyValue('height')).toBe('')
+    expect(store.elementCount()).toBe(0)
+  })
+
+  it('commit on an element with no drafts is a no-op', () => {
+    const store = new DraftStore()
+    const d = el()
+    const spy = vi.fn()
+    store.onChange = spy
+    store.commit(d)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('commit(el, props) removes only the given properties, leaving other drafts intact', () => {
+    const store = new DraftStore()
+    const d = el()
+    store.apply(d, 'padding-top', '12px')
+    store.apply(d, 'margin-top', '8px')
+    store.commit(d, ['padding-top'])
+    expect(d.style.getPropertyValue('padding-top')).toBe('')
+    expect(d.style.getPropertyValue('margin-top')).toBe('8px') // inline still applied
+    expect(store.current(d, 'margin-top')).toBe('8px') // draft still tracked
+    expect(store.current(d, 'padding-top')).toBeNull()
+    expect(store.hasDrafts(d)).toBe(true) // element not forgotten — margin-top draft remains
+  })
+
+  it('commit(el, props) forgets the element once its last targeted property empties the map', () => {
+    const store = new DraftStore()
+    const d = el()
+    store.apply(d, 'padding-top', '12px')
+    store.commit(d, ['padding-top'])
+    expect(store.hasDrafts(d)).toBe(false)
+    expect(store.elementCount()).toBe(0)
+  })
+
+  it('sequential targeted commits across two requests compose correctly', () => {
+    const store = new DraftStore()
+    const d = el()
+    store.apply(d, 'padding-top', '24px')
+    store.apply(d, 'margin-top', '8px')
+    // request 1 committed: only padding-top
+    store.commit(d, ['padding-top'])
+    expect(store.hasDrafts(d)).toBe(true)
+    expect(store.current(d, 'margin-top')).toBe('8px')
+    expect(d.style.getPropertyValue('padding-top')).toBe('')
+    expect(d.style.getPropertyValue('margin-top')).toBe('8px')
+    // request 2 committed: the rest
+    store.commit(d, ['margin-top'])
+    expect(store.hasDrafts(d)).toBe(false)
+    expect(store.elementCount()).toBe(0)
+    expect(d.style.getPropertyValue('margin-top')).toBe('')
+  })
 })

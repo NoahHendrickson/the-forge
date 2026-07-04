@@ -85,6 +85,29 @@ export class DraftStore {
     this.emit()
   }
 
+  commit(el: TaggedElement, props?: string[]): void {
+    const draftProps = this.drafts.get(el)
+    if (!draftProps) return
+    if (props) {
+      // targeted commit: only forget the properties that were actually verified/sent —
+      // an un-sent draft on the same element (e.g. a different property edited after
+      // the request went out) must survive so it isn't silently lost.
+      for (const prop of props) {
+        el.style.removeProperty(prop)
+        draftProps.delete(prop)
+      }
+      if (draftProps.size === 0) {
+        this.drafts.delete(el)
+        this.showingOriginal.delete(el)
+      }
+    } else {
+      for (const prop of draftProps.keys()) el.style.removeProperty(prop)
+      this.drafts.delete(el)
+      this.showingOriginal.delete(el)
+    }
+    this.emit()
+  }
+
   discardAll(): void {
     for (const el of [...this.drafts.keys()]) {
       const props = this.drafts.get(el)!

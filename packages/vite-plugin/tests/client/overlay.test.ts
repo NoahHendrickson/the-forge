@@ -52,12 +52,55 @@ describe('Overlay (M2 additions)', () => {
     expect((overlay.host.shadowRoot!.getElementById('status') as HTMLElement).hidden).toBe(true)
   })
 
-  it('status strip includes the copy button first', () => {
+  it('status strip includes the copy button after send', () => {
     const overlay = new Overlay()
     overlay.mount()
     const status = overlay.host.shadowRoot!.getElementById('status')!
     const buttons = [...status.querySelectorAll('button')]
-    expect(buttons[0]).toBe(overlay.copyButton)
+    expect(buttons[1]).toBe(overlay.copyButton)
     expect(overlay.copyButton.textContent).toBe('Copy for agent')
+  })
+})
+
+describe('Overlay (M4 additions)', () => {
+  it('status strip includes the send button first, before copy', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const status = overlay.host.shadowRoot!.getElementById('status')!
+    const buttons = [...status.querySelectorAll('button')]
+    expect(buttons[0]).toBe(overlay.sendButton)
+    expect(buttons[1]).toBe(overlay.copyButton)
+    expect(overlay.sendButton.textContent).toBe('Send to agent')
+  })
+
+  it('updateStatus shows an optional sent span when given sentText', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const status = overlay.host.shadowRoot!.getElementById('status') as HTMLElement
+    overlay.updateStatus(1, false)
+    const sent = overlay.host.shadowRoot!.getElementById('sent') as HTMLElement
+    expect(sent.hidden).toBe(true)
+
+    overlay.updateStatus(1, false, '1 applying… · 2 implemented')
+    expect(sent.hidden).toBe(false)
+    expect(sent.textContent).toBe('1 applying… · 2 implemented')
+
+    overlay.updateStatus(1, false, '')
+    expect(sent.hidden).toBe(true)
+  })
+
+  it('keeps the strip visible for a verifier summary after drafts hit zero', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.updateStatus(0, false, '1 implemented ✓')
+    const root = overlay.host.shadowRoot!
+    const status = root.getElementById('status') as HTMLElement
+    expect(status.hidden).toBe(false)
+    expect(overlay.sendButton.hidden).toBe(true)
+    expect(overlay.copyButton.hidden).toBe(true)
+    expect(overlay.compareAllButton.hidden).toBe(true)
+    expect(overlay.resetAllButton.hidden).toBe(true)
+    overlay.updateStatus(0, false, '')
+    expect(status.hidden).toBe(true)
   })
 })

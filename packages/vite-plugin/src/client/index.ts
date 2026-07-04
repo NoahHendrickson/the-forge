@@ -3,7 +3,9 @@ import { findTaggedElement, type TaggedElement } from './source'
 import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
-import { buildChangeRequest, renderMarkdown } from './request'
+import { buildChangeRequestWithElements, renderMarkdown } from './request'
+import { SentRegistry } from './sent'
+import { Verifier } from './verifier'
 
 declare global {
   interface Window {
@@ -14,13 +16,17 @@ declare global {
 export class DesignMode {
   active = false
   selected: TaggedElement | null = null
+  sent = new SentRegistry()
+  onSendComplete?: () => void
 
   private moveRaf = 0
   private reflowRaf = 0
   private lastMove: MouseEvent | null = null
   private drafts: DraftStore
   private panel: Panel
-  private copyTimer: ReturnType<typeof setTimeout> | null = null
+  private verifier: Verifier
+  private verifierSummary = ''
+  private buttonTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>()
 
   constructor(
     private overlay: Overlay,
@@ -29,13 +35,59 @@ export class DesignMode {
   ) {
     this.drafts = drafts ?? new DraftStore()
     this.panel = panel ?? new Panel(this.drafts, () => this.remeasure())
+    this.verifier = new Verifier(this.sent, this.drafts, (summary) => {
+      this.verifierSummary = summary
+      this.refreshStatus()
+      // a commit/mismatch may change the computed style of the element the panel is
+      // currently showing (or the selection outline's geometry) — refresh both.
+      this.panel.refresh()
+      this.remeasure()
+    })
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
+    overlay.sendButton.addEventListener('click', () => {
+      if (overlay.sendButton.disabled) return // re-entrancy guard: a POST is already in flight
+      const originalLabel = 'Send to agent'
+      const { request, elements } = buildChangeRequestWithElements(this.drafts)
+      const md = renderMarkdown(request)
+      const onSendFailed = (): void => {
+        overlay.sendButton.disabled = false
+        this.flashButton(overlay.sendButton, 'Send failed', originalLabel)
+      }
+      const onSendOk = (id: string): void => {
+        const mapping = [...elements.entries()].map(([el, change]) => ({
+          el,
+          dcSource: el.dataset.dcSource ?? null,
+          draftProps: [...(this.drafts.entries().get(el)?.keys() ?? [])],
+          changes: change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
+        }))
+        this.sent.add(id, mapping)
+        this.verifier.start()
+        overlay.sendButton.disabled = false
+        this.flashButton(overlay.sendButton, 'Sent ✓', originalLabel)
+        this.onSendComplete?.()
+      }
+      overlay.sendButton.disabled = true
+      // nesting is deliberate: the send test counts microtask ticks — re-check it before flattening to async/await
+      fetch('/__the-forge/queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request, markdown: md }),
+      })
+        .then((res) => {
+          if (!res.ok) return onSendFailed()
+          res
+            .json()
+            .then((body: { id: string }) => onSendOk(body.id))
+            .catch(onSendFailed)
+        })
+        .catch(onSendFailed)
+    })
     overlay.copyButton.addEventListener('click', () => {
-      const md = renderMarkdown(buildChangeRequest(this.drafts))
+      const md = renderMarkdown(buildChangeRequestWithElements(this.drafts).request)
       navigator.clipboard
         .writeText(md)
-        .then(() => this.flashCopyLabel('Copied ✓'))
-        .catch(() => this.flashCopyLabel('Copy failed'))
+        .then(() => this.flashButton(overlay.copyButton, 'Copied ✓', 'Copy for agent'))
+        .catch(() => this.flashButton(overlay.copyButton, 'Copy failed', 'Copy for agent'))
     })
     overlay.compareAllButton.addEventListener('click', () => {
       this.drafts.compareAll(!this.drafts.isComparingAll())
@@ -46,10 +98,7 @@ export class DesignMode {
       this.panel.refresh()
       this.remeasure()
     })
-    this.drafts.onChange = () => {
-      if (!this.active) return
-      this.overlay.updateStatus(this.drafts.elementCount(), this.drafts.isComparingAll())
-    }
+    this.drafts.onChange = () => this.refreshStatus()
   }
 
   get panelRoot(): HTMLElement {
@@ -66,7 +115,8 @@ export class DesignMode {
       document.addEventListener('keydown', this.onKey, true)
       document.addEventListener('scroll', this.onReflow, { capture: true, passive: true })
       window.addEventListener('resize', this.onReflow, { passive: true })
-      this.overlay.updateStatus(this.drafts.elementCount(), this.drafts.isComparingAll())
+      if (this.sent.size() > 0) this.verifier.start()
+      this.refreshStatus()
     } else {
       document.removeEventListener('mousemove', this.onMove, true)
       document.removeEventListener('click', this.onClick, true)
@@ -81,7 +131,13 @@ export class DesignMode {
       this.selected = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
+      this.verifier.stop()
     }
+  }
+
+  private refreshStatus(): void {
+    if (!this.active) return
+    this.overlay.updateStatus(this.drafts.elementCount(), this.drafts.isComparingAll(), this.verifierSummary || undefined)
   }
 
   select(el: TaggedElement): void {
@@ -100,14 +156,15 @@ export class DesignMode {
     if (this.selected) this.overlay.showSelectOutline(this.selected.getBoundingClientRect())
   }
 
-  private flashCopyLabel(label: string): void {
-    const btn = this.overlay.copyButton
+  private flashButton(btn: HTMLButtonElement, label: string, restore: string): void {
     btn.textContent = label
-    if (this.copyTimer) clearTimeout(this.copyTimer)
-    this.copyTimer = setTimeout(() => {
-      btn.textContent = 'Copy for agent'
-      this.copyTimer = null
+    const existing = this.buttonTimers.get(btn)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      btn.textContent = restore
+      this.buttonTimers.delete(btn)
     }, 1500)
+    this.buttonTimers.set(btn, timer)
   }
 
   private onMove = (e: MouseEvent): void => {

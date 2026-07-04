@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest'
 import { DraftStore } from '../../src/client/drafts'
-import { buildChangeRequest, renderMarkdown } from '../../src/client/request'
+import { buildChangeRequest, buildChangeRequestWithElements, cssPath, renderMarkdown } from '../../src/client/request'
 import type { Theme } from '../../src/client/tokens'
 
 const TW: Theme = { rootFontPx: 16, spacingBasePx: 4, radiusScale: { lg: 8, xl: 12 } }
@@ -107,6 +107,62 @@ describe('buildChangeRequest', () => {
     el.remove()
     const req = buildChangeRequest(store, TW)
     expect(req.elements).toHaveLength(0)
+  })
+
+  it('requests carry id, createdAt, and per-element selector', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    store.apply(el, 'padding-top', '24px')
+    const req = buildChangeRequest(store, TW)
+    expect(req.id).toMatch(/^[0-9a-f-]{36}$/)
+    expect(new Date(req.createdAt).getTime()).toBeGreaterThan(0)
+    expect(req.elements[0].selector).toContain('button')
+  })
+
+  it('each build produces a distinct id', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    store.apply(el, 'padding-top', '24px')
+    const req1 = buildChangeRequest(store, TW)
+    const req2 = buildChangeRequest(store, TW)
+    expect(req1.id).not.toBe(req2.id)
+  })
+})
+
+describe('cssPath', () => {
+  it('uses the id when present', () => {
+    document.body.innerHTML = `<div><button id="save-btn">Save</button></div>`
+    const el = document.querySelector('button')!
+    expect(cssPath(el)).toBe('button#save-btn')
+  })
+
+  it('builds an nth-of-type chain up to 4 ancestors when there is no id', () => {
+    document.body.innerHTML = `
+      <div>
+        <section>
+          <article>
+            <div>
+              <button>go</button>
+            </div>
+          </article>
+        </section>
+      </div>`
+    const el = document.querySelector('button')!
+    const path = cssPath(el)
+    expect(path).toContain('button')
+    expect(path.split('>').length).toBeLessThanOrEqual(5)
+  })
+})
+
+describe('buildChangeRequestWithElements', () => {
+  it('returns the same request as buildChangeRequest plus a live element map', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    store.apply(el, 'padding-top', '24px')
+    const { request, elements } = buildChangeRequestWithElements(store, TW)
+    expect(request.elements).toHaveLength(1)
+    expect(elements.size).toBe(1)
+    expect(elements.get(el)).toBe(request.elements[0])
   })
 })
 

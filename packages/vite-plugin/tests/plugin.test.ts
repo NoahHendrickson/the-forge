@@ -1,14 +1,38 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
+import { EventEmitter } from 'node:events'
 import { theForge, CLIENT_ID } from '../src/index'
 
 type TransformHook = (code: string, id: string) => { code: string } | null
 
-function getPlugin() {
+function getPlugin(root = '/proj') {
   const plugin = theForge()
   // simulate vite calling configResolved with a root
-  ;(plugin.configResolved as (c: { root: string }) => void)({ root: '/proj' })
+  ;(plugin.configResolved as (c: { root: string }) => void)({ root })
   const transform = plugin.transform as unknown as TransformHook
   return { plugin, transform }
+}
+
+interface FakeHttpServer extends EventEmitter {
+  address(): { port: number; address: string } | null
+}
+
+interface FakeViteServer {
+  middlewares: { use: (...args: unknown[]) => void }
+  httpServer: FakeHttpServer
+  config: { server: { allowedHosts?: string[] | true } }
+}
+
+function fakeServer(_root: string): FakeViteServer {
+  const httpServer = new EventEmitter() as FakeHttpServer
+  httpServer.address = () => ({ port: 5199, address: '127.0.0.1' })
+  return {
+    middlewares: { use: () => undefined },
+    httpServer,
+    config: { server: {} },
+  }
 }
 
 describe('theForge plugin', () => {
@@ -56,5 +80,26 @@ describe('theForge plugin', () => {
     const resolveId = plugin.resolveId as unknown as (id: string) => string | undefined
     expect(resolveId(CLIENT_ID)).toBe(CLIENT_ID)
     expect(resolveId('/other')).toBeUndefined()
+  })
+
+  describe('endpoint file lifecycle', () => {
+    let root: string
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-plugin-'))
+    })
+
+    it('removes the endpoint file when the http server closes', () => {
+      const { plugin } = getPlugin(root)
+      const server = fakeServer(root)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+
+      const filePath = path.join(root, '.the-forge', `endpoint-${process.pid}.json`)
+      expect(fs.existsSync(filePath)).toBe(true)
+
+      server.httpServer.emit('close')
+      expect(fs.existsSync(filePath)).toBe(false)
+    })
   })
 })

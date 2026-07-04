@@ -16,10 +16,13 @@ export interface ElementChange {
   source: SourceLocation | null
   className: string
   text: string
+  selector: string
   changes: ChangeItem[]
 }
 
 export interface ChangeRequest {
+  id: string
+  createdAt: string
   viewport: { width: number; height: number }
   tailwind: boolean
   elements: ElementChange[]
@@ -57,8 +60,36 @@ function measureComputed(el: TaggedElement, props: Iterable<string>): Map<string
   return out
 }
 
-export function buildChangeRequest(drafts: DraftStore, theme: Theme = readTheme()): ChangeRequest {
-  const elements: ElementChange[] = []
+export function cssPath(start: TaggedElement): string {
+  const parts: string[] = []
+  let el: Element | null = start
+  let depth = 0
+  while (el && depth < 4) {
+    const tag = el.tagName.toLowerCase()
+    if (el.id) {
+      parts.unshift(`${tag}#${el.id}`)
+      break
+    }
+    const parent: Element | null = el.parentElement
+    if (parent) {
+      const siblings = [...parent.children].filter((c) => c.tagName === el!.tagName)
+      const index = siblings.indexOf(el) + 1
+      parts.unshift(siblings.length > 1 ? `${tag}:nth-of-type(${index})` : tag)
+    } else {
+      parts.unshift(tag)
+    }
+    el = parent
+    depth++
+  }
+  return parts.join(' > ')
+}
+
+export function buildChangeRequestWithElements(
+  drafts: DraftStore,
+  theme: Theme = readTheme()
+): { request: ChangeRequest; elements: Map<TaggedElement, ElementChange> } {
+  const elementList: ElementChange[] = []
+  const elements = new Map<TaggedElement, ElementChange>()
 
   for (const [el, props] of drafts.entries()) {
     if (!el.isConnected) continue
@@ -104,20 +135,31 @@ export function buildChangeRequest(drafts: DraftStore, theme: Theme = readTheme(
       })
     }
 
-    elements.push({
+    const elementChange: ElementChange = {
       tag: el.tagName.toLowerCase(),
       source: el.dataset.dcSource ? parseSourceAttr(el.dataset.dcSource) : null,
       className,
       text: (el.textContent ?? '').replace(/[`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80),
+      selector: cssPath(el),
       changes,
-    })
+    }
+    elementList.push(elementChange)
+    elements.set(el, elementChange)
   }
 
-  return {
+  const request: ChangeRequest = {
+    id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
     viewport: { width: window.innerWidth, height: window.innerHeight },
     tailwind: theme.spacingBasePx !== null,
-    elements,
+    elements: elementList,
   }
+
+  return { request, elements }
+}
+
+export function buildChangeRequest(drafts: DraftStore, theme: Theme = readTheme()): ChangeRequest {
+  return buildChangeRequestWithElements(drafts, theme).request
 }
 
 export function renderMarkdown(req: ChangeRequest): string {

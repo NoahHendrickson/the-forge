@@ -13,6 +13,7 @@ const liveModes: DesignMode[] = []
 
 beforeEach(() => {
   document.body.innerHTML = ''
+  document.head.innerHTML = ''
   vi.restoreAllMocks()
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
     cb(0)
@@ -249,5 +250,242 @@ describe('DesignMode selection (M2)', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(overlay.copyButton.textContent).toBe('Copy failed')
+  })
+})
+
+describe('DesignMode send-to-agent (M4)', () => {
+  it('send posts the request and registers pending ids', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q1' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fetchMock).toHaveBeenCalledWith('/__the-forge/queue', expect.objectContaining({ method: 'POST' }))
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.markdown).toContain('# Design change request')
+    expect(mode.sent.pendingIds()).toEqual(['q1'])
+    expect(overlay.sendButton.textContent).toBe('Sent ✓')
+  })
+
+  it('send registers the live element mapping keyed by the server-assigned id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q7' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    const entry = mode.sent.take('q7')!
+    expect(entry.elements).toHaveLength(1)
+    expect(entry.elements[0].el).toBe(btn)
+    expect(entry.elements[0].dcSource).toBe('src/Button.tsx:42:8')
+    expect(entry.elements[0].changes[0].property).toBe('padding-top')
+    expect(entry.elements[0].draftProps).toEqual(['padding-top'])
+  })
+
+  it('send failure flashes "Send failed" and leaves drafts untouched', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('network down'))
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(overlay.sendButton.textContent).toBe('Send failed')
+    expect(mode.sent.size()).toBe(0)
+    expect(drafts.hasDrafts(btn)).toBe(true)
+    expect(btn.style.getPropertyValue('padding-top')).toBe('24px')
+  })
+
+  it('send failure on non-200 response also flashes "Send failed"', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: 'bad' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(overlay.sendButton.textContent).toBe('Send failed')
+    expect(mode.sent.size()).toBe(0)
+  })
+
+  it('calls onSendComplete after a successful send registers', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q9' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    const onSendComplete = vi.fn()
+    mode.onSendComplete = onSendComplete
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(onSendComplete).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables the send button while the POST is in flight, and re-enables on success', async () => {
+    let resolveFetch!: (v: { ok: boolean; json: () => Promise<{ id: string }> }) => void
+    const fetchMock = vi.fn().mockReturnValue(new Promise((resolve) => (resolveFetch = resolve)))
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+
+    overlay.sendButton.click()
+    await Promise.resolve()
+    expect(overlay.sendButton.disabled).toBe(true)
+
+    resolveFetch({ ok: true, json: async () => ({ id: 'q1' }) })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(overlay.sendButton.disabled).toBe(false)
+  })
+
+  it('disables the send button while the POST is in flight, and re-enables on failure', async () => {
+    let rejectFetch!: (e: Error) => void
+    const fetchMock = vi.fn().mockReturnValue(new Promise((_resolve, reject) => (rejectFetch = reject)))
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+
+    overlay.sendButton.click()
+    await Promise.resolve()
+    expect(overlay.sendButton.disabled).toBe(true)
+
+    rejectFetch(new Error('network down'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(overlay.sendButton.disabled).toBe(false)
+  })
+
+  it('two rapid clicks result in exactly one fetch (re-entrancy guard)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q1' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+
+    overlay.sendButton.click()
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('DesignMode verifier wiring (M4 Task 4)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('starts the verifier after a successful send and reflects the summary in the status strip', async () => {
+    const fetchMock = vi.fn()
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'q1' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    // the verifier neutralizes draft inline styles before measuring, so "the code
+    // adopted the value" must come from somewhere other than the draft itself
+    const style = document.createElement('style')
+    style.textContent = '.btn { padding-top: 24px; }'
+    document.head.appendChild(style)
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const sentLabel = overlay.host.shadowRoot!.getElementById('sent') as HTMLElement
+    expect(sentLabel.hidden).toBe(false)
+    expect(sentLabel.textContent).toContain('implemented')
+    expect(drafts.hasDrafts(btn)).toBe(false)
+  })
+
+  it('stops polling on deactivate and resumes on activate while entries remain', async () => {
+    const fetchMock = vi.fn()
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'q1' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(mode.sent.size()).toBe(1)
+
+    mode.setActive(false)
+    fetchMock.mockClear()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(fetchMock).not.toHaveBeenCalled() // stopped: no polling while inactive
+
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ items: [] }) })
+    mode.setActive(true) // entries remain pending -> polling resumes
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(fetchMock).toHaveBeenCalledWith('/__the-forge/status?ids=q1')
+  })
+
+  it('does not start polling on activate when there are no pending sends', () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    expect(mode.sent.size()).toBe(0)
+    return vi.advanceTimersByTimeAsync(4000).then(() => {
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
+
+  it('refreshes the panel and re-measures the selection outline when a verify update arrives', async () => {
+    const fetchMock = vi.fn()
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'q1' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    const style = document.createElement('style')
+    style.textContent = '.btn { padding-top: 24px; }'
+    document.head.appendChild(style)
+    drafts.apply(btn, 'padding-top', '24px')
+    mode.select(btn) // panel is showing this element, as it might be while awaiting verification
+
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const refreshSpy = vi.spyOn(panel, 'refresh')
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(refreshSpy).toHaveBeenCalled()
   })
 })
