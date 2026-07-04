@@ -152,6 +152,23 @@ request builder, verifier: unchanged.
   every tool result; panel detects a dropped watcher (heartbeat gone) and surfaces "watch
   session disconnected — type /forge-watch again". A real soak test decides whether this
   ships; nothing else matters if the loop won't hold.
+- **Token cost of the idle loop** (user-raised 2026-07-04). Parked waits cost nothing —
+  tokens flow only at cycle boundaries, when the agent re-calls the tool. Each tick adds a
+  tiny tool call + terse result (<100 fresh tokens), plus a transcript re-read that is
+  almost entirely prompt-cache hits (25s ticks stay well inside the cache TTL). Envelope:
+  an idle hour ≈ ~140 ticks, transcript grows to ~10–15k tokens, fresh spend on the order
+  of a few tens of thousands of tokens — "a modest conversation gently idling". Cost
+  scales with time watched, not edits sent; applying an edit costs the same on every
+  dispatch path. The failure mode is the forgotten session (overnight watch = pure waste,
+  with idle cost creeping up as context accretes). Design mitigations, to ratify in the
+  plan: (a) **idle auto-stop** — after ~15–20 min with no edits the wait endpoint tells the
+  agent to stop watching; panel shows "watch session idle — type /forge-watch to resume";
+  bounds the worst case. (b) **End the watch when design mode toggles off** (a watch with
+  no design session is useless by definition). (c) Longest safe wait window — the biggest
+  lever; every doubling halves tick count (measure the real client timeout in the soak
+  test). (d) Terse command text + terse tool results to minimize per-tick context growth
+  and deliberation. Soak test must measure actuals: tick count, context growth, and
+  usage-meter impact over an hour.
 - **Tool-permission prompt**: first `wait_for_design_edits` call asks; user picks
   always-allow once. Document it in the command file's own text.
 - **Occupied session**: while watching, that session can't be chatted with (Esc interrupts
