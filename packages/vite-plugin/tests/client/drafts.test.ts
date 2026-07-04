@@ -187,4 +187,22 @@ describe('DraftStore', () => {
     expect(store.hasDrafts(d)).toBe(false)
     expect(store.elementCount()).toBe(0)
   })
+
+  it('sequential targeted commits across two requests compose correctly', () => {
+    const store = new DraftStore()
+    const d = el()
+    store.apply(d, 'padding-top', '24px')
+    store.apply(d, 'margin-top', '8px')
+    // request 1 committed: only padding-top
+    store.commit(d, ['padding-top'])
+    expect(store.hasDrafts(d)).toBe(true)
+    expect(store.current(d, 'margin-top')).toBe('8px')
+    expect(d.style.getPropertyValue('padding-top')).toBe('')
+    expect(d.style.getPropertyValue('margin-top')).toBe('8px')
+    // request 2 committed: the rest
+    store.commit(d, ['margin-top'])
+    expect(store.hasDrafts(d)).toBe(false)
+    expect(store.elementCount()).toBe(0)
+    expect(d.style.getPropertyValue('margin-top')).toBe('')
+  })
 })
