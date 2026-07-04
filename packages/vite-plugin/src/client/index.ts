@@ -38,6 +38,7 @@ export class DesignMode {
   // in the burst until RIPPLE_DEBOUNCE_MS of quiet, so ripples reflect drag-start ->
   // drag-end, not per-tick noise.
   private rippleSnapshot: Map<TaggedElement, DOMRect> | null = null
+  private rippleSnapshotFor: TaggedElement | null = null
   private lastEditAt = 0
 
   constructor(
@@ -148,6 +149,8 @@ export class DesignMode {
       this.reflowRaf = 0
       this.rippleRaf = 0
       this.rippleSnapshot = null
+      this.rippleSnapshotFor = null
+      this.lastEditAt = 0
       this.lastMove = null
       this.selected = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
@@ -163,12 +166,18 @@ export class DesignMode {
 
   select(el: TaggedElement): void {
     this.selected = el
+    this.rippleSnapshot = null
+    this.rippleSnapshotFor = null
+    this.lastEditAt = 0
     this.overlay.showSelectOutline(el.getBoundingClientRect())
     this.panel.show(el, buildInspectorData(el))
   }
 
   deselect(): void {
     this.selected = null
+    this.rippleSnapshot = null
+    this.rippleSnapshotFor = null
+    this.lastEditAt = 0
     this.overlay.hideSelectOutline()
     this.panel.hide()
   }
@@ -181,9 +190,11 @@ export class DesignMode {
   private handleBeforeEdit(el: TaggedElement): void {
     const now = Date.now()
     // Reuse the in-flight snapshot while edits keep arriving within the debounce
-    // window (a scrub/drag burst) — only take a fresh one after a quiet gap.
-    if (!this.rippleSnapshot || now - this.lastEditAt > RIPPLE_DEBOUNCE_MS) {
+    // window (a scrub/drag burst) — only take a fresh one after a quiet gap or
+    // when the edited element changes (re-selection within the debounce window).
+    if (!this.rippleSnapshot || this.rippleSnapshotFor !== el || now - this.lastEditAt > RIPPLE_DEBOUNCE_MS) {
       this.rippleSnapshot = snapshotRects(el)
+      this.rippleSnapshotFor = el
     }
     this.lastEditAt = now
   }

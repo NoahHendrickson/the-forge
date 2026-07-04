@@ -661,4 +661,91 @@ describe('DesignMode layout-ripple debounce (M2b Task 4)', () => {
 
     expect(showRipplesSpy).toHaveBeenCalledWith([sibling.getBoundingClientRect()])
   })
+
+  it('re-snapshots when the selection changes mid-burst', () => {
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
+    const runRaf = () => queue.splice(0).forEach((cb) => cb(0))
+
+    // Two separate component trees (separate scopes)
+    document.body.innerHTML = `
+      <div data-dc-source="src/ComponentA.tsx:1:1" id="compA" style="padding: 8px;">
+        <div data-dc-source="src/ChildA.tsx:2:2" id="childA"></div>
+        <div data-dc-source="src/SiblingA.tsx:3:3" id="siblingA"></div>
+      </div>
+      <div data-dc-source="src/ComponentB.tsx:4:4" id="compB" style="padding: 8px;">
+        <div data-dc-source="src/ChildB.tsx:5:5" id="childB"></div>
+        <div data-dc-source="src/SiblingB.tsx:6:6" id="siblingB"></div>
+      </div>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    mode.setActive(true)
+
+    const childA = document.getElementById('childA')! as HTMLElement
+    const siblingA = document.getElementById('siblingA')! as HTMLElement
+    const childB = document.getElementById('childB')! as HTMLElement
+    const siblingB = document.getElementById('siblingB')! as HTMLElement
+
+    // Setup both scopes with distinct positions
+    stubRect(childA, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(siblingA, { x: 0, y: 30, width: 100, height: 20 })
+    stubRect(childB, { x: 400, y: 0, width: 100, height: 20 })
+    stubRect(siblingB, { x: 400, y: 30, width: 100, height: 20 })
+
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+
+    // STEP 1: Select childA and edit it. This snapshots ComponentA's scope (includes siblingA).
+    mode.select(childA)
+    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    // The rAF is queued but NOT yet run — snapshot still in memory
+    expect(queue).toHaveLength(1)
+
+    // Update positions as if layout reflow happened
+    stubRect(siblingA, { x: 0, y: 40, width: 100, height: 20 })
+
+    // STEP 2: Before the ripple rAF runs, switch to childB and edit it within debounce.
+    // BUG: The old snapshot (childA's scope with siblingA) is still in mode.rippleSnapshot.
+    // handleBeforeEdit(childB) should re-snapshot because the element changed, but the
+    // buggy code only checks elapsed time, not which element the snapshot was for.
+    mode.select(childB)
+    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    // Now we have TWO rAFs queued: one from childA edit, one from childB edit
+    expect(queue).toHaveLength(2)
+
+    // Update childB's sibling position
+    stubRect(siblingB, { x: 400, y: 40, width: 100, height: 20 })
+
+    // Run BOTH rAFs and check what ripples were shown
+    showRipplesSpy.mockClear()
+    runRaf()
+
+    // After running both rAFs:
+    // - First rAF (from childA) diffs childA's snapshot against current positions
+    // - Second rAF (from childB) diffs either childB's snapshot (CORRECT) or childA's (BUG)
+    //
+    // If the bug exists: childB's rAF diff runs against childA's snapshot, measuring siblingA.
+    // Since siblingA moved from y=30→40, and the snapshot has y=30, it would show a ripple at y=40.
+    // But we want it to show siblingB moving from y=30→40 at x=400.
+
+    // Correct behavior: at least one call should have rects with x=400 (siblingB), not x=0 (siblingA).
+    expect(showRipplesSpy.mock.calls.length).toBeGreaterThan(0)
+    let hasCorrectRipple = false
+    for (const callArgs of showRipplesSpy.mock.calls) {
+      const rects = callArgs[0]
+      for (const rect of rects) {
+        if (rect.x === 400) {
+          hasCorrectRipple = true
+          break
+        }
+      }
+    }
+    expect(hasCorrectRipple).toBe(true) // Must see siblingB ripple, not just siblingA
+  })
+
 })
