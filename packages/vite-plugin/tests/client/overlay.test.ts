@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Overlay } from '../../src/client/overlay'
 
 beforeEach(() => {
@@ -102,5 +102,113 @@ describe('Overlay (M4 additions)', () => {
     expect(overlay.resetAllButton.hidden).toBe(true)
     overlay.updateStatus(0, false, '')
     expect(status.hidden).toBe(true)
+  })
+})
+
+describe('Overlay.showRipples (M2b Task 4)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function ripples(overlay: Overlay): HTMLElement[] {
+    return [...overlay.host.shadowRoot!.querySelectorAll('.ripple-outline')] as HTMLElement[]
+  }
+
+  it('draws one ripple-outline div per rect', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showRipples([new DOMRect(0, 0, 10, 10), new DOMRect(20, 20, 5, 5)])
+    expect(ripples(overlay)).toHaveLength(2)
+  })
+
+  it('caps ripple outlines at 8', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const rects = Array.from({ length: 12 }, (_, i) => new DOMRect(i, i, 10, 10))
+    overlay.showRipples(rects)
+    expect(ripples(overlay)).toHaveLength(8)
+  })
+
+  it('reuses the pool on a second call rather than growing indefinitely', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showRipples([new DOMRect(0, 0, 10, 10)])
+    overlay.showRipples([new DOMRect(0, 0, 10, 10), new DOMRect(1, 1, 2, 2)])
+    expect(ripples(overlay)).toHaveLength(2)
+  })
+
+  it('auto-clears ripples after 1.5s plus the fade duration', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showRipples([new DOMRect(0, 0, 10, 10)])
+    expect(ripples(overlay).every((r) => r.hidden)).toBe(false)
+    vi.advanceTimersByTime(1500 + 300) // clear timer, then the fade-out window
+    expect(ripples(overlay).every((r) => r.hidden)).toBe(true)
+  })
+
+  it('ripples actually fade: opacity drops to 0 before the outline hides, not an instant cut', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showRipples([new DOMRect(0, 0, 10, 10)])
+    const [el] = ripples(overlay)
+    expect(el.style.opacity).not.toBe('0')
+    vi.advanceTimersByTime(1500)
+    // opacity must reach 0 (so the CSS transition has something to animate) before hiding
+    expect(el.style.opacity).toBe('0')
+    expect(el.hidden).toBe(false) // still in the DOM, mid-fade
+    vi.advanceTimersByTime(300) // the transition duration declared in CSS
+    expect(el.hidden).toBe(true)
+  })
+
+  it('setActive(false) clearing ripples still leaves them faded-and-hidden (no snap to opacity 1 on reuse)', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showRipples([new DOMRect(0, 0, 10, 10)])
+    const [el] = ripples(overlay)
+    overlay.setActive(false)
+    vi.advanceTimersByTime(300)
+    expect(el.hidden).toBe(true)
+    // reusing the pool for a fresh burst of ripples must restore full opacity
+    overlay.showRipples([new DOMRect(0, 0, 10, 10)])
+    expect(el.style.opacity).toBe('1')
+  })
+
+  it('re-triggering showRipples resets the shared clear timer', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showRipples([new DOMRect(0, 0, 10, 10)])
+    vi.advanceTimersByTime(1000)
+    overlay.showRipples([new DOMRect(0, 0, 10, 10)]) // reset the clock
+    vi.advanceTimersByTime(1000)
+    expect(ripples(overlay).every((r) => r.hidden)).toBe(false) // only 2000ms since first call, but 1000ms since reset
+    vi.advanceTimersByTime(500 + 300) // clear timer fires, then the fade-out window
+    expect(ripples(overlay).every((r) => r.hidden)).toBe(true)
+  })
+
+  it('setActive(false) starts the fade, hiding once it completes', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showRipples([new DOMRect(0, 0, 10, 10)])
+    overlay.setActive(false)
+    expect(ripples(overlay).every((r) => r.hidden)).toBe(false) // mid-fade, not instantly gone
+    vi.advanceTimersByTime(300)
+    expect(ripples(overlay).every((r) => r.hidden)).toBe(true)
+  })
+
+  it('ripple outlines are pointer-events:none and positioned from the rect', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showRipples([new DOMRect(10, 20, 100, 50)])
+    const [el] = ripples(overlay)
+    expect(el.style.pointerEvents).toBe('none')
+    // positioned via the same place() convention as the other outlines (2px outset)
+    expect(el.style.left).toBe('8px')
+    expect(el.style.top).toBe('18px')
+    expect(el.style.width).toBe('104px')
+    expect(el.style.height).toBe('54px')
   })
 })

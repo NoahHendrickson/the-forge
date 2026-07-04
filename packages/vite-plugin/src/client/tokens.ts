@@ -46,6 +46,7 @@ export const UTILITY_PREFIXES: Record<string, string> = {
   'border-bottom-right-radius': 'rounded-br',
   'border-bottom-left-radius': 'rounded-bl',
   opacity: 'opacity',
+  gap: 'gap',
 }
 
 const RADIUS_PROPS = new Set(
@@ -59,6 +60,10 @@ export function suggestUtility(
 ): { utility: string; tokenExact: boolean } | null {
   const prefix = UTILITY_PREFIXES[prop]
   if (!prefix || theme.spacingBasePx === null) return null
+
+  if ((prop === 'width' || prop === 'height') && css === 'auto') {
+    return { utility: `${prefix}-auto`, tokenExact: true }
+  }
 
   if (prop === 'opacity') {
     const pct = Number.parseFloat(css) * 100

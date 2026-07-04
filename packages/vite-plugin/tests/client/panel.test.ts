@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Panel } from '../../src/client/panel'
 import { DraftStore } from '../../src/client/drafts'
 import { buildInspectorData } from '../../src/client/inspector'
@@ -32,6 +32,13 @@ beforeEach(() => {
   document.body.innerHTML = ''
 })
 
+// A couple of tests stub getComputedStyle to simulate flex-layout measurements jsdom can't
+// produce itself; unstub unconditionally here so a failed assertion mid-test can't leak the
+// stub into later tests.
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
 describe('Panel', () => {
   it('shows header with source location and populates fields from computed styles', () => {
     const { panel } = setup()
@@ -50,11 +57,11 @@ describe('Panel', () => {
     expect(onEdited).toHaveBeenCalled()
   })
 
-  it('shows mixed linked values as empty field', () => {
+  it('shows mixed linked values via setMixed', () => {
     const { panel } = setup(
       `<div data-dc-source="src/a.tsx:1:1" id="t" style="padding-left: 4px; padding-right: 12px;"></div>`
     )
-    expect(fieldInput(panel, 'PX').value).toBe('')
+    expect(fieldInput(panel, 'PX').value).toBe('Mixed')
   })
 
   it('expanding padding reveals per-side fields that edit one longhand', () => {
@@ -120,6 +127,407 @@ describe('Panel', () => {
     commit(fieldInput(panel, 'PX'), '16')
     drafts.compare(el, true)
     panel.refresh()
-    expect(fieldInput(panel, 'PX').value).toBe('') // originals differ → mixed again
+    expect(fieldInput(panel, 'PX').value).toBe('Mixed') // originals differ → mixed again
+  })
+
+  it('section order is Layout, Size, Padding, Margin, Appearance regardless of visibility', () => {
+    const { panel } = setup()
+    const titles = [...panel.root.querySelectorAll('.panel-section')].map((n) => n.textContent)
+    expect(titles).toEqual(['Layout', 'Size', 'Padding', 'Margin', 'Appearance'])
+  })
+
+  it('Layout section TITLE stays visible (but still first) for a non-flex element — empty state is title + add-auto-layout button, no floating headerless button', () => {
+    const { panel } = setup()
+    const sections = [...panel.root.querySelectorAll('.panel-section')]
+    expect(sections[0].textContent).toBe('Layout')
+    expect((sections[0] as HTMLElement).hidden).toBe(false)
+    // the layout CONTROLS (direction/gap/align/wrap) are hidden — only the
+    // add-auto-layout button is shown alongside the always-visible title
+    const btn = panel.root.querySelector('[data-add-layout]') as HTMLElement
+    expect(btn.hidden).toBe(false)
+    const controlsWrap = panel.root.querySelector('.layout-controls') as HTMLElement
+    expect(controlsWrap.hidden).toBe(true)
+  })
+
+  function flexSetup(styleExtra = '') {
+    return setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="display: flex; width: 200px; height: 100px; ${styleExtra}"></div>`
+    )
+  }
+
+  it('Layout section is visible for a flex element', () => {
+    const { panel } = flexSetup()
+    const sections = [...panel.root.querySelectorAll('.panel-section')]
+    expect(sections[0].textContent).toBe('Layout')
+    expect((sections[0] as HTMLElement).hidden).toBe(false)
+  })
+
+  it('non-flex element shows only the add-auto-layout button in Layout section', () => {
+    const { el, panel, drafts } = setup()
+    const btn = panel.root.querySelector('[data-add-layout]') as HTMLElement
+    expect(btn).toBeTruthy()
+    btn.click()
+    expect(drafts.current(el, 'display')).toBe('flex')
+  })
+
+  it('add-auto-layout reveals layout controls after refresh', () => {
+    const { panel } = setup()
+    ;(panel.root.querySelector('[data-add-layout]') as HTMLElement).click()
+    const sections = [...panel.root.querySelectorAll('.panel-section')]
+    expect((sections[0] as HTMLElement).hidden).toBe(false)
+    expect((panel.root.querySelector('[data-add-layout]') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('direction segment field drafts flex-direction', () => {
+    const { el, panel, drafts } = flexSetup()
+    const seg = [...panel.root.querySelectorAll('.seg-field')].find(
+      (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
+    )!
+    const buttons = [...seg.querySelectorAll('.seg')] as HTMLElement[]
+    const column = buttons.find((b) => b.textContent === 'Column')!
+    column.click()
+    expect(drafts.current(el, 'flex-direction')).toBe('column')
+  })
+
+  it('gap field drafts gap:Npx on a number', () => {
+    const { el, panel, drafts } = flexSetup()
+    commit(fieldInput(panel, 'Gap'), '24')
+    expect(drafts.current(el, 'gap')).toBe('24px')
+  })
+
+  it('gap field typed "auto" drafts justify-content:space-between and clears gap draft', () => {
+    const { el, panel, drafts } = flexSetup()
+    commit(fieldInput(panel, 'Gap'), '24')
+    expect(drafts.current(el, 'gap')).toBe('24px')
+    commit(fieldInput(panel, 'Gap'), 'auto')
+    expect(drafts.current(el, 'justify-content')).toBe('space-between')
+    expect(drafts.current(el, 'gap')).toBeNull()
+  })
+
+  it('gap field displays auto when computed justify-content is space-between', () => {
+    const { panel } = flexSetup('justify-content: space-between;')
+    expect(fieldInput(panel, 'Gap').value).toBe('auto')
+  })
+
+  it('gap auto restores a pre-existing inline gap instead of destroying it', () => {
+    const { el, panel, drafts } = flexSetup('gap: 16px;')
+    commit(fieldInput(panel, 'Gap'), '24')
+    expect(drafts.current(el, 'gap')).toBe('24px')
+    commit(fieldInput(panel, 'Gap'), 'auto')
+    expect(drafts.current(el, 'justify-content')).toBe('space-between')
+    expect(drafts.current(el, 'gap')).toBeNull()
+    expect(el.style.getPropertyValue('gap')).toBe('16px')
+  })
+
+  it('align matrix click drafts justify-content and align-items', () => {
+    const { el, panel, drafts } = flexSetup()
+    const dot = panel.root.querySelector('.am-dot') as HTMLElement
+    dot.click()
+    expect(drafts.current(el, 'justify-content')).not.toBeNull()
+    expect(drafts.current(el, 'align-items')).not.toBeNull()
+  })
+
+  it('align matrix re-maps when direction changes', () => {
+    const { panel, el, drafts } = flexSetup()
+    // click flex-end/flex-start dot in row mode
+    const dot = [...panel.root.querySelectorAll('.am-dot')].find(
+      (d) => (d as HTMLElement).dataset.j === 'flex-end' && (d as HTMLElement).dataset.a === 'flex-start'
+    ) as HTMLElement
+    dot.click()
+    expect(drafts.current(el, 'justify-content')).toBe('flex-end')
+    expect(drafts.current(el, 'align-items')).toBe('flex-start')
+
+    const seg = [...panel.root.querySelectorAll('.seg-field')].find(
+      (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
+    )!
+    const columnBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Column') as HTMLElement
+    columnBtn.click()
+    // after direction change, the matrix should have re-rendered with column mapping;
+    // the physical dot that emitted (flex-end, flex-start) in row mode now emits
+    // the transposed pair in column mode.
+    const dotAfter = [...panel.root.querySelectorAll('.am-dot')].find(
+      (d) => (d as HTMLElement).dataset.j === 'flex-start' && (d as HTMLElement).dataset.a === 'flex-end'
+    ) as HTMLElement
+    expect(dotAfter).toBeTruthy()
+  })
+
+  it('wrap segment field drafts flex-wrap', () => {
+    const { el, panel, drafts } = flexSetup()
+    const seg = [...panel.root.querySelectorAll('.seg-field')].find(
+      (n) => n.querySelector('.seg-field-label')?.textContent === 'Wrap'
+    )!
+    const wrapBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Wrap') as HTMLElement
+    wrapBtn.click()
+    expect(drafts.current(el, 'flex-wrap')).toBe('wrap')
+  })
+
+  it('flex-child controls are hidden when parent is not flex', () => {
+    const { panel } = setup()
+    const alignSelf = panel.root.querySelector('[data-align-self]') as HTMLElement
+    expect(alignSelf.hidden).toBe(true)
+    const modes = [...panel.root.querySelectorAll('.size-mode')] as HTMLElement[]
+    expect(modes.length).toBeGreaterThan(0)
+    expect(modes.every((m) => m.hidden)).toBe(true)
+  })
+
+  function childSetup() {
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px; height: 50px;"></div>
+    </div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const panel = new Panel(drafts, onEdited)
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    return { el, drafts, panel, onEdited }
+  }
+
+  it('flex-child controls appear when parent is flex', () => {
+    const { panel } = childSetup()
+    const alignSelf = panel.root.querySelector('[data-align-self]') as HTMLElement
+    expect(alignSelf.hidden).toBe(false)
+    const modes = [...panel.root.querySelectorAll('.size-mode')] as HTMLElement[]
+    expect(modes.length).toBeGreaterThan(0)
+    expect(modes.every((m) => !m.hidden)).toBe(true)
+  })
+
+  it('align-self segment field drafts align-self', () => {
+    const { el, panel, drafts } = childSetup()
+    const seg = panel.root.querySelector('[data-align-self]')!
+    const stretchBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Stretch') as HTMLElement
+    stretchBtn.click()
+    expect(drafts.current(el, 'align-self')).toBe('stretch')
+  })
+
+  it('W size-mode Fill on a row parent drafts flex-grow and flex-basis (main axis)', () => {
+    const { el, panel, drafts } = childSetup()
+    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fill'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'flex-grow')).toBe('1')
+    expect(drafts.current(el, 'flex-basis')).toBe('0%')
+  })
+
+  it('H size-mode Fill on a row parent drafts align-self:stretch (cross axis)', () => {
+    const { el, panel, drafts } = childSetup()
+    const hRow = fieldInput(panel, 'H').closest('.nf')!.parentElement!
+    const select = hRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fill'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'align-self')).toBe('stretch')
+  })
+
+  it('H size-mode Hug drafts height:auto and the field shows auto', () => {
+    const { el, panel, drafts } = childSetup()
+    const hRow = fieldInput(panel, 'H').closest('.nf')!.parentElement!
+    const select = hRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'hug'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'height')).toBe('auto')
+    expect(fieldInput(panel, 'H').value).toBe('auto')
+  })
+
+  it('W size-mode Fill then Fixed pins width as a px draft and clears flex-grow/flex-basis', () => {
+    const { el, panel, drafts } = childSetup()
+    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fill'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'flex-grow')).toBe('1')
+    select.value = 'fixed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'width')).toMatch(/^\d+px$/)
+    expect(drafts.current(el, 'flex-grow')).toBeNull()
+    expect(drafts.current(el, 'flex-basis')).toBeNull()
+  })
+
+  it('W size-mode Fixed sticks on refresh after Fill then Fixed', () => {
+    const { panel } = childSetup()
+    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fill'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    select.value = 'fixed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    panel.refresh()
+    expect(select.value).toBe('fixed')
+  })
+
+  it('H size-mode Hug then Fixed pins height as a px draft, not auto', () => {
+    const { el, panel, drafts } = childSetup()
+    const hRow = fieldInput(panel, 'H').closest('.nf')!.parentElement!
+    const select = hRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'hug'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'height')).toBe('auto')
+    select.value = 'fixed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'height')).toMatch(/^\d+px$/)
+    expect(drafts.current(el, 'height')).not.toBe('auto')
+  })
+
+  it('cross-axis Fixed preserves a user-drafted align-self (only discards it when Fill wrote "stretch")', () => {
+    const { el, panel, drafts } = childSetup()
+    const seg = panel.root.querySelector('[data-align-self]')!
+    const startBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Start') as HTMLElement
+    startBtn.click()
+    expect(drafts.current(el, 'align-self')).toBe('flex-start')
+
+    // Switch H (cross axis on a row parent) to Fixed — must NOT clobber the user's align-self.
+    const hRow = fieldInput(panel, 'H').closest('.nf')!.parentElement!
+    const select = hRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fixed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+
+    expect(drafts.current(el, 'align-self')).toBe('flex-start')
+  })
+
+  it('Fixed pins the size the user SEES (computed before mode drafts are discarded)', () => {
+    // Set up flex parent with filled child
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row; width: 400px;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px; height: 50px;"></div>
+    </div>`
+    const parent = document.getElementById('parent')! as HTMLElement
+    const child = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const panel = new Panel(drafts, onEdited)
+    document.body.appendChild(panel.root)
+    panel.show(child, buildInspectorData(child))
+
+    // Apply Fill mode to width (drafts flex-grow: 1, flex-basis: 0%)
+    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fill'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+
+    // Stub getComputedStyle to simulate flex layout: while Fill is active, element is 200px;
+    // once discarded, it would collapse to 50px
+    const realGCS = window.getComputedStyle.bind(window)
+    vi.stubGlobal('getComputedStyle', (el: Element) => {
+      const cs = realGCS(el)
+      if (el === child) {
+        const filled = (el as HTMLElement).style.flexGrow === '1'
+        return new Proxy(cs, {
+          get(t, k) {
+            if (k === 'getPropertyValue') {
+              return (prop: string) =>
+                prop === 'width' ? (filled ? '200px' : '50px') : cs.getPropertyValue(prop)
+            }
+            return Reflect.get(t, k)
+          },
+        })
+      }
+      return cs
+    })
+
+    // Switch mode to Fixed: should pin 200px (what user sees), not 50px (post-collapse)
+    select.value = 'fixed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(child, 'width')).toBe('200px')
+  })
+
+  it('Fixed pin bails when the computed size is not finite (no NaN draft)', () => {
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row; width: 400px;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px; height: 50px;"></div>
+    </div>`
+    const child = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const panel = new Panel(drafts, onEdited)
+    document.body.appendChild(panel.root)
+    panel.show(child, buildInspectorData(child))
+
+    const realGCS = window.getComputedStyle.bind(window)
+    vi.stubGlobal('getComputedStyle', (el: Element) => {
+      const cs = realGCS(el)
+      if (el === child) {
+        return new Proxy(cs, {
+          get(t, k) {
+            if (k === 'getPropertyValue') {
+              return (prop: string) => (prop === 'width' ? 'not-a-size' : cs.getPropertyValue(prop))
+            }
+            return Reflect.get(t, k)
+          },
+        })
+      }
+      return cs
+    })
+
+    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fixed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+
+    // Pin bailed out entirely — no NaN draft was written (width draft stays whatever it was, i.e. null)
+    expect(drafts.current(child, 'width')).toBeNull()
+  })
+
+})
+
+describe('Panel onBeforeEdit pre-hook (M2b Task 4)', () => {
+  function setupWithBeforeEdit(html?: string) {
+    document.body.innerHTML =
+      html ?? `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px; width: 200px;"></div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const onBeforeEdit = vi.fn()
+    const panel = new Panel(drafts, onEdited, onBeforeEdit)
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    return { el, drafts, panel, onEdited, onBeforeEdit }
+  }
+
+  it('is optional — omitting it does not throw on edit', () => {
+    const { panel } = setup()
+    expect(() => commit(fieldInput(panel, 'W'), '300')).not.toThrow()
+  })
+
+  it('a plain number-field edit calls onBeforeEdit with the element before onEdited', () => {
+    const { el, panel, onBeforeEdit, onEdited } = setupWithBeforeEdit()
+    commit(fieldInput(panel, 'PX'), '16')
+    expect(onBeforeEdit).toHaveBeenCalledWith(el)
+    expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
+  })
+
+  it('reset also calls onBeforeEdit before onEdited', () => {
+    const { el, panel, onBeforeEdit, onEdited } = setupWithBeforeEdit()
+    commit(fieldInput(panel, 'W'), '300')
+    onBeforeEdit.mockClear()
+    onEdited.mockClear()
+    panel.resetButton.click()
+    expect(onBeforeEdit).toHaveBeenCalledWith(el)
+    expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
+  })
+
+  it('add-auto-layout calls onBeforeEdit before onEdited', () => {
+    const { el, panel, onBeforeEdit, onEdited } = setupWithBeforeEdit()
+    const btn = panel.root.querySelector('[data-add-layout]') as HTMLElement
+    btn.click()
+    expect(onBeforeEdit).toHaveBeenCalledWith(el)
+    expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
+  })
+
+  it('size-mode select change calls onBeforeEdit before onEdited', () => {
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px; height: 50px;"></div>
+    </div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const onBeforeEdit = vi.fn()
+    const panel = new Panel(drafts, onEdited, onBeforeEdit)
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+
+    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fill'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onBeforeEdit).toHaveBeenCalledWith(el)
+    expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
   })
 })

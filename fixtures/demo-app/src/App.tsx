@@ -22,6 +22,16 @@ export default function App() {
             Add mod
           </button>
         </div>
+        <div className="flex-1 rounded-xl bg-white p-6 shadow-sm">
+          <h1 className="text-lg font-medium text-neutral-900">Discipline</h1>
+          <p className="mt-1 text-sm text-neutral-500">Tier 2 · 41 total</p>
+          <button
+            className="mt-4 rounded-lg bg-neutral-200 px-4 py-2.5 text-sm text-neutral-900"
+            onClick={() => alert('third card click')}
+          >
+            Add mod
+          </button>
+        </div>
       </div>
     </main>
   )

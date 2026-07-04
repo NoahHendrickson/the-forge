@@ -489,3 +489,314 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
     expect(refreshSpy).toHaveBeenCalled()
   })
 })
+
+describe('DesignMode layout-ripple wiring (M2b Task 4)', () => {
+  function fieldInput(root: HTMLElement, label: string): HTMLInputElement {
+    const nf = [...root.querySelectorAll('.nf')].find((n) => n.querySelector('.nf-label')!.textContent === label)
+    if (!nf) throw new Error(`no field labeled ${label}`)
+    return nf.querySelector('input')!
+  }
+
+  function commit(input: HTMLInputElement, value: string): void {
+    input.value = value
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+
+  function stubRect(el: Element, rect: { x: number; y: number; width: number; height: number }): void {
+    el.getBoundingClientRect = () => new DOMRect(rect.x, rect.y, rect.width, rect.height)
+  }
+
+  // Queued rAF (rather than the file-level immediate stub) so the test can mutate
+  // rects BETWEEN the pre-edit snapshot and the post-edit diff, simulating real reflow.
+  function rippleSetup() {
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
+    document.body.innerHTML = `
+      <div data-dc-source="src/Wrap.tsx:1:1" id="scope">
+        <div data-dc-source="src/Selected.tsx:2:2" id="selected" style="padding: 8px;"></div>
+        <div data-dc-source="src/Sibling.tsx:3:3" id="sibling"></div>
+      </div>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    return { overlay, mode, runRaf: () => queue.splice(0).forEach((cb) => cb(0)) }
+  }
+
+  it('editing PY on the selected element ripples the sibling whose rect changed after the edit', () => {
+    const { overlay, mode, runRaf } = rippleSetup()
+    mode.setActive(true)
+    const selected = document.getElementById('selected')! as HTMLElement
+    const sibling = document.getElementById('sibling')! as HTMLElement
+    stubRect(selected, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(sibling, { x: 0, y: 30, width: 100, height: 20 })
+
+    mode.select(selected)
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    // post-edit reflow: the sibling moved down (simulating the padding push) before
+    // the rAF-scheduled diff runs
+    stubRect(sibling, { x: 0, y: 60, width: 100, height: 20 })
+    runRaf()
+
+    expect(showRipplesSpy).toHaveBeenCalledWith([sibling.getBoundingClientRect()])
+  })
+
+  it('never includes the selected element in ripples', () => {
+    const { mode, overlay, runRaf } = rippleSetup()
+    mode.setActive(true)
+    const selected = document.getElementById('selected')! as HTMLElement
+    const sibling = document.getElementById('sibling')! as HTMLElement
+    stubRect(selected, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(sibling, { x: 0, y: 30, width: 100, height: 20 })
+    mode.select(selected)
+
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+    // the selected element itself also changes rect due to the edit (padding growth) —
+    // it must never appear in the ripple set even though it moved.
+    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    stubRect(selected, { x: 0, y: 0, width: 100, height: 60 })
+    stubRect(sibling, { x: 0, y: 90, width: 100, height: 20 })
+    runRaf()
+
+    expect(showRipplesSpy).toHaveBeenCalled()
+    const selectedRect = selected.getBoundingClientRect()
+    for (const [rects] of showRipplesSpy.mock.calls) {
+      for (const r of rects) {
+        expect(r.x === selectedRect.x && r.y === selectedRect.y && r.width === selectedRect.width).toBe(false)
+      }
+    }
+  })
+
+  it('deactivating cancels a pending ripple rAF (no stray showRipples after exit)', () => {
+    const { mode, overlay, runRaf } = rippleSetup()
+    mode.setActive(true)
+    const selected = document.getElementById('selected')! as HTMLElement
+    const sibling = document.getElementById('sibling')! as HTMLElement
+    stubRect(selected, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(sibling, { x: 0, y: 30, width: 100, height: 20 })
+    mode.select(selected)
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    stubRect(sibling, { x: 0, y: 60, width: 100, height: 20 })
+
+    mode.setActive(false) // exits before the queued rAF runs
+
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+    runRaf() // if the stale callback still ran, this would call showRipples
+    expect(showRipplesSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('DesignMode layout-ripple debounce (M2b Task 4)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function fieldInput(root: HTMLElement, label: string): HTMLInputElement {
+    const nf = [...root.querySelectorAll('.nf')].find((n) => n.querySelector('.nf-label')!.textContent === label)
+    if (!nf) throw new Error(`no field labeled ${label}`)
+    return nf.querySelector('input')!
+  }
+
+  function commit(input: HTMLInputElement, value: string): void {
+    input.value = value
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+
+  function stubRect(el: Element, rect: { x: number; y: number; width: number; height: number }): void {
+    el.getBoundingClientRect = () => new DOMRect(rect.x, rect.y, rect.width, rect.height)
+  }
+
+  it('a rapid burst of edits reuses the first snapshot until 300ms of quiet', () => {
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
+    const runRaf = () => queue.splice(0).forEach((cb) => cb(0))
+
+    document.body.innerHTML = `
+      <div data-dc-source="src/Wrap.tsx:1:1" id="scope">
+        <div data-dc-source="src/Selected.tsx:2:2" id="selected" style="padding: 8px;"></div>
+        <div data-dc-source="src/Sibling.tsx:3:3" id="sibling"></div>
+      </div>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    mode.setActive(true)
+
+    const selected = document.getElementById('selected')! as HTMLElement
+    const sibling = document.getElementById('sibling')! as HTMLElement
+    stubRect(selected, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(sibling, { x: 0, y: 30, width: 100, height: 20 })
+    mode.select(selected)
+
+    // Burst: 3 edits within 300ms — the FIRST snapshot (sibling at y=30) should be
+    // the baseline the final diff is measured against, not a snapshot re-taken mid-burst.
+    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    stubRect(sibling, { x: 0, y: 40, width: 100, height: 20 }) // mid-burst noise
+    runRaf()
+    vi.advanceTimersByTime(100)
+    commit(fieldInput(mode.panelRoot, 'PY'), '20')
+    stubRect(sibling, { x: 0, y: 50, width: 100, height: 20 }) // mid-burst noise
+    runRaf()
+    vi.advanceTimersByTime(100)
+
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+    commit(fieldInput(mode.panelRoot, 'PY'), '30')
+    stubRect(sibling, { x: 0, y: 70, width: 100, height: 20 }) // final settled position
+    runRaf()
+
+    expect(showRipplesSpy).toHaveBeenCalledWith([sibling.getBoundingClientRect()])
+  })
+
+  it('a slow drag (sub-threshold per-frame, above-threshold cumulative) still ripples on the burst\'s third edit', () => {
+    // Discriminating test: each edit moves the sibling +0.4px relative to its PREVIOUS
+    // position — below the 0.5px change threshold if re-baselined every frame (the bug:
+    // handleEdited's rAF nulled rippleSnapshot, forcing a fresh baseline each edit).
+    // Cumulatively across the burst the sibling has moved +1.2px from the DRAG-START
+    // baseline, which IS above threshold. This only passes when the snapshot from the
+    // first edit in the burst survives to be diffed against on the third edit.
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
+    const runRaf = () => queue.splice(0).forEach((cb) => cb(0))
+
+    document.body.innerHTML = `
+      <div data-dc-source="src/Wrap.tsx:1:1" id="scope">
+        <div data-dc-source="src/Selected.tsx:2:2" id="selected" style="padding: 8px;"></div>
+        <div data-dc-source="src/Sibling.tsx:3:3" id="sibling"></div>
+      </div>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    mode.setActive(true)
+
+    const selected = document.getElementById('selected')! as HTMLElement
+    const sibling = document.getElementById('sibling')! as HTMLElement
+    stubRect(selected, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(sibling, { x: 0, y: 30, width: 100, height: 20 }) // drag-start baseline
+    mode.select(selected)
+
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    stubRect(sibling, { x: 0, y: 30.4, width: 100, height: 20 }) // +0.4px vs previous — sub-threshold
+    runRaf()
+    vi.advanceTimersByTime(50) // well within the 300ms quiet window
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '20')
+    stubRect(sibling, { x: 0, y: 30.8, width: 100, height: 20 }) // +0.4px vs previous — sub-threshold
+    runRaf()
+    vi.advanceTimersByTime(50)
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '30')
+    stubRect(sibling, { x: 0, y: 31.2, width: 100, height: 20 }) // +0.4px vs previous, +1.2px vs drag-start
+    runRaf()
+
+    expect(showRipplesSpy).toHaveBeenCalledWith([sibling.getBoundingClientRect()])
+  })
+
+  it('re-snapshots when the selection changes mid-burst', () => {
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
+    const runRaf = () => queue.splice(0).forEach((cb) => cb(0))
+
+    // Two separate component trees (separate scopes)
+    document.body.innerHTML = `
+      <div data-dc-source="src/ComponentA.tsx:1:1" id="compA" style="padding: 8px;">
+        <div data-dc-source="src/ChildA.tsx:2:2" id="childA"></div>
+        <div data-dc-source="src/SiblingA.tsx:3:3" id="siblingA"></div>
+      </div>
+      <div data-dc-source="src/ComponentB.tsx:4:4" id="compB" style="padding: 8px;">
+        <div data-dc-source="src/ChildB.tsx:5:5" id="childB"></div>
+        <div data-dc-source="src/SiblingB.tsx:6:6" id="siblingB"></div>
+      </div>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    mode.setActive(true)
+
+    const childA = document.getElementById('childA')! as HTMLElement
+    const siblingA = document.getElementById('siblingA')! as HTMLElement
+    const childB = document.getElementById('childB')! as HTMLElement
+    const siblingB = document.getElementById('siblingB')! as HTMLElement
+
+    // Setup both scopes with distinct positions
+    stubRect(childA, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(siblingA, { x: 0, y: 30, width: 100, height: 20 })
+    stubRect(childB, { x: 400, y: 0, width: 100, height: 20 })
+    stubRect(siblingB, { x: 400, y: 30, width: 100, height: 20 })
+
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+
+    // STEP 1: Select childA and edit it. This snapshots ComponentA's scope (includes siblingA).
+    mode.select(childA)
+    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    // The rAF is queued but NOT yet run — snapshot still in memory
+    expect(queue).toHaveLength(1)
+
+    // Update positions as if layout reflow happened
+    stubRect(siblingA, { x: 0, y: 40, width: 100, height: 20 })
+
+    // STEP 2: Before the ripple rAF runs, switch to childB and edit it within debounce.
+    // BUG: The old snapshot (childA's scope with siblingA) is still in mode.rippleSnapshot.
+    // handleBeforeEdit(childB) should re-snapshot because the element changed, but the
+    // buggy code only checks elapsed time, not which element the snapshot was for.
+    mode.select(childB)
+    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    // Now we have TWO rAFs queued: one from childA edit, one from childB edit
+    expect(queue).toHaveLength(2)
+
+    // Update childB's sibling position
+    stubRect(siblingB, { x: 400, y: 40, width: 100, height: 20 })
+
+    // Run BOTH rAFs and check what ripples were shown
+    showRipplesSpy.mockClear()
+    runRaf()
+
+    // After running both rAFs:
+    // - First rAF (from childA) diffs childA's snapshot against current positions
+    // - Second rAF (from childB) diffs either childB's snapshot (CORRECT) or childA's (BUG)
+    //
+    // If the bug exists: childB's rAF diff runs against childA's snapshot, measuring siblingA.
+    // Since siblingA moved from y=30→40, and the snapshot has y=30, it would show a ripple at y=40.
+    // But we want it to show siblingB moving from y=30→40 at x=400.
+
+    // Correct behavior: at least one call should have rects with x=400 (siblingB), not x=0 (siblingA).
+    expect(showRipplesSpy.mock.calls.length).toBeGreaterThan(0)
+    let hasCorrectRipple = false
+    for (const callArgs of showRipplesSpy.mock.calls) {
+      const rects = callArgs[0]
+      for (const rect of rects) {
+        if (rect.x === 400) {
+          hasCorrectRipple = true
+          break
+        }
+      }
+    }
+    expect(hasCorrectRipple).toBe(true) // Must see siblingB ripple, not just siblingA
+  })
+
+})

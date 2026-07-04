@@ -109,10 +109,15 @@ export function buildChangeRequestWithElements(
       const beforeCss = measureComputed(el, props.keys())
 
       raw = new Map<string, { beforeCss: string; afterCss: string }>()
-      for (const prop of props.keys()) {
+      for (const [prop, draft] of props) {
+        // A drafted keyword (currently just 'auto', e.g. Hug width/height) never round-trips
+        // through the computed style — getComputedStyle resolves it to a px measurement, which
+        // would silently invert the user's intent (Hug -> a hardcoded px). Pass such keywords
+        // through verbatim as the "after" value; "before" stays a real measurement.
+        const isKeyword = /^[a-z-]+$/i.test(draft.value)
         raw.set(prop, {
           beforeCss: beforeCss.get(prop)!,
-          afterCss: afterCss.get(prop)!,
+          afterCss: isKeyword ? draft.value : afterCss.get(prop)!,
         })
       }
       drafts.compare(el, wasComparing)
@@ -178,6 +183,7 @@ export function renderMarkdown(req: ChangeRequest): string {
     if (el.className) lines.push(`Current classes: \`${el.className}\``)
     lines.push('')
     for (const c of el.changes) {
+      if (c.beforeCss === c.afterCss) continue // no-op — nothing actually changed
       let line = `- ${c.property}: ${c.beforeCss} → ${c.afterCss}`
       if (c.afterUtility) {
         line += c.beforeUtility

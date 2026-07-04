@@ -55,6 +55,15 @@ describe('suggestUtility', () => {
     expect(suggestUtility('opacity', '0.505', TW)).toEqual({ utility: 'opacity-[0.505]', tokenExact: false })
   })
 
+  it('maps gap to scale utilities', () => {
+    expect(suggestUtility('gap', '24px', TW)).toEqual({ utility: 'gap-6', tokenExact: true })
+  })
+
+  it('maps width/height auto keyword to w-auto/h-auto', () => {
+    expect(suggestUtility('width', 'auto', TW)).toEqual({ utility: 'w-auto', tokenExact: true })
+    expect(suggestUtility('height', 'auto', TW)).toEqual({ utility: 'h-auto', tokenExact: true })
+  })
+
   it('returns null for non-Tailwind themes and unmapped props', () => {
     expect(suggestUtility('padding-top', '24px', PLAIN)).toBeNull()
     expect(suggestUtility('color', 'red', TW)).toBeNull()
