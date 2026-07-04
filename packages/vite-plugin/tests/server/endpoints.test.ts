@@ -55,7 +55,7 @@ beforeEach(() => {
 describe('forge middleware', () => {
   it('queues a POST and returns the id', async () => {
     const res = fakeRes()
-    await run(mw, fakeReq('POST', '/__the-forge/queue', { request: { elements: [] }, markdown: '# md' }), res)
+    await run(mw, fakeReq('POST', '/__the-forge/queue', { request: { elements: [] }, markdown: '# md' }, { host: 'localhost:5173' }), res)
     expect(res.statusCode).toBe(200)
     const { id } = JSON.parse(res.body)
     expect(queue.get(id)!.markdown).toBe('# md')
@@ -64,7 +64,7 @@ describe('forge middleware', () => {
   it('pull claims and returns pending items', async () => {
     queue.add({}, 'one')
     const res = fakeRes()
-    await run(mw, fakeReq('GET', '/__the-forge/pull'), res)
+    await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: 'localhost:5173' }), res)
     const { items } = JSON.parse(res.body)
     expect(items).toHaveLength(1)
     expect(queue.get(items[0].id)!.status).toBe('claimed')
@@ -74,10 +74,10 @@ describe('forge middleware', () => {
     const item = queue.add({}, 'one')
     queue.pull()
     const res1 = fakeRes()
-    await run(mw, fakeReq('POST', '/__the-forge/mark', { ids: [item.id], status: 'applied', note: 'ok' }), res1)
+    await run(mw, fakeReq('POST', '/__the-forge/mark', { ids: [item.id], status: 'applied', note: 'ok' }, { host: 'localhost:5173' }), res1)
     expect(JSON.parse(res1.body).marked).toEqual([item.id])
     const res2 = fakeRes()
-    await run(mw, fakeReq('GET', `/__the-forge/status?ids=${item.id}`), res2)
+    await run(mw, fakeReq('GET', `/__the-forge/status?ids=${item.id}`, undefined, { host: 'localhost:5173' }), res2)
     expect(JSON.parse(res2.body).items[0]).toMatchObject({ id: item.id, status: 'applied', note: 'ok' })
   })
 
@@ -86,7 +86,7 @@ describe('forge middleware', () => {
     const req = new EventEmitter() as never
     ;(req as { method: string }).method = 'POST'
     ;(req as { url: string }).url = '/__the-forge/queue'
-    ;(req as { headers: object }).headers = {}
+    ;(req as { headers: object }).headers = { host: 'localhost:5173' }
     process.nextTick(() => {
       ;(req as EventEmitter).emit('data', Buffer.from('{nope'))
       ;(req as EventEmitter).emit('end')
@@ -95,7 +95,7 @@ describe('forge middleware', () => {
     expect(bad.statusCode).toBe(400)
 
     const missing = fakeRes()
-    await run(mw, fakeReq('GET', '/__the-forge/nope'), missing)
+    await run(mw, fakeReq('GET', '/__the-forge/nope', undefined, { host: 'localhost:5173' }), missing)
     expect(missing.statusCode).toBe(404)
 
     let nexted = false
@@ -129,12 +129,63 @@ describe('forge middleware', () => {
     })
   })
 
+  describe('host check (DNS-rebinding defense)', () => {
+    it('403s when Host does not match localhost/127.0.0.1/::1/allowedHosts, even with a matching Origin', async () => {
+      const res = fakeRes()
+      await run(
+        mw,
+        fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { origin: 'http://evil.com:5173', host: 'evil.com:5173' }),
+        res
+      )
+      expect(res.statusCode).toBe(403)
+      expect(JSON.parse(res.body)).toEqual({ error: 'host not allowed' })
+    })
+
+    it('403s when no Host header is present', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, {}), res)
+      expect(res.statusCode).toBe(403)
+      expect(JSON.parse(res.body)).toEqual({ error: 'host not allowed' })
+    })
+
+    it('allows Host: localhost:5173', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+
+    it('allows Host: 127.0.0.1:5173', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: '127.0.0.1:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+
+    it('allows Host: [::1]:5173', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: '[::1]:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+
+    it('allows a subdomain of .localhost', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: 'foo.localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+
+    it('allows hosts present in the allowedHosts option', async () => {
+      const mwWithAllowed = createForgeMiddleware(queue, ['my-tunnel.example.com'])
+      const res = fakeRes()
+      await run(mwWithAllowed, fakeReq('GET', '/__the-forge/pull', undefined, { host: 'my-tunnel.example.com:443' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+  })
+
   it('400s oversize bodies without double-settling', async () => {
     const res = fakeRes()
     const req = new EventEmitter() as never
     ;(req as { method: string }).method = 'POST'
     ;(req as { url: string }).url = '/__the-forge/queue'
-    ;(req as { headers: object }).headers = {}
+    ;(req as { headers: object }).headers = { host: 'localhost:5173' }
     process.nextTick(() => {
       ;(req as EventEmitter).emit('data', Buffer.alloc(1024 * 1024 + 1))
       ;(req as EventEmitter).emit('end')

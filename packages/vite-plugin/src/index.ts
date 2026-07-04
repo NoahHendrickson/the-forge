@@ -24,7 +24,8 @@ export function theForge(): Plugin {
     configureServer(server) {
       const forgeDir = path.join(root, '.the-forge')
       const queue = new Queue(forgeDir)
-      server.middlewares.use(createForgeMiddleware(queue))
+      const allowedHosts = Array.isArray(server.config.server.allowedHosts) ? server.config.server.allowedHosts : []
+      server.middlewares.use(createForgeMiddleware(queue, allowedHosts))
       server.httpServer?.once('listening', () => {
         const address = server.httpServer?.address()
         if (address && typeof address === 'object') writeEndpointFile(forgeDir, address.port, address.address)

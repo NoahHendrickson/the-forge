@@ -44,10 +44,34 @@ function send(res: ServerResponse, status: number, data: unknown): void {
   res.end(JSON.stringify(data))
 }
 
-export function createForgeMiddleware(queue: Queue) {
+/** Extracts the hostname from a Host header value, stripping any port and IPv6 brackets. */
+function hostnameOf(host: string): string {
+  let h = host.trim()
+  if (h.startsWith('[')) {
+    // IPv6 literal, e.g. "[::1]:5173" or "[::1]"
+    const close = h.indexOf(']')
+    return close === -1 ? h : h.slice(1, close)
+  }
+  const colon = h.indexOf(':')
+  return colon === -1 ? h : h.slice(0, colon)
+}
+
+function isAllowedHost(host: string | undefined, allowedHosts: string[]): boolean {
+  if (!host) return false
+  const hostname = hostnameOf(host)
+  if (hostname === 'localhost' || hostname.endsWith('.localhost')) return true
+  if (hostname === '127.0.0.1' || hostname === '::1') return true
+  return allowedHosts.includes(hostname)
+}
+
+export function createForgeMiddleware(queue: Queue, allowedHosts: string[] = []) {
   return (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     const url = req.url ?? ''
     if (!url.startsWith('/__the-forge/')) return next()
+
+    if (!isAllowedHost(req.headers.host, allowedHosts)) {
+      return send(res, 403, { error: 'host not allowed' })
+    }
 
     const origin = req.headers.origin
     if (typeof origin === 'string') {

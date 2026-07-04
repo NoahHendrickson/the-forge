@@ -22,6 +22,7 @@ interface FakeHttpServer extends EventEmitter {
 interface FakeViteServer {
   middlewares: { use: (...args: unknown[]) => void }
   httpServer: FakeHttpServer
+  config: { server: { allowedHosts?: string[] | true } }
 }
 
 function fakeServer(_root: string): FakeViteServer {
@@ -30,6 +31,7 @@ function fakeServer(_root: string): FakeViteServer {
   return {
     middlewares: { use: () => undefined },
     httpServer,
+    config: { server: {} },
   }
 }
 
