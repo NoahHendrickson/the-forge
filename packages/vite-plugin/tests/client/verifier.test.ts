@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { Verifier, verifyEntry } from '../../src/client/verifier'
+import { Verifier, verifyEntry, PAUSE_AFTER_FAILURES, MAX_POLL_MS } from '../../src/client/verifier'
 import { SentRegistry, type SentEntry } from '../../src/client/sent'
 import { DraftStore } from '../../src/client/drafts'
 
@@ -589,5 +589,60 @@ describe('Verifier polling lifecycle', () => {
     const afterSuccess = fetchMock.mock.calls.length
     await vi.advanceTimersByTimeAsync(2000) // base cadence restored
     expect(fetchMock.mock.calls.length).toBe(afterSuccess + 1)
+  })
+
+  it('counts non-ok HTTP responses toward the backoff (server responding but erroring)', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const updates: string[] = []
+    const d = el()
+    sent.add('q1', makeEntry([{ el: d, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 })
+    vi.stubGlobal('fetch', fetchMock)
+    const verifier = new Verifier(sent, drafts, (s) => updates.push(s))
+    verifier.start()
+
+    // failures 1-4: silent — an erroring server must not keep re-rendering a fresh summary
+    await vi.advanceTimersByTimeAsync(2000 * (PAUSE_AFTER_FAILURES - 1))
+    expect(fetchMock).toHaveBeenCalledTimes(PAUSE_AFTER_FAILURES - 1)
+    expect(updates).toEqual([])
+
+    // failure 5: the not-responding message (the server IS reachable, so not "unreachable")
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(fetchMock).toHaveBeenCalledTimes(PAUSE_AFTER_FAILURES)
+    expect(updates).toEqual(['verification paused — dev server not responding'])
+
+    // backoff engaged: 2s later nothing, 4s later the next poll
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(fetchMock).toHaveBeenCalledTimes(PAUSE_AFTER_FAILURES)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(fetchMock).toHaveBeenCalledTimes(PAUSE_AFTER_FAILURES + 1)
+  })
+
+  it('the backoff delay doubles only up to the MAX_POLL_MS ceiling', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const d = el()
+    sent.add('q1', makeEntry([{ el: d, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('network down'))
+    vi.stubGlobal('fetch', fetchMock)
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    verifier.start()
+
+    // failures 1-5 at the base cadence, then the delay doubles: 4s, 8s, 16s…
+    await vi.advanceTimersByTimeAsync(2000 * PAUSE_AFTER_FAILURES)
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(fetchMock).toHaveBeenCalledTimes(6)
+    await vi.advanceTimersByTimeAsync(8000)
+    expect(fetchMock).toHaveBeenCalledTimes(7)
+    await vi.advanceTimersByTimeAsync(16_000)
+    expect(fetchMock).toHaveBeenCalledTimes(8)
+    // failure 8 would double 16s → 32s without the cap; with it, poll 9 fires at exactly MAX_POLL_MS
+    await vi.advanceTimersByTimeAsync(MAX_POLL_MS)
+    expect(fetchMock).toHaveBeenCalledTimes(9)
+    // and stays saturated at the ceiling thereafter
+    await vi.advanceTimersByTimeAsync(MAX_POLL_MS)
+    expect(fetchMock).toHaveBeenCalledTimes(10)
   })
 })

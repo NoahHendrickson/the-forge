@@ -161,8 +161,24 @@ export class Verifier {
       return
     }
     fetch(`/__the-forge/status?ids=${ids.join(',')}`)
-      .then((res) => (res.ok ? res.json() : { items: [] }))
-      .then((body: { items: Array<{ id: string; status: string; note: string | null }> }) => {
+      .then((res) => {
+        // A server that ANSWERS but errors (500s from a broken dev server, 404/HTML from some
+        // other process squatting on the port) is just as stuck as an unreachable one — before
+        // this branch existed, a non-ok response read as an empty success below, resetting the
+        // failure counter and polling at the base cadence forever. Distinct message from the
+        // catch path: this server IS reachable, so "unreachable" would be a lie.
+        if (!res.ok) {
+          this.consecutiveFailures++
+          if (this.consecutiveFailures >= PAUSE_AFTER_FAILURES) {
+            this.delayMs = Math.min(this.delayMs * 2, MAX_POLL_MS)
+            this.onUpdate('verification paused — dev server not responding')
+          }
+          return null
+        }
+        return res.json() as Promise<{ items: Array<{ id: string; status: string; note: string | null }> }>
+      })
+      .then((body: { items: Array<{ id: string; status: string; note: string | null }> } | null) => {
+        if (body === null) return
         this.consecutiveFailures = 0
         this.delayMs = POLL_MS
         const statusById = new Map(body.items.map((item) => [item.id, item.status]))
