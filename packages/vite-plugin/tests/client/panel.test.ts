@@ -355,4 +355,51 @@ describe('Panel', () => {
     expect(drafts.current(el, 'height')).not.toBe('auto')
   })
 
+  it('Fixed pins the size the user SEES (computed before mode drafts are discarded)', () => {
+    // Set up flex parent with filled child
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row; width: 400px;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px; height: 50px;"></div>
+    </div>`
+    const parent = document.getElementById('parent')! as HTMLElement
+    const child = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const panel = new Panel(drafts, onEdited)
+    document.body.appendChild(panel.root)
+    panel.show(child, buildInspectorData(child))
+
+    // Apply Fill mode to width (drafts flex-grow: 1, flex-basis: 0%)
+    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fill'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+
+    // Stub getComputedStyle to simulate flex layout: while Fill is active, element is 200px;
+    // once discarded, it would collapse to 50px
+    const realGCS = window.getComputedStyle.bind(window)
+    vi.stubGlobal('getComputedStyle', (el: Element) => {
+      const cs = realGCS(el)
+      if (el === child) {
+        const filled = (el as HTMLElement).style.flexGrow === '1'
+        return new Proxy(cs, {
+          get(t, k) {
+            if (k === 'getPropertyValue') {
+              return (prop: string) =>
+                prop === 'width' ? (filled ? '200px' : '50px') : cs.getPropertyValue(prop)
+            }
+            return Reflect.get(t, k)
+          },
+        })
+      }
+      return cs
+    })
+
+    // Switch mode to Fixed: should pin 200px (what user sees), not 50px (post-collapse)
+    select.value = 'fixed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(child, 'width')).toBe('200px')
+
+    vi.unstubAllGlobals()
+  })
+
 })
