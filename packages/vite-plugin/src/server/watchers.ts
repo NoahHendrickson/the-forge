@@ -25,6 +25,13 @@ export interface WatcherHubOpts {
   /** Claims all currently-claimable queue items — `() => queue.pull()` in production.
    * Injected so hub tests never touch a real Queue/disk. */
   claim: () => QueueItem[]
+  /** True while claimed items are in flight (`queue has status 'claimed'` in production).
+   * Keeps a watcher live through its APPLY window: while the agent is editing files it
+   * is not parked on /wait and its heartbeat goes stale, but treating it as asleep there
+   * would send a mid-apply Send down the keystroke ladder AND deliver it on the next
+   * wait — a double nudge (PR #1 review). Stale claims re-queue after 5 min (queue.ts),
+   * so a died-mid-apply watcher can hold liveness at most that long. */
+  applying?: () => boolean
   /** Injectable clock for idle/freshness math. Defaults to Date.now. */
   now?: () => number
   /** Injectable hold window — tests never sit through a real 20s wait. */
@@ -58,6 +65,7 @@ interface ParkedWaiter {
  */
 export class WatcherHub {
   private claim: () => QueueItem[]
+  private applying: () => boolean
   private now: () => number
   private holdMs: number
   private idleStopMs: number
@@ -79,6 +87,7 @@ export class WatcherHub {
 
   constructor(opts: WatcherHubOpts) {
     this.claim = opts.claim
+    this.applying = opts.applying ?? (() => false)
     this.now = opts.now ?? (() => Date.now())
     this.holdMs = opts.holdMs ?? WAIT_HOLD_MS
     this.idleStopMs = opts.idleStopMs ?? IDLE_STOP_MS
@@ -107,14 +116,19 @@ export class WatcherHub {
       this.replacedToken = null
     }
 
-    // A wait arriving from a non-live watcher — after an idle-stop, or after the previous
-    // loop died silently (disconnect/kill, detected as heartbeat staleness) — is the user
-    // re-arming with /forge-watch: reset the idle clock rather than instantly re-stopping
-    // them for inactivity that happened before they woke the watcher. A wait within the
-    // freshness window is just the running loop's next cycle and must NOT reset the clock,
-    // or the loop's own ticking would defeat the idle auto-stop.
-    const isRearm = !this.watching || nowMs - this.lastSeen >= this.freshMs
-    if (isRearm) {
+    // A wait arriving while NOT watching — after an idle-stop, a 'replaced', or a dropped
+    // connection (cancel() flips `watching` off) — is the user re-arming with
+    // /forge-watch: reset the idle clock rather than instantly re-stopping them for
+    // inactivity that happened before they woke the watcher. `!watching` is the ONLY
+    // re-arm signal on purpose: a heartbeat-staleness heuristic here would let a
+    // slow-but-alive loop (gaps beyond freshMs — long apply cycles, a slow model) reset
+    // its own idle clock forever and never auto-stop, defeating the hard token-cost
+    // bound (PR #1 review, high severity). Known corner accepted in trade: a loop killed
+    // BETWEEN cycles (no socket to close, so `watching` stays true) that the user
+    // re-arms after idleStopMs gets one spurious {stop,'idle'} before the second
+    // /forge-watch re-arms cleanly — rare, self-healing, and cheap next to an unbounded
+    // idle loop.
+    if (!this.watching) {
       this.watching = true
       this.everWatched = true
       this.lastActivity = nowMs
@@ -193,6 +207,9 @@ export class WatcherHub {
   state(): WatcherState {
     if (this.parked) return 'live'
     if (this.watching && this.now() - this.lastSeen < this.freshMs) return 'live'
+    // Mid-apply: not parked, heartbeat possibly stale (applying can take minutes), but
+    // the watcher IS working — it re-waits after mark_applied. See WatcherHubOpts.applying.
+    if (this.watching && this.applying()) return 'live'
     return this.everWatched ? 'asleep' : 'none'
   }
 

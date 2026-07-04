@@ -59,7 +59,7 @@ describe('WatchStatus poller', () => {
     expect(fetchMock).toHaveBeenCalledTimes(callsAtStop)
   })
 
-  it('a poll failure degrades to none silently (no throw, state resets)', async () => {
+  it('a poll failure drops a claimed live silently (never keep a false delivery claim)', async () => {
     const fetchMock = stubStatus('live')
     const onChange = vi.fn()
     const watch = new WatchStatus(onChange)
@@ -71,6 +71,19 @@ describe('WatchStatus poller', () => {
     await vi.advanceTimersByTimeAsync(WATCH_POLL_MS)
     expect(watch.current()).toBe('none')
     expect(onChange).toHaveBeenLastCalledWith('none')
+    watch.stop()
+  })
+
+  it('asleep SURVIVES a failed poll — the wake instruction must not flicker away on a blip', async () => {
+    const fetchMock = stubStatus('asleep')
+    const watch = new WatchStatus(() => {})
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.current()).toBe('asleep')
+
+    fetchMock.mockRejectedValue(new Error('transient'))
+    await vi.advanceTimersByTimeAsync(WATCH_POLL_MS)
+    expect(watch.current()).toBe('asleep') // claims nothing about the server; keep the ratified message
     watch.stop()
   })
 
@@ -113,6 +126,14 @@ describe('sentLabelFor watcher copy', () => {
 
   it('manual rung with an asleep watcher reads as the wake instruction', () => {
     expect(sentLabelFor('manual', 'claude-code', 'asleep')).toBe(
+      'Sent — watcher asleep, type /forge-watch in Claude Code to apply'
+    )
+  })
+
+  it('manual rung with a STALE client-side live also reads as the wake instruction (server is authoritative)', () => {
+    // The 5s poller can lag the server: dispatch said manual, so the watcher did NOT
+    // take this Send regardless of what the client last observed.
+    expect(sentLabelFor('manual', 'claude-code', 'live')).toBe(
       'Sent — watcher asleep, type /forge-watch in Claude Code to apply'
     )
   })

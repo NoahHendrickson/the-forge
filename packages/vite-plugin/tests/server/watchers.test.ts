@@ -11,9 +11,11 @@ function item(id: string): QueueItem {
  * a real hold window. */
 function makeHub(opts: { holdMs?: number; idleStopMs?: number; freshMs?: number } = {}) {
   let nowMs = 1_000_000
+  let applying = false
   const claimable: QueueItem[] = []
   const hub = new WatcherHub({
     claim: () => claimable.splice(0, claimable.length),
+    applying: () => applying,
     now: () => nowMs,
     holdMs: opts.holdMs ?? 30,
     idleStopMs: opts.idleStopMs ?? 10_000,
@@ -22,6 +24,9 @@ function makeHub(opts: { holdMs?: number; idleStopMs?: number; freshMs?: number 
   return {
     hub,
     queueItem: (i: QueueItem) => claimable.push(i),
+    setApplying: (v: boolean) => {
+      applying = v
+    },
     advance: (ms: number) => {
       nowMs += ms
     },
@@ -78,6 +83,30 @@ describe('WatcherHub', () => {
     advance(600) // 1200 since watch start, only 600 since last (empty) tick
     const res = await hub.wait().promise
     expect(res).toEqual({ stop: true, reason: 'idle' })
+  })
+
+  it('a slow-but-alive loop (gaps beyond freshMs) still hits the idle auto-stop — the cost bound holds', async () => {
+    // PR #1 high-severity finding: heartbeat staleness must NOT read as a re-arm, or a
+    // loop ticking slower than freshMs would reset its own idle clock forever.
+    const { hub, advance } = makeHub({ holdMs: 5, idleStopMs: 1_000, freshMs: 100 })
+    await hub.wait().promise // watch starts
+    advance(400)
+    await hub.wait().promise // gap > freshMs, loop still alive — clock must NOT reset
+    advance(400)
+    await hub.wait().promise
+    advance(400) // 1200 since watch start > idleStopMs
+    const res = await hub.wait().promise
+    expect(res).toEqual({ stop: true, reason: 'idle' })
+  })
+
+  it('applying (claimed items in flight) keeps the watcher live through the apply window', async () => {
+    const { hub, advance, setApplying } = makeHub({ holdMs: 5, freshMs: 100, idleStopMs: 60_000 })
+    await hub.wait().promise // watch starts; hold expires
+    setApplying(true) // the agent is mid-apply — not parked, heartbeat going stale
+    advance(500) // well past freshMs
+    expect(hub.state()).toBe('live') // a Send now must NOT fall to the keystroke ladder
+    setApplying(false) // mark_applied landed but the loop never came back
+    expect(hub.state()).toBe('asleep')
   })
 
   it('a delivery resets the idle clock', async () => {

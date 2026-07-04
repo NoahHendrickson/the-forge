@@ -36,7 +36,12 @@ export function sentLabelFor(rung: Rung, agent: AgentName, watcherState: Watcher
   // falsely claiming delivery.
   if (rung === 'watcher') return `Sent — delivered to your ${AGENT_DISPLAY_NAME[agent]} session`
   if (rung === 'tmux' || rung === 'applescript') return 'Sent — typed /forge-design into your session'
-  if (watcherState === 'asleep') return `Sent — watcher asleep, type /forge-watch in ${AGENT_DISPLAY_NAME[agent]} to apply`
+  // Manual family + ANY known watcher ('asleep' OR a possibly-stale client-side 'live'):
+  // the server is authoritative that the watcher did NOT take this Send — if it were
+  // live server-side we'd have the watcher rung. The wake copy is the honest instruction
+  // either way: the request is safely queued, and /forge-watch delivers everything
+  // pending on wake.
+  if (watcherState !== 'none') return `Sent — watcher asleep, type /forge-watch in ${AGENT_DISPLAY_NAME[agent]} to apply`
   return `Sent — type /forge-design in ${AGENT_DISPLAY_NAME[agent]}`
 }
 
@@ -104,15 +109,15 @@ export class WatchStatus {
       .then((res) => (res.ok ? (res.json() as Promise<{ watcher?: unknown }>) : null))
       .then((body) => {
         if (gen !== this.generation) return
-        // Poll failures and unrecognized values degrade to 'none' SILENTLY — a dead dev
-        // server already gets the verifier's louder "unreachable" messaging; the watch
-        // indicator must not become a second alarm for the same outage.
-        const raw = body?.watcher
-        this.update(raw === 'live' || raw === 'asleep' ? raw : 'none')
+        if (body === null) return this.degrade()
+        // Unrecognized values (a future server) degrade like failures below.
+        const raw = body.watcher
+        if (raw === 'live' || raw === 'asleep') this.update(raw)
+        else this.degrade()
       })
       .catch(() => {
         if (gen !== this.generation) return
-        this.update('none')
+        this.degrade()
       })
       .finally(() => {
         // A stop() (or stop()+start()) while the fetch was in flight bumps the generation —
@@ -121,6 +126,16 @@ export class WatchStatus {
           this.timer = setTimeout(() => this.poll(gen), WATCH_POLL_MS)
         }
       })
+  }
+
+  /** Failure/unknown handling, asymmetric on purpose: a claimed 'live' we can no longer
+   * confirm must drop (never keep a false delivery claim), but a standing 'asleep' —
+   * user-ratified wake messaging that claims nothing about the server — survives blips
+   * rather than flickering away until the next good poll. Silent either way: a dead dev
+   * server already gets the verifier's louder "unreachable" messaging; the indicator
+   * must not become a second alarm for the same outage. */
+  private degrade(): void {
+    if (this.state === 'live') this.update('none')
   }
 
   private update(next: WatcherState): void {

@@ -101,7 +101,12 @@ export function createForgeMiddleware(
 ) {
   // Optional param so existing callers/tests stand unchanged; the plugin (src/index.ts)
   // constructs and passes one explicitly so the wiring is visible at the composition root.
-  const watcherHub = hub ?? new WatcherHub({ claim: () => queue.pull() })
+  const watcherHub =
+    hub ??
+    new WatcherHub({
+      claim: () => queue.pull(),
+      applying: () => queue.list().some((i) => i.status === 'claimed'),
+    })
   return (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     const url = req.url ?? ''
     if (!url.startsWith('/__the-forge/')) return next()

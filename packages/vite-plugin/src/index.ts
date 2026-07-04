@@ -56,7 +56,12 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       // The watch-mode long-poll registry (/forge-watch linked sessions). Per dev-server
       // process by design — the MCP bin discovers the newest live server, so the watcher
       // follows it; a hub is pure in-memory state and costs nothing until a session watches.
-      const hub = new WatcherHub({ claim: () => queue.pull() })
+      // `applying` keeps the watcher live through its apply window (claimed items in
+      // flight), when it is neither parked nor heartbeating — see WatcherHubOpts.applying.
+      const hub = new WatcherHub({
+        claim: () => queue.pull(),
+        applying: () => queue.list().some((i) => i.status === 'claimed'),
+      })
       server.middlewares.use(
         createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels, cwd: resolvedRoot }, hub)
       )
