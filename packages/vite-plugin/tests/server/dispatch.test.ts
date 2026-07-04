@@ -377,4 +377,94 @@ describe('dispatch', () => {
       expect(result.rung).toBe('tmux')
     })
   })
+
+  describe('post-timeout mutation guard (settled flag)', () => {
+    it('a hung list-panes that later resolves (after the ladder already timed out) must NOT trigger send-keys', async () => {
+      let resolveListPanes!: (v: { stdout: string }) => void
+      const sendKeysCalls: unknown[] = []
+      const exec: ExecFileFn = vi.fn(async (cmd, args) => {
+        if (cmd === 'tmux' && args[0] === 'list-panes') {
+          // Hangs until we manually resolve it below, well after the ladder timeout fires.
+          return new Promise<{ stdout: string }>((resolve) => {
+            resolveListPanes = resolve
+          })
+        }
+        if (cmd === 'tmux' && args[0] === 'send-keys') {
+          sendKeysCalls.push(args)
+          return { stdout: '' }
+        }
+        throw new Error(`unexpected exec: ${cmd} ${args.join(' ')}`)
+      })
+
+      const dispatchPromise = dispatch({ ...opts({ agent: 'claude-code' }), ladderTimeoutMs: 20 } as DispatchOpts, exec)
+
+      // Let the ladder timeout fire first.
+      await new Promise((r) => setTimeout(r, 50))
+      const result = await dispatchPromise
+      expect(result).toEqual({ rung: 'manual', detail: 'dispatch timed out' })
+
+      // NOW resolve the hung list-panes call with a matching pane — the tmux adapter would
+      // ordinarily proceed straight to send-keys. The settled flag must stop it from ever typing.
+      resolveListPanes({ stdout: '%1 claude\n' })
+      // Give any (incorrect) continuation a chance to run.
+      await new Promise((r) => setTimeout(r, 50))
+
+      expect(sendKeysCalls).toHaveLength(0)
+    })
+
+    it('a hung osascript keystroke call that resolves post-timeout must not be acted on further (no follow-up mutating exec)', async () => {
+      let resolveOsascript!: (v: { stdout: string }) => void
+      const execCallsAfterTimeout: string[] = []
+      let timedOut = false
+      const exec: ExecFileFn = vi.fn(async (cmd, args) => {
+        if (cmd === 'tmux') throw new Error('no tmux')
+        if (cmd === 'osascript') {
+          if (timedOut) execCallsAfterTimeout.push(cmd)
+          return new Promise<{ stdout: string }>((resolve) => {
+            resolveOsascript = resolve
+          })
+        }
+        throw new Error(`unexpected exec: ${cmd}`)
+      })
+
+      const dispatchPromise = dispatch(
+        { ...opts({ agent: 'claude-code', platform: 'darwin' }), ladderTimeoutMs: 20 } as DispatchOpts,
+        exec
+      )
+      await new Promise((r) => setTimeout(r, 50))
+      const result = await dispatchPromise
+      expect(result).toEqual({ rung: 'manual', detail: 'dispatch timed out' })
+      timedOut = true
+
+      resolveOsascript({ stdout: 'ok' })
+      await new Promise((r) => setTimeout(r, 50))
+
+      // The single osascript call was already in flight before timeout (that's fine/unavoidable —
+      // it can't be un-invoked), but the settled flag must prevent the adapter from proceeding to
+      // try a SECOND app's script (e.g. Terminal after iTerm2) once it resolves post-timeout.
+      expect(execCallsAfterTimeout).toHaveLength(0)
+    })
+
+    it('a hung cursor deeplink open() that resolves post-timeout leaves exec called only once', async () => {
+      let resolveOpen!: (v: { stdout: string }) => void
+      const exec: ExecFileFn = vi.fn(async (cmd) => {
+        if (cmd === 'open') {
+          return new Promise<{ stdout: string }>((resolve) => {
+            resolveOpen = resolve
+          })
+        }
+        throw new Error(`unexpected exec: ${cmd}`)
+      })
+
+      const dispatchPromise = dispatch({ ...opts({ agent: 'cursor' }), ladderTimeoutMs: 20 } as DispatchOpts, exec)
+      await new Promise((r) => setTimeout(r, 50))
+      const result = await dispatchPromise
+      expect(result).toEqual({ rung: 'manual', detail: 'dispatch timed out' })
+
+      resolveOpen({ stdout: '' })
+      await new Promise((r) => setTimeout(r, 50))
+
+      expect(exec).toHaveBeenCalledTimes(1) // only the original in-flight open() — no retry/second call
+    })
+  })
 })

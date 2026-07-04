@@ -7,6 +7,13 @@ import { discoverEndpoint } from './discover'
 
 const NOT_RUNNING_MESSAGE = 'The Forge dev server is not running — start your Vite dev server first.'
 
+/** Distinguishes "reached a server, but it rejected the request" (stale/mismatched dev server —
+ * e.g. it restarted, or the plugin and this bin are different versions) from NOT_RUNNING_MESSAGE,
+ * which means the connection itself never succeeded (nothing listening at all). */
+function rejectedMessage(status: number): string {
+  return `The Forge server rejected the request (HTTP ${status}) — the dev server may have restarted or the plugin/bin versions may differ; restart your Vite dev server and agent session.`
+}
+
 function readEndpoint(): ForgeEndpoint | null {
   return discoverEndpoint(path.join(process.cwd(), '.the-forge'))
 }
@@ -31,7 +38,7 @@ function makeBackend(): ForgeBackend {
       } catch {
         throw new Error(NOT_RUNNING_MESSAGE)
       }
-      if (!res.ok) throw new Error(NOT_RUNNING_MESSAGE)
+      if (!res.ok) throw new Error(rejectedMessage(res.status))
       const data = (await res.json()) as { items: Array<{ id: string; markdown: string; createdAt: string }> }
       return data.items
     },
@@ -49,7 +56,7 @@ function makeBackend(): ForgeBackend {
       } catch {
         throw new Error(NOT_RUNNING_MESSAGE)
       }
-      if (!res.ok) throw new Error(NOT_RUNNING_MESSAGE)
+      if (!res.ok) throw new Error(rejectedMessage(res.status))
       const data = (await res.json()) as { marked: string[] }
       return data.marked
     },

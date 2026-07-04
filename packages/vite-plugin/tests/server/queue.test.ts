@@ -108,6 +108,40 @@ describe('Queue', () => {
       now += CLAIM_TIMEOUT_MS + 1
       expect(q.pull()).toEqual([])
     })
+
+    it('re-claims a legacy `claimed` item with a MISSING claimedAt immediately (stale — no way to know its age)', () => {
+      // Legacy M4 queue.json shape: a claimed item persisted before claimedAt existed at all.
+      const legacyItem = {
+        id: 'legacy-1',
+        createdAt: new Date(0).toISOString(),
+        status: 'claimed',
+        markdown: 'legacy',
+        request: null,
+        // claimedAt intentionally absent
+      }
+      fs.writeFileSync(path.join(dir, 'queue.json'), JSON.stringify([legacyItem]))
+      const q = new Queue(dir)
+      const pulled = q.pull()
+      expect(pulled.map((i) => i.id)).toEqual(['legacy-1'])
+      expect(q.get('legacy-1')!.claimedAt).toBeDefined() // restamped on re-claim
+    })
+
+    it('re-claims a `claimed` item with an UNPARSEABLE (NaN) claimedAt immediately', () => {
+      const badItem = {
+        id: 'legacy-2',
+        createdAt: new Date(0).toISOString(),
+        status: 'claimed',
+        markdown: 'legacy',
+        request: null,
+        claimedAt: 'not-a-date',
+      }
+      fs.writeFileSync(path.join(dir, 'queue.json'), JSON.stringify([badItem]))
+      const q = new Queue(dir)
+      const pulled = q.pull()
+      expect(pulled.map((i) => i.id)).toEqual(['legacy-2'])
+      expect(q.get('legacy-2')!.claimedAt).toBeDefined()
+      expect(Number.isNaN(new Date(q.get('legacy-2')!.claimedAt!).getTime())).toBe(false)
+    })
   })
 
   describe('concurrent instances', () => {

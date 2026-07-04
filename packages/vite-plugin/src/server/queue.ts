@@ -22,6 +22,41 @@ export interface QueueItem {
   finishedAt?: string
 }
 
+/** The timestamp a terminal item's age is measured from: when it actually finished (finishedAt),
+ * falling back to createdAt for legacy items marked before finishedAt existed. */
+function finishedBasis(item: QueueItem): number {
+  return new Date(item.finishedAt ?? item.createdAt).getTime()
+}
+
+/**
+ * Pure pruning rule shared by both Queue.prune() (the in-memory instance state) and
+ * persist()'s merged-array path (which must apply the identical rule to items merged in from
+ * disk, including ones this instance never even held in memory). Given exactly the same
+ * `items`/`nowMs` inputs, always produces exactly the same output — no reliance on `this`.
+ *
+ * Rule: drops terminal (applied/failed) items whose finishedBasis is older than PRUNE_AFTER_MS,
+ * then caps total stored items at MAX_STORED_ITEMS by dropping the oldest-finished terminal-status
+ * items first. Pending/claimed items are never dropped by either rule.
+ */
+export function pruneItems(items: QueueItem[], nowMs: number): QueueItem[] {
+  const ageFiltered = items.filter((i) => {
+    if (i.status !== 'applied' && i.status !== 'failed') return true
+    return nowMs - finishedBasis(i) <= PRUNE_AFTER_MS
+  })
+
+  const overflow = ageFiltered.length - MAX_STORED_ITEMS
+  if (overflow <= 0) return ageFiltered
+
+  const terminalOldestFirst = ageFiltered
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.status === 'applied' || item.status === 'failed')
+    .sort((a, b) => finishedBasis(a.item) - finishedBasis(b.item))
+
+  const toDrop = new Set(terminalOldestFirst.slice(0, overflow).map(({ index }) => index))
+  if (toDrop.size === 0) return ageFiltered
+  return ageFiltered.filter((_, index) => !toDrop.has(index))
+}
+
 export class Queue {
   private items: QueueItem[] = []
   private file: string
@@ -58,8 +93,14 @@ export class Queue {
     const nowMs = this.now()
     const claimable = this.items.filter((i) => {
       if (i.status === 'pending') return true
-      if (i.status === 'claimed' && i.claimedAt) {
-        return nowMs - new Date(i.claimedAt).getTime() > CLAIM_TIMEOUT_MS
+      if (i.status === 'claimed') {
+        // Legacy M4 queue.json shape (or any other corruption): a `claimed` item with a missing
+        // or unparseable claimedAt gives us no way to know how long it's actually been claimed —
+        // treat it as immediately stale rather than letting it get stuck claimed forever.
+        if (!i.claimedAt) return true
+        const claimedAtMs = new Date(i.claimedAt).getTime()
+        if (Number.isNaN(claimedAtMs)) return true
+        return nowMs - claimedAtMs > CLAIM_TIMEOUT_MS
       }
       return false
     })
@@ -107,34 +148,9 @@ export class Queue {
     return this.items.find((i) => i.id === id)
   }
 
-  /** The timestamp a terminal item's age is measured from: when it actually finished
-   * (finishedAt), falling back to createdAt for legacy items marked before finishedAt existed. */
-  private static finishedBasis(item: QueueItem): number {
-    return new Date(item.finishedAt ?? item.createdAt).getTime()
-  }
-
-  /** Drops terminal items whose finishedAt (or createdAt, if unset) is older than
-   * PRUNE_AFTER_MS, then caps total stored items at MAX_STORED_ITEMS by dropping the
-   * oldest-finished terminal-status items first. Pending/claimed items are never pruned. */
+  /** Applies the shared pruneItems rule (age + overflow cap) to this instance's in-memory items. */
   private prune(): void {
-    const nowMs = this.now()
-    this.items = this.items.filter((i) => {
-      if (i.status !== 'applied' && i.status !== 'failed') return true
-      return nowMs - Queue.finishedBasis(i) <= PRUNE_AFTER_MS
-    })
-
-    const overflow = this.items.length - MAX_STORED_ITEMS
-    if (overflow <= 0) return
-
-    const terminalOldestFirst = this.items
-      .map((item, index) => ({ item, index }))
-      .filter(({ item }) => item.status === 'applied' || item.status === 'failed')
-      .sort((a, b) => Queue.finishedBasis(a.item) - Queue.finishedBasis(b.item))
-
-    const toDrop = new Set(terminalOldestFirst.slice(0, overflow).map(({ index }) => index))
-    if (toDrop.size > 0) {
-      this.items = this.items.filter((_, index) => !toDrop.has(index))
-    }
+    this.items = pruneItems(this.items, this.now())
   }
 
   /** Re-reads the on-disk file and merges in any items this instance doesn't know about (i.e.
@@ -160,25 +176,10 @@ export class Queue {
     fs.mkdirSync(this.dir, { recursive: true })
     const merged = this.mergeWithDisk()
 
-    // Apply pruning rules to the merged array (stale disk items must also be pruned)
-    const nowMs = this.now()
-    const prunedMerged = merged.filter((i) => {
-      if (i.status !== 'applied' && i.status !== 'failed') return true
-      return nowMs - Queue.finishedBasis(i) <= PRUNE_AFTER_MS
-    })
-
-    // Apply overflow cap (oldest terminal items dropped first)
-    const overflow = prunedMerged.length - MAX_STORED_ITEMS
-    let finalMerged = prunedMerged
-    if (overflow > 0) {
-      const terminalOldestFirst = prunedMerged
-        .map((item, index) => ({ item, index }))
-        .filter(({ item }) => item.status === 'applied' || item.status === 'failed')
-        .sort((a, b) => Queue.finishedBasis(a.item) - Queue.finishedBasis(b.item))
-
-      const toDrop = new Set(terminalOldestFirst.slice(0, overflow).map(({ index }) => index))
-      finalMerged = prunedMerged.filter((_, index) => !toDrop.has(index))
-    }
+    // Apply the shared pruning rule to the merged array (stale disk items must also be pruned) —
+    // same age-cutoff + overflow-cap logic as the in-memory prune() below, applied via the one
+    // pure pruneItems() function so the two paths can never drift apart.
+    const finalMerged = pruneItems(merged, this.now())
 
     // Sort by createdAt ascending so queue.json preserves creation order
     finalMerged.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())

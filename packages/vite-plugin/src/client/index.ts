@@ -8,6 +8,7 @@ import { SentRegistry } from './sent'
 import { Verifier } from './verifier'
 import { snapshotRects, diffRects } from './ripple'
 import { resetTokensCache } from './tokens'
+import { AGENT_DISPLAY_NAME, type AgentName } from './agent'
 
 /** Rapid edits (e.g. dragging a number field) within this window reuse the first snapshot. */
 const RIPPLE_DEBOUNCE_MS = 300
@@ -18,14 +19,7 @@ declare global {
   }
 }
 
-type AgentName = 'claude-code' | 'cursor' | 'codex'
 type Rung = 'channels' | 'tmux' | 'applescript' | 'deeplink' | 'manual'
-
-const AGENT_DISPLAY_NAME: Record<AgentName, string> = {
-  'claude-code': 'Claude Code',
-  cursor: 'Cursor',
-  codex: 'Codex',
-}
 
 /** Maps a dispatch rung to the Send button's flash label. Request content never appears here —
  * only the fixed per-rung copy and (for 'manual') the configured agent's display name. */

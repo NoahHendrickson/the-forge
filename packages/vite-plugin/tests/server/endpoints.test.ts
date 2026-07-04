@@ -274,6 +274,7 @@ describe('forge middleware', () => {
 
 describe('POST /__the-forge/dispatch', () => {
   it('runs the injected dispatch function and returns its result as JSON', async () => {
+    queue.add({}, 'some pending markdown') // a real dispatch only ever fires after a queue add
     const fakeResult: DispatchResult = { rung: 'tmux', detail: 'typed /design into tmux pane %1' }
     let receivedOpts: unknown = null
     const mwWithDispatch = createForgeMiddleware(queue, [], undefined, {
@@ -289,6 +290,35 @@ describe('POST /__the-forge/dispatch', () => {
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.body)).toEqual(fakeResult)
     expect(receivedOpts).toMatchObject({ agent: 'claude-code', channelsFlag: false })
+  })
+
+  it('short-circuits to the manual rung WITHOUT invoking the ladder when there is no pending item and no markdown override', async () => {
+    // queue is empty (nothing added in this test) — no markdown body override either.
+    const dispatchFn = vi.fn(async () => ({ rung: 'tmux' as const, detail: 'should never be reached' }))
+    const mwWithDispatch = createForgeMiddleware(queue, [], undefined, {
+      agent: 'claude-code',
+      channelsFlag: false,
+      dispatchFn,
+    })
+    const res = fakeRes()
+    await run(mwWithDispatch, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'nothing pending' })
+    expect(dispatchFn).not.toHaveBeenCalled()
+  })
+
+  it('still runs the ladder when no item is pending but a markdown override is posted', async () => {
+    const dispatchFn = vi.fn(async () => ({ rung: 'manual' as const, detail: 'x' }))
+    const mwWithDispatch = createForgeMiddleware(queue, [], undefined, {
+      agent: 'claude-code',
+      channelsFlag: false,
+      dispatchFn,
+    })
+    const res = fakeRes()
+    await run(mwWithDispatch, fakeReq('POST', '/__the-forge/dispatch', { markdown: '# override' }, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(200)
+    expect(dispatchFn).toHaveBeenCalledTimes(1)
+    expect(dispatchFn).toHaveBeenCalledWith(expect.objectContaining({ markdown: '# override' }))
   })
 
   it('defaults markdown to the newest pending queue item (not the oldest)', async () => {
@@ -312,6 +342,7 @@ describe('POST /__the-forge/dispatch', () => {
   })
 
   it('defaults the agent from plugin config but allows body.agent to override it', async () => {
+    queue.add({}, 'pending markdown')
     let receivedOpts: { agent?: string } = {}
     const mwWithDispatch = createForgeMiddleware(queue, [], undefined, {
       agent: 'claude-code',
@@ -398,6 +429,7 @@ describe('POST /__the-forge/dispatch', () => {
 
   it('falls back to the dispatch.ts ladder export when no dispatchFn is injected (module mocked — never the real ladder)', async () => {
     dispatchSpy.mockClear()
+    queue.add({}, 'pending markdown') // ensures the new no-pending short-circuit doesn't pre-empt the ladder
     const mwDefault = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false })
     const res = fakeRes()
     await run(mwDefault, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)

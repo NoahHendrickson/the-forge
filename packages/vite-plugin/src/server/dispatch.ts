@@ -46,11 +46,21 @@ export const defaultExec: ExecFileFn = (cmd, args, opts) =>
  * slash command reaches a terminal keystroke-by-keystroke. */
 const DESIGN_COMMAND = '/design'
 
+/** Shared mutable ref threaded through the ladder so `dispatch`'s overall-timeout callback can
+ * flip `settled = true` and every adapter can check it immediately before a MUTATING exec call
+ * (tmux send-keys, an osascript keystroke script, or `open` for the Cursor deeplink). Once the
+ * ladder has timed out and resolved to 'manual', a slow adapter step that only resolves LATER
+ * (e.g. a hung `tmux list-panes`) must never go on to actually type/click on the user's behalf —
+ * the caller already got its answer and may have moved on. */
+export interface SettledRef {
+  settled: boolean
+}
+
 /** tmux adapter: finds the first pane whose current command matches `paneCommand` exactly and
  * sends the literal `/design` + Enter into it. Any failure (missing tmux binary, no server
  * running, no matching pane, send-keys failing) resolves to null so the caller falls through
  * to the next rung — this adapter never throws. */
-async function tryTmux(paneCommand: 'claude' | 'codex', exec: ExecFileFn): Promise<DispatchResult | null> {
+async function tryTmux(paneCommand: 'claude' | 'codex', exec: ExecFileFn, settledRef: SettledRef): Promise<DispatchResult | null> {
   let stdout: string
   try {
     ;({ stdout } = await exec('tmux', ['list-panes', '-a', '-F', '#{pane_id} #{pane_current_command}'], {
@@ -59,6 +69,10 @@ async function tryTmux(paneCommand: 'claude' | 'codex', exec: ExecFileFn): Promi
   } catch {
     return null
   }
+  // The ladder's overall timeout may have already fired while list-panes was in flight — the
+  // caller has moved on with 'manual', so sending keystrokes now would be an unsolicited,
+  // unaccountable mutation. Bail before evaluating panes or calling send-keys.
+  if (settledRef.settled) return null
 
   const lines = stdout.split('\n').map((l) => l.trim()).filter(Boolean)
   let paneId: string | null = null
@@ -73,6 +87,7 @@ async function tryTmux(paneCommand: 'claude' | 'codex', exec: ExecFileFn): Promi
     }
   }
   if (!paneId) return null
+  if (settledRef.settled) return null
 
   try {
     await exec('tmux', ['send-keys', '-t', paneId, DESIGN_COMMAND, 'Enter'], { timeout: EXEC_TIMEOUT_MS })
@@ -184,7 +199,8 @@ return "ok"
 async function tryAppleScript(
   platform: NodeJS.Platform,
   paneCommand: 'claude' | 'codex',
-  exec: ExecFileFn
+  exec: ExecFileFn,
+  settledRef: SettledRef
 ): Promise<DispatchResult | null> {
   if (platform !== 'darwin') return null
 
@@ -200,8 +216,14 @@ async function tryAppleScript(
         ] as const)
 
   for (const [appName, script] of scripts) {
+    // Each osascript call below both verifies the front session/window AND (if verified) types
+    // the keystroke — it's a single atomic mutating call from our side. Once the ladder has
+    // already timed out, no FURTHER such calls may be issued (an already-in-flight call can't be
+    // un-invoked, but we must not proceed to try the next app's script after it resolves).
+    if (settledRef.settled) return null
     try {
       const { stdout } = await exec('osascript', ['-e', script], { timeout: EXEC_TIMEOUT_MS })
+      if (settledRef.settled) return null
       if (stdout.trim() !== 'ok') continue // verification failed (sentinel "no-session") — try next app
       return { rung: 'applescript', detail: `typed /design into ${appName} via AppleScript` }
     } catch {
@@ -216,9 +238,10 @@ async function tryAppleScript(
  * the URL to the OS/Cursor — never interpreted by a shell. User still presses Enter in Cursor
  * (spec hard floor: dispatch never submits on the user's behalf). Oversized markdown (deeplink
  * length limits) falls through to manual instead of risking a truncated/broken deeplink. */
-async function tryDeeplink(markdown: string, exec: ExecFileFn): Promise<DispatchResult | null> {
+async function tryDeeplink(markdown: string, exec: ExecFileFn, settledRef: SettledRef): Promise<DispatchResult | null> {
   const encoded = encodeURIComponent(markdown)
   if (encoded.length > DEEPLINK_MAX_ENCODED_LENGTH) return null
+  if (settledRef.settled) return null
 
   const url = `cursor://anysphere.cursor-deeplink/prompt?text=${encoded}`
   try {
@@ -251,13 +274,16 @@ async function tryChannels(cwd: string): Promise<DispatchResult | null> {
 }
 
 /** The actual per-agent ladder walk — factored out so `dispatch` can race it against the overall
- * timeout below without duplicating the ladder logic. */
-async function runLadder(opts: DispatchOpts, exec: ExecFileFn): Promise<DispatchResult> {
+ * timeout below without duplicating the ladder logic. `settledRef` is shared with `dispatch`,
+ * which flips it to true the instant the overall timeout fires — every adapter checks it
+ * immediately before its mutating exec call so a ladder that keeps running in the background
+ * after a timeout can never type/click on the user's behalf. */
+async function runLadder(opts: DispatchOpts, exec: ExecFileFn, settledRef: SettledRef): Promise<DispatchResult> {
   const platform = opts.platform ?? process.platform
   const cwd = opts.cwd ?? process.cwd()
 
   if (opts.agent === 'cursor') {
-    const deeplink = await tryDeeplink(opts.markdown, exec)
+    const deeplink = await tryDeeplink(opts.markdown, exec, settledRef)
     if (deeplink) return deeplink
     return { rung: 'manual', detail: 'deeplink unavailable — type /design in Cursor' }
   }
@@ -269,10 +295,10 @@ async function runLadder(opts: DispatchOpts, exec: ExecFileFn): Promise<Dispatch
     if (channels) return channels
   }
 
-  const tmuxResult = await tryTmux(paneCommand, exec)
+  const tmuxResult = await tryTmux(paneCommand, exec, settledRef)
   if (tmuxResult) return tmuxResult
 
-  const appleScriptResult = await tryAppleScript(platform, paneCommand, exec)
+  const appleScriptResult = await tryAppleScript(platform, paneCommand, exec, settledRef)
   if (appleScriptResult) return appleScriptResult
 
   return { rung: 'manual', detail: `type /design in ${opts.agent === 'codex' ? 'Codex' : 'Claude Code'}` }
@@ -294,13 +320,19 @@ async function runLadder(opts: DispatchOpts, exec: ExecFileFn): Promise<Dispatch
  */
 export async function dispatch(opts: DispatchOpts, exec: ExecFileFn = defaultExec): Promise<DispatchResult> {
   const timeoutMs = opts.ladderTimeoutMs ?? LADDER_TIMEOUT_MS
+  const settledRef: SettledRef = { settled: false }
   let timer: ReturnType<typeof setTimeout>
   const timeout = new Promise<DispatchResult>((resolve) => {
-    timer = setTimeout(() => resolve({ rung: 'manual', detail: 'dispatch timed out' }), timeoutMs)
+    timer = setTimeout(() => {
+      // The caller is about to get 'manual' back — from this instant on, the still-running
+      // ladder (if any adapter is mid-flight) must never proceed to a mutating exec call.
+      settledRef.settled = true
+      resolve({ rung: 'manual', detail: 'dispatch timed out' })
+    }, timeoutMs)
   })
 
   try {
-    return await Promise.race([runLadder(opts, exec), timeout])
+    return await Promise.race([runLadder(opts, exec, settledRef), timeout])
   } finally {
     clearTimeout(timer!)
   }
