@@ -40,7 +40,9 @@ describe('ForgeDesignMode boundary: dist/design-mode.js is node-free (spec load-
   it('contains no node: specifier and no require() of a Node builtin', () => {
     const code = fs.readFileSync(DIST_FILE, 'utf8')
     expect(code).not.toMatch(/\bnode:/)
-    expect(code).not.toMatch(/require\(\s*['"](?:fs|path|os|child_process|http|https|net|crypto|url)['"]\s*\)/)
+    // The artifact is pure ESM output with only `import { createElement } from "react"` as legitimate
+    // external reference. ANY require() call is a regression that would break isomorphic safety.
+    expect(code).not.toMatch(/require\(/)
   })
 
   it('preserves the literal process.env.NODE_ENV (esbuild must not inline it at OUR build time)', () => {
