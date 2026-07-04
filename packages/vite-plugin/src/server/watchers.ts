@@ -25,12 +25,14 @@ export interface WatcherHubOpts {
   /** Claims all currently-claimable queue items — `() => queue.pull()` in production.
    * Injected so hub tests never touch a real Queue/disk. */
   claim: () => QueueItem[]
-  /** True while claimed items are in flight (`queue has status 'claimed'` in production).
-   * Keeps a watcher live through its APPLY window: while the agent is editing files it
-   * is not parked on /wait and its heartbeat goes stale, but treating it as asleep there
-   * would send a mid-apply Send down the keystroke ladder AND deliver it on the next
-   * wait — a double nudge (PR #1 review). Stale claims re-queue after 5 min (queue.ts),
-   * so a died-mid-apply watcher can hold liveness at most that long. */
+  /** True while claimed items are FRESH (`queue.hasFreshClaims()` in production — the
+   * age check matters, see that method's doc). Keeps a watcher live through its APPLY
+   * window: while the agent is editing files it is not parked on /wait and its heartbeat
+   * goes stale, but treating it as asleep there would send a mid-apply Send down the
+   * keystroke ladder AND deliver it on the next wait — a double nudge (PR #1 review).
+   * Freshness is bounded by CLAIM_TIMEOUT_MS, so a died-mid-apply watcher holds liveness
+   * at most that long — the bound must come from the callback's own age check, because
+   * stale-claim re-queueing is lazy (inside pull()) and a dead watcher never pulls. */
   applying?: () => boolean
   /** Injectable clock for idle/freshness math. Defaults to Date.now. */
   now?: () => number

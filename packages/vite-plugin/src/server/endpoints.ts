@@ -105,7 +105,7 @@ export function createForgeMiddleware(
     hub ??
     new WatcherHub({
       claim: () => queue.pull(),
-      applying: () => queue.list().some((i) => i.status === 'claimed'),
+      applying: () => queue.hasFreshClaims(),
     })
   return (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     const url = req.url ?? ''

@@ -74,6 +74,19 @@ describe('WatchStatus poller', () => {
     watch.stop()
   })
 
+  it("a successful 'none' response CLEARS a cached asleep — the server is authoritative (fresh hub after a restart)", async () => {
+    const fetchMock = stubStatus('asleep')
+    const watch = new WatchStatus(() => {})
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.current()).toBe('asleep')
+
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    await vi.advanceTimersByTimeAsync(WATCH_POLL_MS)
+    expect(watch.current()).toBe('none') // unlike a FAILED poll, which keeps asleep (below)
+    watch.stop()
+  })
+
   it('asleep SURVIVES a failed poll — the wake instruction must not flicker away on a blip', async () => {
     const fetchMock = stubStatus('asleep')
     const watch = new WatchStatus(() => {})

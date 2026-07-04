@@ -110,9 +110,11 @@ export class WatchStatus {
       .then((body) => {
         if (gen !== this.generation) return
         if (body === null) return this.degrade()
-        // Unrecognized values (a future server) degrade like failures below.
+        // 'none' is a legitimate, AUTHORITATIVE server answer (e.g. a fresh hub after a
+        // Vite restart) — it must clear a cached 'asleep', not fall into the degrade
+        // path with failures. Only truly unrecognized values (a future server) degrade.
         const raw = body.watcher
-        if (raw === 'live' || raw === 'asleep') this.update(raw)
+        if (raw === 'live' || raw === 'asleep' || raw === 'none') this.update(raw)
         else this.degrade()
       })
       .catch(() => {

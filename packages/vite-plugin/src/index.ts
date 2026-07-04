@@ -60,7 +60,7 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       // flight), when it is neither parked nor heartbeating — see WatcherHubOpts.applying.
       const hub = new WatcherHub({
         claim: () => queue.pull(),
-        applying: () => queue.list().some((i) => i.status === 'claimed'),
+        applying: () => queue.hasFreshClaims(),
       })
       server.middlewares.use(
         createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels, cwd: resolvedRoot }, hub)

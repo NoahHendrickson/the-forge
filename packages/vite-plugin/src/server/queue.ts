@@ -169,6 +169,27 @@ export class Queue {
   }
 
   /**
+   * True while any claim is still FRESH (within CLAIM_TIMEOUT_MS) — the queue-side signal
+   * that an agent is presumably mid-apply, used by WatcherHub's `applying` liveness hold.
+   * The age check lives here, next to pull()'s staleness rules, and is essential: stale
+   * claims are only re-queued lazily INSIDE pull(), and a watcher that died mid-apply
+   * never pulls again — so "status === 'claimed'" alone would read as applying forever
+   * and hold the hub live indefinitely (PR #1 review). Same edge rules as pull(): a
+   * claimed item with a missing/unparseable claimedAt gives no way to know its age and
+   * counts as stale, not fresh.
+   */
+  hasFreshClaims(): boolean {
+    const nowMs = this.now()
+    return this.items.some((i) => {
+      if (i.status !== 'claimed') return false
+      if (!i.claimedAt) return false
+      const claimedAtMs = new Date(i.claimedAt).getTime()
+      if (Number.isNaN(claimedAtMs)) return false
+      return nowMs - claimedAtMs <= CLAIM_TIMEOUT_MS
+    })
+  }
+
+  /**
    * Merges externally-sourced items (e.g. a legacy queue.json from a since-relocated queue
    * directory — see the forge-dir-root migration) into this instance and persists the result.
    * Dedupes by id using the same rule as mergeWithDisk: items already known to this instance
