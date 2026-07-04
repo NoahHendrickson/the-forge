@@ -18,6 +18,11 @@ export interface NumberFieldOpts {
  *   function's job (NumberField handles plain numbers on its own fast path), but returning
  *   the parsed value here is harmless and simplifies field wiring/tests.
  * - Any parse error, trailing garbage, or division by zero returns null.
+ *
+ * CAVEAT: a bare negative number ('-8') is treated as a leading-operator
+ * expression (current − 8), NOT a negative literal. Callers wanting
+ * negative literals must intercept plain numbers first (NumberField's
+ * change handler does this via its plain-number fast path).
  */
 export function evaluateExpression(expr: string, current: number | null): number | null {
   const trimmed = expr.trim()
@@ -150,6 +155,7 @@ export class NumberField {
   // the exact committed value on refresh.
   private scrubStartValue = 0
   private scrubbing = false
+  private displayState: 'number' | 'mixed' | 'auto' = 'number'
 
   constructor(private opts: NumberFieldOpts) {
     this.root.className = 'nf'
@@ -183,9 +189,19 @@ export class NumberField {
 
   private handleChange(): void {
     const raw = this.input.value
+    const trimmed = raw.trim()
+
+    // Mixed and auto displays survive an unedited blur: if the raw value matches
+    // the current keyword display, keep the display and return early.
+    if (this.displayState === 'mixed' && trimmed === MIXED_TEXT) {
+      return
+    }
+    if (this.displayState === 'auto' && trimmed.toLowerCase() === AUTO_TEXT) {
+      return
+    }
 
     // Keyword handling (auto) takes priority when allowed.
-    if (this.opts.allowAuto && raw.trim().toLowerCase() === AUTO_TEXT) {
+    if (this.opts.allowAuto && trimmed.toLowerCase() === AUTO_TEXT) {
       this.setAuto()
       this.opts.onKeyword?.('auto')
       return
@@ -193,7 +209,7 @@ export class NumberField {
 
     // Plain number path — unchanged from v1.
     const n = Number.parseFloat(raw)
-    if (Number.isFinite(n) && /^-?\d+(\.\d+)?$/.test(raw.trim())) {
+    if (Number.isFinite(n) && /^-?\d+(\.\d+)?$/.test(trimmed)) {
       this.commit(n)
       return
     }
@@ -235,6 +251,7 @@ export class NumberField {
   private render(value: number | null): void {
     this.lastValid = value
     this.input.value = value === null ? '' : String(value)
+    this.displayState = 'number'
   }
 
   set(value: number | null): void {
@@ -245,12 +262,14 @@ export class NumberField {
   setMixed(): void {
     this.lastValid = null
     this.input.value = MIXED_TEXT
+    this.displayState = 'mixed'
   }
 
   /** Displays the literal 'auto' text; internal value is null (get() reports null). Only meaningful with allowAuto. */
   setAuto(): void {
     this.lastValid = null
     this.input.value = AUTO_TEXT
+    this.displayState = 'auto'
   }
 
   get(): number | null {

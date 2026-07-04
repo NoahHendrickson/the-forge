@@ -198,4 +198,15 @@ describe('NumberField v2 — Mixed and auto', () => {
     expect(onInput).toHaveBeenLastCalledWith(8)
     window.dispatchEvent(new MouseEvent('mouseup', {}))
   })
+
+  it('Mixed and auto displays survive an unedited blur', () => {
+    const { nf, input } = make({ allowAuto: true })
+    nf.setMixed()
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(input.value).toBe('Mixed')
+    nf.setAuto()
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(input.value).toBe('auto')
+    expect(nf.get()).toBeNull()
+  })
 })
