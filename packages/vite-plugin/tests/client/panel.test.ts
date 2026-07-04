@@ -105,4 +105,11 @@ describe('Panel', () => {
     panel.compareButton.click()
     expect(fieldInput(panel, 'W').value).toBe('300')
   })
+
+  it('opacity 0 round-trips as 0, not 100', () => {
+    const { panel } = setup()
+    commit(fieldInput(panel, 'O'), '0')
+    panel.refresh()
+    expect(fieldInput(panel, 'O').value).toBe('0')
+  })
 })

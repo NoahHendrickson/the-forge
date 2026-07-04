@@ -71,7 +71,10 @@ const SECTIONS: SectionSpec[] = [
         min: 0,
         max: 100,
         toCss: (n) => String(n / 100),
-        fromCss: (css) => Math.round((Number.parseFloat(css) || 1) * 100),
+        fromCss: (css) => {
+          const n = Number.parseFloat(css)
+          return Math.round((Number.isFinite(n) ? n : 1) * 100)
+        },
       },
     ],
     expandRows: [
