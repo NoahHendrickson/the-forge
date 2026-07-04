@@ -22,6 +22,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const mode of liveModes.splice(0)) mode.setActive(false)
+  vi.unstubAllGlobals()
 })
 
 function fullSetup() {
