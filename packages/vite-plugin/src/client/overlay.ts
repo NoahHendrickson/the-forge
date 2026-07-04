@@ -74,6 +74,8 @@ export class Overlay {
   private static readonly RIPPLE_CAP = 8
   /** Ripples fade and clear this long after the most recent showRipples() call. */
   private static readonly RIPPLE_CLEAR_MS = 1500
+  /** Matches the `.ripple-outline` CSS transition duration — time to fully fade before hiding. */
+  private static readonly RIPPLE_FADE_MS = 300
 
   constructor() {
     const root = this.host.attachShadow({ mode: 'open' })
@@ -159,8 +161,12 @@ export class Overlay {
       this.ripplePool.push(div)
     }
     this.ripplePool.forEach((div, i) => {
-      if (i < shown.length) this.place(div, shown[i])
-      else div.hidden = true
+      if (i < shown.length) {
+        this.place(div, shown[i])
+        div.style.opacity = '1' // full opacity again — a reused div may still be mid-fade-out
+      } else {
+        div.hidden = true
+      }
     })
     if (this.rippleClearTimer) clearTimeout(this.rippleClearTimer)
     this.rippleClearTimer = setTimeout(() => {
@@ -169,12 +175,20 @@ export class Overlay {
     }, Overlay.RIPPLE_CLEAR_MS)
   }
 
+  /**
+   * Starts the fade-then-hide sequence: dropping opacity to 0 lets the CSS transition
+   * on `.ripple-outline` actually animate, instead of the outline vanishing instantly.
+   * The divs are hidden RIPPLE_FADE_MS later, once the transition has had time to finish.
+   */
   private clearRipples(): void {
     if (this.rippleClearTimer) {
       clearTimeout(this.rippleClearTimer)
       this.rippleClearTimer = null
     }
-    for (const div of this.ripplePool) div.hidden = true
+    for (const div of this.ripplePool) div.style.opacity = '0'
+    setTimeout(() => {
+      for (const div of this.ripplePool) div.hidden = true
+    }, Overlay.RIPPLE_FADE_MS)
   }
 
   updateStatus(draftCount: number, comparingAll: boolean, sentText?: string): void {

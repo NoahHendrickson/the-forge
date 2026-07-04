@@ -36,10 +36,14 @@ export class DesignMode {
   // Layout-ripple state: idle-zero — only populated during the post-edit window.
   // A rapid burst of edits (e.g. dragging a number field) reuses the FIRST snapshot
   // in the burst until RIPPLE_DEBOUNCE_MS of quiet, so ripples reflect drag-start ->
-  // drag-end, not per-tick noise.
+  // drag-end, not per-tick noise. The snapshot is cleared by a quiet-window TIMER
+  // (reset on every edit), not by the rAF that runs the diff — the rAF must leave the
+  // snapshot alive so the NEXT edit in a burst still diffs against the drag-start
+  // baseline instead of re-baselining every frame.
   private rippleSnapshot: Map<TaggedElement, DOMRect> | null = null
   private rippleSnapshotFor: TaggedElement | null = null
   private lastEditAt = 0
+  private rippleQuietTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(
     private overlay: Overlay,
@@ -148,9 +152,7 @@ export class DesignMode {
       this.moveRaf = 0
       this.reflowRaf = 0
       this.rippleRaf = 0
-      this.rippleSnapshot = null
-      this.rippleSnapshotFor = null
-      this.lastEditAt = 0
+      this.clearRippleState()
       this.lastMove = null
       this.selected = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
@@ -166,20 +168,25 @@ export class DesignMode {
 
   select(el: TaggedElement): void {
     this.selected = el
-    this.rippleSnapshot = null
-    this.rippleSnapshotFor = null
-    this.lastEditAt = 0
+    this.clearRippleState()
     this.overlay.showSelectOutline(el.getBoundingClientRect())
     this.panel.show(el, buildInspectorData(el))
   }
 
   deselect(): void {
     this.selected = null
+    this.clearRippleState()
+    this.overlay.hideSelectOutline()
+    this.panel.hide()
+  }
+
+  /** Clears all layout-ripple debounce state, including the pending quiet-window timer. */
+  private clearRippleState(): void {
+    if (this.rippleQuietTimer) clearTimeout(this.rippleQuietTimer)
+    this.rippleQuietTimer = null
     this.rippleSnapshot = null
     this.rippleSnapshotFor = null
     this.lastEditAt = 0
-    this.overlay.hideSelectOutline()
-    this.panel.hide()
   }
 
   private remeasure(): void {
@@ -197,6 +204,16 @@ export class DesignMode {
       this.rippleSnapshotFor = el
     }
     this.lastEditAt = now
+    // Reset the quiet-window timer on every edit — it (not the per-frame rAF) is what
+    // retires the snapshot, so a burst of edits keeps diffing against the SAME
+    // drag-start baseline instead of re-baselining every frame.
+    if (this.rippleQuietTimer) clearTimeout(this.rippleQuietTimer)
+    this.rippleQuietTimer = setTimeout(() => {
+      this.rippleQuietTimer = null
+      this.rippleSnapshot = null
+      this.rippleSnapshotFor = null
+      this.lastEditAt = 0
+    }, RIPPLE_DEBOUNCE_MS)
   }
 
   /** Panel's post-hook, called after drafts.apply() for every control edit. */
@@ -205,9 +222,11 @@ export class DesignMode {
     if (this.rippleRaf) cancelAnimationFrame(this.rippleRaf)
     this.rippleRaf = requestAnimationFrame(() => {
       this.rippleRaf = 0
+      // NOTE: do NOT null rippleSnapshot here — it must survive so the next edit in a
+      // burst still diffs against the drag-start baseline. The quiet-window timer in
+      // handleBeforeEdit is solely responsible for retiring it.
       const snapshot = this.rippleSnapshot
       if (!snapshot) return
-      this.rippleSnapshot = null
       const changed = diffRects(snapshot)
       if (changed.length > 0) this.overlay.showRipples(changed.map((el) => el.getBoundingClientRect()))
     })

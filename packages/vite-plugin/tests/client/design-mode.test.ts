@@ -662,6 +662,57 @@ describe('DesignMode layout-ripple debounce (M2b Task 4)', () => {
     expect(showRipplesSpy).toHaveBeenCalledWith([sibling.getBoundingClientRect()])
   })
 
+  it('a slow drag (sub-threshold per-frame, above-threshold cumulative) still ripples on the burst\'s third edit', () => {
+    // Discriminating test: each edit moves the sibling +0.4px relative to its PREVIOUS
+    // position — below the 0.5px change threshold if re-baselined every frame (the bug:
+    // handleEdited's rAF nulled rippleSnapshot, forcing a fresh baseline each edit).
+    // Cumulatively across the burst the sibling has moved +1.2px from the DRAG-START
+    // baseline, which IS above threshold. This only passes when the snapshot from the
+    // first edit in the burst survives to be diffed against on the third edit.
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
+    const runRaf = () => queue.splice(0).forEach((cb) => cb(0))
+
+    document.body.innerHTML = `
+      <div data-dc-source="src/Wrap.tsx:1:1" id="scope">
+        <div data-dc-source="src/Selected.tsx:2:2" id="selected" style="padding: 8px;"></div>
+        <div data-dc-source="src/Sibling.tsx:3:3" id="sibling"></div>
+      </div>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    mode.setActive(true)
+
+    const selected = document.getElementById('selected')! as HTMLElement
+    const sibling = document.getElementById('sibling')! as HTMLElement
+    stubRect(selected, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(sibling, { x: 0, y: 30, width: 100, height: 20 }) // drag-start baseline
+    mode.select(selected)
+
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    stubRect(sibling, { x: 0, y: 30.4, width: 100, height: 20 }) // +0.4px vs previous — sub-threshold
+    runRaf()
+    vi.advanceTimersByTime(50) // well within the 300ms quiet window
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '20')
+    stubRect(sibling, { x: 0, y: 30.8, width: 100, height: 20 }) // +0.4px vs previous — sub-threshold
+    runRaf()
+    vi.advanceTimersByTime(50)
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '30')
+    stubRect(sibling, { x: 0, y: 31.2, width: 100, height: 20 }) // +0.4px vs previous, +1.2px vs drag-start
+    runRaf()
+
+    expect(showRipplesSpy).toHaveBeenCalledWith([sibling.getBoundingClientRect()])
+  })
+
   it('re-snapshots when the selection changes mid-burst', () => {
     const queue: FrameRequestCallback[] = []
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
