@@ -197,6 +197,7 @@ Each milestone is independently useful (M1 alone ≈ a better click-to-source; M
 - **Tailwind v4 CSS-first configs:** token mapper must read `@theme` CSS, not just `tailwind.config.ts`. Verify early in M3.
 - **Styles defined in CSS files (not utility classes):** v1 emits the delta with the element's source location and lets the agent decide where the change belongs; authored-rule attribution via CDP is a possible v2 (requires extension or debugger attach — revisit).
 - **Open:** exact naming; whether M4's `/design` should auto-run via a `UserPromptSubmit` hook that surfaces pending edits whenever the user next messages Claude Code.
+- **Open (M3, from handoff investigation 2026-07-03):** shared-component intent — when a drafted element is one of many instances of a component, the change request must record whether the designer means "this instance" or "all instances" (Figma-style prompt at send time). Also: change requests record viewport size + rendered state; styles sourced from CSS files (not the tagged line) rely on computed-delta + screenshots + verifier until authored-rule attribution lands.
 
 ## 12. Testing approach
 
