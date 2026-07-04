@@ -22,7 +22,7 @@ export function designCompanion(): Plugin {
       const [file] = id.split('?')
       if (!/\.[jt]sx$/.test(file)) return null
       if (file.includes('/node_modules/')) return null
-      const rel = path.relative(root, file)
+      const rel = path.relative(root, file).split(path.sep).join('/')
       if (rel.startsWith('..') || path.isAbsolute(rel)) return null
       return tagJsxSource(code, rel)
     },
