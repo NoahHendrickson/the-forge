@@ -15,4 +15,9 @@ export default defineConfig([
     platform: 'browser',
     define: { 'import.meta.vitest': 'undefined' },
   },
+  {
+    entry: { mcp: 'src/mcp/index.ts' },
+    format: ['esm'],
+    platform: 'node',
+  },
 ])
