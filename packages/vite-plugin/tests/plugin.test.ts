@@ -7,8 +7,8 @@ import { theForge, CLIENT_ID } from '../src/index'
 
 type TransformHook = (code: string, id: string) => { code: string } | null
 
-function getPlugin(root = '/proj') {
-  const plugin = theForge()
+function getPlugin(root = '/proj', options?: Parameters<typeof theForge>[0]) {
+  const plugin = theForge(options)
   // simulate vite calling configResolved with a root
   ;(plugin.configResolved as (c: { root: string }) => void)({ root })
   const transform = plugin.transform as unknown as TransformHook
@@ -115,6 +115,32 @@ describe('theForge plugin', () => {
     })
   })
 
+  describe('agent / experimentalChannels options', () => {
+    let root: string
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-plugin-agent-'))
+    })
+
+    it('defaults to claude-code / experimentalChannels: false in the client bootstrap', () => {
+      const { plugin } = getPlugin(root)
+      const server = fakeServer(root)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+      const code = (plugin.load as (id: string) => string | null)(CLIENT_ID)!
+      expect(code).toContain('"agent":"claude-code"')
+    })
+
+    it('threads a configured agent/experimentalChannels into the client bootstrap', () => {
+      const { plugin } = getPlugin(root, { agent: 'cursor', experimentalChannels: true })
+      const server = fakeServer(root)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+      const code = (plugin.load as (id: string) => string | null)(CLIENT_ID)!
+      expect(code).toContain('"agent":"cursor"')
+    })
+  })
+
   describe('client bootstrap secret injection', () => {
     let root: string
 
@@ -133,7 +159,7 @@ describe('theForge plugin', () => {
 
       const code = (plugin.load as (id: string) => string | null)(CLIENT_ID)
       expect(code).toBeTruthy()
-      expect(code!.startsWith(`globalThis.__THE_FORGE__ = ${JSON.stringify({ secret })};\n`)).toBe(true)
+      expect(code!.startsWith(`globalThis.__THE_FORGE__ = ${JSON.stringify({ secret, agent: 'claude-code' })};\n`)).toBe(true)
     })
   })
 })

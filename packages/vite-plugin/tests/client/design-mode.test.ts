@@ -469,21 +469,162 @@ describe('DesignMode multi-select (B6)', () => {
 })
 
 describe('DesignMode send-to-agent (M4)', () => {
+  /** Flushes enough microtasks for the /queue POST *and* the chained /dispatch POST to settle. */
+  async function flushSend(): Promise<void> {
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+  }
+
   it('send posts the request and registers pending ids', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q1' }) })
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'tmux', detail: 'x' }) })
+      throw new Error(`unexpected fetch: ${url}`)
+    })
     vi.stubGlobal('fetch', fetchMock)
     const { overlay, mode, drafts } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
     overlay.sendButton.click()
-    await Promise.resolve()
-    await Promise.resolve()
+    await flushSend()
     expect(fetchMock).toHaveBeenCalledWith('/__the-forge/queue', expect.objectContaining({ method: 'POST' }))
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body)
     expect(body.markdown).toContain('# Design change request')
     expect(mode.sent.pendingIds()).toEqual(['q1'])
-    expect(overlay.sendButton.textContent).toBe('Sent ✓')
+    expect(overlay.sendButton.textContent).toBe('Sent — typed /design into your session')
+  })
+
+  describe('dispatch chaining after a successful queue POST', () => {
+    function stubQueueThenDispatch(dispatchResponse: { rung: string; detail: string }) {
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+        if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => dispatchResponse })
+        throw new Error(`unexpected fetch: ${url}`)
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      return fetchMock
+    }
+
+    it('POSTs /dispatch after a successful /queue POST', async () => {
+      const fetchMock = stubQueueThenDispatch({ rung: 'tmux', detail: 'x' })
+      const { overlay, mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      overlay.sendButton.click()
+      await flushSend()
+      expect(fetchMock).toHaveBeenCalledWith('/__the-forge/dispatch', expect.objectContaining({ method: 'POST' }))
+    })
+
+    it('surfaces "typed /design into your session" for rung tmux', async () => {
+      stubQueueThenDispatch({ rung: 'tmux', detail: 'x' })
+      const { overlay, mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      overlay.sendButton.click()
+      await flushSend()
+      expect(overlay.sendButton.textContent).toBe('Sent — typed /design into your session')
+    })
+
+    it('surfaces "typed /design into your session" for rung applescript', async () => {
+      stubQueueThenDispatch({ rung: 'applescript', detail: 'x' })
+      const { overlay, mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      overlay.sendButton.click()
+      await flushSend()
+      expect(overlay.sendButton.textContent).toBe('Sent — typed /design into your session')
+    })
+
+    it('surfaces "opened in Cursor" for rung deeplink', async () => {
+      stubQueueThenDispatch({ rung: 'deeplink', detail: 'x' })
+      const { overlay, mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      overlay.sendButton.click()
+      await flushSend()
+      expect(overlay.sendButton.textContent).toBe('Sent — opened in Cursor')
+    })
+
+    it('surfaces "type /design in Claude Code" for rung manual with the default agent', async () => {
+      stubQueueThenDispatch({ rung: 'manual', detail: 'x' })
+      const { overlay, mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      overlay.sendButton.click()
+      await flushSend()
+      expect(overlay.sendButton.textContent).toBe('Sent — type /design in Claude Code')
+    })
+
+    it('surfaces the configured agent name for rung manual (cursor)', async () => {
+      ;(globalThis as { __THE_FORGE__?: { agent?: string } }).__THE_FORGE__ = { agent: 'cursor' }
+      stubQueueThenDispatch({ rung: 'manual', detail: 'x' })
+      const { overlay, mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      overlay.sendButton.click()
+      await flushSend()
+      expect(overlay.sendButton.textContent).toBe('Sent — type /design in Cursor')
+      delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
+    })
+
+    it('surfaces the configured agent name for rung manual (codex)', async () => {
+      ;(globalThis as { __THE_FORGE__?: { agent?: string } }).__THE_FORGE__ = { agent: 'codex' }
+      stubQueueThenDispatch({ rung: 'manual', detail: 'x' })
+      const { overlay, mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      overlay.sendButton.click()
+      await flushSend()
+      expect(overlay.sendButton.textContent).toBe('Sent — type /design in Codex')
+      delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
+    })
+
+    it('still registers the send as successful (pending id tracked) even if /dispatch POST fails', async () => {
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+        if (url === '/__the-forge/dispatch') return Promise.reject(new Error('dispatch network error'))
+        throw new Error(`unexpected fetch: ${url}`)
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { overlay, mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      overlay.sendButton.click()
+      await flushSend()
+      expect(mode.sent.pendingIds()).toEqual(['q1'])
+      // Falls back to a manual-style label since dispatch itself couldn't be reached.
+      expect(overlay.sendButton.textContent).toBe('Sent — type /design in Claude Code')
+    })
+
+    it('re-enables the send button only after both /queue and /dispatch settle', async () => {
+      let resolveDispatch!: (v: { ok: boolean; json: () => Promise<{ rung: string; detail: string }> }) => void
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+        if (url === '/__the-forge/dispatch') return new Promise((resolve) => (resolveDispatch = resolve))
+        throw new Error(`unexpected fetch: ${url}`)
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { overlay, mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      overlay.sendButton.click()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(overlay.sendButton.disabled).toBe(true)
+      resolveDispatch({ ok: true, json: async () => ({ rung: 'tmux', detail: 'x' }) })
+      await flushSend()
+      expect(overlay.sendButton.disabled).toBe(false)
+    })
   })
 
   it('send includes X-Forge-Secret header when globalThis.__THE_FORGE__.secret is set', async () => {
@@ -565,7 +706,10 @@ describe('DesignMode send-to-agent (M4)', () => {
   })
 
   it('calls onSendComplete after a successful send registers', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q9' }) })
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q9' }) })
+      return Promise.resolve({ ok: true, json: async () => ({ rung: 'tmux', detail: 'x' }) })
+    })
     vi.stubGlobal('fetch', fetchMock)
     const { overlay, mode, drafts } = fullSetup()
     const onSendComplete = vi.fn()
@@ -574,14 +718,16 @@ describe('DesignMode send-to-agent (M4)', () => {
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
     overlay.sendButton.click()
-    await Promise.resolve()
-    await Promise.resolve()
+    await flushSend()
     expect(onSendComplete).toHaveBeenCalledTimes(1)
   })
 
   it('disables the send button while the POST is in flight, and re-enables on success', async () => {
     let resolveFetch!: (v: { ok: boolean; json: () => Promise<{ id: string }> }) => void
-    const fetchMock = vi.fn().mockReturnValue(new Promise((resolve) => (resolveFetch = resolve)))
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return new Promise((resolve) => (resolveFetch = resolve))
+      return Promise.resolve({ ok: true, json: async () => ({ rung: 'tmux', detail: 'x' }) })
+    })
     vi.stubGlobal('fetch', fetchMock)
     const { overlay, mode, drafts } = fullSetup()
     mode.setActive(true)
@@ -593,8 +739,7 @@ describe('DesignMode send-to-agent (M4)', () => {
     expect(overlay.sendButton.disabled).toBe(true)
 
     resolveFetch({ ok: true, json: async () => ({ id: 'q1' }) })
-    await Promise.resolve()
-    await Promise.resolve()
+    await flushSend()
     expect(overlay.sendButton.disabled).toBe(false)
   })
 
@@ -617,8 +762,11 @@ describe('DesignMode send-to-agent (M4)', () => {
     expect(overlay.sendButton.disabled).toBe(false)
   })
 
-  it('two rapid clicks result in exactly one fetch (re-entrancy guard)', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q1' }) })
+  it('two rapid clicks result in exactly one /queue POST (re-entrancy guard)', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      return Promise.resolve({ ok: true, json: async () => ({ rung: 'tmux', detail: 'x' }) })
+    })
     vi.stubGlobal('fetch', fetchMock)
     const { overlay, mode, drafts } = fullSetup()
     mode.setActive(true)
@@ -627,9 +775,9 @@ describe('DesignMode send-to-agent (M4)', () => {
 
     overlay.sendButton.click()
     overlay.sendButton.click()
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await flushSend()
+    const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
+    expect(queueCalls).toHaveLength(1)
   })
 })
 

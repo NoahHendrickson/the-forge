@@ -14,8 +14,25 @@ const RIPPLE_DEBOUNCE_MS = 300
 
 declare global {
   interface Window {
-    __THE_FORGE__?: { mode: DesignMode; secret?: string }
+    __THE_FORGE__?: { mode: DesignMode; secret?: string; agent?: AgentName }
   }
+}
+
+type AgentName = 'claude-code' | 'cursor' | 'codex'
+type Rung = 'channels' | 'tmux' | 'applescript' | 'deeplink' | 'manual'
+
+const AGENT_DISPLAY_NAME: Record<AgentName, string> = {
+  'claude-code': 'Claude Code',
+  cursor: 'Cursor',
+  codex: 'Codex',
+}
+
+/** Maps a dispatch rung to the Send button's flash label. Request content never appears here —
+ * only the fixed per-rung copy and (for 'manual') the configured agent's display name. */
+function sentLabelFor(rung: Rung, agent: AgentName): string {
+  if (rung === 'deeplink') return 'Sent — opened in Cursor'
+  if (rung === 'manual' || rung === 'channels') return `Sent — type /design in ${AGENT_DISPLAY_NAME[agent]}`
+  return 'Sent — typed /design into your session' // tmux / applescript
 }
 
 /** Belt-and-braces against cross-origin/DNS-rebinding bypasses of the server's Origin/Host
@@ -87,6 +104,17 @@ export class DesignMode {
         overlay.sendButton.disabled = false
         this.flashButton(overlay.sendButton, 'Send failed', originalLabel)
       }
+      // Dispatch reaches for the user's already-RUNNING agent session (tmux/AppleScript/Cursor
+      // deeplink) so they never have to type anything but Enter — see server/dispatch.ts. A
+      // dispatch failure (network hiccup, non-200) must NOT undo the send: the request is
+      // already safely queued, so we degrade to the same copy as rung 'manual'.
+      const agent: AgentName = window.__THE_FORGE__?.agent ?? 'claude-code'
+      const manualLabel = sentLabelFor('manual', agent)
+      const onDispatchSettled = (rung: Rung | null): void => {
+        overlay.sendButton.disabled = false
+        this.flashButton(overlay.sendButton, rung ? sentLabelFor(rung, agent) : manualLabel, originalLabel)
+        this.onSendComplete?.()
+      }
       const onSendOk = (id: string): void => {
         const mapping = [...elements.entries()].map(([el, change]) => ({
           el,
@@ -96,9 +124,19 @@ export class DesignMode {
         }))
         this.sent.add(id, mapping)
         this.verifier.start()
-        overlay.sendButton.disabled = false
-        this.flashButton(overlay.sendButton, 'Sent ✓', originalLabel)
-        this.onSendComplete?.()
+        fetch('/__the-forge/dispatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+          body: JSON.stringify({}),
+        })
+          .then((res) => {
+            if (!res.ok) return onDispatchSettled(null)
+            res
+              .json()
+              .then((body: { rung: Rung }) => onDispatchSettled(body.rung))
+              .catch(() => onDispatchSettled(null))
+          })
+          .catch(() => onDispatchSettled(null))
       }
       overlay.sendButton.disabled = true
       // nesting is deliberate: the send test counts microtask ticks — re-check it before flattening to async/await
@@ -339,10 +377,11 @@ function boot(): void {
   const mode = new DesignMode(overlay)
   overlay.attachPanel(mode.panelRoot)
   // The server-injected bootstrap (prepended to this bundle's source, see index.ts load())
-  // sets globalThis.__THE_FORGE__ = { secret } BEFORE this module runs — preserve it rather
-  // than clobbering it when we attach `mode`.
+  // sets globalThis.__THE_FORGE__ = { secret, agent } BEFORE this module runs — preserve it
+  // rather than clobbering it when we attach `mode`.
   const secret = window.__THE_FORGE__?.secret
-  window.__THE_FORGE__ = { mode, secret }
+  const agent = window.__THE_FORGE__?.agent
+  window.__THE_FORGE__ = { mode, secret, agent }
 }
 
 if (typeof document !== 'undefined' && !import.meta.vitest) {
