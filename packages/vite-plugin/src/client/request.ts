@@ -1,6 +1,6 @@
 import { DraftStore } from './drafts'
 import { parseSourceAttr, type SourceLocation, type TaggedElement } from './source'
-import { readTheme, suggestUtility, findExistingUtility, type Theme } from './tokens'
+import { readTheme, readTokens, suggestUtility, findExistingUtility, type Theme } from './tokens'
 
 export interface ChangeItem {
   property: string
@@ -125,6 +125,7 @@ export function buildChangeRequestWithElements(
 ): { request: ChangeRequest; elements: Map<TaggedElement, ElementChange> } {
   const elementList: ElementChange[] = []
   const elements = new Map<TaggedElement, ElementChange>()
+  const tokens = readTokens()
 
   for (const [el, props] of drafts.entries()) {
     if (!el.isConnected) continue
@@ -167,7 +168,7 @@ export function buildChangeRequestWithElements(
     const className = typeof el.className === 'string' ? el.className : [...el.classList].join(' ')
     const changes: ChangeItem[] = []
     for (const [property, v] of collapse(raw)) {
-      const suggestion = suggestUtility(property, v.afterCss, theme)
+      const suggestion = suggestUtility(property, v.afterCss, theme, tokens)
       changes.push({
         property,
         beforeCss: v.beforeCss,

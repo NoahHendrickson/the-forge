@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { DraftStore } from '../../src/client/drafts'
 import { buildChangeRequest, buildChangeRequestWithElements, cssPath, renderMarkdown } from '../../src/client/request'
-import type { Theme } from '../../src/client/tokens'
+import { resetTokensCache, type Theme } from '../../src/client/tokens'
 
 const TW: Theme = { rootFontPx: 16, spacingBasePx: 4, radiusScale: { lg: 8, xl: 12 } }
 const PLAIN: Theme = { rootFontPx: 16, spacingBasePx: null, radiusScale: {} }
@@ -262,6 +262,26 @@ describe('buildChangeRequestWithElements', () => {
     expect(request.elements).toHaveLength(1)
     expect(elements.size).toBe(1)
     expect(elements.get(el)).toBe(request.elements[0])
+  })
+
+  it('resolves background-color drafts against the live token vocabulary (readTokens called once per build)', () => {
+    resetTokensCache()
+    document.head.insertAdjacentHTML('beforeend', '<style data-test-req-tokens>:root { --color-red-500: #fb2c36; }</style>')
+    document.documentElement.style.setProperty('--color-red-500', '#fb2c36')
+    try {
+      document.body.innerHTML = `<button data-dc-source="src/App.tsx:7:9" style="background-color: rgb(0, 0, 0);">Add mod</button>`
+      const el = document.querySelector('button')!
+      const store = new DraftStore()
+      store.apply(el, 'background-color', 'rgb(251, 44, 54)')
+      const req = buildChangeRequest(store, TW)
+      const c = req.elements[0].changes.find((x) => x.property === 'background-color')!
+      expect(c.afterUtility).toBe('bg-red-500')
+      expect(c.tokenExact).toBe(true)
+    } finally {
+      document.querySelectorAll('style[data-test-req-tokens]').forEach((s) => s.remove())
+      document.documentElement.removeAttribute('style')
+      resetTokensCache()
+    }
   })
 })
 
