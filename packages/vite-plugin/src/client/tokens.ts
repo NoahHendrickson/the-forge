@@ -46,6 +46,7 @@ export const UTILITY_PREFIXES: Record<string, string> = {
   'border-bottom-right-radius': 'rounded-br',
   'border-bottom-left-radius': 'rounded-bl',
   opacity: 'opacity',
+  gap: 'gap',
 }
 
 const RADIUS_PROPS = new Set(

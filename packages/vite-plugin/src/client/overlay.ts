@@ -29,11 +29,22 @@ button {
 }
 #panel .panel-head { font-weight: 500; margin-bottom: 8px; word-break: break-all; }
 #panel .panel-section { color: #6b6b66; margin: 10px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+#panel .panel-section[hidden] { display: none; }
 #panel .panel-rows { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 #panel button { border-radius: 6px; padding: 4px 10px; }
 .nf { display: flex; align-items: center; gap: 4px; border: 1px solid #e3e3de; border-radius: 6px; padding: 2px 6px; }
 .nf-label { color: #6b6b66; font-size: 11px; cursor: ew-resize; user-select: none; min-width: 16px; }
 .nf input { width: 44px; border: none; outline: none; font: 400 12px system-ui, sans-serif; color: #1a1a18; background: transparent; }
+.seg-field { display: flex; align-items: center; gap: 4px; }
+.seg-field-label { color: #6b6b66; font-size: 11px; min-width: 16px; }
+.seg { border-radius: 6px; padding: 3px 8px; font-size: 11px; }
+.seg.seg-active { background: #1a1a18; color: #fff; }
+.align-matrix { display: grid; grid-template-columns: repeat(3, 16px); grid-template-rows: repeat(3, 16px); gap: 3px; }
+.am-dot { width: 16px; height: 16px; border-radius: 3px; padding: 0; border: 1px solid #e3e3de; background: #fff; }
+.am-dot.am-active { background: #1a1a18; border-color: #1a1a18; }
+.size-row { display: flex; align-items: center; gap: 4px; }
+.size-mode { border: 1px solid #e3e3de; border-radius: 6px; font: 400 11px system-ui, sans-serif; color: #1a1a18; background: #fff; padding: 2px 4px; }
+.layout-section, .flex-child-controls { display: flex; flex-direction: column; gap: 6px; width: 100%; }
 `
 
 export class Overlay {
