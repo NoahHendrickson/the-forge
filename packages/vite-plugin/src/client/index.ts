@@ -6,6 +6,10 @@ import { Panel } from './panel'
 import { buildChangeRequestWithElements, renderMarkdown } from './request'
 import { SentRegistry } from './sent'
 import { Verifier } from './verifier'
+import { snapshotRects, diffRects } from './ripple'
+
+/** Rapid edits (e.g. dragging a number field) within this window reuse the first snapshot. */
+const RIPPLE_DEBOUNCE_MS = 300
 
 declare global {
   interface Window {
@@ -21,6 +25,7 @@ export class DesignMode {
 
   private moveRaf = 0
   private reflowRaf = 0
+  private rippleRaf = 0
   private lastMove: MouseEvent | null = null
   private drafts: DraftStore
   private panel: Panel
@@ -28,13 +33,26 @@ export class DesignMode {
   private verifierSummary = ''
   private buttonTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>()
 
+  // Layout-ripple state: idle-zero — only populated during the post-edit window.
+  // A rapid burst of edits (e.g. dragging a number field) reuses the FIRST snapshot
+  // in the burst until RIPPLE_DEBOUNCE_MS of quiet, so ripples reflect drag-start ->
+  // drag-end, not per-tick noise.
+  private rippleSnapshot: Map<TaggedElement, DOMRect> | null = null
+  private lastEditAt = 0
+
   constructor(
     private overlay: Overlay,
     panel?: Panel,
     drafts?: DraftStore
   ) {
     this.drafts = drafts ?? new DraftStore()
-    this.panel = panel ?? new Panel(this.drafts, () => this.remeasure())
+    this.panel =
+      panel ??
+      new Panel(
+        this.drafts,
+        () => this.handleEdited(),
+        (el) => this.handleBeforeEdit(el)
+      )
     this.verifier = new Verifier(this.sent, this.drafts, (summary) => {
       this.verifierSummary = summary
       this.refreshStatus()
@@ -154,6 +172,31 @@ export class DesignMode {
 
   private remeasure(): void {
     if (this.selected) this.overlay.showSelectOutline(this.selected.getBoundingClientRect())
+  }
+
+  /** Panel's pre-hook, called immediately before drafts.apply() for every control edit. */
+  private handleBeforeEdit(el: TaggedElement): void {
+    const now = Date.now()
+    // Reuse the in-flight snapshot while edits keep arriving within the debounce
+    // window (a scrub/drag burst) — only take a fresh one after a quiet gap.
+    if (!this.rippleSnapshot || now - this.lastEditAt > RIPPLE_DEBOUNCE_MS) {
+      this.rippleSnapshot = snapshotRects(el)
+    }
+    this.lastEditAt = now
+  }
+
+  /** Panel's post-hook, called after drafts.apply() for every control edit. */
+  private handleEdited(): void {
+    this.remeasure()
+    if (this.rippleRaf) cancelAnimationFrame(this.rippleRaf)
+    this.rippleRaf = requestAnimationFrame(() => {
+      this.rippleRaf = 0
+      const snapshot = this.rippleSnapshot
+      if (!snapshot) return
+      this.rippleSnapshot = null
+      const changed = diffRects(snapshot)
+      if (changed.length > 0) this.overlay.showRipples(changed.map((el) => el.getBoundingClientRect()))
+    })
   }
 
   private flashButton(btn: HTMLButtonElement, label: string, restore: string): void {

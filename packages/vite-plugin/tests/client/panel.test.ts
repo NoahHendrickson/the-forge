@@ -403,3 +403,68 @@ describe('Panel', () => {
   })
 
 })
+
+describe('Panel onBeforeEdit pre-hook (M2b Task 4)', () => {
+  function setupWithBeforeEdit(html?: string) {
+    document.body.innerHTML =
+      html ?? `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px; width: 200px;"></div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const onBeforeEdit = vi.fn()
+    const panel = new Panel(drafts, onEdited, onBeforeEdit)
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    return { el, drafts, panel, onEdited, onBeforeEdit }
+  }
+
+  it('is optional — omitting it does not throw on edit', () => {
+    const { panel } = setup()
+    expect(() => commit(fieldInput(panel, 'W'), '300')).not.toThrow()
+  })
+
+  it('a plain number-field edit calls onBeforeEdit with the element before onEdited', () => {
+    const { el, panel, onBeforeEdit, onEdited } = setupWithBeforeEdit()
+    commit(fieldInput(panel, 'PX'), '16')
+    expect(onBeforeEdit).toHaveBeenCalledWith(el)
+    expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
+  })
+
+  it('reset also calls onBeforeEdit before onEdited', () => {
+    const { el, panel, onBeforeEdit, onEdited } = setupWithBeforeEdit()
+    commit(fieldInput(panel, 'W'), '300')
+    onBeforeEdit.mockClear()
+    onEdited.mockClear()
+    panel.resetButton.click()
+    expect(onBeforeEdit).toHaveBeenCalledWith(el)
+    expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
+  })
+
+  it('add-auto-layout calls onBeforeEdit before onEdited', () => {
+    const { el, panel, onBeforeEdit, onEdited } = setupWithBeforeEdit()
+    const btn = panel.root.querySelector('[data-add-layout]') as HTMLElement
+    btn.click()
+    expect(onBeforeEdit).toHaveBeenCalledWith(el)
+    expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
+  })
+
+  it('size-mode select change calls onBeforeEdit before onEdited', () => {
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px; height: 50px;"></div>
+    </div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const onBeforeEdit = vi.fn()
+    const panel = new Panel(drafts, onEdited, onBeforeEdit)
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+
+    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fill'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onBeforeEdit).toHaveBeenCalledWith(el)
+    expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
+  })
+})

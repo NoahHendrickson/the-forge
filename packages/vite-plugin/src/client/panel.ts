@@ -147,7 +147,13 @@ export class Panel {
 
   constructor(
     private drafts: DraftStore,
-    private onEdited: () => void
+    private onEdited: () => void,
+    // Optional third param (rather than an options object) — keeps every existing
+    // `new Panel(drafts, onEdited)` call site and test untouched. Called by every
+    // control handler immediately BEFORE drafts.apply(...), so callers can snapshot
+    // pre-edit layout state (e.g. for the ripple indicator) while onEdited (which
+    // fires after apply) is used for post-edit re-measurement.
+    private onBeforeEdit: (el: TaggedElement) => void = () => {}
   ) {
     this.root.id = 'panel'
     this.root.hidden = true
@@ -161,6 +167,7 @@ export class Panel {
     })
     this.resetButton.addEventListener('click', () => {
       if (!this.el) return
+      this.onBeforeEdit(this.el)
       this.drafts.discard(this.el)
       this.refresh()
       this.onEdited()
@@ -371,6 +378,7 @@ export class Panel {
     addBtn.setAttribute('data-add-layout', '')
     addBtn.addEventListener('click', () => {
       if (!this.el) return
+      this.onBeforeEdit(this.el)
       this.drafts.apply(this.el, 'display', 'flex')
       this.refresh()
       this.onEdited()
@@ -390,6 +398,7 @@ export class Panel {
       ],
       onInput: (value) => {
         if (!this.el) return
+        this.onBeforeEdit(this.el)
         this.drafts.apply(this.el, 'flex-direction', value)
         this.refresh()
         this.onEdited()
@@ -403,12 +412,14 @@ export class Panel {
       allowAuto: true,
       onInput: (n) => {
         if (!this.el) return
+        this.onBeforeEdit(this.el)
         this.drafts.apply(this.el, 'gap', px(n))
         this.refresh()
         this.onEdited()
       },
       onKeyword: (kw) => {
         if (!this.el || kw !== 'auto') return
+        this.onBeforeEdit(this.el)
         this.drafts.apply(this.el, 'justify-content', 'space-between')
         // Figma semantics: switching gap to Auto means "space it out for me" —
         // any explicit gap draft is cleared (not just zeroed) so justify-content
@@ -425,6 +436,7 @@ export class Panel {
     this.alignMatrix = new AlignMatrix({
       onInput: ({ justify, align }) => {
         if (!this.el) return
+        this.onBeforeEdit(this.el)
         this.drafts.apply(this.el, 'justify-content', justify)
         this.drafts.apply(this.el, 'align-items', align)
         this.refresh()
@@ -441,6 +453,7 @@ export class Panel {
       ],
       onInput: (value) => {
         if (!this.el) return
+        this.onBeforeEdit(this.el)
         this.drafts.apply(this.el, 'flex-wrap', value)
         this.refresh()
         this.onEdited()
@@ -466,6 +479,7 @@ export class Panel {
       ],
       onInput: (value) => {
         if (!this.el) return
+        this.onBeforeEdit(this.el)
         this.drafts.apply(this.el, 'align-self', value)
         this.refresh()
         this.onEdited()
@@ -508,6 +522,7 @@ export class Panel {
 
   private onSizeModeChange(spec: RowSpec, mode: string): void {
     if (!this.el) return
+    this.onBeforeEdit(this.el)
     const prop = spec.props[0]
     const parent = this.el.parentElement
     const parentDirection =
@@ -560,6 +575,7 @@ export class Panel {
       allowAuto: spec.sizeMode,
       onInput: (n) => {
         if (!this.el) return
+        this.onBeforeEdit(this.el)
         const css = (spec.toCss ?? px)(n)
         for (const prop of spec.props) this.drafts.apply(this.el, prop, css)
         this.refresh()

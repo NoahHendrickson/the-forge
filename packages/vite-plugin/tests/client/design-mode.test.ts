@@ -489,3 +489,157 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
     expect(refreshSpy).toHaveBeenCalled()
   })
 })
+
+describe('DesignMode layout-ripple wiring (M2b Task 4)', () => {
+  function fieldInput(root: HTMLElement, label: string): HTMLInputElement {
+    const nf = [...root.querySelectorAll('.nf')].find((n) => n.querySelector('.nf-label')!.textContent === label)
+    if (!nf) throw new Error(`no field labeled ${label}`)
+    return nf.querySelector('input')!
+  }
+
+  function commit(input: HTMLInputElement, value: string): void {
+    input.value = value
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+
+  function stubRect(el: Element, rect: { x: number; y: number; width: number; height: number }): void {
+    el.getBoundingClientRect = () => new DOMRect(rect.x, rect.y, rect.width, rect.height)
+  }
+
+  // Queued rAF (rather than the file-level immediate stub) so the test can mutate
+  // rects BETWEEN the pre-edit snapshot and the post-edit diff, simulating real reflow.
+  function rippleSetup() {
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
+    document.body.innerHTML = `
+      <div data-dc-source="src/Wrap.tsx:1:1" id="scope">
+        <div data-dc-source="src/Selected.tsx:2:2" id="selected" style="padding: 8px;"></div>
+        <div data-dc-source="src/Sibling.tsx:3:3" id="sibling"></div>
+      </div>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    return { overlay, mode, runRaf: () => queue.splice(0).forEach((cb) => cb(0)) }
+  }
+
+  it('editing PY on the selected element ripples the sibling whose rect changed after the edit', () => {
+    const { overlay, mode, runRaf } = rippleSetup()
+    mode.setActive(true)
+    const selected = document.getElementById('selected')! as HTMLElement
+    const sibling = document.getElementById('sibling')! as HTMLElement
+    stubRect(selected, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(sibling, { x: 0, y: 30, width: 100, height: 20 })
+
+    mode.select(selected)
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    // post-edit reflow: the sibling moved down (simulating the padding push) before
+    // the rAF-scheduled diff runs
+    stubRect(sibling, { x: 0, y: 60, width: 100, height: 20 })
+    runRaf()
+
+    expect(showRipplesSpy).toHaveBeenCalledWith([sibling.getBoundingClientRect()])
+  })
+
+  it('never includes the selected element in ripples', () => {
+    const { mode, overlay, runRaf } = rippleSetup()
+    mode.setActive(true)
+    const selected = document.getElementById('selected')! as HTMLElement
+    const sibling = document.getElementById('sibling')! as HTMLElement
+    stubRect(selected, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(sibling, { x: 0, y: 30, width: 100, height: 20 })
+    mode.select(selected)
+
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+    // the selected element itself also changes rect due to the edit (padding growth) —
+    // it must never appear in the ripple set even though it moved.
+    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    stubRect(selected, { x: 0, y: 0, width: 100, height: 60 })
+    stubRect(sibling, { x: 0, y: 90, width: 100, height: 20 })
+    runRaf()
+
+    expect(showRipplesSpy).toHaveBeenCalled()
+    const selectedRect = selected.getBoundingClientRect()
+    for (const [rects] of showRipplesSpy.mock.calls) {
+      for (const r of rects) {
+        expect(r.x === selectedRect.x && r.y === selectedRect.y && r.width === selectedRect.width).toBe(false)
+      }
+    }
+  })
+})
+
+describe('DesignMode layout-ripple debounce (M2b Task 4)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function fieldInput(root: HTMLElement, label: string): HTMLInputElement {
+    const nf = [...root.querySelectorAll('.nf')].find((n) => n.querySelector('.nf-label')!.textContent === label)
+    if (!nf) throw new Error(`no field labeled ${label}`)
+    return nf.querySelector('input')!
+  }
+
+  function commit(input: HTMLInputElement, value: string): void {
+    input.value = value
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+
+  function stubRect(el: Element, rect: { x: number; y: number; width: number; height: number }): void {
+    el.getBoundingClientRect = () => new DOMRect(rect.x, rect.y, rect.width, rect.height)
+  }
+
+  it('a rapid burst of edits reuses the first snapshot until 300ms of quiet', () => {
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
+    const runRaf = () => queue.splice(0).forEach((cb) => cb(0))
+
+    document.body.innerHTML = `
+      <div data-dc-source="src/Wrap.tsx:1:1" id="scope">
+        <div data-dc-source="src/Selected.tsx:2:2" id="selected" style="padding: 8px;"></div>
+        <div data-dc-source="src/Sibling.tsx:3:3" id="sibling"></div>
+      </div>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    mode.setActive(true)
+
+    const selected = document.getElementById('selected')! as HTMLElement
+    const sibling = document.getElementById('sibling')! as HTMLElement
+    stubRect(selected, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(sibling, { x: 0, y: 30, width: 100, height: 20 })
+    mode.select(selected)
+
+    // Burst: 3 edits within 300ms — the FIRST snapshot (sibling at y=30) should be
+    // the baseline the final diff is measured against, not a snapshot re-taken mid-burst.
+    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    stubRect(sibling, { x: 0, y: 40, width: 100, height: 20 }) // mid-burst noise
+    runRaf()
+    vi.advanceTimersByTime(100)
+    commit(fieldInput(mode.panelRoot, 'PY'), '20')
+    stubRect(sibling, { x: 0, y: 50, width: 100, height: 20 }) // mid-burst noise
+    runRaf()
+    vi.advanceTimersByTime(100)
+
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+    commit(fieldInput(mode.panelRoot, 'PY'), '30')
+    stubRect(sibling, { x: 0, y: 70, width: 100, height: 20 }) // final settled position
+    runRaf()
+
+    expect(showRipplesSpy).toHaveBeenCalledWith([sibling.getBoundingClientRect()])
+  })
+})

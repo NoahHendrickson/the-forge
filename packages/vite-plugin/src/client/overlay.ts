@@ -21,6 +21,11 @@ button {
   position: fixed; z-index: 2147483646; pointer-events: none;
   border: 2px solid #4a90e2; border-radius: 2px;
 }
+.ripple-outline {
+  position: fixed; z-index: 2147483644; pointer-events: none;
+  border: 1.5px dashed #e2954a; border-radius: 2px;
+  opacity: 1; transition: opacity 0.3s ease-out;
+}
 #panel {
   position: fixed; right: 16px; top: 16px; z-index: 2147483647;
   width: 260px; max-height: 80vh; overflow-y: auto;
@@ -61,6 +66,15 @@ export class Overlay {
   private statusLabel = document.createElement('span')
   private sentLabel = document.createElement('span')
 
+  /** Pool of ripple-outline divs, reused across showRipples() calls instead of recreated. */
+  private ripplePool: HTMLElement[] = []
+  private rippleClearTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Max ripple outlines shown at once — keeps the effect legible when many siblings shift. */
+  private static readonly RIPPLE_CAP = 8
+  /** Ripples fade and clear this long after the most recent showRipples() call. */
+  private static readonly RIPPLE_CLEAR_MS = 1500
+
   constructor() {
     const root = this.host.attachShadow({ mode: 'open' })
     const style = document.createElement('style')
@@ -100,6 +114,7 @@ export class Overlay {
       this.hideOutline()
       this.hideSelectOutline()
       this.status.hidden = true
+      this.clearRipples()
     }
   }
 
@@ -125,6 +140,41 @@ export class Overlay {
 
   hideSelectOutline(): void {
     this.selectOutline.hidden = true
+  }
+
+  /**
+   * Draws up to RIPPLE_CAP dashed outlines at the given rects (siblings that reflowed
+   * after an edit). Reuses a pool of divs across calls rather than recreating them.
+   * A single shared timer clears all ripples RIPPLE_CLEAR_MS after the most recent call
+   * (re-triggering resets the timer, so a fresh edit extends the fade window).
+   */
+  showRipples(rects: DOMRect[]): void {
+    const shown = rects.slice(0, Overlay.RIPPLE_CAP)
+    while (this.ripplePool.length < shown.length) {
+      const div = document.createElement('div')
+      div.className = 'ripple-outline'
+      div.style.pointerEvents = 'none'
+      div.hidden = true
+      this.host.shadowRoot!.appendChild(div)
+      this.ripplePool.push(div)
+    }
+    this.ripplePool.forEach((div, i) => {
+      if (i < shown.length) this.place(div, shown[i])
+      else div.hidden = true
+    })
+    if (this.rippleClearTimer) clearTimeout(this.rippleClearTimer)
+    this.rippleClearTimer = setTimeout(() => {
+      this.rippleClearTimer = null
+      this.clearRipples()
+    }, Overlay.RIPPLE_CLEAR_MS)
+  }
+
+  private clearRipples(): void {
+    if (this.rippleClearTimer) {
+      clearTimeout(this.rippleClearTimer)
+      this.rippleClearTimer = null
+    }
+    for (const div of this.ripplePool) div.hidden = true
   }
 
   updateStatus(draftCount: number, comparingAll: boolean, sentText?: string): void {
