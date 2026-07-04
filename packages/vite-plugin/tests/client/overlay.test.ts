@@ -88,4 +88,19 @@ describe('Overlay (M4 additions)', () => {
     overlay.updateStatus(1, false, '')
     expect(sent.hidden).toBe(true)
   })
+
+  it('keeps the strip visible for a verifier summary after drafts hit zero', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.updateStatus(0, false, '1 implemented ✓')
+    const root = overlay.host.shadowRoot!
+    const status = root.getElementById('status') as HTMLElement
+    expect(status.hidden).toBe(false)
+    expect(overlay.sendButton.hidden).toBe(true)
+    expect(overlay.copyButton.hidden).toBe(true)
+    expect(overlay.compareAllButton.hidden).toBe(true)
+    expect(overlay.resetAllButton.hidden).toBe(true)
+    overlay.updateStatus(0, false, '')
+    expect(status.hidden).toBe(true)
+  })
 })

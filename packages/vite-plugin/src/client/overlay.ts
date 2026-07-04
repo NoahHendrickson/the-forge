@@ -117,9 +117,19 @@ export class Overlay {
   }
 
   updateStatus(draftCount: number, comparingAll: boolean, sentText?: string): void {
-    this.status.hidden = draftCount === 0
+    // Strip is visible when there are drafts OR a non-empty summary
+    this.status.hidden = draftCount === 0 && !sentText
+    // Draft-count label and controls are hidden when no drafts (they act on drafts)
+    this.statusLabel.hidden = draftCount === 0
+    this.sendButton.hidden = draftCount === 0
+    this.copyButton.hidden = draftCount === 0
+    this.compareAllButton.hidden = draftCount === 0
+    this.resetAllButton.hidden = draftCount === 0
+    // Draft count text (shown only when visible)
     this.statusLabel.textContent = `${draftCount} draft${draftCount === 1 ? '' : 's'}`
+    // Compare button label
     this.compareAllButton.textContent = comparingAll ? 'After' : 'Before'
+    // Sent summary label
     this.sentLabel.hidden = !sentText
     this.sentLabel.textContent = sentText ?? ''
   }
