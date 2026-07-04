@@ -162,7 +162,7 @@ describe('Panel', () => {
     expect(fieldInput(panel, 'PX').value).toBe('Mixed') // originals differ → mixed again
   })
 
-  it('section order is Layout, Size, Padding, Margin, Typography, Appearance regardless of visibility', () => {
+  it('section order is Layout, Size, Padding, Margin, Typography, Fill, Stroke, Appearance regardless of visibility', () => {
     const { panel } = setup()
     // Sections with an expand button now parent it inside the title row, so title row
     // textContent includes the '⋯' glyph for expandable sections — compare the leading
@@ -170,7 +170,7 @@ describe('Panel', () => {
     const titles = [...panel.root.querySelectorAll('.panel-section')].map(
       (n) => n.textContent?.replace('⋯', '').trim()
     )
-    expect(titles).toEqual(['Layout', 'Size', 'Padding', 'Margin', 'Typography', 'Appearance'])
+    expect(titles).toEqual(['Layout', 'Size', 'Padding', 'Margin', 'Typography', 'Fill', 'Stroke', 'Appearance'])
   })
 
   it('expand button is parented inside the section title row, not the rows wrap', () => {
@@ -771,16 +771,16 @@ describe('Panel Typography section', () => {
     expect(typographySection(panel).hidden).toBe(false)
   })
 
-  it('sits between Margin and Appearance in stable DOM order', () => {
+  it('sits between Margin and Fill in stable DOM order', () => {
     const { panel } = textSetup()
     const titles = [...panel.root.querySelectorAll('.panel-section')].map(
       (n) => n.textContent?.replace('⋯', '').trim()
     )
     const marginIdx = titles.indexOf('Margin')
     const typographyIdx = titles.indexOf('Typography')
-    const appearanceIdx = titles.indexOf('Appearance')
+    const fillIdx = titles.indexOf('Fill')
     expect(typographyIdx).toBe(marginIdx + 1)
-    expect(appearanceIdx).toBe(typographyIdx + 1)
+    expect(fillIdx).toBe(typographyIdx + 1)
   })
 
   it('family select lists the current computed family first, deduped, then document.fonts, then fallbacks', () => {
@@ -871,5 +871,203 @@ describe('Panel Typography section', () => {
     const seg = panel.root.querySelector('[data-text-align]')!
     const leftBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Left') as HTMLElement
     expect(leftBtn.classList.contains('seg-active')).toBe(true)
+  })
+})
+
+describe('Panel Fill section', () => {
+  function fillSection(panel: Panel): HTMLElement {
+    return [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => n.textContent?.replace('⋯', '').trim() === 'Fill'
+    ) as HTMLElement
+  }
+
+  function colorRows(panel: Panel): HTMLElement[] {
+    return [...fillSection(panel).parentElement!.querySelectorAll('.color-row')].filter((row) => {
+      // Fill section's rows sit in the .panel-rows sibling immediately after the Fill title.
+      const title = row.closest('.panel-rows')?.previousElementSibling
+      return title === fillSection(panel) && !(row as HTMLElement).hidden
+    }) as HTMLElement[]
+  }
+
+  it('shows a swatch and value text reflecting the computed background-color', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 0, 0);"></div>`
+    )
+    const rows = colorRows(panel)
+    const fillRow = rows[0]
+    const swatch = fillRow.querySelector('.swatch') as HTMLElement
+    expect(swatch).toBeTruthy()
+    expect(swatch.style.color).toBe('rgb(255, 0, 0)')
+  })
+
+  it('Text row is hidden for an element with no direct text child', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"><span>x</span></div>`)
+    const rows = colorRows(panel)
+    expect(rows).toHaveLength(1) // only Fill, Text row absent/hidden
+  })
+
+  it('Text row is visible for an element with direct text', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t">Hello</div>`)
+    const rows = colorRows(panel)
+    expect(rows).toHaveLength(2)
+  })
+
+  it('clicking the Fill swatch opens the picker with contrastAgainst set to the computed text color', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255,255,255); color: rgb(0,0,0);">Hi</div>`
+    )
+    const openSpy = vi.fn()
+    ;(panel as unknown as { colorPicker: { open: typeof openSpy } }).colorPicker.open = openSpy
+    const fillRow = colorRows(panel)[0]
+    const swatch = fillRow.querySelector('.swatch') as HTMLElement
+    swatch.click()
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    const opts = openSpy.mock.calls[0][0]
+    expect(opts.contrastAgainst).toBe('rgb(0, 0, 0)')
+  })
+
+  it('picking a fill color drafts background-color live', () => {
+    const { el, panel, drafts } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255,255,255);"></div>`
+    )
+    const fillRow = colorRows(panel)[0]
+    const swatch = fillRow.querySelector('.swatch') as HTMLElement
+    let onPick: ((css: string, meta: { token?: string }) => void) | null = null
+    ;(panel as unknown as { colorPicker: { open: (opts: any) => void } }).colorPicker.open = (opts) => {
+      onPick = opts.onPick
+    }
+    swatch.click()
+    onPick!('rgb(10, 20, 30)', {})
+    expect(drafts.current(el, 'background-color')).toBe('rgb(10, 20, 30)')
+  })
+
+  it('clicking the Text swatch opens the picker with contrastAgainst set to the effective background', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(20,20,20); color: rgb(255,255,255);">Hi</div>`
+    )
+    const openSpy = vi.fn()
+    ;(panel as unknown as { colorPicker: { open: typeof openSpy } }).colorPicker.open = openSpy
+    const textRow = colorRows(panel)[1]
+    const swatch = textRow.querySelector('.swatch') as HTMLElement
+    swatch.click()
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    const opts = openSpy.mock.calls[0][0]
+    expect(opts.contrastAgainst).toBe('rgb(20, 20, 20)')
+  })
+})
+
+describe('Panel Stroke section', () => {
+  function strokeSection(panel: Panel): HTMLElement {
+    return [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+    ) as HTMLElement
+  }
+
+  function strokeWidthField(panel: Panel): HTMLInputElement {
+    const nf = strokeSection(panel).nextElementSibling!.querySelector('.nf') as HTMLElement
+    return nf.querySelector('input') as HTMLInputElement
+  }
+
+  it('is always visible', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    expect(strokeSection(panel).hidden).toBe(false)
+  })
+
+  it('W field drafts all four border-*-width longhands', () => {
+    const { el, panel, drafts } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-style: solid;"></div>`
+    )
+    commit(strokeWidthField(panel), '3')
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-width`)).toBe('3px')
+    }
+  })
+
+  it('W field shows Mixed when computed per-side widths differ', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-style: solid; border-top-width: 2px; border-right-width: 4px; border-bottom-width: 2px; border-left-width: 2px;"></div>`
+    )
+    expect(strokeWidthField(panel).value).toBe('Mixed')
+  })
+
+  it('drafting a width while computed border-style is none also drafts border-style: solid', () => {
+    const { el, panel, drafts } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    commit(strokeWidthField(panel), '2')
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-style`)).toBe('solid')
+    }
+  })
+
+  it('style select drafts all four border-*-style longhands', () => {
+    const { el, panel, drafts } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    const select = strokeSection(panel).nextElementSibling!.querySelector('.stroke-style') as HTMLSelectElement
+    select.value = 'dashed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-style`)).toBe('dashed')
+    }
+  })
+
+  it('expand reveals per-side width fields BT/BR/BB/BL', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    const btn = strokeSection(panel).querySelector('[data-expand="stroke"]') as HTMLElement
+    expect(btn).toBeTruthy()
+    btn.click()
+    const labels = [...panel.root.querySelectorAll('.nf-label')].map((n) => n.textContent)
+    expect(labels).toEqual(expect.arrayContaining(['BT', 'BR', 'BB', 'BL']))
+  })
+
+  it('clicking the border-color swatch opens the picker with contrastAgainst set to the effective background', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(30,30,30);"></div>`
+    )
+    const openSpy = vi.fn()
+    ;(panel as unknown as { colorPicker: { open: typeof openSpy } }).colorPicker.open = openSpy
+    const swatch = strokeSection(panel).nextElementSibling!.querySelector('.swatch') as HTMLElement
+    swatch.click()
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    const opts = openSpy.mock.calls[0][0]
+    expect(opts.contrastAgainst).toBe('rgb(30, 30, 30)')
+  })
+
+  it('picking a border color drafts all four border-*-color longhands', () => {
+    const { el, panel, drafts } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    let onPick: ((css: string, meta: { token?: string }) => void) | null = null
+    ;(panel as unknown as { colorPicker: { open: (opts: any) => void } }).colorPicker.open = (opts) => {
+      onPick = opts.onPick
+    }
+    const swatch = strokeSection(panel).nextElementSibling!.querySelector('.swatch') as HTMLElement
+    swatch.click()
+    onPick!('rgb(1, 2, 3)', {})
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-color`)).toBe('rgb(1, 2, 3)')
+    }
+  })
+})
+
+describe('Panel + ColorPicker lifecycle', () => {
+  it('show() closes any open color picker from a previous selection', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    const swatch = panel.root.querySelector('.color-row .swatch') as HTMLElement
+    swatch.click()
+    const picker = (panel as unknown as { colorPicker: { root: HTMLElement } }).colorPicker
+    expect(picker.root.hidden).toBe(false)
+
+    const el2 = document.createElement('div')
+    el2.id = 't2'
+    el2.dataset.dcSource = 'src/Card.tsx:5:7'
+    document.body.appendChild(el2)
+    panel.show(el2, buildInspectorData(el2))
+    expect(picker.root.hidden).toBe(true)
+  })
+
+  it('hide() closes any open color picker', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    const swatch = panel.root.querySelector('.color-row .swatch') as HTMLElement
+    swatch.click()
+    const picker = (panel as unknown as { colorPicker: { root: HTMLElement } }).colorPicker
+    expect(picker.root.hidden).toBe(false)
+    panel.hide()
+    expect(picker.root.hidden).toBe(true)
   })
 })

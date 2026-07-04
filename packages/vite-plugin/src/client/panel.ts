@@ -3,6 +3,8 @@ import type { InspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { NumberField } from './controls'
 import { SegmentField, AlignMatrix } from './layout-controls'
+import { ColorPicker } from './colorpicker'
+import { nearestColorToken, readTokens, parseColor as parseColorLocal } from './tokens'
 
 interface RowSpec {
   label: string
@@ -17,6 +19,14 @@ interface RowSpec {
   allowAuto?: boolean
   /** Draft value to apply when the user types the `auto` keyword (only meaningful with allowAuto). */
   autoCss?: string
+  /**
+   * Fired once per prop, immediately before that prop's value is drafted (after onBeforeEdit,
+   * before drafts.apply). Used by Stroke's width fields: drafting a border-*-width while the
+   * computed border-*-style is 'none' also drafts border-*-style: solid (one-time), so a
+   * newly-drafted width is actually visible. Receives the live DraftStore so it can read/write
+   * drafts itself (SECTIONS is a module-level const and can't close over a Panel instance).
+   */
+  onBeforeApply?: (el: TaggedElement, prop: string, drafts: DraftStore) => void
 }
 
 interface SectionSpec {
@@ -27,13 +37,54 @@ interface SectionSpec {
   /** Section renders always (stable DOM order) but is hidden via the `hidden` attribute when this returns false. */
   visible?: (el: TaggedElement) => boolean
   /** Custom section body — used by Layout, which isn't a plain row-field grid. */
-  custom?: 'layout' | 'typography'
+  custom?: 'layout' | 'typography' | 'fill' | 'stroke'
 }
 
 const px = (n: number): string => `${n}px`
 const fromPx = (css: string): number => Math.round(Number.parseFloat(css) || 0)
 
 const RADIUS = ['border-top-left-radius', 'border-top-right-radius', 'border-bottom-right-radius', 'border-bottom-left-radius']
+
+const BORDER_WIDTH_PROPS = ['border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width']
+const BORDER_STYLE_PROPS = ['border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style']
+const BORDER_COLOR_PROPS = ['border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color']
+
+/** border-top-width -> border-top-style (matches each width longhand to its side's style longhand). */
+function styleForWidthProp(widthProp: string): string {
+  return widthProp.replace('-width', '-style')
+}
+
+/**
+ * Drafting a border width only becomes visible if the side actually has a style — a computed
+ * `border-style: none` swallows any width. So the FIRST time a width is drafted while the
+ * computed style for that side is 'none', also draft that side's style to 'solid' (one-time —
+ * a later width edit while style is already something else must not stomp a user-chosen style).
+ */
+function draftSolidIfNone(el: TaggedElement, widthProp: string, drafts: DraftStore): void {
+  const styleProp = styleForWidthProp(widthProp)
+  const draftStyle = drafts.current(el, styleProp)
+  // jsdom reports '' rather than the spec default 'none' for an unset border-style — treat
+  // both as "no visible border yet" so the auto-solid behavior works in tests and browsers alike.
+  const computedStyle = draftStyle ?? getComputedStyle(el).getPropertyValue(styleProp)
+  if (computedStyle === 'none' || computedStyle === '') drafts.apply(el, styleProp, 'solid')
+}
+
+/**
+ * Walks up from `el` (starting at el itself) for the first ancestor whose (draft-or-computed)
+ * background-color has alpha > 0 — the color a Text/Stroke swatch would actually be seen
+ * against. Falls back to white when no ancestor paints a background (the page's default canvas).
+ */
+function effectiveBackground(el: TaggedElement, drafts: DraftStore): string {
+  let node: Element | null = el
+  while (node) {
+    const draft = drafts.isComparing(node as TaggedElement) ? null : drafts.current(node as TaggedElement, 'background-color')
+    const css = draft ?? getComputedStyle(node).getPropertyValue('background-color')
+    const parsed = parseColorLocal(css)
+    if (parsed && parsed.a > 0) return css
+    node = node.parentElement
+  }
+  return '#fff'
+}
 
 function isFlex(el: TaggedElement): boolean {
   const d = getComputedStyle(el).display
@@ -114,7 +165,7 @@ function documentFontFamilies(): string[] {
   return [...seen]
 }
 
-// Section ORDER is fixed forever: Layout -> Size -> Padding -> Margin -> Typography -> Appearance.
+// Section ORDER is fixed forever: Layout -> Size -> Padding -> Margin -> Typography -> Fill -> Stroke -> Appearance.
 const SECTIONS: SectionSpec[] = [
   {
     title: 'Layout',
@@ -164,6 +215,23 @@ const SECTIONS: SectionSpec[] = [
     rows: [],
     custom: 'typography',
     visible: hasDirectText,
+  },
+  {
+    title: 'Fill',
+    rows: [],
+    custom: 'fill',
+  },
+  {
+    title: 'Stroke',
+    rows: [],
+    custom: 'stroke',
+    expandKey: 'stroke',
+    expandRows: [
+      { label: 'BT', props: ['border-top-width'], min: 0, onBeforeApply: draftSolidIfNone },
+      { label: 'BR', props: ['border-right-width'], min: 0, onBeforeApply: draftSolidIfNone },
+      { label: 'BB', props: ['border-bottom-width'], min: 0, onBeforeApply: draftSolidIfNone },
+      { label: 'BL', props: ['border-left-width'], min: 0, onBeforeApply: draftSolidIfNone },
+    ],
   },
   {
     title: 'Appearance',
@@ -242,6 +310,16 @@ export class Panel {
   private typeWeightSelect: HTMLSelectElement | null = null
   private typeAlignField: SegmentField | null = null
 
+  // Fill/Stroke section widgets (rebuilt per show(), re-set() per refresh()).
+  private fillRow: HTMLElement | null = null
+  private textRow: HTMLElement | null = null
+  private strokeStyleSelect: HTMLSelectElement | null = null
+  private strokeColorRow: HTMLElement | null = null
+
+  // Single Panel-level ColorPicker instance shared by Fill and Stroke — closed whenever the
+  // selection changes (show()) so it never dangles pointing at a since-removed row.
+  private colorPicker: ColorPicker
+
   constructor(
     private drafts: DraftStore,
     private onEdited: () => void,
@@ -275,10 +353,12 @@ export class Panel {
     })
     this.actions.append(this.compareButton, this.resetButton)
     this.root.append(this.head, this.actions, this.body)
+    this.colorPicker = new ColorPicker(this.root)
   }
 
   show(el: TaggedElement, data: InspectorData): void {
     this.el = el
+    this.colorPicker.close()
     this.root.hidden = false
     this.headTag.textContent = data.tag
     if (data.source) {
@@ -297,6 +377,7 @@ export class Panel {
   hide(): void {
     this.el = null
     this.root.hidden = true
+    this.colorPicker.close()
   }
 
   refresh(): void {
@@ -342,6 +423,7 @@ export class Panel {
     this.refreshLayoutSection(el, computed)
     this.refreshFlexChild(el, computed)
     this.refreshTypography(el, computed)
+    this.refreshFillStroke(el, computed)
   }
 
   private refreshLayoutSection(el: TaggedElement, computed: CSSStyleDeclaration): void {
@@ -454,6 +536,18 @@ export class Panel {
     }
   }
 
+  private refreshFillStroke(el: TaggedElement, computed: CSSStyleDeclaration): void {
+    ;(this.fillRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
+    if (this.textRow) this.textRow.hidden = !hasDirectText(el)
+    ;(this.textRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
+    ;(this.strokeColorRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
+
+    if (this.strokeStyleSelect) {
+      const style = this.currentValue(el, 'border-top-style', computed)
+      this.strokeStyleSelect.value = ['none', 'solid', 'dashed', 'dotted'].includes(style) ? style : 'none'
+    }
+  }
+
   private currentValue(el: TaggedElement, prop: string, computed: CSSStyleDeclaration): string {
     const draft = this.drafts.isComparing(el) ? null : this.drafts.current(el, prop)
     return draft ?? computed.getPropertyValue(prop)
@@ -483,6 +577,10 @@ export class Panel {
     this.typeFamilySelect = null
     this.typeWeightSelect = null
     this.typeAlignField = null
+    this.fillRow = null
+    this.textRow = null
+    this.strokeStyleSelect = null
+    this.strokeColorRow = null
 
     for (const section of SECTIONS) {
       const title = document.createElement('div')
@@ -501,10 +599,25 @@ export class Panel {
         continue
       }
 
-      const rowWrap = document.createElement('div')
-      rowWrap.className = 'panel-rows'
-      this.body.append(rowWrap)
-      for (const row of section.rows) rowWrap.append(this.buildRow(row))
+      if (section.custom === 'fill') {
+        this.body.append(this.buildFillSection())
+        continue
+      }
+
+      let rowWrap: HTMLElement
+      if (section.custom === 'stroke') {
+        // Stroke's body (W+style row, then Color row) is custom, but still a single
+        // .panel-rows sibling — the expand-button logic below appends its own expandWrap
+        // (BT/BR/BB/BL) as the next body child after it, same shape as every other
+        // expandable section.
+        rowWrap = this.buildStrokeSection()
+        this.body.append(rowWrap)
+      } else {
+        rowWrap = document.createElement('div')
+        rowWrap.className = 'panel-rows'
+        this.body.append(rowWrap)
+        for (const row of section.rows) rowWrap.append(this.buildRow(row))
+      }
 
       if (section.title === 'Size') {
         rowWrap.append(this.buildFlexChildControls())
@@ -729,6 +842,153 @@ export class Panel {
     return wrap
   }
 
+  /** Renders a token name (exact nearestColorToken match) or a short hex fallback for display. */
+  private colorLabel(css: string): string {
+    const parsed = parseColorLocal(css)
+    if (!parsed) return css
+    const nearest = nearestColorToken(parsed, readTokens().colors)
+    if (nearest && nearest.distance === 0) return nearest.token.name
+    const toHex = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')
+    return `#${toHex(parsed.r)}${toHex(parsed.g)}${toHex(parsed.b)}`
+  }
+
+  /** Builds a `.color-row` — swatch button + value text — wired to open the shared ColorPicker. */
+  private buildColorRow(opts: {
+    label: string
+    getCss: () => string
+    getContrastAgainst: () => string | null
+    onPick: (css: string) => void
+  }): HTMLElement {
+    const row = document.createElement('div')
+    row.className = 'color-row'
+
+    const labelEl = document.createElement('span')
+    labelEl.className = 'nf-label'
+    labelEl.textContent = opts.label
+    row.append(labelEl)
+
+    const swatch = document.createElement('button')
+    swatch.type = 'button'
+    swatch.className = 'swatch swatch-fill'
+    row.append(swatch)
+
+    const valueEl = document.createElement('span')
+    valueEl.className = 'color-value'
+    row.append(valueEl)
+
+    swatch.addEventListener('click', () => {
+      this.colorPicker.open({
+        anchor: row,
+        initial: opts.getCss(),
+        contrastAgainst: opts.getContrastAgainst(),
+        onPick: (css) => {
+          if (!this.el) return
+          this.onBeforeEdit(this.el)
+          opts.onPick(css)
+          this.refresh()
+          this.onEdited()
+        },
+      })
+    })
+
+    ;(row as HTMLElement & { __refresh?: () => void }).__refresh = () => {
+      const css = opts.getCss()
+      swatch.style.color = css
+      valueEl.textContent = this.colorLabel(css)
+    }
+    return row
+  }
+
+  private buildFillSection(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'panel-rows'
+
+    const fillRow = this.buildColorRow({
+      label: 'Fill',
+      getCss: () => (this.el ? this.currentValue(this.el, 'background-color', getComputedStyle(this.el)) : ''),
+      getContrastAgainst: () => (this.el ? this.currentValue(this.el, 'color', getComputedStyle(this.el)) : null),
+      onPick: (css) => {
+        if (!this.el) return
+        this.drafts.apply(this.el, 'background-color', css)
+      },
+    })
+    wrap.append(fillRow)
+    this.fillRow = fillRow
+
+    const textRow = this.buildColorRow({
+      label: 'Text',
+      getCss: () => (this.el ? this.currentValue(this.el, 'color', getComputedStyle(this.el)) : ''),
+      getContrastAgainst: () => (this.el ? effectiveBackground(this.el, this.drafts) : null),
+      onPick: (css) => {
+        if (!this.el) return
+        this.drafts.apply(this.el, 'color', css)
+      },
+    })
+    wrap.append(textRow)
+    this.textRow = textRow
+
+    return wrap
+  }
+
+  private buildStrokeSection(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'panel-rows stroke-rows'
+
+    const row1 = document.createElement('div')
+    row1.className = 'stroke-row'
+    const widthField = this.buildField({
+      label: 'W',
+      props: BORDER_WIDTH_PROPS,
+      min: 0,
+      fromCss: (css) => {
+        const n = Math.round(Number.parseFloat(css))
+        return Number.isFinite(n) ? n : 0
+      },
+      onBeforeApply: draftSolidIfNone,
+    })
+    row1.append(widthField.field.root)
+
+    const styleSelect = document.createElement('select')
+    styleSelect.className = 'size-mode stroke-style'
+    for (const [value, label] of [
+      ['none', 'None'],
+      ['solid', 'Solid'],
+      ['dashed', 'Dashed'],
+      ['dotted', 'Dotted'],
+    ] as const) {
+      const opt = document.createElement('option')
+      opt.value = value
+      opt.textContent = label
+      styleSelect.append(opt)
+    }
+    styleSelect.addEventListener('change', () => {
+      if (!this.el) return
+      this.onBeforeEdit(this.el)
+      for (const prop of BORDER_STYLE_PROPS) this.drafts.apply(this.el, prop, styleSelect.value)
+      this.refresh()
+      this.onEdited()
+    })
+    this.strokeStyleSelect = styleSelect
+    row1.append(styleSelect)
+
+    const row2 = document.createElement('div')
+    row2.className = 'stroke-row'
+    const colorRow = this.buildColorRow({
+      label: 'Color',
+      getCss: () => (this.el ? this.currentValue(this.el, 'border-top-color', getComputedStyle(this.el)) : ''),
+      getContrastAgainst: () => (this.el ? effectiveBackground(this.el, this.drafts) : null),
+      onPick: (css) => {
+        if (!this.el) return
+        for (const prop of BORDER_COLOR_PROPS) this.drafts.apply(this.el, prop, css)
+      },
+    })
+    row2.append(colorRow)
+    this.strokeColorRow = colorRow
+
+    wrap.append(row1, row2)
+    return wrap
+  }
+
   private buildFlexChildControls(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'flex-child-controls'
@@ -851,7 +1111,10 @@ export class Panel {
         if (!this.el) return
         this.onBeforeEdit(this.el)
         const css = (spec.toCss ?? px)(n)
-        for (const prop of spec.props) this.drafts.apply(this.el, prop, css)
+        for (const prop of spec.props) {
+          spec.onBeforeApply?.(this.el, prop, this.drafts)
+          this.drafts.apply(this.el, prop, css)
+        }
         this.refresh()
         this.onEdited()
       },

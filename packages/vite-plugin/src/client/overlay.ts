@@ -176,6 +176,60 @@ button {
 
 .type-family { width: 100%; }
 .type-row { display: flex; gap: 4px; width: 100%; }
+
+.color-row { display: flex; align-items: center; gap: 6px; flex: 1 1 100%; }
+.swatch {
+  width: 16px; height: 16px; border-radius: 4px; padding: 0; flex: none;
+  border: 1px solid rgba(255,255,255,0.15);
+  background-image: linear-gradient(45deg, rgba(255,255,255,0.12) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255,255,255,0.12) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.12) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.12) 75%);
+  background-size: 8px 8px; background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+}
+.swatch-fill { background-color: currentColor; background-blend-mode: normal; }
+.color-value { color: #9A9A9A; font-size: 10.5px; }
+.stroke-style { flex: 1 1 40%; }
+
+.color-popover {
+  position: absolute; right: 12px; width: 200px; z-index: 10;
+  background: #383838; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
+  box-shadow: 0 5px 24px rgba(0,0,0,0.4); padding: 10px; display: flex; flex-direction: column; gap: 8px;
+}
+.cp-sv {
+  position: relative; height: 120px; border-radius: 6px; cursor: crosshair;
+  background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--cp-hue, red));
+}
+.cp-sv-thumb {
+  position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px;
+  border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,0.4); pointer-events: none;
+}
+.cp-hue {
+  width: 100%; height: 10px; appearance: none; -webkit-appearance: none; border-radius: 999px;
+  background: linear-gradient(to right, red, yellow, lime, cyan, blue, magenta, red);
+}
+.cp-hue::-webkit-slider-thumb {
+  appearance: none; -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; border: 1px solid rgba(0,0,0,0.3);
+}
+.cp-hex-row { display: flex; }
+.cp-hex {
+  width: 100%; height: 24px; background: rgba(255,255,255,0.06); border: 1px solid transparent;
+  border-radius: 6px; padding: 0 6px; color: #F5F5F5; font: 400 11px ui-monospace, monospace;
+}
+.cp-hex:focus { border-color: #0D99FF; outline: none; }
+.cp-hint {
+  font-size: 10.5px; color: #7CC4FF; cursor: pointer; background: rgba(13,153,255,0.12);
+  border-radius: 4px; padding: 3px 6px; width: fit-content;
+}
+.cp-contrast { font-size: 10.5px; color: #D4D4D4; }
+.cp-contrast.cp-fail { color: #F87171; }
+.cp-palette {
+  display: flex; flex-wrap: wrap; gap: 3px; max-height: 120px; overflow-y: auto;
+}
+.cp-swatch {
+  width: 16px; height: 16px; border-radius: 4px; padding: 0; border: 1px solid rgba(255,255,255,0.15);
+}
 `
 
 export class Overlay {
