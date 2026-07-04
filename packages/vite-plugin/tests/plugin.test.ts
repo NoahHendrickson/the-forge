@@ -141,6 +141,44 @@ describe('theForge plugin', () => {
     })
   })
 
+  describe('project config install location (BUG 1: resolves the git root, not the vite root)', () => {
+    let repoRoot: string
+    let viteRoot: string
+
+    beforeEach(() => {
+      repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-plugin-gitroot-'))
+      fs.mkdirSync(path.join(repoRoot, '.git'))
+      viteRoot = path.join(repoRoot, 'fixtures', 'demo-app')
+      fs.mkdirSync(viteRoot, { recursive: true })
+    })
+
+    it('installs .mcp.json and the command file at the resolved git root, not the nested vite root', () => {
+      const { plugin } = getPlugin(viteRoot)
+      const server = fakeServer(viteRoot)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+
+      expect(fs.existsSync(path.join(repoRoot, '.mcp.json'))).toBe(true)
+      expect(fs.existsSync(path.join(repoRoot, '.claude', 'commands', 'forge-design.md'))).toBe(true)
+      expect(fs.existsSync(path.join(viteRoot, '.mcp.json'))).toBe(false)
+      expect(fs.existsSync(path.join(viteRoot, '.claude', 'commands', 'forge-design.md'))).toBe(false)
+    })
+
+    it('still installs at the vite root itself when no .git is found anywhere above it', () => {
+      const noGitRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-plugin-nogit-'))
+      const nested = path.join(noGitRoot, 'fixtures', 'demo-app')
+      fs.mkdirSync(nested, { recursive: true })
+
+      const { plugin } = getPlugin(nested)
+      const server = fakeServer(nested)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+
+      expect(fs.existsSync(path.join(nested, '.mcp.json'))).toBe(true)
+      expect(fs.existsSync(path.join(nested, '.claude', 'commands', 'forge-design.md'))).toBe(true)
+    })
+  })
+
   describe('client bootstrap secret injection', () => {
     let root: string
 

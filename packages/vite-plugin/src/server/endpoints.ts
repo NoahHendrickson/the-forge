@@ -175,9 +175,9 @@ export function createForgeMiddleware(
             .filter((i) => i.status === 'pending')
             .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]
           // Nothing to dispatch: no pending queue item, and the caller didn't post a markdown
-          // override either — invoking the ladder here would type /design into the user's agent
-          // session for NO actual change request. Short-circuit straight to manual without ever
-          // touching tmux/AppleScript/deeplink.
+          // override either — invoking the ladder here would type /forge-design into the user's
+          // agent session for NO actual change request. Short-circuit straight to manual without
+          // ever touching tmux/AppleScript/deeplink.
           if (!pending && markdown === undefined) {
             return send(res, 200, { rung: 'manual', detail: 'nothing pending' })
           }

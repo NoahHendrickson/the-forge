@@ -15,7 +15,7 @@ function opts(partial: Partial<DispatchOpts> = {}): DispatchOpts {
 
 describe('dispatch', () => {
   describe('tmux adapter', () => {
-    it('sends the literal /design keystroke to the first pane running "claude" (claude-code agent)', async () => {
+    it('sends the literal /forge-design keystroke to the first pane running "claude" (claude-code agent)', async () => {
       const exec: ExecFileFn = vi.fn(async (cmd, args) => {
         if (cmd === 'tmux' && args[0] === 'list-panes') {
           return { stdout: '%1 zsh\n%2 claude\n' }
@@ -32,8 +32,8 @@ describe('dispatch', () => {
         ['list-panes', '-a', '-F', '#{pane_id} #{pane_current_command}'],
         expect.objectContaining({ timeout: 2000 })
       )
-      expect(exec).toHaveBeenCalledWith('tmux', ['send-keys', '-t', '%2', '/design', 'Enter'], expect.objectContaining({ timeout: 2000 }))
-      // NEVER send request content into the terminal — only the literal /design
+      expect(exec).toHaveBeenCalledWith('tmux', ['send-keys', '-t', '%2', '/forge-design', 'Enter'], expect.objectContaining({ timeout: 2000 }))
+      // NEVER send request content into the terminal — only the literal /forge-design
       for (const call of (exec as ReturnType<typeof vi.fn>).mock.calls) {
         const argv = call[1] as string[]
         expect(argv.join(' ')).not.toContain('Design change request')
@@ -49,7 +49,7 @@ describe('dispatch', () => {
       })
       const result = await dispatch(opts({ agent: 'codex' }), exec)
       expect(result.rung).toBe('tmux')
-      expect(exec).toHaveBeenCalledWith('tmux', ['send-keys', '-t', '%1', '/design', 'Enter'], expect.anything())
+      expect(exec).toHaveBeenCalledWith('tmux', ['send-keys', '-t', '%1', '/forge-design', 'Enter'], expect.anything())
     })
 
     it('falls through when tmux binary is missing (ENOENT)', async () => {
@@ -313,7 +313,7 @@ describe('dispatch', () => {
 
   describe('default exec wrapper', () => {
     // NEVER call dispatch() with no injected exec in this suite — that would run the REAL
-    // dispatch ladder (real tmux/osascript) and could type /design into the developer's actual
+    // dispatch ladder (real tmux/osascript) and could type /forge-design into the developer's actual
     // front window on a Mac with automation permission + iTerm2/Terminal open. Every dispatch()
     // call in this file must pass an injected exec. The default exec's SHAPE is instead unit
     // tested directly below, in isolation from the ladder.

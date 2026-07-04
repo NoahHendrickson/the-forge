@@ -29,8 +29,8 @@ function sentLabelFor(rung: Rung, agent: AgentName): string {
   // over the network as untyped JSON (see the /dispatch fetch handler below), so any value that
   // isn't recognizably tmux/applescript (a typo, a future rung, a server bug) must default to
   // the manual label rather than falsely claiming a terminal was typed into.
-  if (rung === 'tmux' || rung === 'applescript') return 'Sent — typed /design into your session'
-  return `Sent — type /design in ${AGENT_DISPLAY_NAME[agent]}` // manual / channels / unrecognized
+  if (rung === 'tmux' || rung === 'applescript') return 'Sent — typed /forge-design into your session'
+  return `Sent — type /forge-design in ${AGENT_DISPLAY_NAME[agent]}` // manual / channels / unrecognized
 }
 
 /** Belt-and-braces against cross-origin/DNS-rebinding bypasses of the server's Origin/Host

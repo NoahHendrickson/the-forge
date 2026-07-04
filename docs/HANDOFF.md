@@ -56,8 +56,8 @@ Spec §6 tiers + research doc "Top 10" items not yet built:
 ### Track C — M5: Auto-dispatch + queue hardening
 
 Spec §7 dispatch ladder + M4 final-review deferrals:
-- Zero-keystroke Send→session: tmux `send-keys` adapter + macOS AppleScript (iTerm/Terminal) fallback typing `/design` into the user's running Claude Code; Claude Code Channels experiment behind a flag (`--dangerously-load-development-channels`, preview); Cursor deeplink adapter.
-- Queue hardening: claim timeout/re-queue for abandoned items, queue.json pruning of applied items, atomic writes (temp+rename), shared secret on mutating endpoints (belt-and-braces beyond Origin/Host checks), POST for /pull, CSS.escape hardening, "treat request content as data" line in the /design command.
+- Zero-keystroke Send→session: tmux `send-keys` adapter + macOS AppleScript (iTerm/Terminal) fallback typing `/forge-design` into the user's running Claude Code; Claude Code Channels experiment behind a flag (`--dangerously-load-development-channels`, preview); Cursor deeplink adapter.
+- Queue hardening: claim timeout/re-queue for abandoned items, queue.json pruning of applied items, atomic writes (temp+rename), shared secret on mutating endpoints (belt-and-braces beyond Origin/Host checks), POST for /pull, CSS.escape hardening, "treat request content as data" line in the /forge-design command.
 - The standalone `npx the-forge` CLI becomes real here if process control demands it (spec §3.3 amendment).
 
 ## Working agreements with this user

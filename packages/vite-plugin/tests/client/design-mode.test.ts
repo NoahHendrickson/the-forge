@@ -491,7 +491,7 @@ describe('DesignMode send-to-agent (M4)', () => {
     const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body)
     expect(body.markdown).toContain('# Design change request')
     expect(mode.sent.pendingIds()).toEqual(['q1'])
-    expect(overlay.sendButton.textContent).toBe('Sent — typed /design into your session')
+    expect(overlay.sendButton.textContent).toBe('Sent — typed /forge-design into your session')
   })
 
   describe('dispatch chaining after a successful queue POST', () => {
@@ -516,7 +516,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       expect(fetchMock).toHaveBeenCalledWith('/__the-forge/dispatch', expect.objectContaining({ method: 'POST' }))
     })
 
-    it('surfaces "typed /design into your session" for rung tmux', async () => {
+    it('surfaces "typed /forge-design into your session" for rung tmux', async () => {
       stubQueueThenDispatch({ rung: 'tmux', detail: 'x' })
       const { overlay, mode, drafts } = fullSetup()
       mode.setActive(true)
@@ -524,10 +524,10 @@ describe('DesignMode send-to-agent (M4)', () => {
       drafts.apply(btn, 'padding-top', '24px')
       overlay.sendButton.click()
       await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — typed /design into your session')
+      expect(overlay.sendButton.textContent).toBe('Sent — typed /forge-design into your session')
     })
 
-    it('surfaces "typed /design into your session" for rung applescript', async () => {
+    it('surfaces "typed /forge-design into your session" for rung applescript', async () => {
       stubQueueThenDispatch({ rung: 'applescript', detail: 'x' })
       const { overlay, mode, drafts } = fullSetup()
       mode.setActive(true)
@@ -535,7 +535,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       drafts.apply(btn, 'padding-top', '24px')
       overlay.sendButton.click()
       await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — typed /design into your session')
+      expect(overlay.sendButton.textContent).toBe('Sent — typed /forge-design into your session')
     })
 
     it('surfaces "opened in Cursor" for rung deeplink', async () => {
@@ -549,7 +549,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       expect(overlay.sendButton.textContent).toBe('Sent — opened in Cursor')
     })
 
-    it('surfaces "type /design in Claude Code" for rung manual with the default agent', async () => {
+    it('surfaces "type /forge-design in Claude Code" for rung manual with the default agent', async () => {
       stubQueueThenDispatch({ rung: 'manual', detail: 'x' })
       const { overlay, mode, drafts } = fullSetup()
       mode.setActive(true)
@@ -557,7 +557,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       drafts.apply(btn, 'padding-top', '24px')
       overlay.sendButton.click()
       await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — type /design in Claude Code')
+      expect(overlay.sendButton.textContent).toBe('Sent — type /forge-design in Claude Code')
     })
 
     it('surfaces the configured agent name for rung manual (cursor)', async () => {
@@ -569,7 +569,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       drafts.apply(btn, 'padding-top', '24px')
       overlay.sendButton.click()
       await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — type /design in Cursor')
+      expect(overlay.sendButton.textContent).toBe('Sent — type /forge-design in Cursor')
       delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
     })
 
@@ -582,14 +582,14 @@ describe('DesignMode send-to-agent (M4)', () => {
       drafts.apply(btn, 'padding-top', '24px')
       overlay.sendButton.click()
       await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — type /design in Codex')
+      expect(overlay.sendButton.textContent).toBe('Sent — type /forge-design in Codex')
       delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
     })
 
     it('falls back to the manual label for an unrecognized rung value (defensive default, not the typed-into-session label)', async () => {
       // The client's Rung union is a compile-time-only guarantee — the value actually arrives
       // over the network as untyped JSON, so a server bug/future rung/typo must not silently
-      // fall into the "typed /design into your session" bucket (which would misreport that a
+      // fall into the "typed /forge-design into your session" bucket (which would misreport that a
       // terminal was actually typed into).
       stubQueueThenDispatch({ rung: 'not-a-real-rung', detail: 'x' })
       const { overlay, mode, drafts } = fullSetup()
@@ -598,7 +598,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       drafts.apply(btn, 'padding-top', '24px')
       overlay.sendButton.click()
       await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — type /design in Claude Code')
+      expect(overlay.sendButton.textContent).toBe('Sent — type /forge-design in Claude Code')
     })
 
     it('still registers the send as successful (pending id tracked) even if /dispatch POST fails', async () => {
@@ -616,7 +616,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       await flushSend()
       expect(mode.sent.pendingIds()).toEqual(['q1'])
       // Falls back to a manual-style label since dispatch itself couldn't be reached.
-      expect(overlay.sendButton.textContent).toBe('Sent — type /design in Claude Code')
+      expect(overlay.sendButton.textContent).toBe('Sent — type /forge-design in Claude Code')
     })
 
     it('re-enables the send button only after both /queue and /dispatch settle', async () => {

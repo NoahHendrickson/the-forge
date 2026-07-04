@@ -97,14 +97,14 @@ interface Counters {
 
 /**
  * Renders the sent-status prefix. Manual rung (spec): nothing applies to the user's code until
- * they actually type /design into their agent session — so as long as ANY sent item is still
+ * they actually type /forge-design into their agent session — so as long as ANY sent item is still
  * server-side `pending` (queued, not yet claimed by the agent), the whole prefix must be the
  * manual instruction rather than a possibly-false "applying…" claim. Only once every sent item
  * has been claimed does "N applying…" (N = claimed count) become accurate.
  */
 function renderSummary(counters: Counters, claimed: number, pendingManual: number, agentDisplayName: string): string {
   const parts: string[] = []
-  if (pendingManual > 0) parts.push(`${pendingManual} queued — type /design in ${agentDisplayName}`)
+  if (pendingManual > 0) parts.push(`${pendingManual} queued — type /forge-design in ${agentDisplayName}`)
   else if (claimed > 0) parts.push(`${claimed} applying…`)
   if (counters.implemented) parts.push(`${counters.implemented} implemented ✓`)
   if (counters.mismatch) parts.push(`${counters.mismatch} mismatch ⚠`)
@@ -150,7 +150,7 @@ export class Verifier {
           if (item.status === 'applied') this.handleApplied(item.id)
           else if (item.status === 'failed') this.handleFailed(item.id)
         }
-        // Manual rung: nothing applies until the user types /design, so any sent item the server
+        // Manual rung: nothing applies until the user types /forge-design, so any sent item the server
         // still reports (or simply hasn't reported back yet, i.e. missing from the response) as
         // `pending` — as opposed to `claimed` — must surface the manual instruction, not a false
         // "applying…" claim. Only items confirmed `claimed` count toward "applying…".
