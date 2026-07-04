@@ -130,4 +130,15 @@ describe('handleMessage', () => {
     const result = (res as { result: { content: Array<{ type: string; text: string }>; isError?: boolean } }).result
     expect(result.isError).toBe(true)
   })
+
+  it('echoes id 0 correctly (falsy-id regression)', async () => {
+    const be = backend()
+    const res = await handleMessage(
+      { jsonrpc: '2.0', id: 0, method: 'tools/list' },
+      be
+    )
+    expect(res).not.toBeNull()
+    expect(res!.id).toBe(0)
+    expect((res as { result?: unknown }).result).toBeTruthy()
+  })
 })

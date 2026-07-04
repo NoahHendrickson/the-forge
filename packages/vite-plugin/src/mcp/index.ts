@@ -24,7 +24,9 @@ function makeBackend(): ForgeBackend {
       if (!endpoint) throw new Error(NOT_RUNNING_MESSAGE)
       let res: Response
       try {
-        res = await fetch(`http://127.0.0.1:${endpoint.port}/__the-forge/pull`)
+        res = await fetch(`http://127.0.0.1:${endpoint.port}/__the-forge/pull`, {
+          signal: AbortSignal.timeout(10_000),
+        })
       } catch {
         throw new Error(NOT_RUNNING_MESSAGE)
       }
@@ -41,6 +43,7 @@ function makeBackend(): ForgeBackend {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ids, status, note }),
+          signal: AbortSignal.timeout(10_000),
         })
       } catch {
         throw new Error(NOT_RUNNING_MESSAGE)
