@@ -72,6 +72,10 @@ export class DraftStore {
     return this.drafts.size > 0 && this.showingOriginal.size === this.drafts.size
   }
 
+  entries(): ReadonlyMap<TaggedElement, ReadonlyMap<string, { original: string; value: string }>> {
+    return this.drafts
+  }
+
   discard(el: TaggedElement): void {
     const props = this.drafts.get(el)
     if (!props) return

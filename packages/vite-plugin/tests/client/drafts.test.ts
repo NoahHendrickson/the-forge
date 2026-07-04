@@ -113,4 +113,14 @@ describe('DraftStore', () => {
     expect(d.style.getPropertyValue('width')).toBe('120px')
     expect(d.style.getPropertyValue('height')).toBe('50px')
   })
+
+  it('entries() exposes elements with per-prop original and value', () => {
+    const store = new DraftStore()
+    const d = el()
+    d.style.setProperty('width', '50px')
+    store.apply(d, 'width', '100px')
+    const entries = store.entries()
+    expect(entries.size).toBe(1)
+    expect(entries.get(d)!.get('width')).toEqual({ original: '50px', value: '100px' })
+  })
 })
