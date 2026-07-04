@@ -24,7 +24,16 @@ State: M1, M2a, M3, M4, M2b-1 merged to `main` and pushed. 296 tests + typecheck
 - Subscription-only: official CLI binaries or the user's running session; never the Agent SDK / API keys.
 - Deterministic, token-first change requests; previews are inline styles (framework-bypass); zero production footprint (`apply: 'serve'` + prod-clean check); idle-zero overhead.
 
-## The three remaining tracks (user-prioritized order)
+## Execution: all three tracks, in order, one agent (overnight mode)
+
+The user is asleep and has handed off all three tracks as ONE sequential plan: **A → B → C**. Rules for the overnight run:
+
+- Work autonomously; do not block on user input. For genuinely user-facing design choices (Track A especially), pick the Figma-reference default, record the decision and alternatives, and capture before/after screenshots for the morning report.
+- Each track runs the full gauntlet on its own branch: plan (if the track needs one beyond this doc) → subagent-driven tasks with review gates → final whole-branch review + fix wave → controller real-browser E2E. **Merge to main and push only when the gauntlet is fully green** — that has been the user's choice 5/5 times; anything uncertain stays on its branch with a morning question instead.
+- Tracks build on each other — merge A before starting B, B before C. If a track stalls on something only the user can resolve, park it on its branch, write the question down, and move to the next track only if independent (C is independent of B; B depends on A's panel styling).
+- End with a morning report the user reads over coffee: per track — what shipped, before/after screenshots, review catches, decisions made on their behalf (with rationale), and the short list of things needing their eyes. Update the auto-memory file at the end.
+
+## The three tracks (user-prioritized order)
 
 ### Track A — Panel visual audit & cleanup (NEW, do first)
 
