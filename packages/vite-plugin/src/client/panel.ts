@@ -42,7 +42,9 @@ const SECTIONS: SectionSpec[] = [
     title: 'Layout',
     rows: [],
     custom: 'layout',
-    visible: isFlex,
+    // The section TITLE is always visible (empty state = title + add-auto-layout button —
+    // no floating headerless button). refreshLayoutSection toggles the add-button vs.
+    // layout-controls visibility beneath it based on flex-ness.
   },
   {
     title: 'Size',
@@ -541,7 +543,14 @@ export class Panel {
       // whatever mode props produced the current Fill/Hug layout so they don't leak into
       // the change request, then draft the computed size as an explicit px value so
       // the mode-inference heuristic reads it back as Fixed immediately.
-      const modeProps = isMain ? ['flex-grow', 'flex-basis'] : ['align-self']
+      // Cross-axis: only discard align-self when it holds the 'stretch' value Fill wrote —
+      // a user-drafted value (e.g. flex-start via the Align segment field) must survive
+      // switching this axis to Fixed.
+      const modeProps = isMain
+        ? ['flex-grow', 'flex-basis']
+        : this.drafts.current(this.el, 'align-self') === 'stretch'
+          ? ['align-self']
+          : []
       const isAutoNow = this.drafts.current(this.el, prop) === 'auto'
       if (isAutoNow) modeProps.push(prop)
       let computedSize = Math.round(parseFloat(getComputedStyle(this.el).getPropertyValue(prop)))
@@ -551,6 +560,9 @@ export class Panel {
         const draftEntry = this.drafts.entries().get(this.el)?.get(prop)
         computedSize = draftEntry ? Math.round(parseFloat(draftEntry.original)) : computedSize
       }
+      // Unconditional guard: whatever the source, never draft a non-finite size — bail
+      // out of the pin entirely rather than writing e.g. "NaNpx" into the change request.
+      if (!Number.isFinite(computedSize)) return
       this.drafts.discard(this.el, modeProps)
       this.drafts.apply(this.el, prop, `${computedSize}px`)
     } else if (mode === 'hug') {

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Panel } from '../../src/client/panel'
 import { DraftStore } from '../../src/client/drafts'
 import { buildInspectorData } from '../../src/client/inspector'
@@ -30,6 +30,13 @@ function commit(input: HTMLInputElement, value: string): void {
 
 beforeEach(() => {
   document.body.innerHTML = ''
+})
+
+// A couple of tests stub getComputedStyle to simulate flex-layout measurements jsdom can't
+// produce itself; unstub unconditionally here so a failed assertion mid-test can't leak the
+// stub into later tests.
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe('Panel', () => {
@@ -129,11 +136,17 @@ describe('Panel', () => {
     expect(titles).toEqual(['Layout', 'Size', 'Padding', 'Margin', 'Appearance'])
   })
 
-  it('Layout section is hidden (but still first) for a non-flex element', () => {
+  it('Layout section TITLE stays visible (but still first) for a non-flex element — empty state is title + add-auto-layout button, no floating headerless button', () => {
     const { panel } = setup()
     const sections = [...panel.root.querySelectorAll('.panel-section')]
     expect(sections[0].textContent).toBe('Layout')
-    expect((sections[0] as HTMLElement).hidden).toBe(true)
+    expect((sections[0] as HTMLElement).hidden).toBe(false)
+    // the layout CONTROLS (direction/gap/align/wrap) are hidden — only the
+    // add-auto-layout button is shown alongside the always-visible title
+    const btn = panel.root.querySelector('[data-add-layout]') as HTMLElement
+    expect(btn.hidden).toBe(false)
+    const controlsWrap = panel.root.querySelector('.layout-controls') as HTMLElement
+    expect(controlsWrap.hidden).toBe(true)
   })
 
   function flexSetup(styleExtra = '') {
@@ -355,6 +368,22 @@ describe('Panel', () => {
     expect(drafts.current(el, 'height')).not.toBe('auto')
   })
 
+  it('cross-axis Fixed preserves a user-drafted align-self (only discards it when Fill wrote "stretch")', () => {
+    const { el, panel, drafts } = childSetup()
+    const seg = panel.root.querySelector('[data-align-self]')!
+    const startBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Start') as HTMLElement
+    startBtn.click()
+    expect(drafts.current(el, 'align-self')).toBe('flex-start')
+
+    // Switch H (cross axis on a row parent) to Fixed — must NOT clobber the user's align-self.
+    const hRow = fieldInput(panel, 'H').closest('.nf')!.parentElement!
+    const select = hRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fixed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+
+    expect(drafts.current(el, 'align-self')).toBe('flex-start')
+  })
+
   it('Fixed pins the size the user SEES (computed before mode drafts are discarded)', () => {
     // Set up flex parent with filled child
     document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row; width: 400px;">
@@ -398,8 +427,42 @@ describe('Panel', () => {
     select.value = 'fixed'
     select.dispatchEvent(new Event('change', { bubbles: true }))
     expect(drafts.current(child, 'width')).toBe('200px')
+  })
 
-    vi.unstubAllGlobals()
+  it('Fixed pin bails when the computed size is not finite (no NaN draft)', () => {
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row; width: 400px;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px; height: 50px;"></div>
+    </div>`
+    const child = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const panel = new Panel(drafts, onEdited)
+    document.body.appendChild(panel.root)
+    panel.show(child, buildInspectorData(child))
+
+    const realGCS = window.getComputedStyle.bind(window)
+    vi.stubGlobal('getComputedStyle', (el: Element) => {
+      const cs = realGCS(el)
+      if (el === child) {
+        return new Proxy(cs, {
+          get(t, k) {
+            if (k === 'getPropertyValue') {
+              return (prop: string) => (prop === 'width' ? 'not-a-size' : cs.getPropertyValue(prop))
+            }
+            return Reflect.get(t, k)
+          },
+        })
+      }
+      return cs
+    })
+
+    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fixed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+
+    // Pin bailed out entirely — no NaN draft was written (width draft stays whatever it was, i.e. null)
+    expect(drafts.current(child, 'width')).toBeNull()
   })
 
 })
