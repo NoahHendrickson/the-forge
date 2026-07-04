@@ -53,6 +53,19 @@ describe('Overlay CSS (Track A visibility correctness)', () => {
     expect(CSS).toContain('[data-text-align] .seg-field-label { width: auto; }')
   })
 
+  it('[data-flex-direction] gets the same stacked (label-above-full-width-track) treatment, fixing the "Direction" label overflowing its 40px column at 280px (clipping audit)', () => {
+    // The Layout Direction row's "Direction" label needs ~48px at 11px against the fixed
+    // 40px .seg-field-label column — with overflow: visible it paints under the seg track.
+    // [data-align-self]/[data-text-align] already solve this by stacking the label above a
+    // full-width track; the Direction row must get the same rule.
+    // flex-basis 100% is part of the fix: inside the wrapping .panel-rows the field is
+    // otherwise content-sized (~64px) and the track would still crush "Column".
+    expect(CSS).toMatch(
+      /\[data-flex-direction\]\s*{\s*flex-direction:\s*column;\s*align-items:\s*stretch;\s*gap:\s*3px;\s*flex:\s*1\s+1\s+100%;?\s*}/
+    )
+    expect(CSS).toContain('[data-flex-direction] .seg-field-label { width: auto; }')
+  })
+
   it('seg labels ellipsize instead of hard-clipping', () => {
     expect(CSS).toMatch(/\.seg\s*{[^}]*text-overflow:\s*ellipsis/s)
   })

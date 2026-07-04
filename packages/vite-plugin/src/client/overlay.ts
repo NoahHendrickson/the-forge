@@ -174,6 +174,14 @@ button {
  * the row's horizontal space with the label. */
 [data-text-align] { flex-direction: column; align-items: stretch; gap: 3px; }
 [data-text-align] .seg-field-label { width: auto; }
+/* Layout's Direction row: "Direction" needs ~48px at 11px, overflowing the fixed 40px
+ * label column and painting under the seg track (found by the 280px clipping audit).
+ * Same fix as [data-align-self] above: stack the label above a full-width track — which
+ * also gives "Row"/"Column" enough room to render without ellipsis at minimum width.
+ * flex-basis 100% is load-bearing: inside the wrapping .panel-rows the field would
+ * otherwise be content-sized (~64px) and the track would still crush "Column". */
+[data-flex-direction] { flex-direction: column; align-items: stretch; gap: 3px; flex: 1 1 100%; }
+[data-flex-direction] .seg-field-label { width: auto; }
 .seg {
   flex: 1; padding: 3px 0; text-align: center; border-radius: 4px;
   background: transparent; color: #B8B8B8; font-size: 10px; white-space: nowrap;

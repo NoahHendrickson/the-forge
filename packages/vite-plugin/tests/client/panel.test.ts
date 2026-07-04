@@ -279,6 +279,13 @@ describe('Panel', () => {
     expect(drafts.current(el, 'flex-direction')).toBe('column')
   })
 
+  it('direction field carries [data-flex-direction] so the stacked-label CSS applies (280px clipping audit)', () => {
+    const { panel } = flexSetup()
+    const seg = panel.root.querySelector('[data-flex-direction]')!
+    expect(seg).toBeTruthy()
+    expect(seg.querySelector('.seg-field-label')?.textContent).toBe('Direction')
+  })
+
   it('gap field drafts gap:Npx on a number', () => {
     const { el, panel, drafts } = flexSetup()
     commit(fieldInput(panel, 'Gap'), '24')

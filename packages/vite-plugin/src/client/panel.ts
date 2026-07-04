@@ -710,6 +710,9 @@ export class Panel {
         this.onEdited()
       },
     })
+    // Marks the row for the stacked label-above-track CSS ([data-flex-direction] in
+    // overlay.ts) — the "Direction" label overflows the shared 40px label column.
+    this.directionField.root.setAttribute('data-flex-direction', '')
     controls.append(this.directionField.root)
 
     const grid = document.createElement('div')
