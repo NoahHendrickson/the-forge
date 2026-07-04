@@ -339,11 +339,12 @@ export class NumberField {
     this.displayState = 'number'
   }
 
-  /** Clears pill binding (readOnly + class) without touching lastValid/display — used by set()/setMixed()/setAuto(). */
+  /** Clears pill binding (readOnly + class + title) without touching lastValid/display — used by set()/setMixed()/setAuto(). */
   private unbindPill(): void {
     if (!this.pillBound) return
     this.pillBound = false
     this.input.readOnly = false
+    this.input.title = ''
     this.root.classList.remove('nf-pill')
   }
 
@@ -377,6 +378,9 @@ export class NumberField {
     this.pillBound = true
     this.input.readOnly = true
     this.input.value = label
+    // Spec §5: `.nf-pill` ellipsis-clips long tokens (`spacing-2.5`) — title is the
+    // affordance that keeps the full value discoverable on hover.
+    this.input.title = label
     this.root.classList.add('nf-pill')
     this.displayState = 'number'
   }
@@ -385,6 +389,7 @@ export class NumberField {
   detach(): void {
     this.pillBound = false
     this.input.readOnly = false
+    this.input.title = ''
     this.root.classList.remove('nf-pill')
     this.render(this.lastValid)
   }

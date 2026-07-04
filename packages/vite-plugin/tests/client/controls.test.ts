@@ -455,6 +455,43 @@ describe('NumberField v3 — pill API', () => {
     expect(nf.root.classList.contains('nf-pill')).toBe(false)
     expect(input.value).toBe('auto')
   })
+
+  it('bindToken() sets the input title to the token label (spec: long tokens never silently clip)', () => {
+    const { nf, input } = make()
+    nf.set(10)
+    nf.bindToken('spacing-2.5')
+    expect(input.title).toBe('spacing-2.5')
+  })
+
+  it('detach() clears the title', () => {
+    const { nf, input } = make()
+    nf.set(10)
+    nf.bindToken('spacing-2.5')
+    nf.detach()
+    expect(input.title).toBe('')
+  })
+
+  it('set() while pill-bound clears the title', () => {
+    const { nf, input } = make()
+    nf.set(10)
+    nf.bindToken('spacing-2.5')
+    nf.set(42)
+    expect(input.title).toBe('')
+  })
+
+  it('setMixed() while pill-bound clears the title', () => {
+    const { nf, input } = make()
+    nf.bindToken('spacing-2.5')
+    nf.setMixed()
+    expect(input.title).toBe('')
+  })
+
+  it('setAuto() while pill-bound clears the title', () => {
+    const { nf, input } = make({ allowAuto: true })
+    nf.bindToken('spacing-2.5')
+    nf.setAuto()
+    expect(input.title).toBe('')
+  })
 })
 
 describe('NumberField — onTokenKey (`=` opens token picker)', () => {
