@@ -39,6 +39,7 @@ button {
 export class Overlay {
   host = document.createElement('div')
   toggle = document.createElement('button')
+  sendButton = document.createElement('button')
   copyButton = document.createElement('button')
   compareAllButton = document.createElement('button')
   resetAllButton = document.createElement('button')
@@ -47,6 +48,7 @@ export class Overlay {
   private selectOutline = document.createElement('div')
   private status = document.createElement('div')
   private statusLabel = document.createElement('span')
+  private sentLabel = document.createElement('span')
 
   constructor() {
     const root = this.host.attachShadow({ mode: 'open' })
@@ -57,9 +59,12 @@ export class Overlay {
     this.outline.id = 'outline'
     this.selectOutline.id = 'select-outline'
     this.status.id = 'status'
+    this.sendButton.textContent = 'Send to agent'
     this.copyButton.textContent = 'Copy for agent'
     this.resetAllButton.textContent = 'Reset all'
-    this.status.append(this.statusLabel, this.copyButton, this.compareAllButton, this.resetAllButton)
+    this.sentLabel.id = 'sent'
+    this.sentLabel.hidden = true
+    this.status.append(this.statusLabel, this.sendButton, this.copyButton, this.compareAllButton, this.resetAllButton, this.sentLabel)
     this.outline.hidden = true
     this.selectOutline.hidden = true
     this.status.hidden = true
@@ -111,9 +116,11 @@ export class Overlay {
     this.selectOutline.hidden = true
   }
 
-  updateStatus(draftCount: number, comparingAll: boolean): void {
+  updateStatus(draftCount: number, comparingAll: boolean, sentText?: string): void {
     this.status.hidden = draftCount === 0
     this.statusLabel.textContent = `${draftCount} draft${draftCount === 1 ? '' : 's'}`
     this.compareAllButton.textContent = comparingAll ? 'After' : 'Before'
+    this.sentLabel.hidden = !sentText
+    this.sentLabel.textContent = sentText ?? ''
   }
 }

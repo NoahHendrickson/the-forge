@@ -251,3 +251,84 @@ describe('DesignMode selection (M2)', () => {
     expect(overlay.copyButton.textContent).toBe('Copy failed')
   })
 })
+
+describe('DesignMode send-to-agent (M4)', () => {
+  it('send posts the request and registers pending ids', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q1' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fetchMock).toHaveBeenCalledWith('/__the-forge/queue', expect.objectContaining({ method: 'POST' }))
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.markdown).toContain('# Design change request')
+    expect(mode.sent.pendingIds()).toEqual(['q1'])
+    expect(overlay.sendButton.textContent).toBe('Sent ✓')
+  })
+
+  it('send registers the live element mapping keyed by the server-assigned id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q7' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    const entry = mode.sent.take('q7')!
+    expect(entry.elements).toHaveLength(1)
+    expect(entry.elements[0].el).toBe(btn)
+    expect(entry.elements[0].dcSource).toBe('src/Button.tsx:42:8')
+    expect(entry.elements[0].changes[0].property).toBe('padding-top')
+  })
+
+  it('send failure flashes "Send failed" and leaves drafts untouched', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('network down'))
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(overlay.sendButton.textContent).toBe('Send failed')
+    expect(mode.sent.size()).toBe(0)
+    expect(drafts.hasDrafts(btn)).toBe(true)
+    expect(btn.style.getPropertyValue('padding-top')).toBe('24px')
+  })
+
+  it('send failure on non-200 response also flashes "Send failed"', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: 'bad' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(overlay.sendButton.textContent).toBe('Send failed')
+    expect(mode.sent.size()).toBe(0)
+  })
+
+  it('calls onSendComplete after a successful send registers', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q9' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    const onSendComplete = vi.fn()
+    mode.onSendComplete = onSendComplete
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(onSendComplete).toHaveBeenCalledTimes(1)
+  })
+})

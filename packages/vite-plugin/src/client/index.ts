@@ -3,7 +3,8 @@ import { findTaggedElement, type TaggedElement } from './source'
 import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
-import { buildChangeRequest, renderMarkdown } from './request'
+import { buildChangeRequestWithElements, renderMarkdown } from './request'
+import { SentRegistry } from './sent'
 
 declare global {
   interface Window {
@@ -14,13 +15,15 @@ declare global {
 export class DesignMode {
   active = false
   selected: TaggedElement | null = null
+  sent = new SentRegistry()
+  onSendComplete?: () => void
 
   private moveRaf = 0
   private reflowRaf = 0
   private lastMove: MouseEvent | null = null
   private drafts: DraftStore
   private panel: Panel
-  private copyTimer: ReturnType<typeof setTimeout> | null = null
+  private buttonTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>()
 
   constructor(
     private overlay: Overlay,
@@ -30,12 +33,41 @@ export class DesignMode {
     this.drafts = drafts ?? new DraftStore()
     this.panel = panel ?? new Panel(this.drafts, () => this.remeasure())
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
+    overlay.sendButton.addEventListener('click', () => {
+      const originalLabel = 'Send to agent'
+      const { request, elements } = buildChangeRequestWithElements(this.drafts)
+      const md = renderMarkdown(request)
+      const onSendFailed = (): void => this.flashButton(overlay.sendButton, 'Send failed', originalLabel)
+      const onSendOk = (id: string): void => {
+        const mapping = [...elements.entries()].map(([el, change]) => ({
+          el,
+          dcSource: el.dataset.dcSource ?? null,
+          changes: change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
+        }))
+        this.sent.add(id, mapping)
+        this.flashButton(overlay.sendButton, 'Sent ✓', originalLabel)
+        this.onSendComplete?.()
+      }
+      fetch('/__the-forge/queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request, markdown: md }),
+      })
+        .then((res) => {
+          if (!res.ok) return onSendFailed()
+          res
+            .json()
+            .then((body: { id: string }) => onSendOk(body.id))
+            .catch(onSendFailed)
+        })
+        .catch(onSendFailed)
+    })
     overlay.copyButton.addEventListener('click', () => {
-      const md = renderMarkdown(buildChangeRequest(this.drafts))
+      const md = renderMarkdown(buildChangeRequestWithElements(this.drafts).request)
       navigator.clipboard
         .writeText(md)
-        .then(() => this.flashCopyLabel('Copied ✓'))
-        .catch(() => this.flashCopyLabel('Copy failed'))
+        .then(() => this.flashButton(overlay.copyButton, 'Copied ✓', 'Copy for agent'))
+        .catch(() => this.flashButton(overlay.copyButton, 'Copy failed', 'Copy for agent'))
     })
     overlay.compareAllButton.addEventListener('click', () => {
       this.drafts.compareAll(!this.drafts.isComparingAll())
@@ -100,14 +132,15 @@ export class DesignMode {
     if (this.selected) this.overlay.showSelectOutline(this.selected.getBoundingClientRect())
   }
 
-  private flashCopyLabel(label: string): void {
-    const btn = this.overlay.copyButton
+  private flashButton(btn: HTMLButtonElement, label: string, restore: string): void {
     btn.textContent = label
-    if (this.copyTimer) clearTimeout(this.copyTimer)
-    this.copyTimer = setTimeout(() => {
-      btn.textContent = 'Copy for agent'
-      this.copyTimer = null
+    const existing = this.buttonTimers.get(btn)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      btn.textContent = restore
+      this.buttonTimers.delete(btn)
     }, 1500)
+    this.buttonTimers.set(btn, timer)
   }
 
   private onMove = (e: MouseEvent): void => {

@@ -85,6 +85,15 @@ export class DraftStore {
     this.emit()
   }
 
+  commit(el: TaggedElement): void {
+    const props = this.drafts.get(el)
+    if (!props) return
+    for (const prop of props.keys()) el.style.removeProperty(prop)
+    this.drafts.delete(el)
+    this.showingOriginal.delete(el)
+    this.emit()
+  }
+
   discardAll(): void {
     for (const el of [...this.drafts.keys()]) {
       const props = this.drafts.get(el)!
