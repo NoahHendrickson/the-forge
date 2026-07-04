@@ -173,6 +173,9 @@ button {
 .size-mode:hover { border-color: rgba(255,255,255,0.12); }
 
 .layout-section, .flex-child-controls { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+
+.type-family { width: 100%; }
+.type-row { display: flex; gap: 4px; width: 100%; }
 `
 
 export class Overlay {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { Panel, normalizeJustify, normalizeAlign } from '../../src/client/panel'
+import { Panel, normalizeJustify, normalizeAlign, hasDirectText } from '../../src/client/panel'
 import { DraftStore } from '../../src/client/drafts'
 import { buildInspectorData } from '../../src/client/inspector'
 
@@ -162,7 +162,7 @@ describe('Panel', () => {
     expect(fieldInput(panel, 'PX').value).toBe('Mixed') // originals differ → mixed again
   })
 
-  it('section order is Layout, Size, Padding, Margin, Appearance regardless of visibility', () => {
+  it('section order is Layout, Size, Padding, Margin, Typography, Appearance regardless of visibility', () => {
     const { panel } = setup()
     // Sections with an expand button now parent it inside the title row, so title row
     // textContent includes the '⋯' glyph for expandable sections — compare the leading
@@ -170,7 +170,7 @@ describe('Panel', () => {
     const titles = [...panel.root.querySelectorAll('.panel-section')].map(
       (n) => n.textContent?.replace('⋯', '').trim()
     )
-    expect(titles).toEqual(['Layout', 'Size', 'Padding', 'Margin', 'Appearance'])
+    expect(titles).toEqual(['Layout', 'Size', 'Padding', 'Margin', 'Typography', 'Appearance'])
   })
 
   it('expand button is parented inside the section title row, not the rows wrap', () => {
@@ -369,7 +369,9 @@ describe('Panel', () => {
     const { panel } = setup()
     const alignSelf = panel.root.querySelector('[data-align-self]') as HTMLElement
     expect(alignSelf.hidden).toBe(true)
-    const modes = [...panel.root.querySelectorAll('.size-mode')] as HTMLElement[]
+    // .size-row wraps only the W/H sizing-mode selects (Typography's family/weight selects
+    // reuse the .size-mode chrome class for styling but aren't part of the flex-child registry).
+    const modes = [...panel.root.querySelectorAll('.size-row .size-mode')] as HTMLElement[]
     expect(modes.length).toBeGreaterThan(0)
     expect(modes.every((m) => m.hidden)).toBe(true)
   })
@@ -722,5 +724,152 @@ describe('normalizeAlign', () => {
     expect(result).not.toBe('flex-start')
     expect(result).not.toBe('flex-end')
     expect(result).not.toBe('center')
+  })
+})
+
+describe('hasDirectText', () => {
+  it('returns true when the element has a direct non-whitespace text node child', () => {
+    document.body.innerHTML = `<div id="t">Hello</div>`
+    expect(hasDirectText(document.getElementById('t')!)).toBe(true)
+  })
+
+  it('returns false when the element only has element children', () => {
+    document.body.innerHTML = `<div id="t"><span>Hello</span></div>`
+    expect(hasDirectText(document.getElementById('t')!)).toBe(false)
+  })
+
+  it('returns false when the direct text child is whitespace-only', () => {
+    document.body.innerHTML = `<div id="t">   \n  <span>Hello</span></div>`
+    expect(hasDirectText(document.getElementById('t')!)).toBe(false)
+  })
+})
+
+describe('Panel Typography section', () => {
+  function textSetup(styleExtra = '') {
+    return setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="${styleExtra}">Some text</div>`
+    )
+  }
+
+  function emptySetup() {
+    return setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+  }
+
+  function typographySection(panel: Panel): HTMLElement {
+    return [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => n.textContent?.replace('⋯', '').trim() === 'Typography'
+    ) as HTMLElement
+  }
+
+  it('is hidden for an element with no direct text child', () => {
+    const { panel } = emptySetup()
+    expect(typographySection(panel).hidden).toBe(true)
+  })
+
+  it('is visible for an element with a direct text child', () => {
+    const { panel } = textSetup()
+    expect(typographySection(panel).hidden).toBe(false)
+  })
+
+  it('sits between Margin and Appearance in stable DOM order', () => {
+    const { panel } = textSetup()
+    const titles = [...panel.root.querySelectorAll('.panel-section')].map(
+      (n) => n.textContent?.replace('⋯', '').trim()
+    )
+    const marginIdx = titles.indexOf('Margin')
+    const typographyIdx = titles.indexOf('Typography')
+    const appearanceIdx = titles.indexOf('Appearance')
+    expect(typographyIdx).toBe(marginIdx + 1)
+    expect(appearanceIdx).toBe(typographyIdx + 1)
+  })
+
+  it('family select lists the current computed family first, deduped, then document.fonts, then fallbacks', () => {
+    const { panel } = textSetup('font-family: Georgia, serif;')
+    const select = panel.root.querySelector('.type-family') as HTMLSelectElement
+    expect(select).toBeTruthy()
+    const options = [...select.options].map((o) => o.value)
+    expect(options[0]).toBe('Georgia')
+    // dedupe: 'serif' appears once even though it's both a fallback and possibly a computed family
+    expect(options.filter((o) => o === 'Georgia')).toHaveLength(1)
+    expect(options).toContain('system-ui')
+    expect(options).toContain('serif')
+    expect(options).toContain('monospace')
+  })
+
+  it('family select drafts font-family, quoting names with spaces', () => {
+    const { el, panel, drafts } = textSetup()
+    const select = panel.root.querySelector('.type-family') as HTMLSelectElement
+    const opt = document.createElement('option')
+    opt.value = 'Times New Roman'
+    select.append(opt)
+    select.value = 'Times New Roman'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'font-family')).toBe('"Times New Roman"')
+  })
+
+  it('family select drafts an unquoted single-word family name', () => {
+    const { el, panel, drafts } = textSetup()
+    const select = panel.root.querySelector('.type-family') as HTMLSelectElement
+    select.value = 'monospace'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'font-family')).toBe('monospace')
+  })
+
+  it('weight select shows computed 400 as value 400', () => {
+    const { panel } = textSetup('font-weight: 400;')
+    const select = panel.root.querySelector('.type-weight') as HTMLSelectElement
+    expect(select.value).toBe('400')
+  })
+
+  it('weight select snaps computed "normal" to 400 and "bold" to 700', () => {
+    const { panel } = textSetup('font-weight: normal;')
+    const select = panel.root.querySelector('.type-weight') as HTMLSelectElement
+    expect(select.value).toBe('400')
+  })
+
+  it('weight select drafts font-weight on change', () => {
+    const { el, panel, drafts } = textSetup()
+    const select = panel.root.querySelector('.type-weight') as HTMLSelectElement
+    select.value = '600'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'font-weight')).toBe('600')
+  })
+
+  it('S field drafts font-size in px', () => {
+    const { el, panel, drafts } = textSetup()
+    commit(fieldInput(panel, 'S'), '18')
+    expect(drafts.current(el, 'font-size')).toBe('18px')
+  })
+
+  it('LH field shows auto when computed line-height is normal', () => {
+    const { panel } = textSetup('line-height: normal;')
+    expect(fieldInput(panel, 'LH').value).toBe('auto')
+  })
+
+  it('LH field typing a number drafts line-height in px', () => {
+    const { el, panel, drafts } = textSetup()
+    commit(fieldInput(panel, 'LH'), '24')
+    expect(drafts.current(el, 'line-height')).toBe('24px')
+  })
+
+  it('LS field allows negative values and drafts letter-spacing in px', () => {
+    const { el, panel, drafts } = textSetup()
+    commit(fieldInput(panel, 'LS'), '-1')
+    expect(drafts.current(el, 'letter-spacing')).toBe('-1px')
+  })
+
+  it('Align segment drafts text-align', () => {
+    const { el, panel, drafts } = textSetup()
+    const seg = panel.root.querySelector('[data-text-align]')!
+    const centerBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Center') as HTMLElement
+    centerBtn.click()
+    expect(drafts.current(el, 'text-align')).toBe('center')
+  })
+
+  it('Align segment maps computed "start" to the Left active dot', () => {
+    const { panel } = textSetup('text-align: start;')
+    const seg = panel.root.querySelector('[data-text-align]')!
+    const leftBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Left') as HTMLElement
+    expect(leftBtn.classList.contains('seg-active')).toBe(true)
   })
 })

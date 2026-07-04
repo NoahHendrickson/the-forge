@@ -13,6 +13,10 @@ interface RowSpec {
   fromCss?: (css: string) => number
   /** When true (W/H rows), a sizing-mode <select> (Fixed/Hug/Fill) renders next to the field. */
   sizeMode?: boolean
+  /** When true (e.g. LH), the field accepts the literal keyword `auto` and displays it via setAuto(). */
+  allowAuto?: boolean
+  /** Draft value to apply when the user types the `auto` keyword (only meaningful with allowAuto). */
+  autoCss?: string
 }
 
 interface SectionSpec {
@@ -23,7 +27,7 @@ interface SectionSpec {
   /** Section renders always (stable DOM order) but is hidden via the `hidden` attribute when this returns false. */
   visible?: (el: TaggedElement) => boolean
   /** Custom section body — used by Layout, which isn't a plain row-field grid. */
-  custom?: 'layout'
+  custom?: 'layout' | 'typography'
 }
 
 const px = (n: number): string => `${n}px`
@@ -60,7 +64,57 @@ export function normalizeAlign(align: string): string {
   return align
 }
 
-// Section ORDER is fixed forever: Layout -> Size -> Padding -> Margin -> Appearance.
+/** True when `el` has a direct child text node with non-whitespace content (element children don't count). */
+export function hasDirectText(el: Element): boolean {
+  return [...el.childNodes].some((n) => n.nodeType === 3 && (n.textContent ?? '').trim() !== '')
+}
+
+const WEIGHTS: Array<[value: string, label: string]> = [
+  ['100', 'Thin'],
+  ['200', 'Extra Light'],
+  ['300', 'Light'],
+  ['400', 'Regular'],
+  ['500', 'Medium'],
+  ['600', 'Semibold'],
+  ['700', 'Bold'],
+  ['800', 'Extra Bold'],
+  ['900', 'Black'],
+]
+
+/** Snaps a computed font-weight keyword/number to one of the 9 named-weight values. */
+function snapWeight(css: string): string {
+  if (css === 'normal') return '400'
+  if (css === 'bold') return '700'
+  const n = Number.parseFloat(css)
+  if (!Number.isFinite(n)) return '400'
+  // Snap to the nearest named weight (100-900, step 100).
+  return String(Math.min(900, Math.max(100, Math.round(n / 100) * 100)))
+}
+
+/** Unquotes a computed font-family's first entry for display (e.g. `"Georgia"` -> `Georgia`). */
+function firstFamily(computedFontFamily: string): string {
+  const first = computedFontFamily.split(',')[0]?.trim() ?? ''
+  return first.replace(/^['"]|['"]$/g, '')
+}
+
+/** Quotes a family name for use in a font-family CSS value if it contains whitespace. */
+function cssFamilyValue(name: string): string {
+  return /\s/.test(name) ? `"${name}"` : name
+}
+
+/** Enumerates unique font families from document.fonts, feature-detecting its absence (jsdom). */
+function documentFontFamilies(): string[] {
+  const fonts: unknown = (document as unknown as { fonts?: Iterable<{ family: string; status?: string }> }).fonts
+  if (!fonts || typeof (fonts as Iterable<unknown>)[Symbol.iterator] !== 'function') return []
+  const seen = new Set<string>()
+  for (const face of fonts as Iterable<{ family: string; status?: string }>) {
+    if (face.status !== undefined && face.status !== 'loaded') continue
+    seen.add(face.family.replace(/^['"]|['"]$/g, ''))
+  }
+  return [...seen]
+}
+
+// Section ORDER is fixed forever: Layout -> Size -> Padding -> Margin -> Typography -> Appearance.
 const SECTIONS: SectionSpec[] = [
   {
     title: 'Layout',
@@ -104,6 +158,12 @@ const SECTIONS: SectionSpec[] = [
       { label: 'MB', props: ['margin-bottom'] },
       { label: 'ML', props: ['margin-left'] },
     ],
+  },
+  {
+    title: 'Typography',
+    rows: [],
+    custom: 'typography',
+    visible: hasDirectText,
   },
   {
     title: 'Appearance',
@@ -176,6 +236,11 @@ export class Panel {
   private alignSelfField: SegmentField | null = null
   private alignSelfWrap: HTMLElement | null = null
   private sizeModes: BoundSizeMode[] = []
+
+  // Typography section widgets (rebuilt per show(), re-set() per refresh()).
+  private typeFamilySelect: HTMLSelectElement | null = null
+  private typeWeightSelect: HTMLSelectElement | null = null
+  private typeAlignField: SegmentField | null = null
 
   constructor(
     private drafts: DraftStore,
@@ -259,6 +324,15 @@ export class Panel {
           continue
         }
       }
+      // allowAuto fields whose current CSS value (draft-or-computed) IS the auto keyword
+      // (e.g. line-height: normal) display via setAuto() rather than resolving through fromCss.
+      if (spec.allowAuto && !spec.sizeMode) {
+        const css = this.currentValue(el, spec.props[0], computed)
+        if (css === (spec.autoCss ?? 'normal')) {
+          field.setAuto()
+          continue
+        }
+      }
       const values = spec.props.map((p) => this.readValue(el, p, computed, spec))
       const mixed = values.some((v) => v !== values[0])
       if (mixed) field.setMixed()
@@ -267,6 +341,7 @@ export class Panel {
 
     this.refreshLayoutSection(el, computed)
     this.refreshFlexChild(el, computed)
+    this.refreshTypography(el, computed)
   }
 
   private refreshLayoutSection(el: TaggedElement, computed: CSSStyleDeclaration): void {
@@ -355,6 +430,30 @@ export class Panel {
     sm.select.value = 'hug'
   }
 
+  private refreshTypography(el: TaggedElement, computed: CSSStyleDeclaration): void {
+    if (!this.typeFamilySelect && !this.typeWeightSelect && !this.typeAlignField) return
+
+    if (this.typeFamilySelect) {
+      const current = firstFamily(this.currentValue(el, 'font-family', computed))
+      if (current && ![...this.typeFamilySelect.options].some((o) => o.value === current)) {
+        const opt = document.createElement('option')
+        opt.value = current
+        opt.textContent = current
+        this.typeFamilySelect.insertBefore(opt, this.typeFamilySelect.firstChild)
+      }
+      if (current) this.typeFamilySelect.value = current
+    }
+
+    if (this.typeWeightSelect) {
+      this.typeWeightSelect.value = snapWeight(this.currentValue(el, 'font-weight', computed))
+    }
+
+    if (this.typeAlignField) {
+      const align = this.currentValue(el, 'text-align', computed)
+      this.typeAlignField.set(align === 'start' || align === '' ? 'left' : align)
+    }
+  }
+
   private currentValue(el: TaggedElement, prop: string, computed: CSSStyleDeclaration): string {
     const draft = this.drafts.isComparing(el) ? null : this.drafts.current(el, prop)
     return draft ?? computed.getPropertyValue(prop)
@@ -381,6 +480,9 @@ export class Panel {
     this.alignSelfField = null
     this.alignSelfWrap = null
     this.sizeModes = []
+    this.typeFamilySelect = null
+    this.typeWeightSelect = null
+    this.typeAlignField = null
 
     for (const section of SECTIONS) {
       const title = document.createElement('div')
@@ -391,6 +493,11 @@ export class Panel {
 
       if (section.custom === 'layout') {
         this.body.append(this.buildLayoutSection())
+        continue
+      }
+
+      if (section.custom === 'typography') {
+        this.body.append(this.buildTypographySection())
         continue
       }
 
@@ -531,6 +638,97 @@ export class Panel {
     return wrap
   }
 
+  private buildTypographySection(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'panel-rows'
+
+    // Row 1 — Family.
+    const familySelect = document.createElement('select')
+    familySelect.className = 'size-mode type-family'
+    const families = new Set<string>()
+    if (this.el) {
+      const current = firstFamily(getComputedStyle(this.el).getPropertyValue('font-family'))
+      if (current) families.add(current)
+    }
+    for (const f of documentFontFamilies()) families.add(f)
+    for (const f of ['system-ui', 'serif', 'monospace']) families.add(f)
+    for (const f of families) {
+      const opt = document.createElement('option')
+      opt.value = f
+      opt.textContent = f
+      familySelect.append(opt)
+    }
+    familySelect.addEventListener('change', () => {
+      if (!this.el) return
+      this.onBeforeEdit(this.el)
+      this.drafts.apply(this.el, 'font-family', cssFamilyValue(familySelect.value))
+      this.refresh()
+      this.onEdited()
+    })
+    this.typeFamilySelect = familySelect
+    wrap.append(familySelect)
+
+    // Row 2 — Weight.
+    const weightSelect = document.createElement('select')
+    weightSelect.className = 'size-mode type-weight'
+    for (const [value, label] of WEIGHTS) {
+      const opt = document.createElement('option')
+      opt.value = value
+      opt.textContent = label
+      weightSelect.append(opt)
+    }
+    weightSelect.addEventListener('change', () => {
+      if (!this.el) return
+      this.onBeforeEdit(this.el)
+      this.drafts.apply(this.el, 'font-weight', weightSelect.value)
+      this.refresh()
+      this.onEdited()
+    })
+    this.typeWeightSelect = weightSelect
+    wrap.append(weightSelect)
+
+    // Row 3 — Size + Line height.
+    const sizeRow = document.createElement('div')
+    sizeRow.className = 'type-row'
+    sizeRow.append(
+      this.buildField({ label: 'S', props: ['font-size'], min: 1 }).field.root,
+      this.buildField({
+        label: 'LH',
+        props: ['line-height'],
+        allowAuto: true,
+        autoCss: 'normal',
+        fromCss: (css) => Math.round(Number.parseFloat(css)) || 0,
+      }).field.root
+    )
+    wrap.append(sizeRow)
+
+    // Row 4 — Letter spacing + Align.
+    const lsRow = document.createElement('div')
+    lsRow.className = 'type-row'
+    lsRow.append(this.buildField({ label: 'LS', props: ['letter-spacing'] }).field.root)
+
+    this.typeAlignField = new SegmentField({
+      label: 'Align',
+      options: [
+        { value: 'left', label: 'Left' },
+        { value: 'center', label: 'Center' },
+        { value: 'right', label: 'Right' },
+      ],
+      onInput: (value) => {
+        if (!this.el) return
+        this.onBeforeEdit(this.el)
+        this.drafts.apply(this.el, 'text-align', value)
+        this.refresh()
+        this.onEdited()
+      },
+    })
+    this.typeAlignField.root.setAttribute('data-text-align', '')
+    lsRow.append(this.typeAlignField.root)
+    wrap.append(lsRow)
+
+    return wrap
+  }
+
   private buildFlexChildControls(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'flex-child-controls'
@@ -648,7 +846,7 @@ export class Panel {
       label: spec.label,
       min: spec.min,
       max: spec.max,
-      allowAuto: spec.sizeMode,
+      allowAuto: spec.sizeMode || spec.allowAuto,
       onInput: (n) => {
         if (!this.el) return
         this.onBeforeEdit(this.el)
@@ -657,6 +855,15 @@ export class Panel {
         this.refresh()
         this.onEdited()
       },
+      onKeyword: spec.allowAuto
+        ? (kw) => {
+            if (!this.el || kw !== 'auto') return
+            this.onBeforeEdit(this.el)
+            for (const prop of spec.props) this.drafts.apply(this.el, prop, spec.autoCss ?? 'normal')
+            this.refresh()
+            this.onEdited()
+          }
+        : undefined,
     })
     const bound: BoundField = { field, spec }
     this.fields.push(bound)
