@@ -569,6 +569,52 @@ describe('Panel', () => {
     expect(drafts.current(child, 'width')).toBeNull()
   })
 
+  it('W/H shows the auto keyword when the element authored inline style="width: auto" (no draft)', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="width: auto; height: 100px;"></div>`
+    )
+    expect(fieldInput(panel, 'W').value).toBe('auto')
+  })
+
+})
+
+describe('Panel expand-state persistence (B1 nit)', () => {
+  // The expand button's title (.panel-section) is followed by TWO .panel-rows siblings:
+  // the always-visible rowWrap, then the expandWrap the button toggles. Grab the second one.
+  function expandWrapFor(panel: Panel): HTMLElement {
+    const title = (panel.root.querySelector('[data-expand="padding"]') as HTMLElement).closest('.panel-section')!
+    const rowsWraps = [] as HTMLElement[]
+    let sib = title.nextElementSibling as HTMLElement | null
+    while (sib && rowsWraps.length < 2) {
+      rowsWraps.push(sib)
+      sib = sib.nextElementSibling as HTMLElement | null
+    }
+    return rowsWraps[1]
+  }
+
+  it('keeps a section expanded across a second show() call for a different element', () => {
+    document.body.innerHTML = `
+      <div data-dc-source="src/a.tsx:1:1" id="a" style="padding: 8px;"></div>
+      <div data-dc-source="src/b.tsx:1:1" id="b" style="padding: 4px;"></div>
+    `
+    const a = document.getElementById('a')! as HTMLElement
+    const b = document.getElementById('b')! as HTMLElement
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+
+    panel.show(a, buildInspectorData(a))
+    ;(panel.root.querySelector('[data-expand="padding"]') as HTMLElement).click()
+    expect(expandWrapFor(panel).hidden).toBe(false)
+
+    panel.show(b, buildInspectorData(b))
+    expect(expandWrapFor(panel).hidden).toBe(false)
+  })
+
+  it('defaults to collapsed for a section that was never expanded', () => {
+    const { panel } = setup()
+    expect(expandWrapFor(panel).hidden).toBe(true)
+  })
 })
 
 describe('Panel onBeforeEdit pre-hook (M2b Task 4)', () => {

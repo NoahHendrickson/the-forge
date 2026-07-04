@@ -160,6 +160,9 @@ export class Panel {
   private fields: BoundField[] = []
   private sectionEls: Array<{ spec: SectionSpec; el: HTMLElement }> = []
   private el: TaggedElement | null = null
+  // Persists expand/collapse state per section across show() calls (selecting another
+  // element rebuilds the DOM but should keep sections the user expanded, expanded).
+  private expandState = new Map<string, boolean>()
 
   // Layout section widgets (rebuilt per show(), re-set() per refresh()).
   private directionField: SegmentField | null = null
@@ -242,10 +245,16 @@ export class Panel {
 
     for (const { field, spec } of this.fields) {
       // Size-mode (W/H) fields can hold the literal 'auto' draft (Hug mode) — show
-      // it as the auto keyword rather than resolving it through fromCss.
+      // it as the auto keyword rather than resolving it through fromCss. Draft check
+      // stays first; when there's no draft (and we're not in comparing mode), an
+      // author-authored inline `auto` (e.g. style="width: auto") shows the same way.
       if (spec.sizeMode) {
         const draft = this.drafts.isComparing(el) ? null : this.drafts.current(el, spec.props[0])
         if (draft === 'auto') {
+          field.setAuto()
+          continue
+        }
+        if (draft === null && !this.drafts.isComparing(el) && el.style.getPropertyValue(spec.props[0]) === 'auto') {
           field.setAuto()
           continue
         }
@@ -358,6 +367,8 @@ export class Panel {
   }
 
   private buildBody(): void {
+    for (const { field } of this.fields) field.destroy()
+    if (this.gapField) this.gapField.destroy()
     this.body.replaceChildren()
     this.fields = []
     this.sectionEls = []
@@ -393,14 +404,16 @@ export class Panel {
       }
 
       if (section.expandRows && section.expandKey) {
+        const expandKey = section.expandKey
         const expandWrap = document.createElement('div')
         expandWrap.className = 'panel-rows'
-        expandWrap.hidden = true
+        expandWrap.hidden = !(this.expandState.get(expandKey) ?? false)
         const btn = document.createElement('button')
         btn.textContent = '⋯'
-        btn.setAttribute('data-expand', section.expandKey)
+        btn.setAttribute('data-expand', expandKey)
         btn.addEventListener('click', () => {
           expandWrap.hidden = !expandWrap.hidden
+          this.expandState.set(expandKey, !expandWrap.hidden)
         })
         title.append(btn)
         for (const row of section.expandRows) expandWrap.append(this.buildRow(row))

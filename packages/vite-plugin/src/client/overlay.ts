@@ -111,6 +111,10 @@ button {
   width: 100%; min-width: 24px; flex: 1;
   border: none; outline: none; font: 400 11px system-ui, sans-serif; color: #F5F5F5; background: transparent;
 }
+.nf-pill input {
+  background: rgba(13,153,255,0.15); color: #7CC4FF; border-radius: 4px;
+  padding: 1px 5px; width: auto; flex: 0 1 auto; font-size: 10.5px;
+}
 
 .seg-field { display: flex; align-items: center; gap: 4px; }
 .seg-field-label { flex: none; width: 40px; color: #9A9A9A; font-size: 11px; }
