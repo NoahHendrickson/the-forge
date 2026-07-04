@@ -824,6 +824,15 @@ describe('Panel Typography section', () => {
     expect(typographySection(panel).hidden).toBe(true)
   })
 
+  it('hides the Typography BODY (not just the title) for an element with no direct text child (final review fix #1)', () => {
+    const { panel } = emptySetup()
+    // The body immediately follows the title in DOM order (buildBody appends the custom
+    // typography wrap right after the section title).
+    const bodyWrap = typographySection(panel).nextElementSibling as HTMLElement
+    expect(bodyWrap).toBeTruthy()
+    expect(bodyWrap.hidden).toBe(true)
+  })
+
   it('is visible for an element with a direct text child', () => {
     const { panel } = textSetup()
     expect(typographySection(panel).hidden).toBe(false)
@@ -1015,6 +1024,33 @@ describe('Panel Fill section', () => {
     expect(openSpy).toHaveBeenCalledTimes(1)
     const opts = openSpy.mock.calls[0][0]
     expect(opts.contrastAgainst).toBe('rgb(20, 20, 20)')
+  })
+
+  it('a fully-transparent Fill shows the literal "transparent" label, not a nearest-token guess', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: transparent;"></div>`
+    )
+    const fillRow = colorRows(panel)[0]
+    const valueEl = fillRow.querySelector('.color-value') as HTMLElement
+    expect(valueEl.textContent).toBe('transparent')
+  })
+
+  it('a semi-transparent Fill shows a hex fallback, not a token name, even if the rgb matches a token', () => {
+    document.head.insertAdjacentHTML('beforeend', '<style data-test-cl-tokens>:root { --color-red-500: #ff0000; }</style>')
+    document.documentElement.style.setProperty('--color-red-500', '#ff0000')
+    try {
+      const { panel } = setup(
+        `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgba(255, 0, 0, 0.5);"></div>`
+      )
+      const fillRow = colorRows(panel)[0]
+      const valueEl = fillRow.querySelector('.color-value') as HTMLElement
+      expect(valueEl.textContent).not.toBe('red-500')
+      expect(valueEl.textContent).toBe('#ff000080')
+    } finally {
+      document.querySelectorAll('style[data-test-cl-tokens]').forEach((s) => s.remove())
+      document.documentElement.removeAttribute('style')
+      resetTokensCache()
+    }
   })
 })
 
@@ -1562,6 +1598,108 @@ describe('Panel + ColorPicker lifecycle', () => {
     panel.hide()
     expect(picker.root.hidden).toBe(true)
   })
+
+  it('opening the token picker (`=`) closes an already-open color picker (final review fix #11)', () => {
+    document.documentElement.style.setProperty('--spacing', '4px')
+    try {
+      const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px;"></div>`)
+      const swatch = panel.root.querySelector('.color-row .swatch') as HTMLElement
+      swatch.click()
+      const colorPicker = (panel as unknown as { colorPicker: { root: HTMLElement } }).colorPicker
+      expect(colorPicker.root.hidden).toBe(false)
+
+      const input = fieldInput(panel, 'PX')
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
+      const tokenPicker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+      expect(tokenPicker.root.hidden).toBe(false)
+      expect(colorPicker.root.hidden).toBe(true)
+    } finally {
+      document.documentElement.removeAttribute('style')
+      resetTokensCache()
+    }
+  })
+
+  it('opening the color picker closes an already-open token picker (final review fix #11)', () => {
+    document.documentElement.style.setProperty('--spacing', '4px')
+    try {
+      const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px;"></div>`)
+      const input = fieldInput(panel, 'PX')
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
+      const tokenPicker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+      expect(tokenPicker.root.hidden).toBe(false)
+
+      const swatch = panel.root.querySelector('.color-row .swatch') as HTMLElement
+      swatch.click()
+      const colorPicker = (panel as unknown as { colorPicker: { root: HTMLElement } }).colorPicker
+      expect(colorPicker.root.hidden).toBe(false)
+      expect(tokenPicker.root.hidden).toBe(true)
+    } finally {
+      document.documentElement.removeAttribute('style')
+      resetTokensCache()
+    }
+  })
+})
+
+describe('Panel multi-select: `=` token picker is gated off (final review fix #6)', () => {
+  function multiSetupTailwind(htmlA?: string, htmlB?: string) {
+    document.documentElement.style.setProperty('--spacing', '4px')
+    return {
+      ...(() => {
+        document.body.innerHTML = `
+          <div data-dc-source="src/A.tsx:1:1" id="a" style="${htmlA ?? 'padding: 10px; width: 100px;'}"></div>
+          <div data-dc-source="src/B.tsx:2:2" id="b" style="${htmlB ?? 'padding: 20px; width: 100px;'}"></div>
+        `
+        const a = document.getElementById('a')! as HTMLElement
+        const b = document.getElementById('b')! as HTMLElement
+        const drafts = new DraftStore()
+        const panel = new Panel(drafts, vi.fn())
+        document.body.appendChild(panel.root)
+        panel.show([a, b], buildInspectorData(a))
+        return { a, b, drafts, panel }
+      })(),
+    }
+  }
+
+  afterEach(() => {
+    document.documentElement.removeAttribute('style')
+    resetTokensCache()
+  })
+
+  it('`=` on a regular field (PX) in multi-select does not open the token picker', () => {
+    const { panel } = multiSetupTailwind()
+    const input = fieldInput(panel, 'PX')
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
+    expect(picker.root.hidden).toBe(true)
+  })
+
+  it('`=` on a regular field in multi-select produces no pill and no boundTokens entry', () => {
+    const { panel } = multiSetupTailwind()
+    const field = fieldInput(panel, 'PX').closest('.nf') as HTMLElement
+    const input = fieldInput(panel, 'PX')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
+    expect(field.classList.contains('nf-pill')).toBe(false)
+    const boundTokens = (panel as unknown as { boundTokens: Map<string, unknown> }).boundTokens
+    expect(boundTokens.size).toBe(0)
+  })
+
+  it('`=` on the Gap field in multi-select does not open the token picker', () => {
+    // Gap only renders inside the Layout section, which is single-select only (B6) — so
+    // build a single-then-multi scenario isn't representative; instead verify directly that
+    // gapField's onTokenKey is gated the same way by checking multi-select hides Layout
+    // entirely (already covered elsewhere) AND that show()-ing multi never wires an active
+    // gap onTokenKey that could fire. Exercised via the private gapField reference.
+    const { panel } = multiSetupTailwind('display: flex; gap: 8px;', 'display: flex; gap: 16px;')
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const gapField = (panel as unknown as { gapField: { root: HTMLElement } | null }).gapField
+    // Layout (and therefore Gap) is hidden entirely in multi-select — but defensively confirm
+    // that even if reached, `=` cannot open the picker.
+    if (gapField) {
+      const input = gapField.root.querySelector('input') as HTMLInputElement
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
+    }
+    expect(picker.root.hidden).toBe(true)
+  })
 })
 
 describe('Panel multi-select (B6)', () => {
@@ -1656,6 +1794,16 @@ describe('Panel multi-select (B6)', () => {
     expect((layoutTitle as HTMLElement).hidden).toBe(true)
   })
 
+  it('Layout section BODY (not just the title) is hidden in multi-select (final review fix #1)', () => {
+    const { panel } = multiSetup()
+    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Layout')!
+    // Layout's custom body (.layout-section wrap, holding the add-auto-layout button and/or
+    // layout-controls) is the very next sibling after the title.
+    const bodyWrap = layoutTitle.nextElementSibling as HTMLElement
+    expect(bodyWrap.classList.contains('layout-section')).toBe(true)
+    expect(bodyWrap.hidden).toBe(true)
+  })
+
   it('size-mode selects are hidden in multi-select', () => {
     const { panel } = multiSetup()
     const selects = [...panel.root.querySelectorAll('.size-row .size-mode')] as HTMLElement[]
@@ -1713,10 +1861,14 @@ describe('Panel multi-select Typography (B6)', () => {
 })
 
 describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', () => {
-  function multiSetup(styleA: string, styleB: string) {
+  // hasText defaults true (kept for existing tests that exercise `color` usage aggregation,
+  // which per final-review fix #8 is only counted when the element has direct text).
+  function multiSetup(styleA: string, styleB: string, hasText = true) {
+    const textA = hasText ? 'Hello' : ''
+    const textB = hasText ? 'World' : ''
     document.body.innerHTML = `
-      <div data-dc-source="src/A.tsx:1:1" id="a" style="${styleA}"></div>
-      <div data-dc-source="src/B.tsx:2:2" id="b" style="${styleB}"></div>
+      <div data-dc-source="src/A.tsx:1:1" id="a" style="${styleA}">${textA}</div>
+      <div data-dc-source="src/B.tsx:2:2" id="b" style="${styleB}">${textB}</div>
     `
     const a = document.getElementById('a')! as HTMLElement
     const b = document.getElementById('b')! as HTMLElement
@@ -1741,11 +1893,39 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
     expect((strokeTitleEl as HTMLElement).hidden).toBe(true)
   })
 
+  it('Fill and Stroke section BODIES (not just titles) are hidden in multi-select (final review fix #1)', () => {
+    const { panel } = multiSetup('background-color: red;', 'background-color: blue;')
+    const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Fill')!
+    const strokeTitleEl = [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+    )!
+    const fillBody = fillTitle.nextElementSibling as HTMLElement
+    expect(fillBody.classList.contains('panel-rows')).toBe(true)
+    expect(fillBody.hidden).toBe(true)
+    // Stroke's body is its own rowWrap (stroke-rows) — the first .panel-rows sibling after
+    // the Stroke title, followed by the BT/BR/BB/BL expandWrap.
+    const strokeBody = strokeTitleEl.nextElementSibling as HTMLElement
+    expect(strokeBody.classList.contains('stroke-rows')).toBe(true)
+    expect(strokeBody.hidden).toBe(true)
+    const strokeExpandWrap = strokeBody.nextElementSibling as HTMLElement
+    expect(strokeExpandWrap.classList.contains('panel-rows')).toBe(true)
+    expect(strokeExpandWrap.hidden).toBe(true)
+  })
+
   it('a "Selection colors" section is present and visible only in multi-select', () => {
     const { panel } = multiSetup('background-color: red;', 'background-color: blue;')
     expect(sectionTitles(panel)).toContain('Selection colors')
     const scTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Selection colors')!
     expect((scTitle as HTMLElement).hidden).toBe(false)
+  })
+
+  it('Selection colors rows are unaffected by the Fill/Stroke body-hiding change (final review fix #1)', () => {
+    const { panel } = multiSetup('background-color: red;', 'background-color: blue;')
+    const scTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Selection colors')!
+    const scBody = scTitle.nextElementSibling as HTMLElement
+    expect(scBody.classList.contains('sc-rows')).toBe(true)
+    expect(scBody.hidden).toBe(false)
+    expect(scBody.querySelectorAll('.sc-row').length).toBeGreaterThan(0)
   })
 
   it('single-select never shows Selection colors', () => {
@@ -1766,10 +1946,12 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
   it('groups identical colors into one row with a count; distinct colors get distinct rows', () => {
     // border-top-color defaults to currentColor (the `color` value) when not set explicitly —
     // pin it to a third, distinct color on both elements so counts aren't accidentally aliased
-    // by that cascade default.
+    // by that cascade default. border-style/border-width are set explicitly so the
+    // border-top-color usage survives the "computed border-top-width is 0" filter (fix #8) —
+    // both elements have direct text, so `color` also survives the hasDirectText filter.
     const { panel } = multiSetup(
-      'background-color: rgb(255, 0, 0); color: rgb(255, 0, 0); border-top-color: rgb(9, 9, 9);',
-      'background-color: rgb(255, 0, 0); color: rgb(0, 0, 255); border-top-color: rgb(9, 9, 9);'
+      'background-color: rgb(255, 0, 0); color: rgb(255, 0, 0); border-style: solid; border-width: 1px; border-top-color: rgb(9, 9, 9);',
+      'background-color: rgb(255, 0, 0); color: rgb(0, 0, 255); border-style: solid; border-width: 1px; border-top-color: rgb(9, 9, 9);'
     )
     const rows = scRows(panel)
     // usages: a.bg=red, a.color=red, a.border=gray, b.bg=red, b.color=blue, b.border=gray
@@ -1780,12 +1962,48 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
 
   it('skips fully-transparent colors', () => {
     const { panel } = multiSetup(
-      'background-color: transparent; color: rgb(1, 2, 3); border-top-color: rgb(1, 2, 3);',
-      'background-color: transparent; color: rgb(1, 2, 3); border-top-color: rgb(1, 2, 3);'
+      'background-color: transparent; color: rgb(1, 2, 3); border-style: solid; border-width: 1px; border-top-color: rgb(1, 2, 3);',
+      'background-color: transparent; color: rgb(1, 2, 3); border-style: solid; border-width: 1px; border-top-color: rgb(1, 2, 3);'
     )
     const rows = scRows(panel)
     expect(rows).toHaveLength(1)
     expect((rows[0].querySelector('.sc-count') as HTMLElement).textContent).toBe('×4')
+  })
+
+  it('skips `color` usage for an element with no direct text (fix #8)', () => {
+    const { panel } = multiSetup(
+      'background-color: rgb(255, 0, 0); color: rgb(0, 255, 0);',
+      'background-color: rgb(255, 0, 0); color: rgb(0, 255, 0);',
+      false // no direct text on either element
+    )
+    const rows = scRows(panel)
+    // Only background-color usages should be counted (color skipped entirely) — one row, ×2.
+    expect(rows).toHaveLength(1)
+    expect((rows[0].querySelector('.sc-count') as HTMLElement).textContent).toBe('×2')
+  })
+
+  it('skips `border-top-color` usage when the computed border-top-width is 0 (fix #8)', () => {
+    // No border-width/style authored at all -> computed border-top-width is 0 (or border-style
+    // none) -> the border-top-color usage (which would otherwise default to currentColor) must
+    // not be counted, even though `color` itself IS counted (both elements have direct text).
+    const { panel } = multiSetup(
+      'background-color: rgb(255, 0, 0); color: rgb(0, 255, 0);',
+      'background-color: rgb(255, 0, 0); color: rgb(0, 255, 0);'
+    )
+    const rows = scRows(panel)
+    const counts = rows.map((r) => (r.querySelector('.sc-count') as HTMLElement).textContent).sort()
+    expect(counts).toEqual(['×2', '×2'])
+  })
+
+  it('counts `border-top-color` when a real border is present (width > 0 and style solid)', () => {
+    const { panel } = multiSetup(
+      'border-style: solid; border-width: 1px; border-top-color: rgb(9, 9, 9);',
+      'border-style: solid; border-width: 1px; border-top-color: rgb(9, 9, 9);',
+      false
+    )
+    const rows = scRows(panel)
+    expect(rows).toHaveLength(1)
+    expect((rows[0].querySelector('.sc-count') as HTMLElement).textContent).toBe('×2')
   })
 
   it('clicking a row opens the ColorPicker with contrastAgainst null', () => {

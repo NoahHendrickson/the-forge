@@ -7,6 +7,7 @@ import { buildChangeRequestWithElements, renderMarkdown } from './request'
 import { SentRegistry } from './sent'
 import { Verifier } from './verifier'
 import { snapshotRects, diffRects } from './ripple'
+import { resetTokensCache } from './tokens'
 
 /** Rapid edits (e.g. dragging a number field) within this window reuse the first snapshot. */
 const RIPPLE_DEBOUNCE_MS = 300
@@ -139,6 +140,12 @@ export class DesignMode {
     this.active = on
     this.overlay.setActive(on)
     if (on) {
+      // Tokens (colors, text scale) are memoized module-globally (readTokens) for cheap
+      // repeat access during a session — but that means a theme edit made while design
+      // mode was INACTIVE (author tweaks CSS, HMR reloads styles) would otherwise be
+      // invisible until a full page reload. Reset on every activation so a fresh session
+      // always re-reads the live stylesheet.
+      resetTokensCache()
       document.addEventListener('mousemove', this.onMove, true)
       document.addEventListener('click', this.onClick, true)
       document.addEventListener('keydown', this.onKey, true)

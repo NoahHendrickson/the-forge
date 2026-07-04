@@ -248,6 +248,31 @@ describe('ColorPicker', () => {
     expect(picker.root.hidden).toBe(true)
   })
 
+  it('registers its Escape listener with capture: true (final review fix #11)', () => {
+    const addSpy = vi.spyOn(window, 'addEventListener')
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, initial: '#ff0000', contrastAgainst: null, onPick: vi.fn() })
+    const keydownCall = addSpy.mock.calls.find((c) => c[0] === 'keydown')!
+    expect(keydownCall[2]).toBe(true)
+  })
+
+  it('Escape closes the picker even when a focused control stopped propagation at the bubble phase (final review fix #11)', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, initial: '#ff0000', contrastAgainst: null, onPick: vi.fn() })
+
+    const focused = document.createElement('input')
+    document.body.append(focused)
+    focused.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') e.stopPropagation()
+    })
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    focused.dispatchEvent(event)
+
+    expect(picker.root.hidden).toBe(true)
+  })
+
   it('outside pointerdown closes the picker', () => {
     const { picker } = setupPicker()
     const anchor = anchorEl()
@@ -355,5 +380,20 @@ describe('ColorPicker', () => {
     hue.dispatchEvent(new Event('input', { bubbles: true }))
     const [css] = onPick.mock.calls.at(-1)!
     expect(css).toMatch(/^rgba\(0, 255, 0, 0\.5\)$/)
+  })
+
+  it('open() scrolls the popover into view (guarded for jsdom), final review fix #7', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    const scrollSpy = vi.fn()
+    ;(picker.root as unknown as { scrollIntoView: typeof scrollSpy }).scrollIntoView = scrollSpy
+    picker.open({ anchor, initial: '#ff0000', contrastAgainst: null, onPick: vi.fn() })
+    expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest' })
+  })
+
+  it('open() does not throw when the popover root lacks scrollIntoView (plain jsdom element)', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    expect(() => picker.open({ anchor, initial: '#ff0000', contrastAgainst: null, onPick: vi.fn() })).not.toThrow()
   })
 })

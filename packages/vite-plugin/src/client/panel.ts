@@ -10,6 +10,7 @@ import {
   readTokens,
   readTheme,
   parseColor as parseColorLocal,
+  rgbToHex,
   UTILITY_PREFIXES,
   type Theme,
   type Tokens,
@@ -360,7 +361,12 @@ export class Panel {
   private actions = document.createElement('div')
   private body = document.createElement('div')
   private fields: BoundField[] = []
-  private sectionEls: Array<{ spec: SectionSpec; el: HTMLElement }> = []
+  // `els` holds the section TITLE plus every body wrap belonging to that section (rowWrap,
+  // expandWrap, custom-body wrap — whatever buildBody appended for it) so refresh() can hide
+  // them all together. Hiding only the title (the pre-fix behavior) left a section's fields
+  // visible/interactive underneath a hidden title, which is the bug this fixes (final review
+  // finding E2).
+  private sectionEls: Array<{ spec: SectionSpec; els: HTMLElement[] }> = []
   private el: TaggedElement | null = null
   /** Full selection (B6) — [] when hidden, [el] in single-select (mirrors `el` for back-compat). */
   private els: TaggedElement[] = []
@@ -464,6 +470,21 @@ export class Panel {
     this.root.append(this.head, this.actions, this.body)
     this.colorPicker = new ColorPicker(this.root)
     this.tokenPicker = new TokenPicker(this.root)
+    // Mutual exclusivity (final review fix #11): opening one popover must close the other —
+    // two open at once would overlap/fight for the same anchor-relative position. Wired here
+    // (wrapping each instance's own open(), rather than editing every call site or having the
+    // components import each other) so ColorPicker and TokenPicker stay fully decoupled from
+    // one another; only Panel, which holds both instances, knows they're mutually exclusive.
+    const colorPickerOpen = this.colorPicker.open.bind(this.colorPicker)
+    this.colorPicker.open = (opts) => {
+      this.tokenPicker.close()
+      colorPickerOpen(opts)
+    }
+    const tokenPickerOpen = this.tokenPicker.open.bind(this.tokenPicker)
+    this.tokenPicker.open = (opts) => {
+      this.colorPicker.close()
+      tokenPickerOpen(opts)
+    }
   }
 
   show(elOrEls: TaggedElement | TaggedElement[], data: InspectorData): void {
@@ -489,7 +510,9 @@ export class Panel {
         this.headSrc.remove()
       }
     }
-    // rebuilds all fields per selection; expand state resets by design (revisit in M2b)
+    // rebuilds all fields per selection; expand state PERSISTS across selection changes
+    // (see this.expandState, applied in buildBody()) — B1 made this intentional, superseding
+    // the earlier "resets by design" plan.
     this.buildBody()
     this.refresh()
   }
@@ -502,29 +525,53 @@ export class Panel {
     this.tokenPicker.close()
   }
 
+  /**
+   * Applies `hidden` to every DOM element belonging to a section (title + body wraps) —
+   * see the sectionEls field comment (final review finding E2: a hidden TITLE alone left
+   * the section's fields visible/interactive underneath it).
+   *
+   * The section's expandWrap (its collapsible BT/BR/BB/BL-style sub-rows, when present)
+   * is always the LAST entry in `els` and is special-cased: forcing it hidden=false
+   * whenever the section becomes visible would fight the independent expand/collapse
+   * toggle (persisted in expandState) — so when un-hiding, the expandWrap is left to
+   * whatever expandState already set it to via buildBody(), not forced visible.
+   */
+  private setSectionHidden(spec: SectionSpec, els: HTMLElement[], hidden: boolean): void {
+    const expandWrap = spec.expandRows && spec.expandKey ? els[els.length - 1] : null
+    for (const el of els) {
+      if (hidden) {
+        el.hidden = true
+      } else if (el === expandWrap) {
+        el.hidden = !(this.expandState.get(spec.expandKey!) ?? false)
+      } else {
+        el.hidden = false
+      }
+    }
+  }
+
   refresh(): void {
     if (!this.el) return
     const el = this.el
     const computed = getComputedStyle(el)
     const multi = this.isMulti()
 
-    for (const { spec, el: sectionEl } of this.sectionEls) {
+    for (const { spec, els: sectionEls } of this.sectionEls) {
       if (spec.title === 'Layout') {
         // Decision (B6): Layout is single-element only — matrix/direction across N
         // elements is ambiguous, so the whole section (not just its controls) hides.
-        sectionEl.hidden = multi
+        this.setSectionHidden(spec, sectionEls, multi)
         continue
       }
       if (spec.title === 'Fill' || spec.title === 'Stroke') {
-        // Replaced by Selection colors in multi-mode — title (and its custom body) hides.
-        sectionEl.hidden = multi || (spec.visible ? !spec.visible(el) : false)
+        // Replaced by Selection colors in multi-mode — title AND body hide together.
+        this.setSectionHidden(spec, sectionEls, multi || (spec.visible ? !spec.visible(el) : false))
         continue
       }
       if (multi) {
         // visible when applicable to ANY element in the selection (hasDirectText any, flex any…).
-        sectionEl.hidden = spec.visible ? !this.els.some((e) => spec.visible!(e)) : false
+        this.setSectionHidden(spec, sectionEls, spec.visible ? !this.els.some((e) => spec.visible!(e)) : false)
       } else {
-        sectionEl.hidden = spec.visible ? !spec.visible(el) : false
+        this.setSectionHidden(spec, sectionEls, spec.visible ? !spec.visible(el) : false)
       }
     }
     if (this.selectionColorsTitle) this.selectionColorsTitle.hidden = !multi
@@ -793,20 +840,32 @@ export class Panel {
       title.className = 'panel-section'
       title.textContent = section.title
       this.body.append(title)
-      this.sectionEls.push({ spec: section, el: title })
+      // Every body element belonging to this section (title + rowWrap + custom body +
+      // expandWrap, whichever apply) collects here so refresh() can hide them all together —
+      // see the sectionEls field comment (final review finding E2).
+      const sectionBodyEls: HTMLElement[] = [title]
 
       if (section.custom === 'layout') {
-        this.body.append(this.buildLayoutSection())
+        const layoutBody = this.buildLayoutSection()
+        this.body.append(layoutBody)
+        sectionBodyEls.push(layoutBody)
+        this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
       }
 
       if (section.custom === 'typography') {
-        this.body.append(this.buildTypographySection(multi))
+        const typographyBody = this.buildTypographySection(multi)
+        this.body.append(typographyBody)
+        sectionBodyEls.push(typographyBody)
+        this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
       }
 
       if (section.custom === 'fill') {
-        this.body.append(this.buildFillSection())
+        const fillBody = this.buildFillSection()
+        this.body.append(fillBody)
+        sectionBodyEls.push(fillBody)
+        this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
       }
 
@@ -824,6 +883,7 @@ export class Panel {
         this.body.append(rowWrap)
         for (const row of section.rows) rowWrap.append(this.buildRow(row))
       }
+      sectionBodyEls.push(rowWrap)
 
       if (section.title === 'Size') {
         rowWrap.append(this.buildFlexChildControls())
@@ -844,7 +904,10 @@ export class Panel {
         title.append(btn)
         for (const row of section.expandRows) expandWrap.append(this.buildRow(row))
         this.body.append(expandWrap)
+        sectionBodyEls.push(expandWrap)
       }
+
+      this.sectionEls.push({ spec: section, els: sectionBodyEls })
 
       // Selection colors (B6): a genuinely new section that only exists in multi-mode —
       // built right after Stroke (replacing Fill+Stroke) so section order stays fixed.
@@ -932,26 +995,28 @@ export class Panel {
         // try to re-bind a pill the user explicitly detached via Backspace.
         this.boundTokens.delete(GAP_SPEC.props.join(','))
       },
-      onTokenKey: () => {
-        if (!this.el || !this.gapField) return
-        const entries = tokenEntriesFor(GAP_SPEC, readTheme(), readTokens())
-        if (!entries) return
-        const field = this.gapField
-        this.tokenPicker.open({
-          anchor: field.root,
-          entries,
-          onApply: (entry) => {
-            if (!this.el) return
-            this.onBeforeEdit(this.el)
-            this.drafts.apply(this.el, 'gap', px(entry.px))
-            this.refresh()
-            this.onEdited()
-            const label = this.pillLabelFor(GAP_SPEC, entry)
-            field.bindToken(label)
-            this.boundTokens.set(GAP_SPEC.props.join(','), { label, px: entry.px })
+      onTokenKey: this.isMulti()
+        ? undefined
+        : () => {
+            if (!this.el || !this.gapField) return
+            const entries = tokenEntriesFor(GAP_SPEC, readTheme(), readTokens())
+            if (!entries) return
+            const field = this.gapField
+            this.tokenPicker.open({
+              anchor: field.root,
+              entries,
+              onApply: (entry) => {
+                if (!this.el) return
+                this.onBeforeEdit(this.el)
+                this.drafts.apply(this.el, 'gap', px(entry.px))
+                this.refresh()
+                this.onEdited()
+                const label = this.pillLabelFor(GAP_SPEC, entry)
+                field.bindToken(label)
+                this.boundTokens.set(GAP_SPEC.props.join(','), { label, px: entry.px })
+              },
+            })
           },
-        })
-      },
       onKeyword: (kw) => {
         if (!this.el || kw !== 'auto') return
         this.onBeforeEdit(this.el)
@@ -1090,10 +1155,18 @@ export class Panel {
   private colorLabel(css: string): string {
     const parsed = parseColorLocal(css)
     if (!parsed) return css
-    const nearest = nearestColorToken(parsed, readTokens().colors)
-    if (nearest && nearest.distance === 0) return nearest.token.name
-    const toHex = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')
-    return `#${toHex(parsed.r)}${toHex(parsed.g)}${toHex(parsed.b)}`
+    // Fully-transparent always renders as the literal keyword — a nearest-token guess (which
+    // only compares r/g/b) would otherwise report some opaque color's name for a color that's
+    // actually invisible.
+    if (parsed.a === 0) return 'transparent'
+    // Token names are only claimed for fully-opaque colors — a semi-transparent value must
+    // show its own hex (with alpha) rather than borrowing an opaque token's name, even when
+    // the r/g/b channels coincide.
+    if (parsed.a === 1) {
+      const nearest = nearestColorToken(parsed, readTokens().colors)
+      if (nearest && nearest.distance === 0) return nearest.token.name
+    }
+    return rgbToHex(parsed.r, parsed.g, parsed.b, parsed.a)
   }
 
   /** Builds a `.color-row` — swatch button + value text — wired to open the shared ColorPicker. */
@@ -1269,6 +1342,19 @@ export class Panel {
     for (const el of this.els) {
       const computed = getComputedStyle(el)
       for (const prop of ['background-color', 'color', 'border-top-color']) {
+        // `color` is meaningless to aggregate for an element with no direct text of its own
+        // (it's rendering nothing) — e.g. a pure layout wrapper's inherited/cascaded `color`
+        // would otherwise show up as a "usage" the user never actually sees painted.
+        if (prop === 'color' && !hasDirectText(el)) continue
+        // border-top-color similarly means nothing when there's no visible border to paint
+        // it on — a computed width of 0 (no border authored) or an explicit `none` style
+        // means the color, however it resolves (often currentColor), is never rendered.
+        if (prop === 'border-top-color') {
+          const styleCss = this.currentValue(el, 'border-top-style', computed)
+          const widthCss = this.currentValue(el, 'border-top-width', computed)
+          const widthPx = Number.parseFloat(widthCss)
+          if (styleCss === 'none' || !Number.isFinite(widthPx) || widthPx === 0) continue
+        }
         const css = this.currentValue(el, prop, computed)
         const parsed = parseColorLocal(css)
         if (!parsed || parsed.a === 0) continue // skip transparent/unset
@@ -1579,21 +1665,23 @@ export class Panel {
         // later refresh() doesn't try to re-bind a pill the user explicitly detached.
         this.boundTokens.delete(spec.props.join(','))
       },
-      onTokenKey: () => {
-        if (!this.el) return
-        const entries = tokenEntriesFor(spec, readTheme(), readTokens())
-        if (!entries) return
-        this.tokenPicker.open({
-          anchor: field.root,
-          entries,
-          onApply: (entry) => {
-            commit(entry.px)
-            const label = this.pillLabelFor(spec, entry)
-            field.bindToken(label)
-            this.boundTokens.set(spec.props.join(','), { label, px: entry.px })
+      onTokenKey: multi
+        ? undefined
+        : () => {
+            if (!this.el) return
+            const entries = tokenEntriesFor(spec, readTheme(), readTokens())
+            if (!entries) return
+            this.tokenPicker.open({
+              anchor: field.root,
+              entries,
+              onApply: (entry) => {
+                commit(entry.px)
+                const label = this.pillLabelFor(spec, entry)
+                field.bindToken(label)
+                this.boundTokens.set(spec.props.join(','), { label, px: entry.px })
+              },
+            })
           },
-        })
-      },
     })
     const bound: BoundField = { field, spec }
     this.fields.push(bound)

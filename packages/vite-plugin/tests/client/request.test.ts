@@ -329,6 +329,43 @@ describe('buildChangeRequestWithElements', () => {
       resetTokensCache()
     }
   })
+
+  it('resolves font-size before/after utilities against the live text scale (className has text-lg, drafts to text-xl)', () => {
+    resetTokensCache()
+    document.head.insertAdjacentHTML(
+      'beforeend',
+      '<style data-test-req-tokens>:root { --text-lg: 18px; --text-xl: 20px; }</style>'
+    )
+    document.documentElement.style.setProperty('--text-lg', '18px')
+    document.documentElement.style.setProperty('--text-xl', '20px')
+    try {
+      document.body.innerHTML = `<button data-dc-source="src/App.tsx:7:9" class="text-lg font-medium text-neutral-900" style="font-size: 18px;">Add mod</button>`
+      const el = document.querySelector('button')!
+      const store = new DraftStore()
+      store.apply(el, 'font-size', '20px')
+      const req = buildChangeRequest(store, TW)
+      const c = req.elements[0].changes.find((x) => x.property === 'font-size')!
+      expect(c.beforeUtility).toBe('text-lg')
+      expect(c.afterUtility).toBe('text-xl')
+      expect(c.tokenExact).toBe(true)
+    } finally {
+      document.querySelectorAll('style[data-test-req-tokens]').forEach((s) => s.remove())
+      document.documentElement.removeAttribute('style')
+      resetTokensCache()
+    }
+  })
+
+  it('resolves font-weight before/after utilities (600 -> font-semibold)', () => {
+    document.body.innerHTML = `<button data-dc-source="src/App.tsx:7:9" class="text-lg font-medium text-neutral-900" style="font-weight: 500;">Add mod</button>`
+    const el = document.querySelector('button')!
+    const store = new DraftStore()
+    store.apply(el, 'font-weight', '600')
+    const req = buildChangeRequest(store, TW)
+    const c = req.elements[0].changes.find((x) => x.property === 'font-weight')!
+    expect(c.beforeUtility).toBe('font-medium')
+    expect(c.afterUtility).toBe('font-semibold')
+    expect(c.tokenExact).toBe(true)
+  })
 })
 
 describe('renderMarkdown', () => {

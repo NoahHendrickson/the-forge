@@ -9,6 +9,7 @@ import {
   parseColor,
   nearestColorToken,
   contrastRatio,
+  rgbToHex,
   type Theme,
   type Tokens,
   type ColorToken,
@@ -93,6 +94,38 @@ describe('suggestUtility', () => {
   it('border-style has no utility mapping (left as a CSS-only line)', () => {
     expect(suggestUtility('border-style', 'dashed', TW)).toBeNull()
   })
+
+  it('maps font-size to the nearest text-* token by exact px match, arbitrary otherwise', () => {
+    const tokens: Tokens = {
+      colors: [],
+      textScale: [
+        { name: 'sm', px: 14 },
+        { name: 'base', px: 16 },
+        { name: 'lg', px: 18 },
+        { name: 'xl', px: 20 },
+      ],
+    }
+    expect(suggestUtility('font-size', '18px', TW, tokens)).toEqual({ utility: 'text-lg', tokenExact: true })
+    expect(suggestUtility('font-size', '20px', TW, tokens)).toEqual({ utility: 'text-xl', tokenExact: true })
+    expect(suggestUtility('font-size', '19px', TW, tokens)).toEqual({ utility: 'text-[19px]', tokenExact: false })
+  })
+
+  it('font-size with no matching text scale falls back to arbitrary', () => {
+    expect(suggestUtility('font-size', '18px', TW)).toEqual({ utility: 'text-[18px]', tokenExact: false })
+  })
+
+  it('maps font-weight to the 9 named-weight utilities, arbitrary otherwise', () => {
+    expect(suggestUtility('font-weight', '100', TW)).toEqual({ utility: 'font-thin', tokenExact: true })
+    expect(suggestUtility('font-weight', '200', TW)).toEqual({ utility: 'font-extralight', tokenExact: true })
+    expect(suggestUtility('font-weight', '300', TW)).toEqual({ utility: 'font-light', tokenExact: true })
+    expect(suggestUtility('font-weight', '400', TW)).toEqual({ utility: 'font-normal', tokenExact: true })
+    expect(suggestUtility('font-weight', '500', TW)).toEqual({ utility: 'font-medium', tokenExact: true })
+    expect(suggestUtility('font-weight', '600', TW)).toEqual({ utility: 'font-semibold', tokenExact: true })
+    expect(suggestUtility('font-weight', '700', TW)).toEqual({ utility: 'font-bold', tokenExact: true })
+    expect(suggestUtility('font-weight', '800', TW)).toEqual({ utility: 'font-extrabold', tokenExact: true })
+    expect(suggestUtility('font-weight', '900', TW)).toEqual({ utility: 'font-black', tokenExact: true })
+    expect(suggestUtility('font-weight', '450', TW)).toEqual({ utility: 'font-[450]', tokenExact: false })
+  })
 })
 
 describe('findExistingUtility', () => {
@@ -139,6 +172,42 @@ describe('findExistingUtility', () => {
 
   it('skips color utilities when looking for border-width', () => {
     expect(findExistingUtility('border-slate-400', 'border-width')).toBeNull()
+  })
+
+  it('finds a color utility among non-color size/utility siblings by requiring a color-shaped suffix', () => {
+    // "text-lg" (a font-size utility) must not be mistaken for the color utility just
+    // because it shares the "text-" prefix — only "text-neutral-900" (family-shade shaped)
+    // is a color suffix.
+    expect(findExistingUtility('text-lg text-neutral-900', 'color')).toBe('text-neutral-900')
+  })
+
+  it('does not match a non-color-shaped bg-* utility for background-color', () => {
+    expect(findExistingUtility('bg-gradient-to-r p-2', 'background-color')).toBeNull()
+    expect(findExistingUtility('bg-cover p-2', 'background-color')).toBeNull()
+  })
+
+  it('border-t-red-500 is not matched for border-width (side-prefixed but color-shaped, not width-shaped)', () => {
+    expect(findExistingUtility('border-t-red-500', 'border-width')).toBeNull()
+  })
+
+  it('still finds arbitrary and keyword color suffixes (hex/rgb/named keywords)', () => {
+    expect(findExistingUtility('bg-[#ff0000] p-2', 'background-color')).toBe('bg-[#ff0000]')
+    expect(findExistingUtility('bg-white p-2', 'background-color')).toBe('bg-white')
+    expect(findExistingUtility('bg-transparent p-2', 'background-color')).toBe('bg-transparent')
+  })
+
+  it('finds font-size utilities via size-shaped text-* suffixes, symmetric with color-shape guarding', () => {
+    expect(findExistingUtility('text-lg font-medium text-neutral-900', 'font-size')).toBe('text-lg')
+    expect(findExistingUtility('text-[20px] font-medium', 'font-size')).toBe('text-[20px]')
+    // a color-shaped text-* utility must not be mistaken for font-size
+    expect(findExistingUtility('text-neutral-900', 'font-size')).toBeNull()
+  })
+
+  it('finds font-weight only among the 9 named weight utilities, never font-sans/serif/mono', () => {
+    expect(findExistingUtility('text-lg font-semibold text-neutral-900', 'font-weight')).toBe('font-semibold')
+    expect(findExistingUtility('font-sans text-lg', 'font-weight')).toBeNull()
+    expect(findExistingUtility('font-serif', 'font-weight')).toBeNull()
+    expect(findExistingUtility('font-mono', 'font-weight')).toBeNull()
   })
 })
 
@@ -365,6 +434,26 @@ describe('parseColor', () => {
   })
 })
 
+describe('rgbToHex', () => {
+  it('formats and zero-pads each channel to 2 hex digits', () => {
+    expect(rgbToHex(255, 0, 0)).toBe('#ff0000')
+    expect(rgbToHex(0, 8, 0)).toBe('#000800')
+  })
+
+  it('clamps out-of-range and rounds fractional channel values', () => {
+    expect(rgbToHex(-10, 300, 127.6)).toBe('#00ff80')
+  })
+
+  it('appends a 2-digit alpha channel when alpha is provided and less than 1', () => {
+    expect(rgbToHex(255, 0, 0, 0.5)).toBe('#ff000080')
+  })
+
+  it('omits the alpha channel when alpha is 1 or omitted', () => {
+    expect(rgbToHex(0, 255, 0, 1)).toBe('#00ff00')
+    expect(rgbToHex(0, 255, 0)).toBe('#00ff00')
+  })
+})
+
 describe('nearestColorToken', () => {
   const tokens: ColorToken[] = [
     { name: 'red-500', value: '#fb2c36' },
@@ -457,5 +546,24 @@ describe('suggestUtility — color support', () => {
 
   it('works with no tokens argument (falls back to arbitrary values)', () => {
     expect(suggestUtility('color', 'red', TW)).toEqual({ utility: 'text-[red]', tokenExact: false })
+  })
+
+  it('a measured fully-transparent rgba maps to bg-transparent (not a token guess), even with a matching alpha-0 token', () => {
+    // "rgba(0, 0, 0, 0)" must resolve via the a===0 special case, not fall through to the
+    // token loop and claim bg-black (r/g/b all match black, but alpha is 0 — a completely
+    // different color in practice).
+    expect(suggestUtility('background-color', 'rgba(0, 0, 0, 0)', TW, tokens)).toEqual({
+      utility: 'bg-transparent',
+      tokenExact: true,
+    })
+  })
+
+  it('a semi-transparent color matching an opaque token by rgb still returns arbitrary, not the token', () => {
+    // rgba(251, 44, 54, 0.5) has the same rgb as the red-500 token (opaque) but the alpha
+    // differs — must NOT claim tokenExact against a token whose own color is fully opaque.
+    expect(suggestUtility('background-color', 'rgba(251, 44, 54, 0.5)', TW, tokens)).toEqual({
+      utility: 'bg-[rgba(251,44,54,0.5)]',
+      tokenExact: false,
+    })
   })
 })

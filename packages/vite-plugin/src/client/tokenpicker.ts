@@ -76,7 +76,18 @@ export class TokenPicker {
     this.applyFilter('')
     this.searchInput.focus()
 
-    window.addEventListener('keydown', this.onKeydown)
+    // The popover is absolutely positioned inside the panel's own scrollable body — for an
+    // anchor row far down a long panel, the popover can render below the panel's visible
+    // viewport even though the PANEL itself is scrolled to a sane position. Scroll it into
+    // view immediately on open so it's never opened off-screen. jsdom elements don't
+    // implement scrollIntoView at all, so guard its existence (mirrors moveActive's guard).
+    const root = this.root as HTMLElement & { scrollIntoView?: (opts?: ScrollIntoViewOptions) => void }
+    if (typeof root.scrollIntoView === 'function') root.scrollIntoView({ block: 'nearest' })
+
+    // capture: true so a focused control's own bubble-phase Escape handler (e.g. NumberField
+    // calls stopPropagation() on Escape — see controls.ts) can't starve this listener: the
+    // capture phase runs BEFORE the target's bubble-phase handlers fire.
+    window.addEventListener('keydown', this.onKeydown, true)
     window.addEventListener('mousedown', this.outsideMousedown)
     this.globalListenersAttached = true
   }
@@ -86,7 +97,7 @@ export class TokenPicker {
     // close() is called defensively even when the picker was never opened — guard so a
     // no-op close doesn't register a spurious removeEventListener (mirrors ColorPicker).
     if (!this.globalListenersAttached) return
-    window.removeEventListener('keydown', this.onKeydown)
+    window.removeEventListener('keydown', this.onKeydown, true)
     window.removeEventListener('mousedown', this.outsideMousedown)
     this.globalListenersAttached = false
   }

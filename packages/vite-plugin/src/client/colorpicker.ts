@@ -1,4 +1,4 @@
-import { parseColor, nearestColorToken, contrastRatio, readTokens, type Tokens, type RGBA } from './tokens'
+import { parseColor, nearestColorToken, contrastRatio, readTokens, rgbToHex, type Tokens, type RGBA } from './tokens'
 
 export interface HSV {
   h: number
@@ -187,7 +187,16 @@ export class ColorPicker {
     this.renderPalette()
     this.renderAll()
 
-    window.addEventListener('keydown', this.onKeydown)
+    // See TokenPicker.open()'s identical guard: the popover can render below the panel's
+    // visible viewport for an anchor row far down a long panel — scroll it into view on
+    // open. jsdom elements don't implement scrollIntoView at all, so guard its existence.
+    const root = this.root as HTMLElement & { scrollIntoView?: (opts?: ScrollIntoViewOptions) => void }
+    if (typeof root.scrollIntoView === 'function') root.scrollIntoView({ block: 'nearest' })
+
+    // capture: true — see TokenPicker's identical comment: a focused control's own
+    // bubble-phase Escape handler (NumberField calls stopPropagation() on Escape) must not
+    // be able to starve this listener.
+    window.addEventListener('keydown', this.onKeydown, true)
     window.addEventListener('mousedown', this.outsideMousedown)
     this.globalListenersAttached = true
   }
@@ -198,7 +207,7 @@ export class ColorPicker {
     // close() is called defensively (every Panel.show()/hide()) even when the picker was
     // never opened — guard so a no-op close doesn't register a spurious removeEventListener.
     if (!this.globalListenersAttached) return
-    window.removeEventListener('keydown', this.onKeydown)
+    window.removeEventListener('keydown', this.onKeydown, true)
     window.removeEventListener('mousedown', this.outsideMousedown)
     this.globalListenersAttached = false
   }
@@ -298,10 +307,7 @@ export class ColorPicker {
 
   private hexString(): string {
     const { r, g, b } = this.currentRgb
-    const toHex = (n: number) => clampByte(n).toString(16).padStart(2, '0')
-    let hex = `#${toHex(r)}${toHex(g)}${toHex(b)}`
-    if (this.alpha < 1) hex += toHex(Math.round(this.alpha * 255))
-    return hex
+    return rgbToHex(r, g, b, this.alpha)
   }
 
   /** Family key for grouping: name minus a trailing `-<digits>` shade suffix (e.g. `red-500` -> `red`). Shadeless names (e.g. `white`, `black`) group under this sentinel into one final row. */

@@ -43,6 +43,15 @@ describe('Overlay CSS (Track A visibility correctness)', () => {
     // .layout-side, governs the field's HEIGHT — this override pins it back to content size.
     expect(CSS).toMatch(/\.layout-side\s+\.nf\s*{\s*flex:\s*0\s+0\s+auto;?\s*}/)
   })
+
+  it('[data-text-align] gets the same stacked (label-above-full-width-track) treatment as [data-align-self], fixing "Center" clipping at 280px (final review fix #7)', () => {
+    // The Typography Align row shares its .type-row with the LS number field, leaving too
+    // little width for the 3-option segment track — "Center" clips. [data-align-self]
+    // already solves this identical problem (5 options, even tighter) by stacking the
+    // label above a full-width track; [data-text-align] must get the same rule.
+    expect(CSS).toMatch(/\[data-text-align\]\s*{\s*flex-direction:\s*column;\s*align-items:\s*stretch;\s*gap:\s*3px;?\s*}/)
+    expect(CSS).toContain('[data-text-align] .seg-field-label { width: auto; }')
+  })
 })
 
 describe('Overlay (M2 additions)', () => {

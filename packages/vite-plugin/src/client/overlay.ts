@@ -129,6 +129,12 @@ button {
 /* Align-self has 5 options — stack label above a full-width track so nothing clips. */
 [data-align-self] { flex-direction: column; align-items: stretch; gap: 3px; }
 [data-align-self] .seg-field-label { width: auto; }
+/* Typography's Align row shares its .type-row with the LS number field, leaving too little
+ * width for the 3-option segment track — "Center" clips at the 280px panel width. Same fix
+ * as [data-align-self] above: stack the label above a full-width track instead of sharing
+ * the row's horizontal space with the label. */
+[data-text-align] { flex-direction: column; align-items: stretch; gap: 3px; }
+[data-text-align] .seg-field-label { width: auto; }
 .seg {
   flex: 1; padding: 3px 0; text-align: center; border-radius: 4px;
   background: transparent; color: #B8B8B8; font-size: 10px; white-space: nowrap;

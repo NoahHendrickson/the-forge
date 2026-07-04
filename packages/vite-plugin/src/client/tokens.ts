@@ -149,6 +149,16 @@ function clamp255(n: number): number {
   return Math.min(255, Math.max(0, Math.round(n)))
 }
 
+/** Shared rgb(+alpha) -> hex formatter — clamps/rounds each channel, zero-pads to 2 digits,
+ *  and appends a 2-digit alpha channel only when alpha is provided and < 1. Single source of
+ *  truth for the toHex/clampByte logic previously duplicated in panel.ts and colorpicker.ts. */
+export function rgbToHex(r: number, g: number, b: number, a = 1): string {
+  const toHex = (n: number) => clamp255(n).toString(16).padStart(2, '0')
+  let hex = `#${toHex(r)}${toHex(g)}${toHex(b)}`
+  if (a < 1) hex += toHex(Math.round(a * 255))
+  return hex
+}
+
 function parsePercentOrNumber(raw: string, scale: number): number {
   const s = raw.trim()
   if (s.endsWith('%')) return (Number.parseFloat(s) / 100) * scale
@@ -365,7 +375,10 @@ function suggestColorUtility(
   const parsed = parseColor(css)
   if (!parsed) return null
 
-  if (parsed.a === 0 && css.trim().toLowerCase() === 'transparent') {
+  // Fully-transparent (alpha 0) always maps to `-transparent` regardless of the r/g/b
+  // channels — a measured "rgba(0, 0, 0, 0)" must not be mistaken for opaque black just
+  // because its channels happen to match a black token.
+  if (parsed.a === 0) {
     return { utility: `${prefix}-transparent`, tokenExact: true }
   }
 
@@ -373,10 +386,15 @@ function suggestColorUtility(
   for (const token of colorTokens) {
     const tokenParsed = parseColor(token.value)
     if (!tokenParsed) continue
+    // Only claim an exact token match when the token itself is (essentially) opaque —
+    // a semi-transparent measured color must never claim an opaque token's utility name,
+    // even when its r/g/b channels coincide with that token's.
+    if (tokenParsed.a <= 0.996) continue
     if (
       Math.abs(tokenParsed.r - parsed.r) <= 1 &&
       Math.abs(tokenParsed.g - parsed.g) <= 1 &&
-      Math.abs(tokenParsed.b - parsed.b) <= 1
+      Math.abs(tokenParsed.b - parsed.b) <= 1 &&
+      parsed.a > 0.996
     ) {
       return { utility: `${prefix}-${token.name}`, tokenExact: true }
     }
@@ -384,6 +402,40 @@ function suggestColorUtility(
 
   const arbitrary = css.trim().replace(/\s+/g, '')
   return { utility: `${prefix}-[${arbitrary}]`, tokenExact: false }
+}
+
+// Tailwind's 9 named font-weight utilities — the only font-weight utilities recognized by
+// findExistingUtility (font-sans/serif/mono share the `font-` prefix but are FAMILY utilities,
+// not weight, and must never be mistaken for one).
+const FONT_WEIGHT_UTILITIES: Record<string, string> = {
+  100: 'font-thin',
+  200: 'font-extralight',
+  300: 'font-light',
+  400: 'font-normal',
+  500: 'font-medium',
+  600: 'font-semibold',
+  700: 'font-bold',
+  800: 'font-extrabold',
+  900: 'font-black',
+}
+const FONT_WEIGHT_SUFFIXES = new Set(Object.values(FONT_WEIGHT_UTILITIES).map((u) => u.slice('font-'.length)))
+
+function suggestFontSizeUtility(
+  css: string,
+  tokens: Tokens | undefined
+): { utility: string; tokenExact: boolean } {
+  const px = Number.parseFloat(css)
+  for (const token of tokens?.textScale ?? []) {
+    if (Math.abs(token.px - px) < 0.5) return { utility: `text-${token.name}`, tokenExact: true }
+  }
+  return { utility: `text-[${px}px]`, tokenExact: false }
+}
+
+function suggestFontWeightUtility(css: string): { utility: string; tokenExact: boolean } {
+  const n = Number.parseFloat(css)
+  const named = FONT_WEIGHT_UTILITIES[n]
+  if (named) return { utility: named, tokenExact: true }
+  return { utility: `font-[${css.trim()}]`, tokenExact: false }
 }
 
 export function suggestUtility(
@@ -396,6 +448,15 @@ export function suggestUtility(
   if (colorPrefix) {
     if (theme.spacingBasePx === null) return null
     return suggestColorUtility(colorPrefix, css, tokens)
+  }
+
+  if (prop === 'font-size') {
+    if (theme.spacingBasePx === null) return null
+    return suggestFontSizeUtility(css, tokens)
+  }
+  if (prop === 'font-weight') {
+    if (theme.spacingBasePx === null) return null
+    return suggestFontWeightUtility(css)
   }
 
   const prefix = UTILITY_PREFIXES[prop]
@@ -442,12 +503,49 @@ export function suggestUtility(
 }
 
 // single-letter side/axis suffixes that make a border-<x> class a WIDTH utility
-// (border-t, border-r, border-b, border-l), not a color utility
-const BORDER_SIDE_SUFFIX = /^[trblxy](-|$)/
+// (border-t, border-r, border-b, border-l), optionally followed by a numeric width
+// (border-t-2) — NOT a color utility. Tightened to require the suffix be EXACTLY the side
+// letter (optionally `-<digits>`), so a color utility like `border-t-red-500` (side letter
+// followed by a color family-shade, not a number) no longer misreads as a width utility.
+const BORDER_SIDE_SUFFIX = /^[trblxy](-\d+)?$/
+
+// A suffix is "color-shaped" — the shape findExistingUtility requires before treating a
+// bg-*/text-*/border-* class as a COLOR utility, not some other same-prefixed utility
+// (text-lg is a font-size, bg-cover/bg-gradient-to-r are background shorthand utilities).
+// Three shapes: a family-shade pair (red-500, neutral-900, ...), one of the bare color
+// keywords Tailwind ships (white/black/transparent/current/inherit), or an arbitrary value
+// containing an actual color notation (#hex, rgb(), hsl(), oklch(), or a --color-* var()).
+const COLOR_KEYWORD_SUFFIXES = new Set(['white', 'black', 'transparent', 'current', 'inherit'])
+const FAMILY_SHADE_SUFFIX = /^[a-z]+-\d{2,3}$/
+
+function isColorShapedSuffix(suffix: string): boolean {
+  if (FAMILY_SHADE_SUFFIX.test(suffix)) return true
+  if (COLOR_KEYWORD_SUFFIXES.has(suffix)) return true
+  if (suffix.startsWith('[') && suffix.endsWith(']')) {
+    const inner = suffix.slice(1, -1)
+    return /#|rgb|hsl|oklch|var\(--color/i.test(inner)
+  }
+  return false
+}
+
+// A suffix is "size-shaped" — the shape findExistingUtility requires for a text-* class to
+// be read as a FONT-SIZE utility (text-lg, text-[20px]) rather than a color (text-neutral-900).
+// Symmetric with isColorShapedSuffix: a bare scale name (letters/digits, no embedded '-<digits>'
+// family-shade pattern) or an arbitrary px/rem value.
+function isSizeShapedSuffix(suffix: string): boolean {
+  if (FAMILY_SHADE_SUFFIX.test(suffix)) return false // that shape is a color, not a size
+  if (suffix.startsWith('[') && suffix.endsWith(']')) {
+    const inner = suffix.slice(1, -1)
+    return /^[\d.]+(px|rem)$/.test(inner)
+  }
+  return /^[a-z0-9]+$/i.test(suffix)
+}
 
 export function findExistingUtility(className: string, prop: string): string | null {
+  if (prop === 'font-weight') return findFontWeightUtility(className)
+
   const colorPrefix = COLOR_PREFIXES[prop]
-  const prefix = colorPrefix ?? UTILITY_PREFIXES[prop]
+  const prefix = prop === 'font-size' ? 'text' : (colorPrefix ?? UTILITY_PREFIXES[prop])
   if (!prefix) return null
   for (const cls of className.split(/\s+/)) {
     if (cls.includes(':')) continue // variant-prefixed — out of scope for detection
@@ -460,17 +558,27 @@ export function findExistingUtility(className: string, prop: string): string | n
     // guard: 'rounded-' must not match 'rounded-tl-…' (a longer registered prefix)
     const corner = /^(tl|tr|br|bl)(-|$)/.test(suffix)
     if (prefix === 'rounded' && corner) continue
-    if (prop === 'border-color') {
+    if (colorPrefix) {
       // 'border-2' (width) and 'border-t'/'border-t-2' (side width) are not colors
       if (/^\d+$/.test(suffix)) continue
       if (BORDER_SIDE_SUFFIX.test(suffix)) continue
+      if (!isColorShapedSuffix(suffix)) continue
     }
     if (prop === 'border-width') {
       // only numeric widths and side-width variants are WIDTH utilities — 'border-slate-400'
       // (a color) must not match here
       if (!/^\d+$/.test(suffix) && !BORDER_SIDE_SUFFIX.test(suffix)) continue
     }
+    if (prop === 'font-size' && !isSizeShapedSuffix(suffix)) continue
     return cls
+  }
+  return null
+}
+
+function findFontWeightUtility(className: string): string | null {
+  for (const cls of className.split(/\s+/)) {
+    if (cls.includes(':')) continue
+    if (cls.startsWith('font-') && FONT_WEIGHT_SUFFIXES.has(cls.slice('font-'.length))) return cls
   }
   return null
 }

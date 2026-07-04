@@ -4,6 +4,8 @@ import { Overlay } from '../../src/client/overlay'
 import { DesignMode } from '../../src/client/index'
 import { DraftStore } from '../../src/client/drafts'
 import { Panel } from '../../src/client/panel'
+import { readTokens, resetTokensCache } from '../../src/client/tokens'
+import * as tokensModule from '../../src/client/tokens'
 
 // DesignMode registers capture-phase listeners on `document`/`window`, which
 // persist across tests within this file (jsdom's `document` is shared per
@@ -116,6 +118,49 @@ describe('DesignMode listener lifecycle (spec §10: zero idle listeners)', () =>
 
     expect(secondRect).toHaveBeenCalled()
     expect(firstRect).not.toHaveBeenCalled()
+  })
+})
+
+describe('DesignMode tokens cache invalidation (final review fix #5)', () => {
+  afterEach(() => {
+    resetTokensCache()
+    document.querySelectorAll('style[data-test-dm-tokens]').forEach((el) => el.remove())
+    document.documentElement.removeAttribute('style')
+  })
+
+  it('activating resets the tokens cache so a theme change since the last activation is picked up', () => {
+    document.head.insertAdjacentHTML('beforeend', '<style data-test-dm-tokens>:root { --color-red-500: #fb2c36; }</style>')
+    document.documentElement.style.setProperty('--color-red-500', '#fb2c36')
+
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+
+    mode.setActive(true)
+    expect(readTokens().colors.some((c) => c.name === 'red-500')).toBe(true)
+    mode.setActive(false)
+
+    // Theme changes while inactive (e.g. author edits CSS, HMR reloads styles) — without
+    // invalidation, the stale memoized Tokens would still be returned.
+    document.documentElement.style.setProperty('--color-blue-500', '#2b7fff')
+    document.head.insertAdjacentHTML(
+      'beforeend',
+      '<style data-test-dm-tokens>:root { --color-blue-500: #2b7fff; }</style>'
+    )
+
+    mode.setActive(true)
+    expect(readTokens().colors.some((c) => c.name === 'blue-500')).toBe(true)
+  })
+
+  it('calls resetTokensCache on activation (spy-verified)', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    const spy = vi.spyOn(tokensModule, 'resetTokensCache')
+    mode.setActive(true)
+    expect(spy).toHaveBeenCalled()
   })
 })
 
