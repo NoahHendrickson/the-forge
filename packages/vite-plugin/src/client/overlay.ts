@@ -113,14 +113,18 @@ button {
 }
 
 .seg-field { display: flex; align-items: center; gap: 4px; }
-.seg-field-label { flex: none; width: 44px; color: #9A9A9A; font-size: 11px; }
+.seg-field-label { flex: none; width: 40px; color: #9A9A9A; font-size: 11px; }
 .seg-track {
-  flex: 1; display: flex; gap: 2px;
+  flex: 1; display: flex; gap: 2px; min-width: 0;
   background: rgba(255,255,255,0.06); border-radius: 6px; padding: 2px;
 }
+/* Align-self has 5 options — stack label above a full-width track so nothing clips. */
+[data-align-self] { flex-direction: column; align-items: stretch; gap: 3px; }
+[data-align-self] .seg-field-label { width: auto; }
 .seg {
   flex: 1; padding: 3px 0; text-align: center; border-radius: 4px;
-  background: transparent; color: #B8B8B8; font-size: 10.5px; white-space: nowrap;
+  background: transparent; color: #B8B8B8; font-size: 10px; white-space: nowrap;
+  overflow: hidden; min-width: 0;
 }
 .seg:hover { color: #F5F5F5; }
 .seg-active { background: rgba(255,255,255,0.16); color: #fff; }
