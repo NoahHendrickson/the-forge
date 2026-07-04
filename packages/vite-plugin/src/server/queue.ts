@@ -68,12 +68,36 @@ export class Queue {
   ) {
     this.now = now
     this.file = path.join(dir, 'queue.json')
+    this.items = this.readDiskItems()
+  }
+
+  /**
+   * Reads queue.json, returning [] when the file doesn't exist (normal first run). A file that
+   * exists but doesn't parse to an array is QUARANTINED — renamed to queue.json.corrupt-<ms> —
+   * rather than silently discarded: it may hold pending user edits worth hand-recovering, and
+   * leaving it in place would let the next persist() clobber the evidence.
+   */
+  private readDiskItems(): QueueItem[] {
+    let raw: string
     try {
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'))
-      if (Array.isArray(raw)) this.items = raw as QueueItem[]
+      raw = fs.readFileSync(this.file, 'utf8')
     } catch {
-      this.items = []
+      return []
     }
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed as QueueItem[]
+    } catch {
+      // fall through to quarantine
+    }
+    const corruptPath = `${this.file}.corrupt-${this.now()}`
+    try {
+      fs.renameSync(this.file, corruptPath)
+      console.warn(`[the-forge] queue.json was unreadable — moved to ${corruptPath}; starting with an empty queue`)
+    } catch {
+      // rename failed (permissions?) — leave the file for inspection; nothing else we can do
+    }
+    return []
   }
 
   add(request: unknown, markdown: string): QueueItem {
@@ -175,13 +199,7 @@ export class Queue {
    * overwrite into an additive merge, so two dev servers sharing a queue dir don't clobber each
    * other's items. */
   private mergeWithDisk(): QueueItem[] {
-    let onDisk: QueueItem[] = []
-    try {
-      const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'))
-      if (Array.isArray(raw)) onDisk = raw as QueueItem[]
-    } catch {
-      onDisk = []
-    }
+    const onDisk = this.readDiskItems()
     const knownIds = new Set(this.items.map((i) => i.id))
     const unknownFromDisk = onDisk.filter((i) => !knownIds.has(i.id))
     return [...this.items, ...unknownFromDisk]
