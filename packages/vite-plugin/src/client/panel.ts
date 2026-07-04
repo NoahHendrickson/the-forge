@@ -130,6 +130,7 @@ export class Panel {
     this.head.textContent = data.source
       ? `<${data.tag}> — ${data.source.file}:${data.source.line}:${data.source.col}`
       : `<${data.tag}>`
+    // rebuilds all fields per selection; expand state resets by design (revisit in M2b)
     this.buildBody()
     this.refresh()
   }

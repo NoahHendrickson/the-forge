@@ -112,4 +112,14 @@ describe('Panel', () => {
     panel.refresh()
     expect(fieldInput(panel, 'O').value).toBe('0')
   })
+
+  it('mixed detection still works while comparing', () => {
+    const { panel, drafts, el } = setup(
+      `<div data-dc-source="src/a.tsx:1:1" id="t" style="padding-left: 4px; padding-right: 12px;"></div>`
+    )
+    commit(fieldInput(panel, 'PX'), '16')
+    drafts.compare(el, true)
+    panel.refresh()
+    expect(fieldInput(panel, 'PX').value).toBe('') // originals differ → mixed again
+  })
 })

@@ -148,11 +148,16 @@ describe('DesignMode selection (M2)', () => {
     const btn = document.querySelector('button')!
     btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     const appEsc = vi.fn()
+    // Design mode's Escape listener is on `document` in the capture phase, so it
+    // runs during the capture descent toward any deeper target — including
+    // document.body. Dispatching on document.body (bubbling) puts body genuinely
+    // in the propagation path, so stopPropagation() during capture can actually
+    // be observed preventing the bubble-phase listener below from firing.
     document.body.addEventListener('keydown', appEsc)
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     expect(mode.selected).toBeNull()
     expect(mode.active).toBe(true)
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     expect(mode.active).toBe(false)
     expect(appEsc).not.toHaveBeenCalled()
   })
