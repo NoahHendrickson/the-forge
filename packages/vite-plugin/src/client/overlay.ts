@@ -1,5 +1,6 @@
 export const CSS = `
 [hidden] { display: none !important; }
+*, *::before, *::after { box-sizing: border-box; }
 :host { all: initial; }
 
 /*
@@ -36,7 +37,11 @@ button {
   font: 400 12px system-ui, sans-serif; color: #D4D4D4;
   background: #2C2C2C; border: 1px solid rgba(255,255,255,0.15); border-radius: 999px; padding: 5px 8px 5px 12px;
 }
-#status button { border-radius: 6px; }
+#status button {
+  background: rgba(255,255,255,0.06); color: #D4D4D4; border: none; border-radius: 6px;
+  font: 500 11px system-ui, sans-serif; padding: 4px 8px;
+}
+#status button:hover { background: rgba(255,255,255,0.12); }
 #outline {
   position: fixed; z-index: 2147483645; pointer-events: none;
   border: 1.5px solid rgba(13,153,255,0.75); border-radius: 2px;
@@ -52,7 +57,7 @@ button {
 }
 #panel {
   position: fixed; right: 16px; top: 16px; z-index: 2147483647;
-  width: 280px; max-height: 80vh; overflow-y: auto;
+  width: 280px; max-height: 80vh; overflow-y: auto; overflow-x: hidden;
   font: 400 12px system-ui, sans-serif; background: #2C2C2C; color: #F5F5F5;
   border: 1px solid rgba(255,255,255,0.09); border-radius: 12px; padding: 0;
   box-shadow: 0 5px 24px rgba(0,0,0,0.35);
@@ -86,6 +91,12 @@ button {
 #panel button:hover { background: rgba(255,255,255,0.12); }
 #panel button:active { background: rgba(255,255,255,0.16); }
 
+[data-add-layout] {
+  width: 100%; text-align: center; padding: 6px 0; background: transparent;
+  border: 1px dashed rgba(255,255,255,0.18); color: #B8B8B8;
+}
+[data-add-layout]:hover { border-style: solid; background: rgba(255,255,255,0.06); }
+
 .nf {
   display: flex; align-items: center; gap: 4px;
   height: 24px; background: rgba(255,255,255,0.06);
@@ -109,7 +120,7 @@ button {
 }
 .seg {
   flex: 1; padding: 3px 0; text-align: center; border-radius: 4px;
-  background: transparent; color: #B8B8B8; font-size: 10.5px;
+  background: transparent; color: #B8B8B8; font-size: 10.5px; white-space: nowrap;
 }
 .seg:hover { color: #F5F5F5; }
 .seg-active { background: rgba(255,255,255,0.16); color: #fff; }
@@ -140,7 +151,7 @@ button {
   width: 8px; height: 8px; background: #0D99FF; box-shadow: 0 0 0 2px rgba(13,153,255,0.25);
 }
 
-.size-row { display: flex; gap: 4px; width: 100%; }
+.size-row { display: flex; gap: 4px; flex: 1 1 40%; min-width: 0; }
 .size-row .nf { flex: 1; }
 .size-mode {
   appearance: none; -webkit-appearance: none;
@@ -153,12 +164,6 @@ button {
 .size-mode:hover { border-color: rgba(255,255,255,0.12); }
 
 .layout-section, .flex-child-controls { display: flex; flex-direction: column; gap: 6px; width: 100%; }
-
-[data-add-layout] {
-  width: 100%; text-align: center; padding: 6px 0; background: transparent;
-  border: 1px dashed rgba(255,255,255,0.18); color: #B8B8B8;
-}
-[data-add-layout]:hover { border-style: solid; background: rgba(255,255,255,0.06); }
 `
 
 export class Overlay {
