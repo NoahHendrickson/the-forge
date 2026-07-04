@@ -18,6 +18,13 @@ fi
 MAX_UNPACKED_KB=250
 PACK_JSON=$(npm pack --dry-run --json -w @the-forge/vite 2>/dev/null)
 UNPACKED_KB=$(printf '%s' "$PACK_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(Math.ceil(j[0].unpackedSize/1024))})')
+# Guard against a silent PASS: [ -gt ] on an empty/non-numeric value errors to stderr but
+# evaluates false, which would fall through to the PASS lines — the one failure mode this
+# gate exists to prevent. (Unreachable today only because node throws first under pipefail.)
+if ! [[ "$UNPACKED_KB" =~ ^[0-9]+$ ]]; then
+  echo "FAIL: could not determine unpacked package size (got '${UNPACKED_KB}')" >&2
+  exit 1
+fi
 if [ "$UNPACKED_KB" -gt "$MAX_UNPACKED_KB" ]; then
   echo "FAIL: @the-forge/vite unpacked package is ${UNPACKED_KB}KB — exceeds the ${MAX_UNPACKED_KB}KB budget" >&2
   exit 1

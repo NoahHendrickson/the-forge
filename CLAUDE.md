@@ -54,7 +54,7 @@ The build produces three bundles in `packages/vite-plugin/dist/`: `index.js` (th
 - **Two tools** (server name `the-forge`, bin `dist/mcp.js`):
   - `pull_design_edits` — no args; claims all pending items (and re-claims stale ones) and returns their change-request markdown.
   - `mark_applied` — `{ ids: string[], status: 'applied' | 'failed', note? }`.
-- **Endpoint discovery:** the plugin (`src/server/setup.ts`) resolves the project root by walking up from Vite's root to the nearest `.git` (monorepo-safe) and writes `.the-forge/endpoint-<pid>.json` (`{port, host, pid, secret}`). The bin (`src/mcp/discover.ts`) reads `<cwd>/.the-forge/`, filters entries to live pids, newest mtime wins; legacy `endpoint.json` is only used when no per-pid file exists.
+- **Endpoint discovery:** the plugin resolves the project root by walking up from Vite's root to the nearest `.git` (`resolveProjectRoot` in `src/server/setup.ts`, monorepo-safe) and writes `.the-forge/endpoint-<pid>.json` (`{port, host, pid, secret}`, written by `writeEndpointFile` in `src/server/endpoints.ts`). The bin (`src/mcp/discover.ts`) reads `<cwd>/.the-forge/`, filters entries to live pids, newest mtime wins; legacy `endpoint.json` is only used when no per-pid file exists.
 - **Auth:** mutating endpoints (`POST /__the-forge/pull`, `/mark`, `/queue`, `/dispatch`) require the `X-Forge-Secret` header from the endpoint file.
 - **Install side-effects (auto, idempotent):** the plugin writes a `the-forge` entry into `.mcp.json` and a `/forge-design` command at `.claude/commands/forge-design.md`, both at the git root. `.the-forge/` is gitignored runtime state.
 - **Queue lifecycle:** `pending` → `claimed` (stale claims re-queue after 5 min) → `applied`/`failed`; terminal items pruned after 24h, 200-item cap; corrupt `queue.json` is quarantined to `queue.json.corrupt-<ts>`, never silently discarded.
@@ -83,4 +83,4 @@ The build produces three bundles in `packages/vite-plugin/dist/`: `index.js` (th
 - **jsdom cannot see flex layout, cascade, or real computed styles.** Unit tests alone never prove layout/visual behavior — run a real-browser E2E against the demo app before merging UI work.
 - Stale dev servers cause phantom bugs — check `lsof -iTCP:5173` and kill before E2E. The dev server often binds IPv6 (`[::1]:5173`).
 - The MCP bin resolves `.the-forge/` from `process.cwd()` — the agent session must run at the git root (the plugin writes the endpoint file there for exactly this reason).
-- Re-pulling without `mark_applied` returns the same queue items again — the `/forge-design` flow is pull → apply → mark in one pass.
+- Items stay queued until `mark_applied` — but an immediate re-pull returns nothing (pull flips them to `claimed`; a dropped claim only re-queues after 5 min). The `/forge-design` flow is pull → apply → mark in one pass.
