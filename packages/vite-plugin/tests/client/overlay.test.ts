@@ -51,4 +51,13 @@ describe('Overlay (M2 additions)', () => {
     expect((overlay.host.shadowRoot!.getElementById('select-outline') as HTMLElement).hidden).toBe(true)
     expect((overlay.host.shadowRoot!.getElementById('status') as HTMLElement).hidden).toBe(true)
   })
+
+  it('status strip includes the copy button first', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const status = overlay.host.shadowRoot!.getElementById('status')!
+    const buttons = [...status.querySelectorAll('button')]
+    expect(buttons[0]).toBe(overlay.copyButton)
+    expect(overlay.copyButton.textContent).toBe('Copy for agent')
+  })
 })

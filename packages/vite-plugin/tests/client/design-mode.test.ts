@@ -22,6 +22,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const mode of liveModes.splice(0)) mode.setActive(false)
+  vi.unstubAllGlobals()
 })
 
 function fullSetup() {
@@ -218,5 +219,35 @@ describe('DesignMode selection (M2)', () => {
     for (const cb of queue.splice(0)) cb(0)
     const outline = overlay.host.shadowRoot!.getElementById('outline') as HTMLElement
     expect(outline.hidden).toBe(true) // hovering the SELECTED element → hover outline stays suppressed
+  })
+
+  it('copy button writes the rendered change request to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.copyButton.click()
+    await Promise.resolve()
+    expect(writeText).toHaveBeenCalledTimes(1)
+    const md = writeText.mock.calls[0][0] as string
+    expect(md).toContain('# Design change request')
+    expect(md).toContain('src/Button.tsx:42:8')
+    expect(md).toContain('padding-top')
+    expect(overlay.copyButton.textContent).toBe('Copied ✓')
+  })
+
+  it('copy button reports failure without throwing', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.copyButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(overlay.copyButton.textContent).toBe('Copy failed')
   })
 })

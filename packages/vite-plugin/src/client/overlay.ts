@@ -39,6 +39,7 @@ button {
 export class Overlay {
   host = document.createElement('div')
   toggle = document.createElement('button')
+  copyButton = document.createElement('button')
   compareAllButton = document.createElement('button')
   resetAllButton = document.createElement('button')
 
@@ -56,8 +57,9 @@ export class Overlay {
     this.outline.id = 'outline'
     this.selectOutline.id = 'select-outline'
     this.status.id = 'status'
+    this.copyButton.textContent = 'Copy for agent'
     this.resetAllButton.textContent = 'Reset all'
-    this.status.append(this.statusLabel, this.compareAllButton, this.resetAllButton)
+    this.status.append(this.statusLabel, this.copyButton, this.compareAllButton, this.resetAllButton)
     this.outline.hidden = true
     this.selectOutline.hidden = true
     this.status.hidden = true
