@@ -151,4 +151,11 @@ describe('writeEndpointFile', () => {
     expect(data.port).toBe(5199)
     expect(data.pid).toBe(process.pid)
   })
+
+  it('writes host when provided (e.g. IPv6)', () => {
+    writeEndpointFile(dir, 5199, '::1')
+    const data = JSON.parse(fs.readFileSync(path.join(dir, 'endpoint.json'), 'utf8'))
+    expect(data.port).toBe(5199)
+    expect(data.host).toBe('::1')
+  })
 })

@@ -3,15 +3,16 @@ import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
 import { handleMessage, type ForgeBackend, type JsonRpcMessage } from './protocol'
+import { baseUrl, type ForgeEndpoint } from './url'
 
 const NOT_RUNNING_MESSAGE = 'The Forge dev server is not running — start your Vite dev server first.'
 
-function readEndpoint(): { port: number } | null {
+function readEndpoint(): ForgeEndpoint | null {
   try {
     const raw = fs.readFileSync(path.join(process.cwd(), '.the-forge', 'endpoint.json'), 'utf8')
-    const data = JSON.parse(raw) as { port?: number }
+    const data = JSON.parse(raw) as { port?: number; host?: string }
     if (typeof data.port !== 'number') return null
-    return { port: data.port }
+    return { port: data.port, host: data.host }
   } catch {
     return null
   }
@@ -24,7 +25,7 @@ function makeBackend(): ForgeBackend {
       if (!endpoint) throw new Error(NOT_RUNNING_MESSAGE)
       let res: Response
       try {
-        res = await fetch(`http://127.0.0.1:${endpoint.port}/__the-forge/pull`, {
+        res = await fetch(`${baseUrl(endpoint)}/__the-forge/pull`, {
           signal: AbortSignal.timeout(10_000),
         })
       } catch {
@@ -39,7 +40,7 @@ function makeBackend(): ForgeBackend {
       if (!endpoint) throw new Error(NOT_RUNNING_MESSAGE)
       let res: Response
       try {
-        res = await fetch(`http://127.0.0.1:${endpoint.port}/__the-forge/mark`, {
+        res = await fetch(`${baseUrl(endpoint)}/__the-forge/mark`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ids, status, note }),

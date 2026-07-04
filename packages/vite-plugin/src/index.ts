@@ -27,7 +27,7 @@ export function theForge(): Plugin {
       server.middlewares.use(createForgeMiddleware(queue))
       server.httpServer?.once('listening', () => {
         const address = server.httpServer?.address()
-        if (address && typeof address === 'object') writeEndpointFile(forgeDir, address.port)
+        if (address && typeof address === 'object') writeEndpointFile(forgeDir, address.port, address.address)
       })
       const dir = path.dirname(fileURLToPath(import.meta.url))
       setupProjectConfig(root, path.join(dir, 'mcp.js'))

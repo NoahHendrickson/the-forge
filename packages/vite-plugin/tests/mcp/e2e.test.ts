@@ -66,7 +66,7 @@ beforeAll(async () => {
   fs.mkdirSync(path.join(tempDir, '.the-forge'), { recursive: true })
   fs.writeFileSync(
     path.join(tempDir, '.the-forge', 'endpoint.json'),
-    JSON.stringify({ port: stubPort, pid: process.pid })
+    JSON.stringify({ port: stubPort, host: '127.0.0.1', pid: process.pid })
   )
 
   child = spawn('node', [MCP_BIN], { cwd: tempDir, stdio: ['pipe', 'pipe', 'pipe'] })
