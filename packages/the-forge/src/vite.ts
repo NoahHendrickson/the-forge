@@ -1,13 +1,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { randomUUID } from 'node:crypto'
 import type { Plugin } from 'vite'
 import { tagJsxSource } from './transform'
-import { Queue } from './server/queue'
 import { createForgeMiddleware, writeEndpointFile, removeEndpointFile } from './server/endpoints'
-import { WatcherHub } from './server/watchers'
-import { setupProjectConfig, resolveProjectRoot, migrateLegacyForgeDir } from './server/setup'
+import { setupProjectConfig, resolveProjectRoot } from './server/setup'
+import { createForgeRuntime } from './server/runtime'
 import type { DispatchOpts } from './server/dispatch'
 
 export const CLIENT_ID = '/@the-forge/client'
@@ -28,8 +26,10 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
   // Generated once per server start — belt-and-braces against cross-origin/DNS-rebinding
   // bypasses of the Origin/Host checks in the middleware; same-origin page scripts are the
   // user's own app and not the adversary. Threaded to the client via the load() bootstrap
-  // below, and to the MCP bin via the endpoint file (writeEndpointFile).
-  const secret = randomUUID()
+  // below, and to the MCP bin via the endpoint file (writeEndpointFile). Assigned inside
+  // configureServer (createForgeRuntime mints it) but read from load(), which runs outside
+  // configureServer — so it lives in this outer closure rather than that function's scope.
+  let secret = ''
 
   return {
     name: 'the-forge',
@@ -49,19 +49,9 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       // the root cause of "dev server not running": the plugin wrote the endpoint file (and its
       // shared secret) at the vite root while the MCP bin only ever looked at the resolved root.
       const resolvedRoot = resolveProjectRoot(root)
-      const forgeDir = path.join(resolvedRoot, '.the-forge')
-      const queue = new Queue(forgeDir)
-      migrateLegacyForgeDir(resolvedRoot, root, queue)
+      const { queue, hub, secret: runtimeSecret, forgeDir } = createForgeRuntime(resolvedRoot, root)
+      secret = runtimeSecret
       const allowedHosts = Array.isArray(server.config.server.allowedHosts) ? server.config.server.allowedHosts : []
-      // The watch-mode long-poll registry (/forge-watch linked sessions). Per dev-server
-      // process by design — the MCP bin discovers the newest live server, so the watcher
-      // follows it; a hub is pure in-memory state and costs nothing until a session watches.
-      // `applying` keeps the watcher live through its apply window (claimed items in
-      // flight), when it is neither parked nor heartbeating — see WatcherHubOpts.applying.
-      const hub = new WatcherHub({
-        claim: () => queue.pull(),
-        applying: () => queue.hasFreshClaims(),
-      })
       server.middlewares.use(
         createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels, cwd: resolvedRoot }, hub)
       )
