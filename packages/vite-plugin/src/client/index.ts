@@ -5,6 +5,7 @@ import { buildInspectorData } from './inspector'
 export class DesignMode {
   active = false
   private rafId = 0
+  private lastMove: MouseEvent | null = null
 
   constructor(private overlay: Overlay) {
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
@@ -24,15 +25,18 @@ export class DesignMode {
       document.removeEventListener('keydown', this.onKey, true)
       if (this.rafId) cancelAnimationFrame(this.rafId)
       this.rafId = 0
+      this.lastMove = null
     }
   }
 
   private onMove = (e: MouseEvent): void => {
+    this.lastMove = e
     if (this.rafId) return
     this.rafId = requestAnimationFrame(() => {
       this.rafId = 0
-      if (!this.active || this.overlay.contains(e.target)) return
-      const el = findTaggedElement(e.target as Element)
+      const ev = this.lastMove
+      if (!this.active || !ev || this.overlay.contains(ev.target)) return
+      const el = findTaggedElement(ev.target as Element)
       if (el) this.overlay.showOutline(el.getBoundingClientRect())
       else this.overlay.hideOutline()
     })

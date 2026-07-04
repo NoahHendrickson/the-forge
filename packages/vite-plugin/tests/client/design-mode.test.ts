@@ -97,4 +97,29 @@ describe('DesignMode listener lifecycle (spec §10: zero idle listeners)', () =>
     expect(panel.textContent).toContain('src/Button.tsx:42:8')
     expect(panel.textContent).toContain('btn')
   })
+
+  it('uses the latest mousemove target when events arrive between frames', () => {
+    document.body.innerHTML = `<div data-dc-source="src/a.tsx:1:1" id="first"></div><div data-dc-source="src/b.tsx:2:2" id="second"></div>`
+    let queued: FrameRequestCallback | null = null
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queued = cb
+      return 1
+    })
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    mode.setActive(true)
+
+    const first = document.getElementById('first')!
+    const second = document.getElementById('second')!
+    const firstRect = vi.spyOn(first, 'getBoundingClientRect')
+    const secondRect = vi.spyOn(second, 'getBoundingClientRect')
+
+    first.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+    second.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+    queued!(0)
+
+    expect(secondRect).toHaveBeenCalled()
+    expect(firstRect).not.toHaveBeenCalled()
+  })
 })
