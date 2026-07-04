@@ -82,6 +82,21 @@ describe('ensureSidecar', () => {
     expect(second.port).toBeGreaterThan(0)
   })
 
+  it('a bind failure rejects the promise AND clears the singleton — a subsequent default-host call succeeds', async () => {
+    const { ensureSidecar } = await importSidecar()
+    // TEST-NET-2 (RFC 5737): guaranteed non-local, non-routable from this host — binding to
+    // it fails with EADDRNOTAVAIL, proving ensureSidecar's rejection contract (createSidecar's
+    // .catch clears `singleton` before rethrowing) without relying on a real network condition.
+    await expect(ensureSidecar(baseOpts({ listenHost: '198.51.100.1' }))).rejects.toThrow()
+
+    // withForge's never-load-bearing guarantee depends on this: a failed bind must not wedge
+    // the module-level singleton so that all future calls (e.g. after the user fixes their
+    // network config, or in a fresh withForge call) also fail forever.
+    const second = await ensureSidecar(baseOpts())
+    closers.push(() => second.close())
+    expect(second.port).toBeGreaterThan(0)
+  })
+
   it('GET /__the-forge/client.js serves the bootstrap line + clientBundle() with the right content type', async () => {
     const { ensureSidecar } = await importSidecar()
     const handle = await ensureSidecar(baseOpts())

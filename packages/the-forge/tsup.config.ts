@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup'
 
 export default defineConfig([
   {
-    entry: { index: 'src/index.ts', vite: 'src/vite.ts' },
+    entry: { index: 'src/index.ts', vite: 'src/vite.ts', next: 'src/next/index.ts' },
     format: ['esm'],
     dts: true,
     platform: 'node',

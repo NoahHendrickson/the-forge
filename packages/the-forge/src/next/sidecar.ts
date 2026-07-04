@@ -17,8 +17,10 @@ export interface SidecarOpts {
   channelsFlag: boolean
   /** resolveProjectRoot()'d project root. */
   root: string
-  /** Injectable for tests; prod impl reads dist/client.js next to this module. */
-  clientBundle: () => string
+  /** Injectable for tests; prod impl reads dist/client.js next to this module. Optional —
+   * withForge (N4) passes only { agent, channelsFlag, root } in production and relies on
+   * the default. */
+  clientBundle?: () => string
   /** default '127.0.0.1' */
   listenHost?: string
   /** One-shot missing-ForgeDesignMode hint delay, ms — default 60_000. Injectable so tests
