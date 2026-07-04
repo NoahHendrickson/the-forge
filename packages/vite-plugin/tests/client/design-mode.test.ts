@@ -1015,3 +1015,202 @@ describe('DesignMode layout-ripple debounce (M2b Task 4)', () => {
   })
 
 })
+
+describe('DesignMode layout-ripple multi-select (B6 follow-up)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function fieldInput(root: HTMLElement, label: string): HTMLInputElement {
+    const nf = [...root.querySelectorAll('.nf')].find((n) => n.querySelector('.nf-label')!.textContent === label)
+    if (!nf) throw new Error(`no field labeled ${label}`)
+    return nf.querySelector('input')!
+  }
+
+  function commit(input: HTMLInputElement, value: string): void {
+    input.value = value
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+
+  function stubRect(el: Element, rect: { x: number; y: number; width: number; height: number }): void {
+    el.getBoundingClientRect = () => new DOMRect(rect.x, rect.y, rect.width, rect.height)
+  }
+
+  function click(el: Element, opts: MouseEventInit = {}): void {
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...opts }))
+  }
+
+  /** Flattens every rect from every showRipples call into one list. */
+  function allRippledRects(spy: ReturnType<typeof vi.spyOn>): DOMRect[] {
+    return spy.mock.calls.flatMap((call) => call[0] as DOMRect[])
+  }
+
+  // Two separate component trees (separate ripple scopes), each with its own sibling —
+  // a multi-select spanning both must ripple around BOTH scopes.
+  function twoScopeSetup() {
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
+    document.body.innerHTML = `
+      <div data-dc-source="src/ComponentA.tsx:1:1" id="compA" style="padding: 8px;">
+        <div data-dc-source="src/ChildA.tsx:2:2" id="childA"></div>
+        <div data-dc-source="src/SiblingA.tsx:3:3" id="siblingA"></div>
+      </div>
+      <div data-dc-source="src/ComponentB.tsx:4:4" id="compB" style="padding: 8px;">
+        <div data-dc-source="src/ChildB.tsx:5:5" id="childB"></div>
+        <div data-dc-source="src/SiblingB.tsx:6:6" id="siblingB"></div>
+      </div>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    mode.setActive(true)
+
+    const childA = document.getElementById('childA')! as HTMLElement
+    const siblingA = document.getElementById('siblingA')! as HTMLElement
+    const childB = document.getElementById('childB')! as HTMLElement
+    const siblingB = document.getElementById('siblingB')! as HTMLElement
+    stubRect(childA, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(siblingA, { x: 0, y: 30, width: 100, height: 20 })
+    stubRect(childB, { x: 400, y: 0, width: 100, height: 20 })
+    stubRect(siblingB, { x: 400, y: 30, width: 100, height: 20 })
+
+    // Multi-select both children (click + shift-click, the real B6 gesture)
+    click(childA)
+    click(childB, { shiftKey: true })
+
+    return { overlay, mode, childA, siblingA, childB, siblingB, runRaf: () => queue.splice(0).forEach((cb) => cb(0)) }
+  }
+
+  it('a multi-select edit ripples siblings in EVERY selected element\'s scope, not just the last one snapshotted', () => {
+    const { overlay, mode, siblingA, siblingB, runRaf } = twoScopeSetup()
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    // post-edit reflow in BOTH scopes before the rAF-scheduled diff runs
+    stubRect(siblingA, { x: 0, y: 60, width: 100, height: 20 })
+    stubRect(siblingB, { x: 400, y: 60, width: 100, height: 20 })
+    runRaf()
+
+    const rects = allRippledRects(showRipplesSpy)
+    // BUG (single-slot snapshot): only childB's snapshot survives the per-element
+    // onBeforeEdit loop, so only siblingB ripples and siblingA's reflow is missed.
+    expect(rects.some((r) => r.x === 0 && r.y === 60)).toBe(true) // siblingA
+    expect(rects.some((r) => r.x === 400 && r.y === 60)).toBe(true) // siblingB
+  })
+
+  it('multi-select slow drag (sub-threshold per tick, above-threshold cumulative) still ripples — per-element baselines survive alternating onBeforeEdit calls', () => {
+    // Each tick moves both siblings +0.4px (below the 0.5px CHANGE_THRESHOLD).
+    // Cumulatively they move +1.2px from the drag-start baseline. This only ripples
+    // if each element's FIRST snapshot in the burst survives the alternating
+    // per-element onBeforeEdit calls of the multi-select commit loop — the old
+    // single-slot state re-snapshotted on EVERY call (rippleSnapshotFor !== el),
+    // re-baselining every tick and never crossing the threshold.
+    const { overlay, mode, siblingA, siblingB, runRaf } = twoScopeSetup()
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    stubRect(siblingA, { x: 0, y: 30.4, width: 100, height: 20 })
+    stubRect(siblingB, { x: 400, y: 30.4, width: 100, height: 20 })
+    runRaf()
+    vi.advanceTimersByTime(50) // well within the 300ms quiet window
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '20')
+    stubRect(siblingA, { x: 0, y: 30.8, width: 100, height: 20 })
+    stubRect(siblingB, { x: 400, y: 30.8, width: 100, height: 20 })
+    runRaf()
+    vi.advanceTimersByTime(50)
+
+    showRipplesSpy.mockClear()
+    commit(fieldInput(mode.panelRoot, 'PY'), '30')
+    stubRect(siblingA, { x: 0, y: 31.2, width: 100, height: 20 })
+    stubRect(siblingB, { x: 400, y: 31.2, width: 100, height: 20 })
+    runRaf()
+
+    const rects = allRippledRects(showRipplesSpy)
+    expect(rects.some((r) => r.x === 0 && r.y === 31.2)).toBe(true) // siblingA
+    expect(rects.some((r) => r.x === 400 && r.y === 31.2)).toBe(true) // siblingB
+  })
+
+  it('multi-select burst reuses each element\'s first snapshot instead of re-measuring the scope on every tick', () => {
+    // Direct churn check: after the burst's first edit, subsequent edits within the
+    // debounce window must NOT re-measure the siblings' rects at onBeforeEdit time
+    // (only the post-edit rAF diff re-measures). The old single-slot state called
+    // snapshotRects() for every element on every tick because the alternating
+    // per-element calls always failed the rippleSnapshotFor === el reuse check.
+    const { mode, siblingA, siblingB, runRaf } = twoScopeSetup()
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    runRaf() // flush the first diff (one legitimate re-measure per sibling)
+    vi.advanceTimersByTime(50)
+
+    let measuresA = 0
+    let measuresB = 0
+    const rectA = new DOMRect(0, 30, 100, 20)
+    const rectB = new DOMRect(400, 30, 100, 20)
+    siblingA.getBoundingClientRect = () => (measuresA++, rectA)
+    siblingB.getBoundingClientRect = () => (measuresB++, rectB)
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '20')
+    // No rAF flush yet: any measurement so far came from onBeforeEdit re-snapshotting.
+    expect(measuresA).toBe(0)
+    expect(measuresB).toBe(0)
+    runRaf() // the diff itself measures each sibling exactly once
+    expect(measuresA).toBe(1)
+    expect(measuresB).toBe(1)
+  })
+
+  it('co-selected elements never appear in ripples even when they sit in each other\'s snapshot scope', () => {
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
+    const runRaf = (): void => queue.splice(0).forEach((cb) => cb(0))
+    // ONE shared scope: each selected element appears in the OTHER's snapshot
+    // (snapshotRects only excludes the element it was taken for).
+    document.body.innerHTML = `
+      <div data-dc-source="src/Wrap.tsx:1:1" id="scope">
+        <div data-dc-source="src/SelA.tsx:2:2" id="selA" style="padding: 8px;"></div>
+        <div data-dc-source="src/SelB.tsx:3:3" id="selB" style="padding: 8px;"></div>
+        <div data-dc-source="src/Sibling.tsx:4:4" id="sibling"></div>
+      </div>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    mode.setActive(true)
+
+    const selA = document.getElementById('selA')! as HTMLElement
+    const selB = document.getElementById('selB')! as HTMLElement
+    const sibling = document.getElementById('sibling')! as HTMLElement
+    stubRect(selA, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(selB, { x: 0, y: 30, width: 100, height: 20 })
+    stubRect(sibling, { x: 0, y: 60, width: 100, height: 20 })
+
+    click(selA)
+    click(selB, { shiftKey: true })
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    // BOTH edited elements grow (padding), pushing the sibling down
+    stubRect(selA, { x: 0, y: 0, width: 100, height: 60 })
+    stubRect(selB, { x: 0, y: 70, width: 100, height: 60 })
+    stubRect(sibling, { x: 0, y: 140, width: 100, height: 20 })
+    runRaf()
+
+    const rects = allRippledRects(showRipplesSpy)
+    expect(rects.some((r) => r.y === 140)).toBe(true) // the true sibling ripples
+    // Neither co-selected element may ripple, even though each moved and each sits
+    // in the other's snapshot scope.
+    expect(rects.some((r) => r.height === 60)).toBe(false)
+  })
+})
