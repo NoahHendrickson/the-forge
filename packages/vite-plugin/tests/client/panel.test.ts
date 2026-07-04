@@ -230,6 +230,15 @@ describe('Panel', () => {
     expect(active.dataset.a).toBe('flex-start')
   })
 
+  it('space-between with no explicit align-items shows active dot in 3-dot space-between mode with flex-start align', () => {
+    const { panel } = flexSetup('justify-content: space-between;')
+    const dots = [...panel.root.querySelectorAll('.am-dot')] as HTMLElement[]
+    expect(dots).toHaveLength(3)
+    const active = panel.root.querySelector('.am-dot.am-active') as HTMLElement
+    expect(active).toBeTruthy()
+    expect(active.dataset.a).toBe('flex-start')
+  })
+
   it('explicit align-items: stretch shows no active dot (stretch is represented via Fill, not a matrix position)', () => {
     const { panel } = flexSetup('align-items: stretch;')
     const active = panel.root.querySelector('.am-dot.am-active')

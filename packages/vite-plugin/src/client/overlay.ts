@@ -1,6 +1,6 @@
 export const CSS = `
-:host { all: initial; }
 [hidden] { display: none !important; }
+:host { all: initial; }
 button {
   font: 500 12px system-ui, sans-serif; border-radius: 999px;
   border: 1px solid #d0d0cb; background: #fff; color: #1a1a18;
