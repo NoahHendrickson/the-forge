@@ -147,7 +147,7 @@ export class Panel {
   }
 
   private readValue(el: TaggedElement, prop: string, computed: CSSStyleDeclaration, spec: RowSpec): number {
-    const draft = this.drafts.current(el, prop)
+    const draft = this.drafts.isComparing(el) ? null : this.drafts.current(el, prop)
     const css = draft ?? computed.getPropertyValue(prop)
     return (spec.fromCss ?? fromPx)(css)
   }

@@ -96,4 +96,13 @@ describe('Panel', () => {
     panel.hide()
     expect(panel.root.hidden).toBe(true)
   })
+
+  it('fields show on-screen (original) values while comparing', () => {
+    const { el, panel } = setup()
+    commit(fieldInput(panel, 'W'), '300')
+    panel.compareButton.click()
+    expect(fieldInput(panel, 'W').value).toBe('200')
+    panel.compareButton.click()
+    expect(fieldInput(panel, 'W').value).toBe('300')
+  })
 })
