@@ -11,7 +11,11 @@ const DESIGN_COMMAND = `Pull pending design edits from The Forge and apply them.
 
 /** The watch-mode loop command (see docs/plans/2026-07-04-watch-mode-linked-sessions.md).
  * Deliberately terse: every word here is re-read by the agent on every wait cycle, so
- * verbosity is a per-tick token cost (the watch loop's idle cost bound depends on it). */
+ * verbosity is a per-tick token cost (the watch loop's idle cost bound depends on it).
+ * When first EDITING this text, add the outgoing version to a HISTORICAL_WATCH_COMMANDS
+ * list mirroring HISTORICAL_DESIGN_COMMANDS below, so installs can recognize our own
+ * legacy output for cleanup. (The list is deliberately not created ahead of time — it
+ * was dead code until a second version exists; PR #1 review.) */
 const WATCH_COMMAND = `Watch The Forge for design edits and apply them as they arrive.
 
 1. Call the \`wait_for_design_edits\` tool from the \`the-forge\` MCP server.
@@ -19,11 +23,6 @@ const WATCH_COMMAND = `Watch The Forge for design edits and apply them as they a
 3. Follow the tool result's instruction: call \`wait_for_design_edits\` again immediately to keep watching, or stop if it says watching has ended.
 4. Keep the loop terse — no commentary between cycles.
 `
-
-/** Historical WATCH_COMMAND texts (byte-exact), oldest first — same recognize-our-own-output
- * cleanup contract as HISTORICAL_DESIGN_COMMANDS below. Nothing to migrate yet; this list
- * exists so the first future edit to WATCH_COMMAND remembers to append the outgoing text. */
-export const HISTORICAL_WATCH_COMMANDS = [WATCH_COMMAND]
 
 /** Historical DESIGN_COMMAND texts (byte-exact), oldest first — used only to recognize OUR OWN
  * legacy `.claude/commands/design.md` output for cleanup after the /forge-design rename. A file

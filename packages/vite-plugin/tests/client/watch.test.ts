@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { WatchStatus, WATCH_POLL_MS } from '../../src/client/watch'
-import { sentLabelFor, watchIndicatorFor } from '../../src/client/index'
+import { WatchStatus, WATCH_POLL_MS, sentLabelFor, watchIndicatorFor, queuedLineFor } from '../../src/client/watch'
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -84,6 +83,16 @@ describe('WatchStatus poller', () => {
     watch.stop()
   })
 
+  it('stop() forgets the last state — no cached "Linked" flash on the next design-mode entry', async () => {
+    stubStatus('live')
+    const watch = new WatchStatus(() => {})
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.current()).toBe('live')
+    watch.stop()
+    expect(watch.current()).toBe('none') // re-activation renders nothing until the first probe answers
+  })
+
   it('start() while already running is a no-op (no double chains)', async () => {
     const fetchMock = stubStatus('none')
     const watch = new WatchStatus(() => {})
@@ -123,6 +132,16 @@ describe('sentLabelFor watcher copy', () => {
   it('tmux/applescript/deeplink copy is untouched by watcher state', () => {
     expect(sentLabelFor('tmux', 'claude-code', 'asleep')).toBe('Sent — typed /forge-design into your session')
     expect(sentLabelFor('deeplink', 'cursor', 'asleep')).toBe('Sent — opened in Cursor')
+  })
+})
+
+describe('queuedLineFor (verifier pending prefix — same matrix, same module)', () => {
+  it('live → delivering; asleep → wake; none → pre-watch-mode copy', () => {
+    expect(queuedLineFor(2, 'Claude Code', 'live')).toBe('2 queued — delivering to your Claude Code session…')
+    expect(queuedLineFor(1, 'Claude Code', 'asleep')).toBe(
+      '1 queued — watcher asleep, type /forge-watch in Claude Code to wake it'
+    )
+    expect(queuedLineFor(1, 'Claude Code', 'none')).toBe('1 queued — type /forge-design in Claude Code')
   })
 })
 

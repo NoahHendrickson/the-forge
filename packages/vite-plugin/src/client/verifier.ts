@@ -3,6 +3,7 @@ import { SentRegistry } from './sent'
 import type { DraftStore } from './drafts'
 import type { TaggedElement } from './source'
 import { AGENT_DISPLAY_NAME, currentAgent } from './agent'
+import { queuedLineFor, type WatcherState } from './watch'
 
 const POLL_MS = 2000
 /** After this many consecutive failed polls the verifier surfaces "paused" and starts backing off. */
@@ -99,11 +100,6 @@ interface Counters {
   failed: number
 }
 
-/** Watcher lifecycle as carried on /status responses — mirrors server/watchers.ts. Parsed
- * defensively (untyped JSON): anything unrecognized reads as 'none', which yields the
- * pre-watch-mode copy verbatim. */
-type WatcherState = 'live' | 'asleep' | 'none'
-
 /**
  * Renders the sent-status prefix. Manual rung (spec): nothing applies to the user's code until
  * they actually type /forge-design into their agent session — so as long as ANY sent item is still
@@ -111,10 +107,8 @@ type WatcherState = 'live' | 'asleep' | 'none'
  * manual instruction rather than a possibly-false "applying…" claim. Only once every sent item
  * has been claimed does "N applying…" (N = claimed count) become accurate.
  *
- * Watch mode refines the pending copy: a LIVE watcher will claim pending items within one
- * hold window, so the honest line is "delivering…", not an instruction to type anything; an
- * ASLEEP watcher needs waking (/forge-watch), not /forge-design — the queued items deliver
- * the moment it wakes.
+ * Watch mode refines the pending copy via queuedLineFor — the live/asleep/none message
+ * matrix lives in watch.ts alongside the other watcher copy, not here.
  */
 function renderSummary(
   counters: Counters,
@@ -124,12 +118,8 @@ function renderSummary(
   watcherState: WatcherState = 'none'
 ): string {
   const parts: string[] = []
-  if (pendingManual > 0) {
-    if (watcherState === 'live') parts.push(`${pendingManual} queued — delivering to your ${agentDisplayName} session…`)
-    else if (watcherState === 'asleep')
-      parts.push(`${pendingManual} queued — watcher asleep, type /forge-watch in ${agentDisplayName} to wake it`)
-    else parts.push(`${pendingManual} queued — type /forge-design in ${agentDisplayName}`)
-  } else if (claimed > 0) parts.push(`${claimed} applying…`)
+  if (pendingManual > 0) parts.push(queuedLineFor(pendingManual, agentDisplayName, watcherState))
+  else if (claimed > 0) parts.push(`${claimed} applying…`)
   if (counters.implemented) parts.push(`${counters.implemented} implemented ✓`)
   if (counters.mismatch) parts.push(`${counters.mismatch} mismatch ⚠`)
   if (counters.unverified) parts.push(`${counters.unverified} applied (unverified)`)

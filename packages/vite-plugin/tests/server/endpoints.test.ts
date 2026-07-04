@@ -566,6 +566,32 @@ describe('watch mode (POST /__the-forge/wait + watcher-aware dispatch/status)', 
     expect(dead.body).toBe('') // the dead response was never written to
   })
 
+  it('threads X-Forge-Watcher through to the hub: a replaced token retrying is absorbed, the winner keeps the slot', async () => {
+    const hub = new WatcherHub({ claim: () => queue.pull(), holdMs: 5_000 })
+    const mwWatch = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, hub)
+    const headersFor = (token: string) => ({ host: 'localhost:5173', 'x-forge-watcher': token })
+
+    const resA = fakeRes()
+    const waitingA = run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, headersFor('bin-a')), resA)
+    await new Promise((r) => setTimeout(r, 10))
+    const resB = fakeRes()
+    void run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, headersFor('bin-b')), resB)
+    await waitingA
+    expect(JSON.parse(resA.body)).toEqual({ stop: true, reason: 'replaced' })
+
+    // A's disobedient retry is absorbed without bumping B…
+    const resARetry = fakeRes()
+    await run(mwWatch, fakeReq('POST', '/__the-forge/wait', {}, headersFor('bin-a')), resARetry)
+    expect(JSON.parse(resARetry.body)).toEqual({ stop: true, reason: 'replaced' })
+
+    // …and B still receives the next Send.
+    await run(mwWatch, fakeReq('POST', '/__the-forge/queue', { markdown: '# for B' }, { host: 'localhost:5173' }), fakeRes())
+    await new Promise((r) => setTimeout(r, 10))
+    const bBody = JSON.parse(resB.body)
+    expect(bBody.stop).toBe(false)
+    expect(bBody.items).toHaveLength(1)
+  })
+
   it('GET /status reports watcher state and supports the empty-ids probe', async () => {
     queue.add({}, 'an item')
     // Absent ids param → all items, watcher 'none' on a pristine hub.

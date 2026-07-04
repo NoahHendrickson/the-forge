@@ -37,6 +37,8 @@ interface ParkedWaiter {
   resolve: (r: WaitResponse) => void
   timer: ReturnType<typeof setTimeout>
   settled: boolean
+  /** Per-bin-process identity (X-Forge-Watcher header) — see the ping-pong note below. */
+  token?: string
 }
 
 /**
@@ -47,9 +49,12 @@ interface ParkedWaiter {
  * through it instead of the keystroke ladder.
  *
  * Single slot on purpose: if two sessions watch the same project, deliveries would
- * alternate between them unpredictably. Instead a second wait() preempts the first with
- * an explicit `{stop, 'replaced'}` — the replaced agent is told to stop looping, so the
- * two can't ping-pong the slot back and forth.
+ * alternate between them unpredictably. A second wait() preempts the first with an
+ * explicit `{stop, 'replaced'}`, and — mechanically, not just via the canned stop text —
+ * a session that was told 'replaced' cannot bump the winner back: its retries are
+ * absorbed with another `{stop, 'replaced'}` for as long as the winner is live (tracked
+ * by per-bin-process token; a replaced token may re-arm normally once the winner is
+ * gone). Tokenless clients (an older bin) fall back to the advisory-only behavior.
  */
 export class WatcherHub {
   private claim: () => QueueItem[]
@@ -59,6 +64,9 @@ export class WatcherHub {
   private freshMs: number
 
   private parked: ParkedWaiter | null = null
+  /** The token most recently told `{stop, 'replaced'}` — its retries are absorbed while
+   * the winning watcher is live, so a disobedient replaced loop can't ping-pong the slot. */
+  private replacedToken: string | null = null
   /** True between a wait cycle's start and a stop/disconnect — distinct from "parked"
    * because between cycles (hold expired, agent re-invoking the tool) nothing is parked
    * but the watcher is still very much live. */
@@ -84,8 +92,20 @@ export class WatcherHub {
    * 'close' event) frees the slot without resolving — the socket is already gone, so
    * there is nobody to answer; it is a no-op once settled.
    */
-  wait(): { promise: Promise<WaitResponse>; cancel: () => void } {
+  wait(token?: string): { promise: Promise<WaitResponse>; cancel: () => void } {
     const nowMs = this.now()
+
+    // Mechanical no-ping-pong: a token that was already told 'replaced' gets absorbed
+    // with the same stop for as long as the winner is live — BEFORE any state mutation,
+    // so a disobedient replaced loop can't even refresh the heartbeat. Once the winner is
+    // gone (asleep/none), the denial is lifted: the user going back to that session and
+    // re-running /forge-watch is a legitimate re-arm.
+    if (token !== undefined && token === this.replacedToken) {
+      if (this.state() === 'live') {
+        return { promise: Promise.resolve({ stop: true, reason: 'replaced' }), cancel: () => {} }
+      }
+      this.replacedToken = null
+    }
 
     // A wait arriving from a non-live watcher — after an idle-stop, or after the previous
     // loop died silently (disconnect/kill, detected as heartbeat staleness) — is the user
@@ -102,8 +122,14 @@ export class WatcherHub {
     this.lastSeen = nowMs
 
     // Preempt an existing waiter BEFORE the idle check — the preempted session must be
-    // told to stop regardless of what this new wait resolves to.
+    // told to stop regardless of what this new wait resolves to. Remember the loser's
+    // token (when it's a genuinely different session) so its retries get absorbed above;
+    // preempting one's OWN parked wait (same token — e.g. a client-side abort + retry)
+    // is not a takeover and must not deny that session its own slot.
     if (this.parked) {
+      if (this.parked.token !== undefined && this.parked.token !== token) {
+        this.replacedToken = this.parked.token
+      }
       this.settle(this.parked, { stop: true, reason: 'replaced' })
       this.parked = null
     }
@@ -126,6 +152,7 @@ export class WatcherHub {
       waiter = {
         resolve,
         settled: false,
+        token,
         timer: setTimeout(() => {
           if (this.parked === waiter) this.parked = null
           this.settle(waiter, { stop: false, items: [] })
@@ -137,9 +164,17 @@ export class WatcherHub {
       if (waiter.settled) return
       clearTimeout(waiter.timer)
       waiter.settled = true // never resolves — the response socket is gone
-      if (this.parked === waiter) this.parked = null
-      // The bin vanished mid-hold (agent killed, session closed). Don't flip `watching`
-      // here — a re-arm may already be in flight; freshness decay handles a real death.
+      // The bin vanished mid-hold (agent killed, session closed, fetch aborted). If this
+      // waiter still owns the slot, the watcher is GONE — flip `watching` off so state()
+      // reads asleep immediately rather than a ghost 'live' for another WATCHER_FRESH_MS
+      // (during which /dispatch would claim delivery while notify() had nobody to wake).
+      // A STALE cancel — a newer wait already took the slot before this close event
+      // landed — must touch nothing: the slot and the `watching` flag belong to the new
+      // watcher now.
+      if (this.parked === waiter) {
+        this.parked = null
+        this.watching = false
+      }
     }
     return { promise, cancel }
   }

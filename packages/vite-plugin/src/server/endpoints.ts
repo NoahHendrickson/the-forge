@@ -183,8 +183,10 @@ export function createForgeMiddleware(
       // Long-poll: the response is held open until a change request lands, the hold window
       // expires (agent re-arms), or the hub tells this watcher to stop (idle / replaced).
       // The request body is irrelevant (no parameters) and deliberately not read — parking
-      // must not depend on body parsing.
-      const { promise, cancel } = watcherHub.wait()
+      // must not depend on body parsing. The optional X-Forge-Watcher header carries the
+      // bin's per-process identity for the hub's mechanical no-ping-pong guarantee.
+      const watcherToken = req.headers['x-forge-watcher']
+      const { promise, cancel } = watcherHub.wait(typeof watcherToken === 'string' ? watcherToken : undefined)
       // The bin vanished mid-hold (agent killed, session closed): free the slot so a
       // re-armed watcher isn't blocked by a ghost. No-op after normal completion.
       res.on('close', cancel)

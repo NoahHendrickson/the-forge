@@ -101,13 +101,34 @@ describe('WatcherHub', () => {
     expect(hub.state()).not.toBe('none')
   })
 
-  it('re-arm after a SILENT death (stale heartbeat, no stop ever delivered) also resets the idle clock', async () => {
+  it('re-arm after a SILENT death (dropped connection, no stop ever delivered) also resets the idle clock', async () => {
     const { hub, advance } = makeHub({ holdMs: 5, idleStopMs: 1_000, freshMs: 500 })
     const { cancel } = hub.wait()
-    cancel() // bin vanished — no stop response was ever sent, `watching` was never cleared
-    advance(2_000) // past BOTH freshMs (heartbeat stale) and idleStopMs
+    cancel() // bin vanished — no stop response was ever sent
+    advance(2_000) // past BOTH freshMs and idleStopMs
     const res = await hub.wait().promise // fresh /forge-watch — must not be insta-stopped
     expect(res).toEqual({ stop: false, items: [] })
+  })
+
+  it('a dropped connection reads asleep IMMEDIATELY — no ghost-live window for dispatch to claim delivery', () => {
+    const { hub } = makeHub({ holdMs: 5_000, freshMs: 60_000 })
+    const { cancel } = hub.wait()
+    expect(hub.state()).toBe('live')
+    cancel() // socket died mid-hold; heartbeat is still fresh, but nobody is watching
+    expect(hub.state()).toBe('asleep')
+    expect(hub.isLive()).toBe(false)
+  })
+
+  it('a STALE cancel (a newer wait already took the slot) does not kill the new watcher', async () => {
+    const { hub, queueItem } = makeHub({ holdMs: 5_000 })
+    const first = hub.wait()
+    const second = hub.wait() // preempts first; first's close event hasn't landed yet
+    await first.promise // {stop, replaced}
+    first.cancel() // the replaced session's socket close arrives late — must be a no-op
+    expect(hub.state()).toBe('live')
+    queueItem(item('s'))
+    hub.notify()
+    await expect(second.promise).resolves.toEqual({ stop: false, items: [expect.objectContaining({ id: 's' })] })
   })
 
   it('a second wait preempts the first with {stop, replaced}; the new one keeps watching', async () => {
@@ -134,6 +155,58 @@ describe('WatcherHub', () => {
     const next = await hub.wait().promise
     expect(next).toEqual({ stop: false, items: [expect.objectContaining({ id: 'f' })] })
     expect(settled).toBe(false)
+  })
+
+  describe('watcher tokens (mechanical no-ping-pong)', () => {
+    it('a replaced token that keeps calling is absorbed with {stop, replaced} — the winner is never bumped', async () => {
+      const { hub, queueItem } = makeHub({ holdMs: 5_000 })
+      const a = hub.wait('token-a')
+      const b = hub.wait('token-b') // takes over; a is told replaced
+      await expect(a.promise).resolves.toEqual({ stop: true, reason: 'replaced' })
+
+      // Disobedient session A retries anyway — absorbed instantly, B stays parked.
+      const aRetry = hub.wait('token-a')
+      await expect(aRetry.promise).resolves.toEqual({ stop: true, reason: 'replaced' })
+      expect(hub.state()).toBe('live')
+      queueItem(item('t'))
+      hub.notify()
+      await expect(b.promise).resolves.toEqual({ stop: false, items: [expect.objectContaining({ id: 't' })] })
+    })
+
+    it('a replaced token may re-arm normally once the winner is gone', async () => {
+      const { hub, advance } = makeHub({ holdMs: 5, freshMs: 100, idleStopMs: 60_000 })
+      const a = hub.wait('token-a')
+      const b = hub.wait('token-b')
+      await a.promise // replaced
+      b.cancel() // winner dies (asleep immediately)
+      advance(10)
+      const res = await hub.wait('token-a').promise // user re-runs /forge-watch in session A
+      expect(res).toEqual({ stop: false, items: [] })
+      expect(hub.state()).toBe('live')
+    })
+
+    it("re-arming after a takeover does not deny the winner's OWN later cycles (denial is cleared)", async () => {
+      const { hub } = makeHub({ holdMs: 5, freshMs: 0 }) // freshMs 0: state decays instantly between cycles
+      const a = hub.wait('token-a')
+      const b = hub.wait('token-b')
+      await a.promise // a replaced
+      await b.promise // b's hold expires; freshMs 0 → hub no longer live
+      const aAgain = await hub.wait('token-a').promise // legitimate re-arm — denial lifted
+      expect(aAgain).toEqual({ stop: false, items: [] })
+      // a's own NEXT cycle must not be absorbed by its stale denylist entry
+      const aNext = await hub.wait('token-a').promise
+      expect(aNext).toEqual({ stop: false, items: [] })
+    })
+
+    it('same-token preemption (abort + retry from one session) does not deny that session its own slot', async () => {
+      const { hub } = makeHub({ holdMs: 5, freshMs: 60_000 })
+      const first = hub.wait('token-a')
+      const second = hub.wait('token-a') // same bin re-arming while its old request lingers
+      await expect(first.promise).resolves.toEqual({ stop: true, reason: 'replaced' })
+      await expect(second.promise).resolves.toEqual({ stop: false, items: [] }) // parked normally, hold expires
+      const third = await hub.wait('token-a').promise // and its loop keeps working
+      expect(third).toEqual({ stop: false, items: [] })
+    })
   })
 
   describe('state()', () => {
