@@ -141,6 +141,84 @@ describe('theForge plugin', () => {
     })
   })
 
+  describe('.the-forge dir location (BUG 2: forgeDir resolves the git root, not the vite root)', () => {
+    let repoRoot: string
+    let viteRoot: string
+
+    beforeEach(() => {
+      repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-plugin-forgedir-'))
+      fs.mkdirSync(path.join(repoRoot, '.git'))
+      viteRoot = path.join(repoRoot, 'fixtures', 'demo-app')
+      fs.mkdirSync(viteRoot, { recursive: true })
+    })
+
+    it('writes the endpoint file and queue.json at the resolved git root, not the nested vite root', () => {
+      const { plugin } = getPlugin(viteRoot)
+      const server = fakeServer(viteRoot)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+
+      const endpointAtRoot = path.join(repoRoot, '.the-forge', `endpoint-${process.pid}.json`)
+      expect(fs.existsSync(endpointAtRoot)).toBe(true)
+      expect(fs.existsSync(path.join(viteRoot, '.the-forge', `endpoint-${process.pid}.json`))).toBe(false)
+
+      // this is what the MCP bin at process.cwd() === repoRoot actually discovers
+      const data = JSON.parse(fs.readFileSync(endpointAtRoot, 'utf8'))
+      expect(typeof data.secret).toBe('string')
+    })
+
+    it('still writes the endpoint file at the vite root itself when no .git is found anywhere above it', () => {
+      const noGitRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-plugin-forgedir-nogit-'))
+      const nested = path.join(noGitRoot, 'fixtures', 'demo-app')
+      fs.mkdirSync(nested, { recursive: true })
+
+      const { plugin } = getPlugin(nested)
+      const server = fakeServer(nested)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+
+      expect(fs.existsSync(path.join(nested, '.the-forge', `endpoint-${process.pid}.json`))).toBe(true)
+    })
+
+    it('migrates legacy queue.json items from the vite root into the resolved root queue on startup', () => {
+      const legacyDir = path.join(viteRoot, '.the-forge')
+      fs.mkdirSync(legacyDir, { recursive: true })
+      const legacyItem = {
+        id: 'legacy-plugin-item',
+        createdAt: new Date(0).toISOString(),
+        status: 'pending',
+        markdown: 'legacy from vite root',
+        request: null,
+      }
+      fs.writeFileSync(path.join(legacyDir, 'queue.json'), JSON.stringify([legacyItem]))
+
+      const { plugin } = getPlugin(viteRoot)
+      const server = fakeServer(viteRoot)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+
+      const newQueueFile = path.join(repoRoot, '.the-forge', 'queue.json')
+      const onDisk = JSON.parse(fs.readFileSync(newQueueFile, 'utf8'))
+      expect(onDisk.map((i: { id: string }) => i.id)).toContain('legacy-plugin-item')
+      expect(fs.existsSync(path.join(legacyDir, 'queue.json'))).toBe(false)
+    })
+
+    it('leaves a corrupt legacy queue.json untouched and does not throw', () => {
+      const legacyDir = path.join(viteRoot, '.the-forge')
+      fs.mkdirSync(legacyDir, { recursive: true })
+      fs.writeFileSync(path.join(legacyDir, 'queue.json'), 'not valid json')
+
+      const { plugin } = getPlugin(viteRoot)
+      const server = fakeServer(viteRoot)
+      expect(() => {
+        ;(plugin.configureServer as (s: unknown) => void)(server)
+        server.httpServer.emit('listening')
+      }).not.toThrow()
+
+      expect(fs.readFileSync(path.join(legacyDir, 'queue.json'), 'utf8')).toBe('not valid json')
+    })
+  })
+
   describe('project config install location (BUG 1: resolves the git root, not the vite root)', () => {
     let repoRoot: string
     let viteRoot: string

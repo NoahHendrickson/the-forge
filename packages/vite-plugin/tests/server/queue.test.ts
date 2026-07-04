@@ -271,6 +271,39 @@ describe('Queue', () => {
       expect(ids).toContain(newItem.id)
     })
 
+    it('mergeItems adds items with ids this instance does not know, then persists', () => {
+      const q = new Queue(dir)
+      const existing = q.add({}, 'existing')
+      const legacyItem = {
+        id: 'legacy-item-1',
+        createdAt: new Date(0).toISOString(),
+        status: 'pending' as const,
+        markdown: 'legacy-md',
+        request: null,
+      }
+      q.mergeItems([legacyItem])
+
+      const ids = q.list().map((i) => i.id)
+      expect(ids).toContain(existing.id)
+      expect(ids).toContain('legacy-item-1')
+      expect(q.get('legacy-item-1')!.markdown).toBe('legacy-md')
+
+      const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'queue.json'), 'utf8'))
+      expect(onDisk.map((i: { id: string }) => i.id)).toContain('legacy-item-1')
+    })
+
+    it('mergeItems: in-memory item wins over a merged item with the same id', () => {
+      const q = new Queue(dir)
+      const existing = q.add({}, 'from-memory')
+      q.mark([existing.id], 'applied', 'memory-wins')
+
+      q.mergeItems([{ ...q.get(existing.id)!, markdown: 'stale-disk-version', status: 'pending', note: undefined }])
+
+      expect(q.get(existing.id)!.markdown).toBe('from-memory')
+      expect(q.get(existing.id)!.status).toBe('applied')
+      expect(q.get(existing.id)!.note).toBe('memory-wins')
+    })
+
     it('sorts merged queue by createdAt ascending so queue.json preserves creation order', () => {
       let now = 0
       const a = new Queue(dir, () => now)

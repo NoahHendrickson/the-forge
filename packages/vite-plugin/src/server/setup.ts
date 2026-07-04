@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import type { Queue } from './queue'
 
 const DESIGN_COMMAND = `Pull pending design edits from The Forge and apply them.
 
@@ -88,6 +89,58 @@ function migrateLegacyMcpEntry(root: string): void {
 
   delete config.mcpServers!['the-forge']
   fs.writeFileSync(mcpFile, JSON.stringify(config, null, 2) + '\n')
+}
+
+/**
+ * One-time migration for the BUG where the plugin's `.the-forge` dir (Queue + endpoint files)
+ * used to live at Vite's config root instead of the resolved project root (see resolveProjectRoot
+ * above) — the same mismatch that made the MCP bin unable to find the endpoint file. When
+ * `resolvedRoot` differs from `viteRoot` and a legacy `<viteRoot>/.the-forge/queue.json` exists,
+ * its items are merged into the (already-constructed, new-location) `queue` — deduped by id via
+ * Queue.mergeItems, where the new-location/in-memory queue always wins on collision — then the
+ * legacy queue.json is deleted. An unreadable/corrupt legacy file is skipped silently and left in
+ * place (never clobbered — same caution as the .mcp.json/design.md migrations above). Endpoint
+ * files in the legacy dir are per-pid ephemeral and liveness-filtered elsewhere; they are never
+ * touched here. The legacy `.the-forge` dir itself is removed only once it's fully empty (i.e. no
+ * endpoint files remain either).
+ */
+export function migrateLegacyForgeDir(resolvedRoot: string, viteRoot: string, queue: Queue): void {
+  if (path.resolve(resolvedRoot) === path.resolve(viteRoot)) return
+
+  const legacyDir = path.join(viteRoot, '.the-forge')
+  const legacyQueueFile = path.join(legacyDir, 'queue.json')
+
+  let raw: string
+  try {
+    raw = fs.readFileSync(legacyQueueFile, 'utf8')
+  } catch {
+    return // no legacy queue.json — nothing to migrate
+  }
+
+  let legacyItems: unknown
+  try {
+    legacyItems = JSON.parse(raw)
+  } catch {
+    return // corrupt — skip silently, leave it in place
+  }
+  if (!Array.isArray(legacyItems)) return
+
+  queue.mergeItems(legacyItems as Parameters<Queue['mergeItems']>[0])
+
+  try {
+    fs.unlinkSync(legacyQueueFile)
+  } catch {
+    return
+  }
+
+  // Remove the legacy dir only if it's now fully empty (endpoint files, if any, are left alone —
+  // they're per-pid ephemeral and liveness-filtered elsewhere, not this migration's concern).
+  try {
+    const remaining = fs.readdirSync(legacyDir)
+    if (remaining.length === 0) fs.rmdirSync(legacyDir)
+  } catch {
+    // ignore — dir may not exist or may not be empty for some other reason
+  }
 }
 
 export function setupProjectConfig(root: string, mcpBinPath: string, viteRoot?: string): void {
