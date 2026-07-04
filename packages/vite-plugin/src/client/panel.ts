@@ -52,12 +52,18 @@ export class Panel {
   root = document.createElement('div')
   compareButton = document.createElement('button')
   resetButton = document.createElement('button')
+  footer = document.createElement('div')
+  resizeHandle = document.createElement('div')
+  modeButton = document.createElement('button')
 
   private head = document.createElement('div')
   private headTag = document.createElement('div')
   private headSrc = document.createElement('div')
   private actions = document.createElement('div')
   private body = document.createElement('div')
+  private emptyEl = document.createElement('div')
+  /** Dock currently active (NOT the persisted preference — Dock owns that). */
+  private docked = false
   private fields: BoundField[] = []
   // `els` holds the section TITLE plus every body wrap belonging to that section (rowWrap,
   // expandWrap, custom-body wrap — whatever buildBody appended for it) so refresh() can hide
@@ -165,9 +171,22 @@ export class Panel {
       this.onEdited()
     })
     this.actions.append(this.compareButton, this.resetButton)
-    this.root.append(this.head, this.actions, this.body)
-    this.colorPicker = new ColorPicker(this.root)
-    this.tokenPicker = new TokenPicker(this.root)
+    this.body.className = 'panel-body'
+    this.emptyEl.className = 'panel-empty'
+    this.emptyEl.textContent = 'Click an element to edit'
+    this.emptyEl.hidden = true
+    this.footer.className = 'panel-footer'
+    this.resizeHandle.className = 'panel-resize'
+    this.modeButton.className = 'panel-mode'
+    this.modeButton.type = 'button'
+    this.head.append(this.modeButton)
+    this.root.append(this.resizeHandle, this.head, this.actions, this.emptyEl, this.body, this.footer)
+    // Popovers mount in the BODY (the scroll container), not the root — anchor.offsetTop
+    // and the popover's absolute top must share the body's scrolled coordinate space or
+    // the popover stops tracking its row the moment the sections scroll (see overlay.ts
+    // .panel-body comment).
+    this.colorPicker = new ColorPicker(this.body)
+    this.tokenPicker = new TokenPicker(this.body)
     // Mutual exclusivity (final review fix #11): opening one popover must close the other —
     // two open at once would overlap/fight for the same anchor-relative position. Wired here
     // (wrapping each instance's own open(), rather than editing every call site or having the
@@ -194,6 +213,9 @@ export class Panel {
     this.tokenPicker.close()
     this.boundTokens.clear()
     this.root.hidden = false
+    this.actions.hidden = false
+    this.body.hidden = false
+    this.emptyEl.hidden = true
     if (els.length > 1) {
       this.headTag.textContent = `${els.length} selected`
       this.headSrc.remove()
@@ -218,9 +240,32 @@ export class Panel {
   hide(): void {
     this.el = null
     this.els = []
-    this.root.hidden = true
     this.colorPicker.close()
     this.tokenPicker.close()
+    if (this.docked) {
+      // Docked empty state: root stays visible (the dock holds its space), header says
+      // why the controls are gone, footer (status strip) remains usable.
+      this.root.hidden = false
+      this.headTag.textContent = 'No selection'
+      this.headSrc.remove()
+      this.actions.hidden = true
+      this.body.hidden = true
+      this.emptyEl.hidden = false
+    } else {
+      this.root.hidden = true
+    }
+  }
+
+  /**
+   * Dock-active flag (set by Dock, not persisted here). Docked changes what "no
+   * selection" looks like: the root stays visible with an empty-state hint instead of
+   * hiding, so the dock never collapses mid-session. Re-runs hide() when nothing is
+   * selected so the visibility rules of the NEW mode apply immediately.
+   */
+  setDocked(on: boolean): void {
+    this.docked = on
+    this.root.classList.toggle('docked', on)
+    if (!this.el) this.hide()
   }
 
   /**

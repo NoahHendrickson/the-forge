@@ -329,3 +329,35 @@ describe('Overlay.showRipples (M2b Task 4)', () => {
     expect(el.style.height).toBe('54px')
   })
 })
+
+describe('Dock CSS (docked-panel spec)', () => {
+  it('panel width is driven by --forge-dock-w with a 320px default (resize hook)', () => {
+    expect(CSS).toContain('width: var(--forge-dock-w, 320px)')
+    expect(CSS).not.toContain('width: 280px')
+  })
+  it('panel is a flex column so the footer can pin and the body can scroll', () => {
+    expect(CSS).toMatch(/#panel\s*{[^}]*display:\s*flex;\s*flex-direction:\s*column/s)
+  })
+  it('scrolling moved from #panel to .panel-body (popover-tracking prerequisite)', () => {
+    expect(CSS).toMatch(/\.panel-body\s*{[^}]*overflow-y:\s*auto/s)
+    expect(CSS).toMatch(/\.panel-body\s*{[^}]*position:\s*relative/s)
+    expect(CSS).toContain('.panel-body::-webkit-scrollbar')
+    expect(CSS).not.toContain('#panel::-webkit-scrollbar')
+  })
+  it('docked modifier pins the panel full-height right with square corners', () => {
+    expect(CSS).toMatch(/#panel\.docked\s*{[^}]*top:\s*0;\s*right:\s*0;\s*bottom:\s*0/s)
+    expect(CSS).toMatch(/#panel\.docked\s*{[^}]*border-radius:\s*0/s)
+    expect(CSS).toMatch(/#panel\.docked\s*{[^}]*max-height:\s*none/s)
+  })
+  it('status strip restyles to static inside the footer', () => {
+    expect(CSS).toMatch(/\.panel-footer\s+#status\s*{[^}]*position:\s*static/s)
+    expect(CSS).toMatch(/\.panel-footer\s+#status\s*{[^}]*flex-wrap:\s*wrap/s)
+  })
+  it('Design toggle shifts left of the dock via the dock-open class', () => {
+    expect(CSS).toContain('#toggle.dock-open { right: calc(16px + var(--forge-dock-w, 320px)); }')
+  })
+  it('resize handle spans the left edge with a col-resize cursor', () => {
+    expect(CSS).toMatch(/\.panel-resize\s*{[^}]*left:\s*0;\s*top:\s*0;\s*bottom:\s*0/s)
+    expect(CSS).toMatch(/\.panel-resize\s*{[^}]*cursor:\s*col-resize/s)
+  })
+})

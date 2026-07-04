@@ -63,16 +63,45 @@ button {
 }
 #panel {
   position: fixed; right: 16px; top: 16px; z-index: 2147483647;
-  width: 280px; max-height: 80vh; overflow-y: auto; overflow-x: hidden;
+  width: var(--forge-dock-w, 320px); max-height: 80vh;
+  display: flex; flex-direction: column; overflow: hidden;
   font: 400 12px system-ui, sans-serif; background: #2C2C2C; color: #F5F5F5;
   border: 1px solid rgba(255,255,255,0.09); border-radius: 12px; padding: 0;
   box-shadow: 0 5px 24px rgba(0,0,0,0.35);
   -webkit-font-smoothing: antialiased;
 }
-#panel::-webkit-scrollbar { width: 8px; }
-#panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+/* Docked: full-height right sidebar; page content is pushed left by Dock's html
+ * margin-right (the VisBug-style mechanism — see dock.ts). */
+#panel.docked {
+  top: 0; right: 0; bottom: 0; max-height: none;
+  border-radius: 0; border: none; border-left: 1px solid rgba(255,255,255,0.09);
+  box-shadow: none;
+}
+/* The scroll container is the BODY, not the root: the root is a flex column so the
+ * footer pins, and popovers live inside the body (position: relative) so they keep
+ * tracking their anchor rows when the sections scroll. */
+.panel-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative;
+}
+#panel .panel-head, #panel .panel-actions { flex: none; }
+.panel-empty { padding: 28px 12px; color: #9A9A9A; font: 400 11px system-ui, sans-serif; text-align: center; }
+.panel-footer { flex: none; border-top: 1px solid rgba(255,255,255,0.07); padding: 8px 10px; }
+.panel-footer:has(> #status[hidden]) { display: none; }
+.panel-footer #status { position: static; border-radius: 8px; padding: 5px 8px; flex-wrap: wrap; }
+.panel-resize {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 6px;
+  cursor: col-resize; z-index: 20;
+}
+.panel-resize:hover, .panel-resize:active { background: rgba(13,153,255,0.4); }
+.panel-mode {
+  position: absolute; top: 10px; right: 10px;
+  width: 22px; height: 20px; padding: 0; line-height: 1;
+}
+#toggle.dock-open { right: calc(16px + var(--forge-dock-w, 320px)); }
+.panel-body::-webkit-scrollbar { width: 8px; }
+.panel-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
 
-#panel .panel-head { padding: 12px 12px 10px; }
+#panel .panel-head { position: relative; padding: 12px 12px 10px; }
 #panel .panel-head-tag { font: 600 12px system-ui, sans-serif; color: #F5F5F5; }
 #panel .panel-head-src {
   font: 400 10px ui-monospace, monospace; color: #9A9A9A; margin-top: 2px;

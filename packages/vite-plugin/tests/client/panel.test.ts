@@ -2064,3 +2064,78 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
     expect((scRows(panel)[0].querySelector('.sc-count') as HTMLElement).textContent).toBe('×2')
   })
 })
+
+describe('Docked mode structure (docked-panel spec)', () => {
+  function freshPanel() {
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, () => {})
+    document.body.appendChild(panel.root)
+    return panel
+  }
+
+  function makeTagged(): HTMLElement {
+    document.body.innerHTML = `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px; width: 200px;"></div>`
+    return document.getElementById('t')! as HTMLElement
+  }
+
+  it('creates footer, resize handle, and mode button with their hook classes', () => {
+    const panel = freshPanel()
+    expect(panel.footer.className).toBe('panel-footer')
+    expect(panel.resizeHandle.className).toBe('panel-resize')
+    expect(panel.modeButton.className).toBe('panel-mode')
+    expect(panel.root.contains(panel.footer)).toBe(true)
+    expect(panel.root.contains(panel.resizeHandle)).toBe(true)
+    expect(panel.root.contains(panel.modeButton)).toBe(true)
+  })
+
+  it('body div carries the panel-body scroll-container class', () => {
+    const panel = freshPanel()
+    expect(panel.root.querySelector('.panel-body')).not.toBeNull()
+  })
+
+  it('setDocked(true) with no selection shows the root with the empty state', () => {
+    const panel = freshPanel()
+    panel.setDocked(true)
+    expect(panel.root.classList.contains('docked')).toBe(true)
+    expect(panel.root.hidden).toBe(false)
+    const empty = panel.root.querySelector('.panel-empty') as HTMLElement
+    expect(empty.hidden).toBe(false)
+    expect(empty.textContent).toBe('Click an element to edit')
+    expect((panel.root.querySelector('.panel-body') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('show() in docked mode hides the empty state and reveals body/actions', () => {
+    const panel = freshPanel()
+    panel.setDocked(true)
+    const el = makeTagged()
+    panel.show(el, buildInspectorData(el))
+    expect((panel.root.querySelector('.panel-empty') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('.panel-body') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('hide() in docked mode returns to the empty state with "No selection" header', () => {
+    const panel = freshPanel()
+    panel.setDocked(true)
+    const el = makeTagged()
+    panel.show(el, buildInspectorData(el))
+    panel.hide()
+    expect(panel.root.hidden).toBe(false)
+    expect((panel.root.querySelector('.panel-empty') as HTMLElement).hidden).toBe(false)
+    expect(panel.root.querySelector('.panel-head-tag')!.textContent).toBe('No selection')
+  })
+
+  it('setDocked(false) with no selection hides the root (floating behavior)', () => {
+    const panel = freshPanel()
+    panel.setDocked(true)
+    panel.setDocked(false)
+    expect(panel.root.classList.contains('docked')).toBe(false)
+    expect(panel.root.hidden).toBe(true)
+  })
+
+  it('popovers mount inside the panel-body scroll container, not the root', () => {
+    const panel = freshPanel()
+    const body = panel.root.querySelector('.panel-body') as HTMLElement
+    expect(body.querySelector('.color-popover')).not.toBeNull()
+    expect(body.querySelector('.token-popover')).not.toBeNull()
+  })
+})
