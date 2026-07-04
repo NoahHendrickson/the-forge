@@ -520,9 +520,16 @@ export class Panel {
     const isMain = prop === main
 
     if (mode === 'fixed') {
-      // Returning to Fixed drafts nothing by itself — the field reverts to
-      // showing the last numeric value, and the user typing a number is what
-      // actually produces an explicit size draft (read back as Fixed next refresh).
+      // Figma semantics: selecting Fixed pins the element's CURRENT rendered size —
+      // it doesn't wait for the user to type a number. First clear whatever mode
+      // props produced the current Fill/Hug layout so they don't leak into the
+      // change request, then draft the computed size as an explicit px value so
+      // the mode-inference heuristic reads it back as Fixed immediately.
+      const modeProps = isMain ? ['flex-grow', 'flex-basis'] : ['align-self']
+      if (this.drafts.current(this.el, prop) === 'auto') modeProps.push(prop)
+      this.drafts.discard(this.el, modeProps)
+      const computedSize = Math.round(parseFloat(getComputedStyle(this.el).getPropertyValue(prop)))
+      this.drafts.apply(this.el, prop, `${computedSize}px`)
     } else if (mode === 'hug') {
       this.drafts.apply(this.el, prop, 'auto')
     } else if (mode === 'fill') {

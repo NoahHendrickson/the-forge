@@ -316,4 +316,43 @@ describe('Panel', () => {
     expect(fieldInput(panel, 'H').value).toBe('auto')
   })
 
+  it('W size-mode Fill then Fixed pins width as a px draft and clears flex-grow/flex-basis', () => {
+    const { el, panel, drafts } = childSetup()
+    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fill'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'flex-grow')).toBe('1')
+    select.value = 'fixed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'width')).toMatch(/^\d+px$/)
+    expect(drafts.current(el, 'flex-grow')).toBeNull()
+    expect(drafts.current(el, 'flex-basis')).toBeNull()
+  })
+
+  it('W size-mode Fixed sticks on refresh after Fill then Fixed', () => {
+    const { panel } = childSetup()
+    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fill'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    select.value = 'fixed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    panel.refresh()
+    expect(select.value).toBe('fixed')
+  })
+
+  it('H size-mode Hug then Fixed pins height as a px draft, not auto', () => {
+    const { el, panel, drafts } = childSetup()
+    const hRow = fieldInput(panel, 'H').closest('.nf')!.parentElement!
+    const select = hRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'hug'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'height')).toBe('auto')
+    select.value = 'fixed'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(drafts.current(el, 'height')).toMatch(/^\d+px$/)
+    expect(drafts.current(el, 'height')).not.toBe('auto')
+  })
+
 })
