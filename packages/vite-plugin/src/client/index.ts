@@ -57,6 +57,7 @@ export class DesignMode {
         const mapping = [...elements.entries()].map(([el, change]) => ({
           el,
           dcSource: el.dataset.dcSource ?? null,
+          draftProps: [...(this.drafts.entries().get(el)?.keys() ?? [])],
           changes: change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
         }))
         this.sent.add(id, mapping)

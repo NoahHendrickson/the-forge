@@ -286,6 +286,7 @@ describe('DesignMode send-to-agent (M4)', () => {
     expect(entry.elements[0].el).toBe(btn)
     expect(entry.elements[0].dcSource).toBe('src/Button.tsx:42:8')
     expect(entry.elements[0].changes[0].property).toBe('padding-top')
+    expect(entry.elements[0].draftProps).toEqual(['padding-top'])
   })
 
   it('send failure flashes "Send failed" and leaves drafts untouched', async () => {

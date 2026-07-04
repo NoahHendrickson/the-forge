@@ -37,7 +37,7 @@ describe('verifyEntry', () => {
     styleRule('t1', 'padding-top', '24px')
     const entry: SentEntry = {
       id: 'q1',
-      elements: [{ el: d, dcSource: 'src/App.tsx:1:1', changes: [{ property: 'padding-top', afterCss: '24px' }] }],
+      elements: [{ el: d, dcSource: 'src/App.tsx:1:1', draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }],
     }
     const result = verifyEntry(entry)
     expect(result.verified).toBe(1)
@@ -51,7 +51,7 @@ describe('verifyEntry', () => {
     styleRule('t2', 'padding-top', '24px')
     const entry: SentEntry = {
       id: 'q1',
-      elements: [{ el: d, dcSource: null, changes: [{ property: 'padding-top', afterCss: '  24px  ' }] }],
+      elements: [{ el: d, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '  24px  ' }] }],
     }
     const result = verifyEntry(entry)
     expect(result.verified).toBe(1)
@@ -64,7 +64,7 @@ describe('verifyEntry', () => {
     styleRule('t3', 'padding-top', '10px')
     const entry: SentEntry = {
       id: 'q1',
-      elements: [{ el: d, dcSource: null, changes: [{ property: 'padding-top', afterCss: '24px' }] }],
+      elements: [{ el: d, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }],
     }
     const result = verifyEntry(entry)
     expect(result.verified).toBe(0)
@@ -79,7 +79,7 @@ describe('verifyEntry', () => {
     el.style.setProperty('padding-top', '32px') // the draft preview
     const entry = {
       id: 'q1',
-      elements: [{ el, dcSource: 'src/a.tsx:1:1', changes: [{ property: 'padding-top', afterCss: '32px' }] }],
+      elements: [{ el, dcSource: 'src/a.tsx:1:1', draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '32px' }] }],
     }
     const result = verifyEntry(entry)
     // with inline neutralized, computed padding-top is '' (jsdom default) ≠ '32px'
@@ -94,7 +94,7 @@ describe('verifyEntry', () => {
     styleRule('t5', 'padding-top', '24px')
     const entry: SentEntry = {
       id: 'q1',
-      elements: [{ el: d, dcSource: 'src/App.tsx:5:2', changes: [{ property: 'padding-top', afterCss: '24px' }] }],
+      elements: [{ el: d, dcSource: 'src/App.tsx:5:2', draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }],
     }
     d.remove() // el.isConnected is now false
 
@@ -114,7 +114,7 @@ describe('verifyEntry', () => {
     d.dataset.dcSource = 'src/App.tsx:9:9'
     const entry: SentEntry = {
       id: 'q1',
-      elements: [{ el: d, dcSource: 'src/App.tsx:9:9', changes: [{ property: 'padding-top', afterCss: '24px' }] }],
+      elements: [{ el: d, dcSource: 'src/App.tsx:9:9', draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }],
     }
     d.remove()
     const result = verifyEntry(entry, document)
@@ -136,7 +136,7 @@ describe('Verifier polling lifecycle', () => {
     const btn = el()
     btn.style.setProperty('padding-top', '24px')
     drafts.apply(btn, 'padding-top', '24px')
-    sent.add('q1', makeEntry([{ el: btn, dcSource: null, changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
 
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -162,7 +162,7 @@ describe('Verifier polling lifecycle', () => {
     const sent = new SentRegistry()
     const drafts = new DraftStore()
     const btn = el()
-    sent.add('q1', makeEntry([{ el: btn, dcSource: null, changes: [] }]))
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [] }]))
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [] }) })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -181,7 +181,7 @@ describe('Verifier polling lifecycle', () => {
     btn.id = 'implemented-btn'
     styleRule('implemented-btn', 'padding-top', '24px') // code now provides the drafted value
     drafts.apply(btn, 'padding-top', '24px') // sets inline style to 24px (neutralized during verification)
-    sent.add('q1', makeEntry([{ el: btn, dcSource: null, changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
     const commitSpy = vi.spyOn(drafts, 'commit')
 
     const fetchMock = vi.fn().mockResolvedValue({
@@ -199,13 +199,61 @@ describe('Verifier polling lifecycle', () => {
     expect(lastSummary).toContain('implemented')
   })
 
+  it('commits longhand drafts when the sent change used a collapsed property', async () => {
+    // The change-request builder collapses padding-top+padding-bottom into padding-block
+    // for the markdown/diff shown to the agent, but the DraftStore's keys are still the
+    // longhands. SentEntry now carries draftProps (the store's real keys) separately from
+    // changes (the collapsed property list used for verification) — commit must use
+    // draftProps, or the un-collapsed longhand ('padding-bottom' here) never gets cleared.
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const onUpdate = vi.fn()
+    const btn = el()
+    btn.id = 'collapsed-btn'
+    styleRule('collapsed-btn', 'padding-top', '24px') // code now provides the drafted value for padding-top
+    drafts.apply(btn, 'padding-top', '24px')
+    drafts.apply(btn, 'padding-bottom', '24px')
+    sent.add(
+      'q1',
+      makeEntry([
+        {
+          el: btn,
+          dcSource: null,
+          draftProps: ['padding-top', 'padding-bottom'],
+          // verification vector uses a LONGHAND (padding-block is unsupported by
+          // getComputedStyle in jsdom — it always resolves to '', which would report a
+          // mismatch and never reach the commit call at all, masking the real bug).
+          // Using padding-top here lets verification pass while still proving commit
+          // must draw its property list from draftProps, not from `changes`.
+          changes: [{ property: 'padding-top', afterCss: '24px' }],
+        },
+      ])
+    )
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, onUpdate)
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const lastSummary = onUpdate.mock.calls.at(-1)![0] as string
+    expect(lastSummary).toContain('implemented')
+    expect(drafts.hasDrafts(btn)).toBe(false)
+    expect(btn.style.getPropertyValue('padding-top')).toBe('')
+    expect(btn.style.getPropertyValue('padding-bottom')).toBe('')
+  })
+
   it('on applied status with mismatched computed styles: does not commit and reports mismatch', async () => {
     const sent = new SentRegistry()
     const drafts = new DraftStore()
     const onUpdate = vi.fn()
     const btn = el()
     drafts.apply(btn, 'padding-top', '10px') // draft applied a DIFFERENT value than what was "sent"
-    sent.add('q1', makeEntry([{ el: btn, dcSource: null, changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
     const commitSpy = vi.spyOn(drafts, 'commit')
 
     const fetchMock = vi.fn().mockResolvedValue({
@@ -228,7 +276,7 @@ describe('Verifier polling lifecycle', () => {
     const drafts = new DraftStore()
     const onUpdate = vi.fn()
     const btn = el()
-    sent.add('q1', makeEntry([{ el: btn, dcSource: null, changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
 
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -251,7 +299,7 @@ describe('Verifier polling lifecycle', () => {
     const onUpdate = vi.fn()
     const btn = el()
     btn.dataset.dcSource = 'src/Gone.tsx:1:1'
-    sent.add('q1', makeEntry([{ el: btn, dcSource: 'src/Gone.tsx:1:1', changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+    sent.add('q1', makeEntry([{ el: btn, dcSource: 'src/Gone.tsx:1:1', draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
     btn.remove() // no replacement exists anywhere
 
     const fetchMock = vi.fn().mockResolvedValue({
@@ -277,9 +325,9 @@ describe('Verifier polling lifecycle', () => {
     btn1.id = 'pending-btn1'
     styleRule('pending-btn1', 'padding-top', '24px')
     drafts.apply(btn1, 'padding-top', '24px')
-    sent.add('q1', makeEntry([{ el: btn1, dcSource: null, changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+    sent.add('q1', makeEntry([{ el: btn1, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
     // q2 stays pending — server has not marked it yet
-    sent.add('q2', makeEntry([{ el: el(), dcSource: null, changes: [{ property: 'padding-top', afterCss: '10px' }] }]))
+    sent.add('q2', makeEntry([{ el: el(), dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '10px' }] }]))
 
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -305,7 +353,7 @@ describe('Verifier polling lifecycle', () => {
     btn1.id = 'cumulative-btn1'
     styleRule('cumulative-btn1', 'padding-top', '24px')
     drafts.apply(btn1, 'padding-top', '24px')
-    sent.add('q1', makeEntry([{ el: btn1, dcSource: null, changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+    sent.add('q1', makeEntry([{ el: btn1, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
 
     const fetchMock = vi.fn()
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }) })
@@ -321,7 +369,7 @@ describe('Verifier polling lifecycle', () => {
     btn2.id = 'cumulative-btn2'
     styleRule('cumulative-btn2', 'padding-top', '24px')
     drafts.apply(btn2, 'padding-top', '24px')
-    sent.add('q2', makeEntry([{ el: btn2, dcSource: null, changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+    sent.add('q2', makeEntry([{ el: btn2, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ items: [{ id: 'q2', status: 'applied', note: null }] }) })
     verifier.start() // idempotent restart, e.g. after reactivation
     await vi.advanceTimersByTimeAsync(2000)
@@ -332,7 +380,7 @@ describe('Verifier polling lifecycle', () => {
     const sent = new SentRegistry()
     const drafts = new DraftStore()
     const btn = el()
-    sent.add('q1', makeEntry([{ el: btn, dcSource: null, changes: [] }]))
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [] }]))
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [] }) })
     vi.stubGlobal('fetch', fetchMock)
 

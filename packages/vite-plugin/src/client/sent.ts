@@ -5,6 +5,10 @@ export interface SentEntry {
   elements: Array<{
     el: TaggedElement
     dcSource: string | null
+    /** the DraftStore's actual keys for this element at send time — used for targeted commit,
+     * since `changes` may use collapsed shorthand property names (see COLLAPSE in request.ts)
+     * that don't match any DraftStore key. */
+    draftProps: string[]
     changes: Array<{ property: string; afterCss: string }>
   }>
 }

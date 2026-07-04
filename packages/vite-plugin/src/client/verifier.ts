@@ -26,8 +26,10 @@ function locate(el: TaggedElement, dcSource: string | null, doc: Document): Tagg
 /** Per-element verification outcome, used to decide whether that element's drafts can be committed. */
 interface ElementVerification {
   el: TaggedElement
-  /** properties this entry sent for this element — the only ones eligible for a targeted commit */
-  properties: string[]
+  /** the DraftStore keys actually held for this element at send time — the only ones eligible
+   * for a targeted commit. NOT the (possibly collapsed shorthand) `changes` property list —
+   * those names may not exist as DraftStore keys at all (see SentEntry.draftProps). */
+  draftProps: string[]
   verified: number
   mismatched: Array<{ property: string; expected: string; actual: string }>
   missing: number
@@ -35,9 +37,8 @@ interface ElementVerification {
 
 function verifyElements(entry: SentEntry, doc: Document = document): ElementVerification[] {
   return entry.elements.map((el) => {
-    const properties = el.changes.map((c) => c.property)
     const target = locate(el.el, el.dcSource, doc)
-    if (!target) return { el: el.el, properties, verified: 0, mismatched: [], missing: el.changes.length }
+    if (!target) return { el: el.el, draftProps: el.draftProps, verified: 0, mismatched: [], missing: el.changes.length }
 
     // Neutralize the draft's inline styles before measuring — inline styles win the
     // cascade, so if the sent draft is still applied as inline style (e.g. the DOM
@@ -72,7 +73,7 @@ function verifyElements(entry: SentEntry, doc: Document = document): ElementVeri
       else target.style.removeProperty('transition')
     }
 
-    return { el: el.el, properties, verified, mismatched, missing: 0 }
+    return { el: el.el, draftProps: el.draftProps, verified, mismatched, missing: 0 }
   })
 }
 
@@ -159,7 +160,7 @@ export class Verifier {
       } else if (ev.mismatched.length > 0) {
         this.counters.mismatch += 1
       } else {
-        this.drafts.commit(ev.el, ev.properties)
+        this.drafts.commit(ev.el, ev.draftProps)
         this.counters.implemented += 1
       }
     }

@@ -18,7 +18,7 @@ describe('SentRegistry', () => {
     expect(registry.size()).toBe(0)
     const btn = el()
     btn.dataset.dcSource = 'src/App.tsx:7:9'
-    registry.add('q1', [{ el: btn, dcSource: btn.dataset.dcSource ?? null, changes: [{ property: 'padding-top', afterCss: '24px' }] }])
+    registry.add('q1', [{ el: btn, dcSource: btn.dataset.dcSource ?? null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }])
     expect(registry.size()).toBe(1)
     expect(registry.pendingIds()).toEqual(['q1'])
 
@@ -54,7 +54,7 @@ describe('SentRegistry', () => {
   it('records dcSource as null when the element has no data-dc-source', () => {
     const registry = new SentRegistry()
     const plain = el()
-    registry.add('q2', [{ el: plain, dcSource: null, changes: [] }])
+    registry.add('q2', [{ el: plain, dcSource: null, draftProps: [], changes: [] }])
     const entry = registry.take('q2')!
     expect(entry.elements[0].dcSource).toBeNull()
   })
