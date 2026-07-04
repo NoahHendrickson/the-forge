@@ -9,19 +9,32 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
+    let settled = false
+
     req.on('data', (c: Buffer) => {
+      if (settled) return
       size += c.length
-      if (size > MAX_BODY) reject(new Error('body too large'))
-      else chunks.push(c)
+      if (size > MAX_BODY) {
+        settled = true
+        reject(new Error('body too large'))
+      } else {
+        chunks.push(c)
+      }
     })
     req.on('end', () => {
+      if (settled) return
+      settled = true
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
       } catch {
         reject(new Error('malformed JSON'))
       }
     })
-    req.on('error', reject)
+    req.on('error', (e) => {
+      if (settled) return
+      settled = true
+      reject(e)
+    })
   })
 }
 
@@ -35,6 +48,19 @@ export function createForgeMiddleware(queue: Queue) {
   return (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     const url = req.url ?? ''
     if (!url.startsWith('/__the-forge/')) return next()
+
+    const origin = req.headers.origin
+    if (typeof origin === 'string') {
+      let originHost: string | null = null
+      try {
+        originHost = new URL(origin).host
+      } catch {
+        originHost = null
+      }
+      if (!req.headers.host || originHost !== req.headers.host) {
+        return send(res, 403, { error: 'cross-origin request rejected' })
+      }
+    }
 
     const [pathname, query = ''] = url.split('?')
 

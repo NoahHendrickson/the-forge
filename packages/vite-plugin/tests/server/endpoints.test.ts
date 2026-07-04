@@ -6,10 +6,11 @@ import { EventEmitter } from 'node:events'
 import { Queue } from '../../src/server/queue'
 import { createForgeMiddleware, writeEndpointFile } from '../../src/server/endpoints'
 
-function fakeReq(method: string, url: string, body?: unknown) {
-  const req = new EventEmitter() as EventEmitter & { method: string; url: string }
+function fakeReq(method: string, url: string, body?: unknown, headers: Record<string, string> = {}) {
+  const req = new EventEmitter() as EventEmitter & { method: string; url: string; headers: Record<string, string> }
   req.method = method
   req.url = url
+  req.headers = headers
   process.nextTick(() => {
     if (body !== undefined) req.emit('data', Buffer.from(JSON.stringify(body)))
     req.emit('end')
@@ -85,6 +86,7 @@ describe('forge middleware', () => {
     const req = new EventEmitter() as never
     ;(req as { method: string }).method = 'POST'
     ;(req as { url: string }).url = '/__the-forge/queue'
+    ;(req as { headers: object }).headers = {}
     process.nextTick(() => {
       ;(req as EventEmitter).emit('data', Buffer.from('{nope'))
       ;(req as EventEmitter).emit('end')
@@ -105,6 +107,40 @@ describe('forge middleware', () => {
       })
     })
     expect(nexted).toBe(true)
+  })
+
+  describe('origin check', () => {
+    it('rejects cross-origin browser requests with 403', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { origin: 'https://evil.example', host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(403)
+    })
+
+    it('allows same-origin requests', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('POST', '/__the-forge/queue', { request: null, markdown: 'x' }, { origin: 'http://localhost:5173', host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+
+    it('allows origin-less local tool requests', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('GET', '/__the-forge/pull', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+  })
+
+  it('400s oversize bodies without double-settling', async () => {
+    const res = fakeRes()
+    const req = new EventEmitter() as never
+    ;(req as { method: string }).method = 'POST'
+    ;(req as { url: string }).url = '/__the-forge/queue'
+    ;(req as { headers: object }).headers = {}
+    process.nextTick(() => {
+      ;(req as EventEmitter).emit('data', Buffer.alloc(1024 * 1024 + 1))
+      ;(req as EventEmitter).emit('end')
+    })
+    await run(mw, req, res)
+    expect(res.statusCode).toBe(400)
   })
 })
 
