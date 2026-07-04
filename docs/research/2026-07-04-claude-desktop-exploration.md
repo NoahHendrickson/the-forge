@@ -102,47 +102,115 @@ servers).
 **5. Folder trust:** folders passed via deeplink arrive "untrusted" — Cowork asks the user
 to grant access on first use. One-time friction per project; acceptable.
 
+## Linked-session watch mode (user direction, 2026-07-04 — supersedes the deeplink options)
+
+User decisions after reading the exploration: **Claude Code desktop app only — Cowork is
+out of scope entirely.** And the repeat-sends dilemma (deeplink = new session per Send) is
+not acceptable: once a user opts into the desktop app, *one* session should be where they
+watch changes land. Terminal UX must remain byte-for-byte unchanged for everyone who never
+opts in.
+
+The proposed shape — the session volunteers instead of being typed at:
+
+1. User opens a Claude Code desktop session at the project root and runs `/forge-watch`
+   (a new plugin-installed command, sibling of `/forge-design`).
+2. The command instructs the agent to call a new MCP tool `wait_for_design_edits` in a
+   loop. The tool long-polls a new dev-server endpoint (e.g. `POST /__the-forge/wait`,
+   secret-gated like the other mutating endpoints): the response is held open until a
+   change request is queued or a timeout elapses.
+3. Send in the panel → the parked wait returns instantly with the change request (claimed
+   atomically, same queue semantics). The session applies, calls `mark_applied`, and
+   resumes waiting. Zero keystrokes per Send — stronger than the tmux rung.
+4. Dispatch gains a top rung: *linked session live → delivered, stop.* The long-poll IS the
+   liveness signal (an in-flight wait, or one within the last ~35s, means linked). No
+   watcher → fall through to tmux → AppleScript → manual, i.e. today's ladder untouched.
+   This is the **channels stub made real** (`tryChannels` in dispatch.ts + backlog item 4)
+   without waiting for the Claude Code Channels preview — the "companion channel" is just
+   MCP long-poll.
+5. Send-button/verifier copy for the linked rung: "delivered to your Claude Code session"
+   (a true statement — delivery is confirmed by the wait response being consumed, unlike
+   the fire-and-hope keystroke rungs).
+
+Not desktop-specific, deliberately: a terminal session can run `/forge-watch` too and get
+zero-keystroke sends without tmux. The desktop app is simply the surface where watch mode
+is the only automated path.
+
+**Change surface:** one long-poll endpoint (`endpoints.ts` — must hold a response open;
+today's handlers are all request/response), watcher registry + `channels`-rung wiring in
+`dispatch.ts` (the rung result type already exists), `wait_for_design_edits` in
+`protocol.ts`/`mcp/index.ts` (zero-dep, fits the hand-rolled JSON-RPC), a `forge-watch.md`
+command written by `setup.ts` (same additive/migration care), agent copy. Panel, drafts,
+request builder, verifier: unchanged.
+
+**Risks / verify live (in priority order):**
+
+- **Loop endurance.** The agent must re-call the tool through idle stretches. MCP clients
+  cap single-call block time (Claude Code: `MCP_TOOL_TIMEOUT`, default not under our
+  control on user machines) — so each wait cycle must stay conservatively short (~25s),
+  meaning an idle hour is 100+ cycles of context accretion, and the model may eventually
+  conclude it's done and stop watching. Mitigations to test: standing re-arm instruction in
+  every tool result; panel detects a dropped watcher (heartbeat gone) and surfaces "watch
+  session disconnected — type /forge-watch again". A real soak test decides whether this
+  ships; nothing else matters if the loop won't hold.
+- **Tool-permission prompt**: first `wait_for_design_edits` call asks; user picks
+  always-allow once. Document it in the command file's own text.
+- **Occupied session**: while watching, that session can't be chatted with (Esc interrupts
+  and ends the watch — which must degrade gracefully via the heartbeat, never error a Send).
+- **Claim semantics**: a wait that times out returns nothing and re-arms; a wait that
+  returns items claims them (existing claimed/stale-reclaim rules apply if the session dies
+  mid-apply).
+
+Deeplink rung (`claude://code/new`) is demoted to not-planned; kept in this doc only as
+reference for what the platform offers.
+
 ## What can't be done (on purpose, theirs not ours)
 
-No mechanism exists to inject a message into a **running** desktop-app conversation: no
-AppleScript dictionary, no local API, no CLI, and MCP servers can't push turns. The desktop
-app's security model is user-initiates, always. So the desktop story's floor is "one click
-+ Enter", not "zero keystrokes". That's the honest trade to present: same loop, same
-guarantees, one extra Enter.
+No mechanism exists for an *outsider* to inject a message into a **running** desktop-app
+conversation: no AppleScript dictionary, no local API, no CLI, and MCP servers can't push
+turns. The desktop app's security model is user-initiates, always. Watch mode routes around
+this cleanly rather than fighting it: the session isn't being pushed at from outside — it
+*asked* (via a user-initiated command) to sit on a long-poll, and every "delivery" is
+technically the response to a request the session itself made.
 
-## Proposed shape (if we do it) — for a later plan doc
+## Proposed shape — watch-mode milestone, for a later plan doc
 
-1. `mcp/index.ts` — `--root`/env override for discovery root (S).
-2. `protocol.ts` — `prompts` capability with the one `forge-design` prompt (S).
-3. `agent.ts` / client copy / plugin option — add `'claude-desktop'` to `AgentName`, display
-   name "Claude Desktop", manual-rung copy without the `/forge-design` phrasing (S).
-4. `dispatch.ts` — `claude://` deeplink rung(s); `open` on macOS, `start`-equivalent on
-   Windows (the Cursor rung is currently macOS-shaped too — fix both or scope to macOS) (M).
-5. Setup story per decision below (S–L depending on choice).
-6. Docs: README + CLAUDE.md MCP-contract section; new gotcha ("desktop app spawns the bin
-   with arbitrary cwd — root must be explicit") (S).
+1. `endpoints.ts`/`queue.ts` — long-poll `POST /__the-forge/wait` (secret-gated; holds the
+   response until a queue item lands or ~25s elapses) + watcher-liveness registry (M).
+2. `dispatch.ts` — make the channels rung real: linked-watcher-live → delivered (S; rung
+   type, ladder position, and stub already exist).
+3. `protocol.ts` + `mcp/index.ts` — `wait_for_design_edits` tool with a standing re-arm
+   instruction in every result (S).
+4. `setup.ts` — write `/forge-watch` command file (same additive/migration care as
+   `/forge-design`) (S).
+5. Client copy — Send flash + verifier prefix for the delivered rung ("delivered to your
+   Claude Code session"); watcher-dropped state ("watch session disconnected — type
+   /forge-watch again") (S).
+6. Docs: README, CLAUDE.md MCP contract, gotchas (S).
 
-Nothing touches the panel, drafts, request builder, queue, or verifier. Current terminal UX
-is unchanged by construction — this is a new agent target plus one additive rung.
+Nothing touches the panel, drafts, request builder, or queue semantics. Terminal UX without
+a watcher is unchanged by construction — the new rung sees no watcher and falls through.
 
 ## Open design decisions (user call)
 
-1. **Which path first?** A (Claude Code desktop rung — smallest change, current UX intact) or
-   B (Cowork — new audience, new setup story), or A-then-B.
-2. **Repeat-Send behavior:** always fire the deeplink (new window each Send) vs. deeplink on
-   first Send then manual/prompt copy ("press + → forge-design in your Claude session") vs.
-   a panel toggle.
-3. **Setup UX for B:** printed instructions / npx setup command / `.mcpb` bundle.
-4. **Global discovery mode** (one registration, all projects) vs. per-project entries.
+1. **Watch-session copy/framing** — what the session says while watching, and what the panel
+   shows while linked (e.g. a persistent "linked to Claude Code" indicator vs. only
+   per-Send flash copy).
+2. **Should `/forge-design` remain the documented manual path** in desktop sessions (it
+   works there today — the session loads `.mcp.json`/commands normally), with
+   `/forge-watch` as the recommended flow? (Proposed: yes, keep both.)
 
 ## Verify live before planning (jsdom-rule equivalent: docs ≠ reality)
 
-- `claude://code/new?q=%2Fforge-design&folder=…` — does a pre-filled `/forge-design`
-  actually execute as a command when sent?
-- Cowork + our stdio bin from global config: does `pull_design_edits` appear and work?
-- Do Cowork's file edits trigger HMR normally (no atomic-write/watcher surprises)?
-- Prompt surfacing: where exactly does a `forge-design` MCP prompt show up in the composer?
-- Windows deeplink open command.
+- **Soak test the watch loop** in a real Claude Code desktop session: does the agent keep
+  re-calling `wait_for_design_edits` across an idle hour? Where does it give up, and does
+  the re-arm instruction hold? This decides whether the milestone ships at all.
+- Actual MCP tool-call timeout behavior in Claude Code (default `MCP_TOOL_TIMEOUT`) — pick
+  the wait window under it with margin.
+- Esc-interrupt during a parked wait: confirm the server sees the disconnect and the
+  heartbeat goes stale (no wedged claimed items; stale-reclaim covers a mid-apply death).
+- Permission flow: exactly one always-allow prompt on first wait call.
+- Desktop session at project root: confirm `.mcp.json` + `/forge-design`/`/forge-watch`
+  load identically to the terminal (expected — it's Claude Code — but never proven live).
 
 ## Sources
 
