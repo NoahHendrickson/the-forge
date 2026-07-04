@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { NumberField } from '../../src/client/controls'
+import { NumberField, evaluateExpression } from '../../src/client/controls'
 
 beforeEach(() => {
   document.body.innerHTML = ''
 })
 
-function make(opts: Partial<{ min: number; max: number }> = {}) {
+function make(opts: Partial<{ min: number; max: number; allowAuto: boolean; onKeyword: (kw: 'auto') => void }> = {}) {
   const onInput = vi.fn()
   const nf = new NumberField({ label: 'W', onInput, ...opts })
   document.body.appendChild(nf.root)
@@ -89,6 +89,113 @@ describe('NumberField', () => {
     expect(input.value).toBe('30')
     window.dispatchEvent(new MouseEvent('mousemove', { clientX: 120 }))
     expect(input.value).toBe('40') // anchored to drag start — no snap-back, no double-count
+    window.dispatchEvent(new MouseEvent('mouseup', {}))
+  })
+})
+
+describe('evaluateExpression', () => {
+  it('evaluates a standalone expression', () => {
+    expect(evaluateExpression('60+12', null)).toBe(72)
+  })
+
+  it('applies a leading-operator expression to the current value', () => {
+    expect(evaluateExpression('*2', 8)).toBe(16)
+  })
+
+  it('evaluates parens and precedence', () => {
+    expect(evaluateExpression('(100/2)+6', null)).toBe(56)
+  })
+
+  it('leading-operator expression with null current returns null', () => {
+    expect(evaluateExpression('+8', null)).toBeNull()
+  })
+
+  it('returns null for malformed expressions', () => {
+    expect(evaluateExpression('2**3', null)).toBeNull()
+  })
+
+  it('returns null for garbage input', () => {
+    expect(evaluateExpression('hello', null)).toBeNull()
+  })
+
+  it('returns null for division by zero', () => {
+    expect(evaluateExpression('5/0', null)).toBeNull()
+  })
+
+  it('parses a plain number', () => {
+    expect(evaluateExpression('42', null)).toBe(42)
+  })
+})
+
+describe('NumberField v2 — math expressions', () => {
+  it('typed expression commits the evaluated result via onInput', () => {
+    const { onInput, input } = make()
+    input.value = '12*2'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onInput).toHaveBeenCalledWith(24)
+    expect(input.value).toBe('24')
+  })
+
+  it('typed leading-operator expression applies to current value', () => {
+    const { nf, onInput, input } = make()
+    nf.set(10)
+    input.value = '+8'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onInput).toHaveBeenCalledWith(18)
+    expect(input.value).toBe('18')
+  })
+
+  it('reverts on an expression that evaluates to null', () => {
+    const { nf, onInput, input } = make()
+    nf.set(10)
+    input.value = '5/0'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onInput).not.toHaveBeenCalled()
+    expect(input.value).toBe('10')
+  })
+})
+
+describe('NumberField v2 — Mixed and auto', () => {
+  it('setMixed() displays literal Mixed and get() reports null', () => {
+    const { nf, input } = make()
+    nf.set(10)
+    nf.setMixed()
+    expect(input.value).toBe('Mixed')
+    expect(nf.get()).toBeNull()
+  })
+
+  it('setAuto() displays literal auto when allowAuto', () => {
+    const { nf, input } = make({ allowAuto: true })
+    nf.setAuto()
+    expect(input.value).toBe('auto')
+    expect(nf.get()).toBeNull()
+  })
+
+  it('typing auto in an allowAuto field fires onKeyword and displays auto, without firing onInput', () => {
+    const onKeyword = vi.fn()
+    const { onInput, input } = make({ allowAuto: true, onKeyword })
+    input.value = '  Auto  '
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onKeyword).toHaveBeenCalledWith('auto')
+    expect(input.value).toBe('auto')
+    expect(onInput).not.toHaveBeenCalled()
+  })
+
+  it('scrubbing from Mixed state starts at 0 (clamped by min)', () => {
+    const { nf, onInput, label } = make({ min: 0 })
+    nf.setMixed()
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 58 }))
+    expect(onInput).toHaveBeenLastCalledWith(8)
+    window.dispatchEvent(new MouseEvent('mouseup', {}))
+  })
+
+  it('scrubbing from auto state starts at 0 (clamped by min)', () => {
+    const { nf, onInput, label } = make({ min: 0, allowAuto: true })
+    nf.setAuto()
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 50, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 58 }))
+    expect(onInput).toHaveBeenLastCalledWith(8)
     window.dispatchEvent(new MouseEvent('mouseup', {}))
   })
 })
