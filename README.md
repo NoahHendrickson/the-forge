@@ -21,7 +21,15 @@ Early development — building in the open. Current milestones on `main`:
 
 Next: Effects (shadow, blur), gradients, and the rest of the open backlog in [docs/HANDOFF.md](docs/HANDOFF.md).
 
-## Try it
+## Set it up in your own project
+
+The fastest way: open your AI coding agent in the project you want to use The Forge in and paste
+
+> Set up The Forge in this repo. Follow the "Agent setup instructions" in https://raw.githubusercontent.com/NoahHendrickson/the-forge/main/SETUP.md exactly, then tell me what to do next.
+
+Full setup and usage guide (for humans too): [SETUP.md](SETUP.md).
+
+## Try the demo
 
 ```bash
 npm install
@@ -31,18 +39,7 @@ npm run dev -w demo-app
 
 Open the printed URL, hit the **Design** toggle (bottom-right), click an element, and start scrubbing. When you have drafts, hit **Copy for agent** and paste into your agent of choice. Or hit **Send to agent**, then type /forge-design in a Claude Code session opened in the same project — it pulls the queued edits over MCP, applies them, and the browser marks your drafts Implemented once computed styles match.
 
-To use it on your own Vite + React project:
-
-```ts
-// vite.config.ts
-import { theForge } from '@the-forge/vite'
-
-export default defineConfig({
-  plugins: [theForge(), react(), tailwindcss()],
-})
-```
-
-(Local install for now: `npm install -D file:../the-forge/packages/vite-plugin`.)
+To use it on your own Vite + React project, see [SETUP.md](SETUP.md) — the package isn't on npm yet, so it installs from a local checkout (`npm install -D file:../the-forge/packages/vite-plugin`) and one line in `vite.config.ts`.
 
 ## Guarantees
 
