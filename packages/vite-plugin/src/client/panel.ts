@@ -362,6 +362,8 @@ export class Panel {
   private fields: BoundField[] = []
   private sectionEls: Array<{ spec: SectionSpec; el: HTMLElement }> = []
   private el: TaggedElement | null = null
+  /** Full selection (B6) — [] when hidden, [el] in single-select (mirrors `el` for back-compat). */
+  private els: TaggedElement[] = []
   // Persists expand/collapse state per section across show() calls (selecting another
   // element rebuilds the DOM but should keep sections the user expanded, expanded).
   private expandState = new Map<string, boolean>()
@@ -447,7 +449,10 @@ export class Panel {
     this.tokenPicker = new TokenPicker(this.root)
   }
 
-  show(el: TaggedElement, data: InspectorData): void {
+  show(elOrEls: TaggedElement | TaggedElement[], data: InspectorData): void {
+    const els = Array.isArray(elOrEls) ? elOrEls : [elOrEls]
+    this.els = els
+    const el = els[0] ?? null
     this.el = el
     this.colorPicker.close()
     this.tokenPicker.close()
@@ -469,6 +474,7 @@ export class Panel {
 
   hide(): void {
     this.el = null
+    this.els = []
     this.root.hidden = true
     this.colorPicker.close()
     this.tokenPicker.close()

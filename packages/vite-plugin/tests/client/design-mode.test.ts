@@ -271,6 +271,158 @@ describe('DesignMode selection (M2)', () => {
   })
 })
 
+describe('DesignMode multi-select (B6)', () => {
+  function multiSetup() {
+    document.body.innerHTML = `
+      <button data-dc-source="src/Button.tsx:42:8" class="btn" id="a">a</button>
+      <button data-dc-source="src/Button2.tsx:1:1" class="btn" id="b">b</button>
+      <button data-dc-source="src/Button3.tsx:2:2" class="btn" id="c">c</button>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, () => {})
+    overlay.attachPanel(panel.root)
+    const mode = new DesignMode(overlay, panel, drafts)
+    liveModes.push(mode)
+    return { overlay, drafts, panel, mode }
+  }
+
+  function click(el: Element, opts: MouseEventInit = {}): void {
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...opts }))
+  }
+
+  it('plain click replaces the selection with just that element', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    expect(mode.selection).toEqual([a])
+    click(b)
+    expect(mode.selection).toEqual([b])
+  })
+
+  it('shift+click on an unselected element adds it to the selection', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    click(b, { shiftKey: true })
+    expect(mode.selection).toEqual([a, b])
+  })
+
+  it('shift+click on an already-selected element removes it', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    click(b, { shiftKey: true })
+    click(a, { shiftKey: true })
+    expect(mode.selection).toEqual([b])
+  })
+
+  it('shift+click removing the last remaining element deselects entirely', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    click(a)
+    click(a, { shiftKey: true })
+    expect(mode.selection).toEqual([])
+  })
+
+  it('get selected() returns the first selection member (or null) for single-semantics call sites', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    expect(mode.selected).toBeNull()
+    click(a)
+    expect(mode.selected).toBe(a)
+    click(b, { shiftKey: true })
+    expect(mode.selected).toBe(a) // first member, unchanged by appending b
+  })
+
+  it('Escape clears the entire multi-selection', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    click(b, { shiftKey: true })
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(mode.selection).toEqual([])
+    expect(mode.active).toBe(true) // first Escape only deselects
+  })
+
+  it('clicking untagged area deselects the whole multi-selection', () => {
+    const { mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    click(b, { shiftKey: true })
+    click(document.body)
+    expect(mode.selection).toEqual([])
+  })
+
+  it('overlay shows a pooled multi-outline per selected element (single selection keeps using #select-outline)', () => {
+    const { overlay, mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    const c = document.getElementById('c')!
+    click(a)
+    const root = overlay.host.shadowRoot!
+    expect((root.getElementById('select-outline') as HTMLElement).hidden).toBe(false)
+    expect(root.querySelectorAll('.select-outline-multi').length).toBe(0)
+
+    click(b, { shiftKey: true })
+    click(c, { shiftKey: true })
+    expect((root.getElementById('select-outline') as HTMLElement).hidden).toBe(true)
+    const multi = [...root.querySelectorAll('.select-outline-multi')] as HTMLElement[]
+    expect(multi.filter((d) => !d.hidden)).toHaveLength(3)
+  })
+
+  it('shrinking back to a single element switches back to #select-outline and hides the multi pool', () => {
+    const { overlay, mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    click(b, { shiftKey: true })
+    click(b, { shiftKey: true }) // remove b -> back to [a]
+    const root = overlay.host.shadowRoot!
+    expect((root.getElementById('select-outline') as HTMLElement).hidden).toBe(false)
+    expect([...root.querySelectorAll('.select-outline-multi')].every((d: Element) => (d as HTMLElement).hidden)).toBe(
+      true
+    )
+  })
+
+  it('panel.show is called with the full selection array and the first element data in multi-select', () => {
+    const { panel, mode } = multiSetup()
+    mode.setActive(true)
+    const showSpy = vi.spyOn(panel, 'show')
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    click(a)
+    click(b, { shiftKey: true })
+    expect(showSpy).toHaveBeenLastCalledWith([a, b], expect.objectContaining({ tag: 'button' }))
+  })
+
+  it('deselecting hides the panel', () => {
+    const { overlay, mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    click(a)
+    click(document.body)
+    const root = overlay.host.shadowRoot!
+    expect((root.getElementById('panel') as HTMLElement).hidden).toBe(true)
+  })
+})
+
 describe('DesignMode send-to-agent (M4)', () => {
   it('send posts the request and registers pending ids', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q1' }) })

@@ -50,6 +50,10 @@ button {
   position: fixed; z-index: 2147483646; pointer-events: none;
   border: 2px solid #0D99FF; border-radius: 2px;
 }
+.select-outline-multi {
+  position: fixed; z-index: 2147483646; pointer-events: none;
+  border: 2px solid #0D99FF; border-radius: 2px;
+}
 .ripple-outline {
   position: fixed; z-index: 2147483644; pointer-events: none;
   border: 1.5px dashed #e2954a; border-radius: 2px;
@@ -281,6 +285,9 @@ export class Overlay {
   private ripplePool: HTMLElement[] = []
   private rippleClearTimer: ReturnType<typeof setTimeout> | null = null
 
+  /** Pool of select-outline-multi divs (B6), reused across showSelectOutlines() calls. */
+  private selectOutlinePool: HTMLElement[] = []
+
   /** Max ripple outlines shown at once — keeps the effect legible when many siblings shift. */
   private static readonly RIPPLE_CAP = 8
   /** Ripples fade and clear this long after the most recent showRipples() call. */
@@ -326,6 +333,7 @@ export class Overlay {
     if (!on) {
       this.hideOutline()
       this.hideSelectOutline()
+      this.hideSelectOutlines()
       this.status.hidden = true
       this.clearRipples()
     }
@@ -353,6 +361,30 @@ export class Overlay {
 
   hideSelectOutline(): void {
     this.selectOutline.hidden = true
+  }
+
+  /**
+   * Draws one pooled `.select-outline-multi` div per rect (VisBug-style multi-select
+   * outlines) — pool pattern copied from showRipples: reused across calls, extra slots
+   * hidden rather than removed when the selection shrinks.
+   */
+  showSelectOutlines(rects: DOMRect[]): void {
+    while (this.selectOutlinePool.length < rects.length) {
+      const div = document.createElement('div')
+      div.className = 'select-outline-multi'
+      div.style.pointerEvents = 'none'
+      div.hidden = true
+      this.host.shadowRoot!.appendChild(div)
+      this.selectOutlinePool.push(div)
+    }
+    this.selectOutlinePool.forEach((div, i) => {
+      if (i < rects.length) this.place(div, rects[i])
+      else div.hidden = true
+    })
+  }
+
+  hideSelectOutlines(): void {
+    for (const div of this.selectOutlinePool) div.hidden = true
   }
 
   /**
