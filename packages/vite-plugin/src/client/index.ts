@@ -143,8 +143,11 @@ export class DesignMode {
       window.removeEventListener('resize', this.onReflow)
       if (this.moveRaf) cancelAnimationFrame(this.moveRaf)
       if (this.reflowRaf) cancelAnimationFrame(this.reflowRaf)
+      if (this.rippleRaf) cancelAnimationFrame(this.rippleRaf)
       this.moveRaf = 0
       this.reflowRaf = 0
+      this.rippleRaf = 0
+      this.rippleSnapshot = null
       this.lastMove = null
       this.selected = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"

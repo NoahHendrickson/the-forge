@@ -572,6 +572,25 @@ describe('DesignMode layout-ripple wiring (M2b Task 4)', () => {
       }
     }
   })
+
+  it('deactivating cancels a pending ripple rAF (no stray showRipples after exit)', () => {
+    const { mode, overlay, runRaf } = rippleSetup()
+    mode.setActive(true)
+    const selected = document.getElementById('selected')! as HTMLElement
+    const sibling = document.getElementById('sibling')! as HTMLElement
+    stubRect(selected, { x: 0, y: 0, width: 100, height: 20 })
+    stubRect(sibling, { x: 0, y: 30, width: 100, height: 20 })
+    mode.select(selected)
+
+    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    stubRect(sibling, { x: 0, y: 60, width: 100, height: 20 })
+
+    mode.setActive(false) // exits before the queued rAF runs
+
+    const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
+    runRaf() // if the stale callback still ran, this would call showRipples
+    expect(showRipplesSpy).not.toHaveBeenCalled()
+  })
 })
 
 describe('DesignMode layout-ripple debounce (M2b Task 4)', () => {
