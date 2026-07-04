@@ -5,6 +5,10 @@ import type { TaggedElement } from './source'
 import { AGENT_DISPLAY_NAME, currentAgent } from './agent'
 
 const POLL_MS = 2000
+/** After this many consecutive failed polls the verifier surfaces "paused" and starts backing off. */
+export const PAUSE_AFTER_FAILURES = 5
+/** Backoff ceiling — a dead dev server costs one request per 30s, not one per 2s forever. */
+export const MAX_POLL_MS = 30_000
 
 /**
  * Units: `verified` and `missing` are per-element counts (how many elements in the
@@ -115,7 +119,9 @@ function renderSummary(counters: Counters, claimed: number, pendingManual: numbe
 
 export class Verifier {
   private counters: Counters = { implemented: 0, mismatch: 0, unverified: 0, failed: 0 }
-  private timer: ReturnType<typeof setInterval> | null = null
+  private timer: ReturnType<typeof setTimeout> | null = null
+  private consecutiveFailures = 0
+  private delayMs = POLL_MS
 
   constructor(
     private sent: SentRegistry,
@@ -126,14 +132,19 @@ export class Verifier {
   start(): void {
     if (this.timer) return
     if (this.sent.size() === 0) return
-    this.timer = setInterval(() => {
-      this.poll()
-    }, POLL_MS)
+    this.consecutiveFailures = 0
+    this.delayMs = POLL_MS
+    this.schedule()
   }
 
   stop(): void {
-    if (this.timer) clearInterval(this.timer)
+    if (this.timer) clearTimeout(this.timer)
     this.timer = null
+  }
+
+  /** Chained setTimeout instead of setInterval so the delay can stretch under backoff. */
+  private schedule(): void {
+    this.timer = setTimeout(() => this.poll(), this.delayMs)
   }
 
   private poll(): void {
@@ -145,6 +156,8 @@ export class Verifier {
     fetch(`/__the-forge/status?ids=${ids.join(',')}`)
       .then((res) => (res.ok ? res.json() : { items: [] }))
       .then((body: { items: Array<{ id: string; status: string; note: string | null }> }) => {
+        this.consecutiveFailures = 0
+        this.delayMs = POLL_MS
         const statusById = new Map(body.items.map((item) => [item.id, item.status]))
         for (const item of body.items) {
           if (item.status === 'applied') this.handleApplied(item.id)
@@ -166,7 +179,19 @@ export class Verifier {
         this.onUpdate(renderSummary(this.counters, claimed, pendingManual, agentDisplayName))
       })
       .catch(() => {
-        // transient network errors during polling are silently retried next tick
+        // Transient blips retry silently at the base cadence; a RUN of failures means the dev
+        // server is gone — say so instead of freezing on a stale "applying…" line, and back off
+        // so a dead server costs one request per MAX_POLL_MS, not one per 2s forever.
+        this.consecutiveFailures++
+        if (this.consecutiveFailures >= PAUSE_AFTER_FAILURES) {
+          this.delayMs = Math.min(this.delayMs * 2, MAX_POLL_MS)
+          this.onUpdate('verification paused — dev server unreachable')
+        }
+      })
+      .finally(() => {
+        // stop() (external, or stop-on-empty inside the then-branch) nulls the timer — only
+        // chain the next poll if nobody stopped us while this one was in flight.
+        if (this.timer !== null) this.schedule()
       })
   }
 

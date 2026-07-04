@@ -500,4 +500,62 @@ describe('Verifier polling lifecycle', () => {
     await vi.advanceTimersByTimeAsync(10000)
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('backs off after 5 consecutive failed polls and surfaces a paused message', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const updates: string[] = []
+    const d = el()
+    sent.add('q1', makeEntry([{ el: d, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('network down'))
+    vi.stubGlobal('fetch', fetchMock)
+    const verifier = new Verifier(sent, drafts, (s) => updates.push(s))
+    verifier.start()
+
+    // failures 1-4: silent retries at the base 2s cadence, no paused message
+    await vi.advanceTimersByTimeAsync(8000)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(updates).toEqual([])
+
+    // failure 5: paused message surfaces, delay doubles to 4s
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+    expect(updates).toEqual(['verification paused — dev server unreachable'])
+
+    // only 2s later: nothing (backoff in effect) …
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+    // … but at 4s the next (6th) poll fires and the delay doubles again to 8s
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(fetchMock).toHaveBeenCalledTimes(6)
+  })
+
+  it('a successful poll resets the failure counter and restores the 2s cadence', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const updates: string[] = []
+    const d = el()
+    sent.add(
+      'q1',
+      makeEntry([{ el: d, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }])
+    )
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('down'))
+      .mockRejectedValueOnce(new TypeError('down'))
+      .mockRejectedValueOnce(new TypeError('down'))
+      .mockRejectedValueOnce(new TypeError('down'))
+      .mockRejectedValueOnce(new TypeError('down'))
+      .mockResolvedValue({ ok: true, json: async () => ({ items: [{ id: 'q1', status: 'pending', note: null }] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const verifier = new Verifier(sent, drafts, (s) => updates.push(s))
+    verifier.start()
+
+    await vi.advanceTimersByTimeAsync(10_000) // 5 failures → paused, delay 4s
+    expect(updates).toContain('verification paused — dev server unreachable')
+    await vi.advanceTimersByTimeAsync(4000) // 6th poll succeeds → reset
+    const afterSuccess = fetchMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(2000) // base cadence restored
+    expect(fetchMock.mock.calls.length).toBe(afterSuccess + 1)
+  })
 })
