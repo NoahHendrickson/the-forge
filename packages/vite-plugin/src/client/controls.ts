@@ -12,6 +12,9 @@ export class NumberField {
   private labelEl = document.createElement('span')
   private lastValid: number | null = null
   private scrubStartX = 0
+  // Scrub anchor is FIXED at mousedown (absolute drag mapping). External set()
+  // during a drag only updates the display — safe because the panel round-trips
+  // the exact committed value on refresh.
   private scrubStartValue = 0
   private scrubbing = false
 

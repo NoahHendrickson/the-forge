@@ -73,4 +73,22 @@ describe('NumberField', () => {
     expect(onInput).toHaveBeenLastCalledWith(8)
     window.dispatchEvent(new MouseEvent('mouseup', {}))
   })
+
+  it('tracks the drag correctly when onInput feeds back into set() (panel refresh loop)', () => {
+    const nf = new NumberField({
+      label: 'W',
+      min: 0,
+      onInput: (v) => nf.set(v), // simulates Panel.refresh() round-tripping the committed value
+    })
+    document.body.appendChild(nf.root)
+    const label = nf.root.querySelector('.nf-label')! as HTMLElement
+    const input = nf.root.querySelector('input')!
+    nf.set(20)
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 110 }))
+    expect(input.value).toBe('30')
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 120 }))
+    expect(input.value).toBe('40') // anchored to drag start — no snap-back, no double-count
+    window.dispatchEvent(new MouseEvent('mouseup', {}))
+  })
 })
