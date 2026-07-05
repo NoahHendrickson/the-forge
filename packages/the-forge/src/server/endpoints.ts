@@ -123,7 +123,19 @@ export function createForgeMiddleware(
       } catch {
         originHost = null
       }
-      if (!req.headers.host || originHost !== req.headers.host) {
+      // Next's rewrites() proxy rewrites Host to the sidecar's own loopback address
+      // (127.0.0.1:<port>) before this middleware ever sees the request, while the browser's
+      // real page origin only survives in X-Forwarded-Host (confirmed live in
+      // docs/research/2026-07-04-next-spike-findings.md and by the next-demo E2E, N8a — every
+      // real browser POST was 403ing here). Comparing Origin against the rewritten Host would
+      // reject every legitimate request on the Next adapter path, so prefer X-Forwarded-Host
+      // when present and fall back to Host for the direct-connection Vite path (which never
+      // sets X-Forwarded-Host). This does not weaken the DNS-rebinding defense above: that
+      // defense lives entirely in isAllowedHost's read of the real Host header, which an
+      // attacker cannot spoof via X-Forwarded-Host on a direct (non-proxied) connection.
+      const forwardedHost = req.headers['x-forwarded-host']
+      const effectiveHost = typeof forwardedHost === 'string' ? forwardedHost : req.headers.host
+      if (!effectiveHost || originHost !== effectiveHost) {
         return send(res, 403, { error: 'cross-origin request rejected' })
       }
     }

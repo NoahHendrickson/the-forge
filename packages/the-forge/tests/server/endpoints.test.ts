@@ -157,6 +157,44 @@ describe('forge middleware', () => {
       await run(mw, fakeReq('POST', '/__the-forge/pull', {}, { host: 'localhost:5173' }), res)
       expect(res.statusCode).toBe(200)
     })
+
+    // Next.js's rewrites() proxy rewrites Host to the sidecar's own loopback address
+    // (127.0.0.1:<port>) before the request reaches this middleware, while Origin still
+    // carries the browser's real page origin (e.g. http://localhost:3000) — see
+    // docs/research/2026-07-04-next-spike-findings.md's Host-rewrite finding. Comparing
+    // Origin against the rewritten Host therefore rejects every real browser request on the
+    // Next adapter path (found via next-demo E2E, N8a). The original external host survives
+    // as X-Forwarded-Host, which this check must prefer when present; falling back to Host
+    // keeps the direct-connection Vite path (no proxy, no X-Forwarded-Host) unchanged.
+    it('allows same-origin requests proxied through Next rewrites (Host rewritten, X-Forwarded-Host preserved)', async () => {
+      const res = fakeRes()
+      await run(
+        mw,
+        fakeReq(
+          'POST',
+          '/__the-forge/queue',
+          { request: null, markdown: 'x' },
+          { origin: 'http://localhost:3000', host: '127.0.0.1:55836', 'x-forwarded-host': 'localhost:3000' }
+        ),
+        res
+      )
+      expect(res.statusCode).toBe(200)
+    })
+
+    it('still rejects a genuinely cross-origin request behind the same proxy Host', async () => {
+      const res = fakeRes()
+      await run(
+        mw,
+        fakeReq(
+          'POST',
+          '/__the-forge/queue',
+          { markdown: 'x' },
+          { origin: 'https://evil.example', host: '127.0.0.1:55836', 'x-forwarded-host': 'localhost:3000' }
+        ),
+        res
+      )
+      expect(res.statusCode).toBe(403)
+    })
   })
 
   describe('host check (DNS-rebinding defense)', () => {
