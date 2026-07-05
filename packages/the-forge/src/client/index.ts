@@ -5,11 +5,11 @@ import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { Dock } from './dock'
 import { buildChangeRequestWithElements, renderMarkdown, type ChangeRequest, type ElementChange } from './request'
-import { SentRegistry } from './sent'
+import { LifecycleSession, type SentSeed } from './lifecycle'
 import { Verifier } from './verifier'
 import { snapshotRects, diffRects } from './ripple'
 import { resetTokensCache, readTheme } from './tokens'
-import { ChangeList, type SentSeed } from './changelist'
+import { ChangeList } from './changelist'
 import { type AgentName } from './agent'
 import { WatchStatus, sentLabelFor, watchIndicatorFor, type Rung } from './watch'
 import { saveLifecycle, loadLifecycle, sourceIndex, locateBySource, type PersistedLifecycle } from './lifecycle-store'
@@ -36,8 +36,16 @@ export class DesignMode {
   active = false
   /** Ordered set of currently selected elements — VisBug-style multi-select (B6). */
   selection: TaggedElement[] = []
-  sent = new SentRegistry()
+  /** Single owner of sent-state — verifier consumption, ChangeList rows, persistence
+   * projection — replacing the old SentRegistry + sentSeeds + ChangeList.sentRows trio. */
+  session = new LifecycleSession()
   onSendComplete?: () => void
+
+  /** Back-compat alias: `.sent` used to be a separate SentRegistry; the session implements
+   * that same SentStore surface directly now. */
+  get sent() {
+    return this.session
+  }
 
   private moveRaf = 0
   private reflowRaf = 0
@@ -49,9 +57,6 @@ export class DesignMode {
   private verifier: Verifier
   private verifierSummary = ''
   private changeList: ChangeList
-  /** Seed payloads per sent request id — the single owner ChangeList rows and (Task 10)
-   * persistence read from; SentRegistry keeps only what verification needs. */
-  private sentSeeds = new Map<string, SentSeed[]>()
   /** Watcher-state poller — runs ONLY while design mode is on (started/stopped in
    * setActive), so watch mode adds zero idle overhead to the page. */
   private watch = new WatchStatus(() => this.refreshStatus())
@@ -94,7 +99,7 @@ export class DesignMode {
         (el) => this.handleBeforeEdit(el)
       )
     this.dock = dock ?? new Dock(overlay.host, this.panel, overlay.status, overlay.toggle)
-    this.verifier = new Verifier(this.sent, this.drafts, (summary) => {
+    this.verifier = new Verifier(this.session, this.drafts, (summary) => {
       this.verifierSummary = summary
       this.refreshStatus()
       // a commit/mismatch may change the computed style of the element the panel is
@@ -102,7 +107,7 @@ export class DesignMode {
       this.panel.refresh()
       this.remeasure()
     })
-    this.changeList = new ChangeList(this.drafts, {
+    this.changeList = new ChangeList(this.drafts, this.session, {
       onHover: (el) => (el ? this.overlay.showOutline(el.getBoundingClientRect()) : this.overlay.hideOutline()),
       onSelect: (el) => this.select(el),
       onResend: (seed) => this.resend(seed),
@@ -113,7 +118,7 @@ export class DesignMode {
       // ticks every ~2s while a request is pending) — persisting on every tick regardless would
       // defeat "storage writes only on state changes" (final-review F4). Only a real stage
       // transition (sent -> applying, applying -> done, etc.) warrants a sessionStorage write.
-      if (this.changeList.applyStage(e)) this.persist()
+      if (this.session.applyStage(e)) this.persist()
     })
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
     overlay.sendButton.addEventListener('click', () => {
@@ -143,41 +148,9 @@ export class DesignMode {
         this.onSendComplete?.()
       }
       const onSendOk = (id: string): void => {
-        const mapping = pairs.map(([el, change]) => {
-          const dcSource = el.dataset.dcSource ?? null
-          return {
-            el,
-            dcSource,
-            index: dcSource ? sourceIndex(el, dcSource) : 0,
-            draftProps: [...(this.drafts.entries().get(el)?.keys() ?? [])],
-            changes: change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
-          }
-        })
-        this.sent.add(id, mapping)
-        const seeds: SentSeed[] = pairs.map(([el, change], i) => ({
-          el,
-          dcSource: mapping[i].dcSource,
-          index: mapping[i].index,
-          draftProps: [...(this.drafts.entries().get(el)?.keys() ?? [])],
-          change,
-        }))
-        this.sentSeeds.set(id, seeds)
-        this.changeList.addSent(id, seeds)
-        this.verifier.start()
-        this.persist()
-        fetch('/__the-forge/dispatch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
-          body: JSON.stringify({}),
-        })
-          .then((res) => {
-            if (!res.ok) return onDispatchSettled(null)
-            res
-              .json()
-              .then((body: { rung: Rung }) => onDispatchSettled(body.rung))
-              .catch(() => onDispatchSettled(null))
-          })
-          .catch(() => onDispatchSettled(null))
+        const seeds = this.pairsToSeeds(pairs)
+        this.registerQueuedSend(id, seeds)
+        this.postDispatch(onDispatchSettled)
       }
       overlay.sendButton.disabled = true
       // nesting is deliberate: the send test counts microtask ticks — re-check it before flattening to async/await
@@ -247,10 +220,51 @@ export class DesignMode {
     | 'no-changes'
     | 'already-sent' {
     const { request, elements } = buildChangeRequestWithElements(this.drafts)
-    const pairs = [...elements.entries()].filter(([el, change]) => !this.sent.isDuplicate(el, change.changes))
+    const pairs = [...elements.entries()].filter(([el, change]) => !this.session.isDuplicate(el, change.changes))
     request.elements = pairs.map(([, change]) => change)
     if (request.elements.length === 0) return elements.size > 0 ? 'already-sent' : 'no-changes'
     return { request, pairs }
+  }
+
+  /** Single construction point for element/change pairs -> SentSeed[] (used to be built twice:
+   * once for SentRegistry, once for ChangeList). */
+  private pairsToSeeds(pairs: Array<[TaggedElement, ElementChange]>): SentSeed[] {
+    return pairs.map(([el, change]) => {
+      const dcSource = el.dataset.dcSource ?? null
+      return {
+        el,
+        dcSource,
+        index: dcSource ? sourceIndex(el, dcSource) : 0,
+        draftProps: [...(this.drafts.entries().get(el)?.keys() ?? [])],
+        change,
+      }
+    })
+  }
+
+  /** Registers a freshly-queued send under its server-assigned id — the single path shared by
+   * Send's onSendOk and resend()'s re-queue success handler. */
+  private registerQueuedSend(id: string, seeds: SentSeed[]): void {
+    this.session.register(id, seeds)
+    this.verifier.start()
+    this.persist()
+  }
+
+  /** Fire-and-forget dispatch POST shared by Send and resend() — a failure here must never
+   * undo the send, only downgrade to the manual rung. */
+  private postDispatch(onSettled: (rung: Rung | null) => void): void {
+    fetch('/__the-forge/dispatch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+      body: JSON.stringify({}),
+    })
+      .then((res) => {
+        if (!res.ok) return onSettled(null)
+        res
+          .json()
+          .then((body: { rung: Rung }) => onSettled(body.rung))
+          .catch(() => onSettled(null))
+      })
+      .catch(() => onSettled(null))
   }
 
   /** Re-queues one failed element-change as a fresh request. Safe and unfiltered by design:
@@ -272,29 +286,12 @@ export class DesignMode {
     })
       .then((res) => (res.ok ? (res.json() as Promise<{ id: string }>) : Promise.reject(new Error('queue failed'))))
       .then((body) => {
-        this.sent.add(body.id, [
-          {
-            el: seed.el,
-            dcSource: seed.dcSource,
-            index: seed.index,
-            draftProps: seed.draftProps,
-            changes: seed.change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
-          },
-        ])
-        this.sentSeeds.set(body.id, [seed])
         // Remove the OLD failed row only once the re-queue actually succeeded (final-review
         // F5) — a failed POST below (see .catch) leaves the failed row and its note in place
         // instead of vanishing on click with nothing to show for it.
-        this.changeList.removeRow(seed)
-        this.changeList.addSent(body.id, [seed])
-        this.verifier.start()
-        this.persist() // final-review F1: without this, a reload within the ~2s verifier-poll
-        // window after a re-send loses the re-sent entry from the restored session.
-        fetch('/__the-forge/dispatch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
-          body: JSON.stringify({}),
-        }).catch(() => {
+        this.session.removeSeed(seed)
+        this.registerQueuedSend(body.id, [seed])
+        this.postDispatch(() => {
           /* request is safely queued — manual rung, same as Send */
         })
       })
@@ -323,7 +320,7 @@ export class DesignMode {
       document.addEventListener('keydown', this.onKey, true)
       document.addEventListener('scroll', this.onReflow, { capture: true, passive: true })
       window.addEventListener('resize', this.onReflow, { passive: true })
-      if (this.sent.size() > 0) this.verifier.start()
+      if (this.session.size() > 0) this.verifier.start()
       this.watch.start()
       this.refreshStatus()
       this.persist()
@@ -351,8 +348,9 @@ export class DesignMode {
       this.dock.exit()
       this.verifier.stop()
       this.watch.stop()
+      // Visual-only: sent entries survive deactivate — the verifier keeps polling them and
+      // setActive(true) below re-arms it whenever entries remain.
       this.changeList.clear()
-      this.sentSeeds.clear()
       this.persist()
     }
   }
@@ -373,28 +371,8 @@ export class DesignMode {
       }
       for (const [prop, value] of d.props) this.drafts.apply(el, prop, value)
     }
-    for (const s of saved.sent) {
-      const seeds: SentSeed[] = s.elements.map((pe) => ({
-        el: (pe.dcSource && locateBySource(pe.dcSource, pe.index)) || (document.createElement(pe.tag) as TaggedElement),
-        dcSource: pe.dcSource,
-        index: pe.index,
-        draftProps: pe.draftProps,
-        change: pe.change,
-      }))
-      this.sent.add(
-        s.id,
-        seeds.map((seed, i) => ({
-          el: seed.el,
-          dcSource: seed.dcSource,
-          index: seed.index,
-          draftProps: seed.draftProps,
-          changes: s.elements[i].changes,
-        }))
-      )
-      this.sentSeeds.set(s.id, seeds)
-      this.changeList.addSent(s.id, seeds)
-    }
-    if (this.sent.size() > 0) this.verifier.start()
+    this.session.restoreSent(saved.sent, locateBySource)
+    if (this.session.size() > 0) this.verifier.start()
     const locatedSelection = saved.selection
       .map((sel) => ({ sel, el: locateBySource(sel.dcSource, sel.index) }))
       .filter((pair): pair is { sel: (typeof saved.selection)[number]; el: TaggedElement } => pair.el !== null)
@@ -482,26 +460,9 @@ export class DesignMode {
         if (!liveKeys.has(`${d.dcSource}#${d.index}`)) drafts.push(d)
       }
     }
-    const sent: PersistedLifecycle['sent'] = []
-    for (const [id, seeds] of this.sentSeeds) {
-      if (!this.sent.get(id)) continue // resolved — receipts are session-visual only, not persisted
-      sent.push({
-        id,
-        elements: seeds.map((seed) => ({
-          dcSource: seed.dcSource,
-          // Read the seed's OWN index rather than recomputing via sourceIndex(seed.el, ...): for
-          // a still-detached placeholder seed, sourceIndex(el, dcSource) can never find `el`
-          // among the live DOM matches (it's not there) and always degrades to 0, silently
-          // losing which list instance this entry actually refers to on every persist() while
-          // detached. Seeds carry their index from send/restore time — trust it instead.
-          index: seed.index,
-          tag: seed.change.tag,
-          draftProps: seed.draftProps,
-          changes: seed.change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
-          change: seed.change,
-        })),
-      })
-    }
+    // resolved (taken by the verifier) entries are already gone from the session's map, so
+    // toPersistedSent() only ever sees what's still live.
+    const sent = this.session.toPersistedSent()
     const selection =
       this.selection.length === 0 && this.pendingRestore && this.pendingRestore.selection.length > 0
         ? this.pendingRestore.selection

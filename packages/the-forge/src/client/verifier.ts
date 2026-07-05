@@ -1,5 +1,5 @@
 import type { SentEntry } from './sent'
-import { SentRegistry } from './sent'
+import type { SentStore } from './lifecycle'
 import type { DraftStore } from './drafts'
 import type { TaggedElement } from './source'
 import { AGENT_DISPLAY_NAME, currentAgent } from './agent'
@@ -175,7 +175,7 @@ export class Verifier {
   private stageListeners: Array<(e: StageEvent) => void> = []
 
   constructor(
-    private sent: SentRegistry,
+    private sent: SentStore,
     private drafts: DraftStore,
     private onUpdate: (summary: string) => void
   ) {}

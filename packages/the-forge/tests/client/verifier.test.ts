@@ -1,13 +1,47 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Verifier, verifyEntry, PAUSE_AFTER_FAILURES, MAX_POLL_MS, type StageEvent } from '../../src/client/verifier'
-import { SentRegistry, type SentEntry } from '../../src/client/sent'
+import type { SentEntry } from '../../src/client/sent'
+import { LifecycleSession, type SentSeed } from '../../src/client/lifecycle'
+import type { ElementChange } from '../../src/client/request'
 import { DraftStore } from '../../src/client/drafts'
 
 function el(): HTMLElement {
   const d = document.createElement('div')
   document.body.appendChild(d)
   return d
+}
+
+/** Thin adapter over LifecycleSession so this suite's many `.add(id, elements)` call sites
+ * (built against the deleted SentRegistry's raw SentEntry['elements'] shape) keep working
+ * verbatim — the verifier itself now depends only on the structural SentStore interface, which
+ * LifecycleSession implements directly. Synthesizes a minimal ElementChange per element since
+ * SentSeed carries a full ElementChange where the old raw shape only carried `changes`. */
+class SentRegistry extends LifecycleSession {
+  add(id: string, elements: SentEntry['elements']): void {
+    const seeds: SentSeed[] = elements.map((e) => ({
+      el: e.el,
+      dcSource: e.dcSource,
+      index: e.index ?? 0,
+      draftProps: e.draftProps,
+      change: {
+        tag: e.el.tagName?.toLowerCase() ?? 'div',
+        source: e.dcSource ? { file: e.dcSource.split(':')[0], line: Number(e.dcSource.split(':')[1]), col: Number(e.dcSource.split(':')[2]) } : null,
+        className: '',
+        text: '',
+        selector: e.el.tagName?.toLowerCase() ?? 'div',
+        changes: e.changes.map((c) => ({
+          property: c.property,
+          beforeCss: '',
+          afterCss: c.afterCss,
+          beforeUtility: null,
+          afterUtility: null,
+          tokenExact: false,
+        })),
+      } satisfies ElementChange,
+    }))
+    this.register(id, seeds)
+  }
 }
 
 beforeEach(() => {

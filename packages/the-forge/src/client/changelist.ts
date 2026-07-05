@@ -1,36 +1,16 @@
 import type { DraftStore } from './drafts'
 import type { StageEvent, LifecycleStage } from './verifier'
-import type { ElementChange, ChangeItem } from './request'
+import type { ChangeItem } from './request'
 import type { TaggedElement } from './source'
 import { parseSourceAttr } from './source'
-import { resolveElement } from './lifecycle-store'
+import type { LifecycleSession, SentSeed, SeedRecord } from './lifecycle'
 
-export interface SentSeed {
-  el: TaggedElement
-  dcSource: string | null
-  /** Position among matches for `dcSource` at send time — carried through to healPlaceholders()
-   * (via resolveElement) so a restored/detached seed heals to the SAME list instance it was
-   * originally sent for, not just whichever instance happens to match first. */
-  index: number
-  draftProps: string[]
-  change: ElementChange
-}
+export type { SentSeed } from './lifecycle'
 
 export interface ChangeListCallbacks {
   onHover: (el: TaggedElement | null) => void
   onSelect: (el: TaggedElement) => void
   onResend: (seed: SentSeed) => void
-}
-
-/** Stages a row can no longer leave via poll events — a late 'sent'/'applying' tick for an
- * already-resolved id (races between take() and the next poll) must not resurrect a receipt. */
-const TERMINAL: ReadonlySet<LifecycleStage> = new Set(['done', 'mismatch', 'unverified', 'failed'])
-
-interface SentRow {
-  seed: SentSeed
-  stage: LifecycleStage
-  note?: string
-  mismatches?: StageEvent['mismatches']
 }
 
 function summarizeItem(c: ChangeItem): string {
@@ -53,20 +33,26 @@ function shortSource(dcSource: string | null): string {
   return `${slash === -1 ? parsed.file : parsed.file.slice(slash + 1)}:${parsed.line}`
 }
 
+/** Renders the send/verify lifecycle as rows. Sent-row state lives in LifecycleSession now —
+ * this class is a view over it plus the DraftStore: DOM building, draft dedup, interactions. */
 export class ChangeList {
   root = document.createElement('div')
 
   private head = document.createElement('div')
   private clearButton = document.createElement('button')
   private list = document.createElement('div')
-  private sentRows = new Map<string, SentRow>() // key: `${requestId}:${elIndex}`
   /** Set by clear() (design-mode off) and cleared by the next syncDrafts() — suppresses the
    * draft-row render loop so a clear() while the DraftStore still holds stale drafts (the
    * DraftStore is owned/cleared by the caller, not this class) doesn't resurrect rows. */
   private suppressDrafts = false
+  /** Same idea for sent rows, cleared by the next addSent()/applyStage(): clear() must hide
+   * rows WITHOUT wiping the session — the verifier keeps polling its entries across a
+   * deactivate/reactivate. */
+  private suppressSeedRecords = false
 
   constructor(
     private drafts: DraftStore,
+    private session: LifecycleSession,
     private cb: ChangeListCallbacks
   ) {
     this.root.className = 'changes-section'
@@ -76,10 +62,11 @@ export class ChangeList {
     title.textContent = 'Changes'
     this.clearButton.className = 'changes-clear'
     this.clearButton.textContent = 'Clear done'
-    this.clearButton.addEventListener('click', () => this.clearDone())
+    this.clearButton.addEventListener('click', () => this.session.clearResolved())
     this.head.append(title, this.clearButton)
     this.list.className = 'changes-list'
     this.root.append(this.head, this.list)
+    this.session.onChange(() => this.render())
   }
 
   syncDrafts(): void {
@@ -87,45 +74,36 @@ export class ChangeList {
     this.render()
   }
 
+  // Thin delegates to the session (state lives there now) — kept here for one call surface;
+  // the session's onChange subscription (constructor) drives the re-render.
   addSent(id: string, seeds: SentSeed[]): void {
-    seeds.forEach((seed, i) => this.sentRows.set(`${id}:${i}`, { seed, stage: 'sent' }))
-    this.render()
+    this.suppressSeedRecords = false
+    this.session.register(id, seeds)
   }
 
-  /** Returns true only when this event actually changed a row's stage — poll re-emissions of
-   * an unchanged stage (verifier ticks every ~2s while a request is pending) are expected and
-   * must be a no-op, not just for rendering but for the caller's own state-change bookkeeping
-   * (index.ts persists to sessionStorage only when this returns true — see final-review F4). */
   applyStage(e: StageEvent): boolean {
-    const row = this.sentRows.get(`${e.requestId}:${e.elIndex}`)
-    if (!row) return false
-    if (row.stage === e.stage) return false // poll re-emissions are expected — no re-render churn
-    if (TERMINAL.has(row.stage)) return false
-    row.stage = e.stage
-    row.note = e.note
-    row.mismatches = e.mismatches
-    this.render()
-    return true
+    this.suppressSeedRecords = false
+    return this.session.applyStage(e)
   }
 
-  clearDone(): void {
-    for (const [key, row] of this.sentRows) {
-      if (row.stage === 'done' || row.stage === 'unverified') this.sentRows.delete(key)
-    }
-    this.render()
+  removeRow(seed: SentSeed): void {
+    this.session.removeSeed(seed)
   }
 
+  /** Design-mode-off teardown: visually clears every row WITHOUT touching the session (the
+   * verifier keeps polling its entries across a deactivate/reactivate). Suppression lifts on
+   * the next real mutation. */
   clear(): void {
-    this.sentRows.clear()
+    this.suppressSeedRecords = true
     this.suppressDrafts = true
     this.render()
   }
 
   /** Props of `el` covered by an in-flight (sent/applying) row — those edits are already
    * represented; a draft row repeating them would show the same change twice. */
-  private inFlightProps(el: TaggedElement): Set<string> {
+  private inFlightProps(el: TaggedElement, rows: SeedRecord[]): Set<string> {
     const props = new Set<string>()
-    for (const row of this.sentRows.values()) {
+    for (const row of rows) {
       if (row.seed.el !== el) continue
       if (row.stage !== 'sent' && row.stage !== 'applying') continue
       for (const p of row.seed.draftProps) props.add(p)
@@ -133,45 +111,22 @@ export class ChangeList {
     return props
   }
 
-  /** Restored sent seeds whose element couldn't be located at boot get a detached
-   * `document.createElement(tag)` placeholder (see lifecycle-store.ts / index.ts
-   * restoreLifecycle) — nothing ever re-located them afterward, so a restored row stayed
-   * greyed (`row-gone`) forever even once the framework mounted the real element, AND
-   * inFlightProps (which dedupes by `seed.el` identity) missed since the draft's el and the
-   * placeholder are different objects, letting a draft row and an in-flight row for the same
-   * change show up side by side. Heal at render time — every render is a natural re-check
-   * point — mirroring the verifier's own locate() fallback: a disconnected element with a
-   * dcSource always gets one more chance to resolve to its live DOM counterpart. MUTATING
-   * `seed.el` in place (not replacing the SentRow) is what makes the fix reach every consumer
-   * that shares the seed object: inFlightProps, persist(), and row click/hover handlers.
-   */
-  private healPlaceholders(): void {
-    for (const row of this.sentRows.values()) {
-      if (row.seed.el.isConnected) continue
-      if (!row.seed.dcSource) continue
-      // Seeds carry their own instance index (R1) — resolveElement re-finds the SAME list
-      // instance this seed was originally sent for, mirroring the verifier's own locate().
-      const located = resolveElement(row.seed.el, row.seed.dcSource, row.seed.index)
-      if (located) row.seed.el = located
-    }
-  }
-
   private render(): void {
-    this.healPlaceholders()
+    this.session.healPlaceholders()
     this.list.replaceChildren()
     let terminalOk = 0
 
-    // Sent rows first (newest last in insertion order — reverse for newest-first display).
-    const sentEntries = [...this.sentRows.entries()].reverse()
-    for (const [, row] of sentEntries) {
-      this.list.appendChild(this.renderSentRow(row))
+    // Sent rows first (newest last in session insertion order — reverse for newest-first display).
+    const rows: SeedRecord[] = this.suppressSeedRecords ? [] : this.session.records()
+    for (const row of [...rows].reverse()) {
+      this.list.appendChild(this.renderSeedRecord(row))
       if (row.stage === 'done' || row.stage === 'unverified') terminalOk++
     }
 
     // Draft rows after sent rows: drafts are "not yet part of the story being told above".
     if (!this.suppressDrafts) {
       for (const [el, props] of this.drafts.entries()) {
-        const inFlight = this.inFlightProps(el as TaggedElement)
+        const inFlight = this.inFlightProps(el as TaggedElement, rows)
         const remaining = [...props.entries()].filter(([prop]) => !inFlight.has(prop))
         if (remaining.length === 0) continue
         this.list.appendChild(this.renderDraftRow(el as TaggedElement, remaining))
@@ -222,7 +177,7 @@ export class ChangeList {
     return row
   }
 
-  private renderSentRow(row: SentRow): HTMLElement {
+  private renderSeedRecord(row: SeedRecord): HTMLElement {
     const dom = this.baseRow(row.stage, row.seed.el)
     const source = row.seed.change.source
     const dcSource = source ? `${source.file}:${source.line}:${source.col}` : row.seed.dcSource
@@ -249,7 +204,7 @@ export class ChangeList {
     return dom
   }
 
-  private failedActions(row: SentRow): HTMLElement {
+  private failedActions(row: SeedRecord): HTMLElement {
     const actions = document.createElement('div')
     actions.className = 'change-actions'
     const resend = document.createElement('button')
@@ -268,27 +223,9 @@ export class ChangeList {
     dismiss.textContent = 'Dismiss'
     dismiss.addEventListener('click', (e) => {
       e.stopPropagation()
-      this.dismissRow(row)
+      this.session.removeSeed(row.seed)
     })
     actions.append(resend, dismiss)
     return actions
-  }
-
-  private dismissRow(row: SentRow): void {
-    for (const [key, r] of this.sentRows) {
-      if (r === row) this.sentRows.delete(key)
-    }
-    this.render()
-  }
-
-  /** Public counterpart to dismissRow, keyed by seed rather than the internal SentRow — the
-   * host (index.ts resend()) calls this right before addSent() once its re-queue POST actually
-   * resolves, so a failed POST leaves the old failed row in place instead of vanishing on
-   * click (final-review F5). */
-  removeRow(seed: SentSeed): void {
-    for (const [key, r] of this.sentRows) {
-      if (r.seed === seed) this.sentRows.delete(key)
-    }
-    this.render()
   }
 }

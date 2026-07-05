@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { ChangeList, type SentSeed } from '../../src/client/changelist'
+import { LifecycleSession } from '../../src/client/lifecycle'
 import { DraftStore } from '../../src/client/drafts'
 import type { ElementChange } from '../../src/client/request'
 
@@ -37,7 +38,7 @@ beforeEach(() => {
 
 describe('empty state', () => {
   it('is hidden with no rows', () => {
-    const list = new ChangeList(new DraftStore(), noop)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     expect(list.root.hidden).toBe(true)
     expect(list.root.className).toBe('changes-section')
   })
@@ -47,7 +48,7 @@ describe('draft rows', () => {
   it('shows a draft row per drafted element after syncDrafts', () => {
     const drafts = new DraftStore()
     const el = tagged()
-    const list = new ChangeList(drafts, noop)
+    const list = new ChangeList(drafts, new LifecycleSession(), noop)
     drafts.apply(el as never, 'padding-top', '24px')
     list.syncDrafts()
     expect(list.root.hidden).toBe(false)
@@ -62,7 +63,7 @@ describe('draft rows', () => {
   it('removes the draft row when the draft is discarded', () => {
     const drafts = new DraftStore()
     const el = tagged()
-    const list = new ChangeList(drafts, noop)
+    const list = new ChangeList(drafts, new LifecycleSession(), noop)
     drafts.apply(el as never, 'padding-top', '24px')
     list.syncDrafts()
     drafts.discard(el as never)
@@ -73,7 +74,7 @@ describe('draft rows', () => {
   it('excludes props covered by an in-flight sent row for the same element', () => {
     const drafts = new DraftStore()
     const el = tagged()
-    const list = new ChangeList(drafts, noop)
+    const list = new ChangeList(drafts, new LifecycleSession(), noop)
     drafts.apply(el as never, 'padding-top', '24px')
     list.addSent('q1', [seed(el)])
     list.syncDrafts()
@@ -92,7 +93,7 @@ describe('draft rows', () => {
 
 describe('sent rows and stages', () => {
   it('renders sent rows with token-vocabulary summaries', () => {
-    const list = new ChangeList(new DraftStore(), noop)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     list.addSent('q1', [seed(tagged())])
     const row = list.root.querySelector('.change-row')!
     expect(row.querySelector('.chip')!.className).toContain('chip-sent')
@@ -107,13 +108,13 @@ describe('sent rows and stages', () => {
         { property: 'margin-top', beforeCss: '0px', afterCss: '8px', beforeUtility: null, afterUtility: 'mt-2', tokenExact: true },
       ],
     })
-    const list = new ChangeList(new DraftStore(), noop)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     list.addSent('q1', [seed(tagged(), change)])
     expect(list.root.querySelector('.change-summary')!.textContent).toBe('pt-2 → pt-6 +1 more')
   })
 
   it('advances stages idempotently and allows applying → sent regression', () => {
-    const list = new ChangeList(new DraftStore(), noop)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     list.addSent('q1', [seed(tagged())])
     const chip = () => list.root.querySelector('.chip')!.className
     list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:8:11', stage: 'applying' })
@@ -127,7 +128,7 @@ describe('sent rows and stages', () => {
   })
 
   it('a terminal row no longer regresses on late poll events', () => {
-    const list = new ChangeList(new DraftStore(), noop)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     list.addSent('q1', [seed(tagged())])
     list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:8:11', stage: 'done' })
     list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:8:11', stage: 'sent' })
@@ -135,7 +136,7 @@ describe('sent rows and stages', () => {
   })
 
   it('renders the failed note', () => {
-    const list = new ChangeList(new DraftStore(), noop)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     list.addSent('q1', [seed(tagged())])
     list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:8:11', stage: 'failed', note: 'needs confirmation: shared component' })
     expect(list.root.querySelector('.chip')!.className).toContain('chip-failed')
@@ -143,7 +144,7 @@ describe('sent rows and stages', () => {
   })
 
   it('ignores events for unknown rows', () => {
-    const list = new ChangeList(new DraftStore(), noop)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     expect(() => list.applyStage({ requestId: 'zzz', elIndex: 3, dcSource: null, stage: 'done' })).not.toThrow()
     expect(list.root.hidden).toBe(true)
   })
@@ -151,7 +152,7 @@ describe('sent rows and stages', () => {
   it('clear() drops everything', () => {
     const drafts = new DraftStore()
     const el = tagged()
-    const list = new ChangeList(drafts, noop)
+    const list = new ChangeList(drafts, new LifecycleSession(), noop)
     drafts.apply(el as never, 'padding-top', '24px')
     list.syncDrafts()
     list.addSent('q1', [seed(tagged('src/B.tsx:1:1'))])
@@ -164,7 +165,7 @@ describe('sent rows and stages', () => {
 describe('interactions', () => {
   it('hover reports the element, mouseleave reports null', () => {
     const onHover = vi.fn()
-    const list = new ChangeList(new DraftStore(), { ...noop, onHover })
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), { ...noop, onHover })
     const el = tagged()
     list.addSent('q1', [seed(el)])
     const row = list.root.querySelector('.change-row')!
@@ -176,7 +177,7 @@ describe('interactions', () => {
 
   it('click selects a connected element', () => {
     const onSelect = vi.fn()
-    const list = new ChangeList(new DraftStore(), { ...noop, onSelect })
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), { ...noop, onSelect })
     const el = tagged()
     list.addSent('q1', [seed(el)])
     list.root.querySelector('.change-row')!.dispatchEvent(new MouseEvent('click'))
@@ -186,7 +187,7 @@ describe('interactions', () => {
   it('a disconnected element greys the row and never selects', () => {
     const onSelect = vi.fn()
     const onHover = vi.fn()
-    const list = new ChangeList(new DraftStore(), { ...noop, onSelect, onHover })
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), { ...noop, onSelect, onHover })
     const el = tagged()
     const s = seed(el)
     el.remove()
@@ -200,7 +201,7 @@ describe('interactions', () => {
   })
 
   it('Dismiss removes a failed row', () => {
-    const list = new ChangeList(new DraftStore(), noop)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     list.addSent('q1', [seed(tagged())])
     list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'failed', note: 'nope' })
     ;(list.root.querySelector('.change-dismiss') as HTMLElement).click()
@@ -214,7 +215,7 @@ describe('interactions', () => {
   // handler only forwards the seed and no longer dismisses.
   it('Re-send forwards the seed and keeps the row until the host confirms success', () => {
     const onResend = vi.fn()
-    const list = new ChangeList(new DraftStore(), { ...noop, onResend })
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), { ...noop, onResend })
     const el = tagged()
     const s = seed(el)
     list.addSent('q1', [s])
@@ -232,7 +233,7 @@ describe('interactions', () => {
 
   it('a failed re-queue POST leaves the row present with its note (host never calls removeRow)', () => {
     const onResend = vi.fn()
-    const list = new ChangeList(new DraftStore(), { ...noop, onResend })
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), { ...noop, onResend })
     const el = tagged()
     const s = seed(el)
     list.addSent('q1', [s])
@@ -254,7 +255,7 @@ describe('interactions', () => {
   it('a placeholder seed heals to the real element once it renders, un-greying the row', () => {
     const dcSource = 'src/App.tsx:9:1'
     const placeholder = document.createElement('h1') as unknown as never // detached — never appended
-    const list = new ChangeList(new DraftStore(), noop)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     const placeholderSeed: SentSeed = {
       el: placeholder,
       dcSource,
@@ -281,7 +282,7 @@ describe('interactions', () => {
   it('a placeholder seed heals to the SECOND list instance when its seed carries index: 1', () => {
     const dcSource = 'src/List.tsx:4:4'
     const placeholder = document.createElement('li') as unknown as never // detached
-    const list = new ChangeList(new DraftStore(), noop)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     const placeholderSeed: SentSeed = {
       el: placeholder,
       dcSource,
@@ -304,7 +305,7 @@ describe('interactions', () => {
     const dcSource = 'src/App.tsx:9:1'
     const placeholder = document.createElement('h1') as unknown as never
     const drafts = new DraftStore()
-    const list = new ChangeList(drafts, noop)
+    const list = new ChangeList(drafts, new LifecycleSession(), noop)
     const placeholderSeed: SentSeed = {
       el: placeholder,
       dcSource,
@@ -325,7 +326,7 @@ describe('interactions', () => {
   })
 
   it('Clear done removes done and unverified rows, keeps failed and mismatch', () => {
-    const list = new ChangeList(new DraftStore(), noop)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     list.addSent('q1', [seed(tagged('a.tsx:1:1')), seed(tagged('b.tsx:2:2')), seed(tagged('c.tsx:3:3')), seed(tagged('d.tsx:4:4'))])
     list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'done' })
     list.applyStage({ requestId: 'q1', elIndex: 1, dcSource: null, stage: 'unverified' })
@@ -337,7 +338,7 @@ describe('interactions', () => {
   })
 
   it('the Clear done button is hidden while nothing is clearable', () => {
-    const list = new ChangeList(new DraftStore(), noop)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     list.addSent('q1', [seed(tagged())])
     expect((list.root.querySelector('.changes-clear') as HTMLElement).hidden).toBe(true)
     list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'done' })
