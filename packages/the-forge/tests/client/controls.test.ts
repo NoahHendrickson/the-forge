@@ -16,6 +16,7 @@ function make(
     onScrubStart: () => void
     onDetach: () => void
     onTokenKey: () => void
+    onTokenOpen: () => void
   }> = {}
 ) {
   const onInput = vi.fn()
@@ -519,5 +520,37 @@ describe('NumberField — onTokenKey (`=` opens token picker)', () => {
     const { input } = make()
     const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
     expect(() => input.dispatchEvent(ev)).not.toThrow()
+  })
+})
+
+describe('NumberField — onTokenOpen (`{ }` hover icon button)', () => {
+  it('no onTokenOpen → no .token-btn rendered', () => {
+    const { nf } = make()
+    expect(nf.root.querySelector('.token-btn')).toBeNull()
+  })
+
+  it('with onTokenOpen → button exists inside .nf, has the right title, and click() fires the callback once', () => {
+    const onTokenOpen = vi.fn()
+    const { nf } = make({ onTokenOpen })
+    const btn = nf.root.querySelector('.token-btn') as HTMLButtonElement
+    expect(btn).not.toBeNull()
+    expect(nf.root.classList.contains('nf')).toBe(true)
+    expect(btn.title).toBe('Use design token')
+    btn.click()
+    expect(onTokenOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it('after bindToken(), click() still fires onTokenOpen (swap-while-bound), while `=` keydown still does not fire onTokenKey (existing gate pinned)', () => {
+    const onTokenOpen = vi.fn()
+    const onTokenKey = vi.fn()
+    const { nf, input } = make({ onTokenOpen, onTokenKey })
+    nf.set(10)
+    nf.bindToken('px-4')
+    const btn = nf.root.querySelector('.token-btn') as HTMLButtonElement
+    btn.click()
+    expect(onTokenOpen).toHaveBeenCalledTimes(1)
+    const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
+    input.dispatchEvent(ev)
+    expect(onTokenKey).not.toHaveBeenCalled()
   })
 })
