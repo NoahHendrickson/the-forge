@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { Panel, normalizeJustify, normalizeAlign, hasDirectText, tokenEntriesFor } from '../../src/client/panel'
+import { Panel, normalizeJustify, normalizeAlign, hasDirectText, tokenEntriesFor, colorTokenEntries } from '../../src/client/panel'
 import { DraftStore } from '../../src/client/drafts'
 import { buildInspectorData } from '../../src/client/inspector'
 import { resetTokensCache, type Theme, type Tokens } from '../../src/client/tokens'
@@ -817,6 +817,56 @@ describe('tokenEntriesFor', () => {
 
   it('opacity (and other unmapped props) return null — no picker', () => {
     expect(tokenEntriesFor({ props: ['opacity'] }, TW, TOKENS)).toBeNull()
+  })
+})
+
+describe('colorTokenEntries', () => {
+  it('maps tokens.colors to {label, color} entries preserving readTokens() sorted order', () => {
+    const tokens: Tokens = {
+      colors: [
+        { name: 'red-100', value: '#ffcccc' },
+        { name: 'red-500', value: '#ff0000' },
+        { name: 'blue-400', value: '#0000ff' },
+      ],
+      textScale: [],
+    }
+    const entries = colorTokenEntries(tokens)
+    expect(entries).not.toBeNull()
+    expect(entries).toEqual([
+      { label: 'red-100', color: '#ffcccc' },
+      { label: 'red-500', color: '#ff0000' },
+      { label: 'blue-400', color: '#0000ff' },
+    ])
+  })
+
+  it('filters out unparseable token value (e.g. var(--indirect))', () => {
+    const tokens: Tokens = {
+      colors: [
+        { name: 'red-500', value: '#ff0000' },
+        { name: 'indirect', value: 'var(--indirect)' },
+        { name: 'blue-500', value: '#0000ff' },
+      ],
+      textScale: [],
+    }
+    const entries = colorTokenEntries(tokens)
+    expect(entries).toEqual([
+      { label: 'red-500', color: '#ff0000' },
+      { label: 'blue-500', color: '#0000ff' },
+    ])
+  })
+
+  it('returns null when color set is empty or all colors are unparseable', () => {
+    const emptyTokens: Tokens = {
+      colors: [],
+      textScale: [],
+    }
+    expect(colorTokenEntries(emptyTokens)).toBeNull()
+
+    const unparseableTokens: Tokens = {
+      colors: [{ name: 'indirect', value: 'var(--indirect)' }],
+      textScale: [],
+    }
+    expect(colorTokenEntries(unparseableTokens)).toBeNull()
   })
 })
 

@@ -1,6 +1,6 @@
 import type { TaggedElement } from './source'
 import { DraftStore } from './drafts'
-import { UTILITY_PREFIXES, type Theme, type Tokens } from './tokens'
+import { UTILITY_PREFIXES, parseColor, type Theme, type Tokens } from './tokens'
 import type { TokenEntry } from './tokenpicker'
 import { hasDirectText } from './panel-readers'
 
@@ -107,6 +107,15 @@ export function tokenEntriesFor(spec: { props: string[] }, theme: Theme, tokens:
     return SPACING_SCALE.map((n) => ({ label: String(n), px: n * base }))
   }
   return null
+}
+
+/** Named color-token entries for the color rows' `{ }` icon — null when the theme defines
+ * no (parseable) color tokens, which suppresses the icon entirely (spec: no empty dropdowns). */
+export function colorTokenEntries(tokens: Tokens): TokenEntry[] | null {
+  const entries = tokens.colors
+    .filter((t) => parseColor(t.value) !== null)
+    .map((t) => ({ label: t.name, color: t.value }))
+  return entries.length === 0 ? null : entries
 }
 
 /** border-top-width -> border-top-style (matches each width longhand to its side's style longhand). */

@@ -16,6 +16,7 @@ import {
   utilityPrefixFor,
   draftSolidIfNone,
   tokenEntriesFor,
+  colorTokenEntries,
   WEIGHTS,
   SECTIONS,
 } from './panel-specs'
@@ -34,7 +35,7 @@ import {
   mainAxisProp,
 } from './panel-readers'
 
-export { tokenEntriesFor } from './panel-specs'
+export { tokenEntriesFor, colorTokenEntries } from './panel-specs'
 export { normalizeJustify, normalizeAlign, hasDirectText } from './panel-readers'
 
 interface BoundField {
