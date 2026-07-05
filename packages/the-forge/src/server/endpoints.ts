@@ -132,6 +132,16 @@ export function createForgeMiddleware(
       if (!isAllowedHost(req.headers.host, allowedHosts)) {
         return send(res, 403, { error: 'host not allowed' })
       }
+      // Next's rewrites() proxy rewrites Host to the sidecar's own loopback address before this
+      // middleware ever sees the request (same phenomenon as the Origin check below) — so on the
+      // Next path the Host check above always passes with a loopback address regardless of the
+      // real browser origin, and a DNS-rebinding page could otherwise reach this route and read
+      // the absolute project path back out. Require X-Forwarded-Host to also pass the allowlist
+      // when present so the proxied path gets the same DNS-rebinding defense as direct Vite.
+      const devtoolsForwardedHost = req.headers['x-forwarded-host']
+      if (typeof devtoolsForwardedHost === 'string' && !isAllowedHost(devtoolsForwardedHost, allowedHosts)) {
+        return send(res, 403, { error: 'host not allowed' })
+      }
       if (req.method !== 'GET') return send(res, 405, { error: 'use GET' })
       const forgeDir = path.join(dispatchConfig.cwd, '.the-forge')
       return send(res, 200, {

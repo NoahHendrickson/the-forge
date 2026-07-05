@@ -888,6 +888,30 @@ describe('GET /.well-known/appspecific/com.chrome.devtools.json (Chrome DevTools
     expect(res.statusCode).toBe(200)
   })
 
+  it('403s when X-Forwarded-Host is a disallowed host even though Host is loopback (Next proxy rewrites Host)', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-devtools-cwd-'))
+    const mwWithCwd = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false, cwd })
+    const res = fakeRes()
+    await run(
+      mwWithCwd,
+      fakeReq('GET', DEVTOOLS_JSON_PATH, undefined, { host: '127.0.0.1:4568', 'x-forwarded-host': 'evil.com:3000' }),
+      res
+    )
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('200s when X-Forwarded-Host is an allowed host (the proxied Next path)', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-devtools-cwd-'))
+    const mwWithCwd = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false, cwd })
+    const res = fakeRes()
+    await run(
+      mwWithCwd,
+      fakeReq('GET', DEVTOOLS_JSON_PATH, undefined, { host: '127.0.0.1:4568', 'x-forwarded-host': 'localhost:5175' }),
+      res
+    )
+    expect(res.statusCode).toBe(200)
+  })
+
   // Non-GET: 405, matching the convention this middleware already uses for every other route
   // it owns (e.g. POST /pull, /mark, /wait all 405 on the wrong method) — consistent behavior
   // rather than inventing a bespoke fall-through just for this one route.

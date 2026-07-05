@@ -164,6 +164,19 @@ describe('wrapNextConfigExport', () => {
     expect(withoutWrap).toBe(source)
   })
 
+  it('inserts the CJS require after a leading "use strict" directive, not before it', () => {
+    const source = `'use strict'\n\nconst nextConfig = {}\n\nmodule.exports = nextConfig\n`
+    const result = wrapNextConfigExport(source)
+    expect(result.kind).toBe('edited')
+    if (result.kind !== 'edited') throw new Error('unreachable')
+
+    expect(result.code.startsWith(`'use strict'`)).toBe(true)
+    expect(result.code.indexOf(`'use strict'`)).toBeLessThan(
+      result.code.indexOf(`require('the-forge/next')`)
+    )
+    expect(result.code).toContain(`module.exports = withForge(nextConfig)`)
+  })
+
   it('wraps an identifier default export', () => {
     const source = `const config = {}\n\nexport default config\n`
     const result = wrapNextConfigExport(source)
@@ -269,6 +282,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     if (first.kind !== 'edited') throw new Error('unreachable')
     const second = mountDesignMode(first.code, 'app')
     expect(second).toEqual({ kind: 'already' })
+  })
+
+  it('puts the mount on its own line, indented past <body>, when children are on the same line as <body>', () => {
+    const source = `export default function RootLayout({ children }) {\n  return (\n    <html>\n      <body>{children}</body>\n    </html>\n  )\n}\n`
+    const result = mountDesignMode(source, 'app')
+    expect(result.kind).toBe('edited')
+    if (result.kind !== 'edited') throw new Error('unreachable')
+
+    expect(result.code).toContain(`      <body>\n        <ForgeDesignMode />{children}</body>`)
   })
 
   it('reports already when the-forge/design-mode is already imported', () => {

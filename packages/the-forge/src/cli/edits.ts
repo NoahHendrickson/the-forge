@@ -247,7 +247,19 @@ export function wrapNextConfigExport(source: string): EditResult {
         const s = new MagicString(source)
         s.appendLeft(right.start, 'withForge(')
         s.appendRight(right.end, ')')
-        s.prepend(`const { withForge } = require('the-forge/next')\n\n`)
+
+        // A leading directive prologue (e.g. 'use strict') must stay the very first
+        // statement(s) in the file — prepending the require unconditionally would land
+        // ahead of it and silently de-strictify the module. Babel parses directives into
+        // `program.directives`, separate from `body`, so insert after the last one's end
+        // when present, else prepend as before.
+        const directives = (cjsProgram.directives as unknown as AstNode[]) ?? []
+        const lastDirectiveEnd = directives.length > 0 ? directives[directives.length - 1].end : null
+        if (typeof lastDirectiveEnd === 'number') {
+          s.appendLeft(lastDirectiveEnd, `\n\nconst { withForge } = require('the-forge/next')`)
+        } else {
+          s.prepend(`const { withForge } = require('the-forge/next')\n\n`)
+        }
 
         return { kind: 'edited', code: s.toString() }
       }
@@ -309,13 +321,19 @@ function mountDesignModeApp(source: string, program: AstNode): EditResult {
     return { kind: 'fallback', reason: 'could not locate <body> opening tag' }
   }
 
-  // Indent the inserted line to match the existing first child (or, absent
-  // one, one level deeper than <body> itself) rather than hardcoding a width.
+  // Indent the inserted line to match the existing first child, unless that child sits on
+  // the same source line as <body> itself (e.g. `<body>{children}</body>` all on one line) —
+  // matching its column would put <ForgeDesignMode /> at <body>'s own indent, not nested
+  // under it. In both that case and the no-children case, fall back to one level deeper
+  // than <body>'s own line rather than hardcoding a width.
+  const bodyLineIndent = lineIndentAt(source, opening.start as number)
   const children = (bodyEl.children as unknown as AstNode[]).filter(
     (c) => !(c.type === 'JSXText' && typeof c.value === 'string' && c.value.trim() === '')
   )
-  const indentSource = children.length > 0 ? (children[0].start as number) : (opening.start as number)
-  const indent = children.length > 0 ? lineIndentAt(source, indentSource) : lineIndentAt(source, opening.start as number) + '  '
+  const firstChild = children[0]
+  const firstChildOnOwnLine =
+    firstChild !== undefined && source.lastIndexOf('\n', (firstChild.start as number) - 1) >= (opening.end as number)
+  const indent = firstChildOnOwnLine ? lineIndentAt(source, firstChild.start as number) : bodyLineIndent + '  '
 
   const s = new MagicString(source)
   insertImportInto(s, program, `import { ForgeDesignMode } from 'the-forge/design-mode'`)

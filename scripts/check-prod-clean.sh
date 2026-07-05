@@ -83,4 +83,13 @@ if [ "$HAS_CLI" != "yes" ]; then
 fi
 echo "PASS: tarball includes dist/cli.js"
 
+# The published bin must be directly executable (`npx the-forge`) without an explicit `node`
+# prefix — that requires the shebang to survive the build unmodified as the file's first line.
+SHEBANG=$(head -1 packages/the-forge/dist/cli.js)
+if [ "$SHEBANG" != "#!/usr/bin/env node" ]; then
+  echo "FAIL: packages/the-forge/dist/cli.js does not start with the node shebang (got '${SHEBANG}')" >&2
+  exit 1
+fi
+echo "PASS: dist/cli.js starts with the node shebang"
+
 echo "PASS: production build is clean"
