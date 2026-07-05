@@ -13,6 +13,21 @@ if grep -riq "data-dc-source\|the-forge\|__THE_FORGE__" fixtures/demo-app/dist/;
   exit 1
 fi
 
+npm run build -w next-demo
+if [ ! -d fixtures/next-demo/.next ]; then
+  echo "FAIL: fixtures/next-demo/.next does not exist" >&2
+  exit 1
+fi
+# Pattern deliberately drops the bare "the-forge" used for the Vite dist grep above:
+# .next/ build metadata legitimately contains the devDependency's package name (e.g. in
+# trace files and manifests), whereas the three markers below are the actual runtime
+# traces we must never ship.
+if grep -riq "data-dc-source\|__the-forge\|__THE_FORGE__" fixtures/next-demo/.next/; then
+  echo "FAIL: companion artifacts found in Next.js production build" >&2
+  exit 1
+fi
+echo "PASS: Next.js production build is clean"
+
 # Package-size gate: the npm package ("files": ["dist"]) is the product's headline lightweight
 # guarantee. Budget sits ~40% above today's ~180KB unpacked so only real regressions trip it.
 MAX_UNPACKED_KB=250
