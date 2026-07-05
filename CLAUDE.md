@@ -58,9 +58,10 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `drafts.ts` | inline-style draft store: apply/current/commit, before-after compare |
 | `agent.ts` | which agent is targeted (`claude-code`/`cursor`/`codex`) + display names |
 | `ripple.ts` | measures which elements move when a draft lands; flashes ripple outlines |
-| `sent.ts` | registry of sent-but-unverified change requests |
-| `changelist.ts` | Changes lifecycle list: per-change rows `draft` → `sent` → `applying` → `done`/`failed`, re-send/dismiss |
-| `lifecycle-store.ts` | sessionStorage persistence of drafts/sent/design-mode across full reloads |
+| `sent.ts` | `SentChange`/`SentEntry` types only (the registry class was absorbed into `lifecycle.ts`) |
+| `lifecycle.ts` | `LifecycleSession` — the single owner of in-flight send state: verifier store (`SentStore`), UI row state, persistence projection; `take()` resolves in place so terminal stage events still land |
+| `changelist.ts` | Changes lifecycle list (view over `LifecycleSession` + drafts): per-change rows `draft` → `sent` → `applying` → `done`/`failed`, re-send/dismiss |
+| `lifecycle-store.ts` | sessionStorage persistence + the canonical element resolver (`resolveElement`/`locateBySource`) used by verifier, healing, and restore |
 | `request.ts` | change-request builder: before/after CSS + utility deltas, markdown |
 | `verifier.ts` | post-send polling, computed-style verification, backoff when server is gone |
 | `watch.ts` | watcher-state poller (design-mode-on only) for the linked-session indicator |
