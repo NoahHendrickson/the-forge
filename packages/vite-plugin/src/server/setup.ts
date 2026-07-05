@@ -27,7 +27,9 @@ const WATCH_COMMAND = `Watch The Forge for design edits and apply them as they a
 /** Historical WATCH_COMMAND texts (byte-exact), oldest first — same purpose as
  * HISTORICAL_DESIGN_COMMANDS below: recognizing OUR OWN legacy command-file output if
  * forge-watch.md ever needs cleanup/migration. Not consumed by any migration yet (the file
- * has never been renamed); exported so the freeze convention is enforceable from tests. */
+ * has never been renamed); exported for the convention tests in tests/server/setup.test.ts,
+ * which enforce the freeze rule (current text never in this list, entries distinct) and that
+ * the repo's own dogfooded .claude/commands/forge-watch.md matches WATCH_COMMAND. */
 export const HISTORICAL_WATCH_COMMANDS = [
   `Watch The Forge for design edits and apply them as they arrive.
 

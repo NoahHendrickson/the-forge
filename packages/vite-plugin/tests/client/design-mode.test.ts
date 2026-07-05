@@ -547,6 +547,28 @@ describe('DesignMode send-to-agent (M4)', () => {
     expect(mode.sent.pendingIds()).toEqual(['q1'])
   })
 
+  it("reverting all drafts while another send is in flight flashes 'No changes', not 'Already sent' (agrees with Copy)", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await flushSend() // q1 in flight
+
+    drafts.apply(btn, 'padding-top', '') // reverted to the original — the builder now produces nothing
+    overlay.sendButton.click()
+    await flushSend()
+
+    expect(overlay.sendButton.textContent).toBe('No changes')
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')).toHaveLength(1)
+  })
+
   it('re-editing an in-flight element to a NEW value sends again (not a duplicate)', async () => {
     let nextId = 1
     const fetchMock = vi.fn((url: string) => {

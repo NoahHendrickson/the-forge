@@ -189,8 +189,11 @@ export class DesignMode {
    * verified) — re-queueing an identical request would instruct the agent to redo utility
    * renames whose "before" class the first apply already removed. Elements edited to NEW
    * values since the send pass through: that's a genuinely new request. 'no-changes' means
-   * every draft was a no-op (scrubbed back to its original — buildChangeRequest drops those);
-   * 'already-sent' means whatever remained is in flight. */
+   * the BUILDER produced nothing (every draft a no-op — scrubbed back to its original);
+   * 'already-sent' means real changes existed but the duplicate filter dropped every one.
+   * The distinction keys off what the builder produced, NOT off sent.size(): reverting all
+   * drafts while an unrelated send is still in flight is "No changes", not "Already sent"
+   * (and must agree with the Copy button, which shows "No changes" in that state). */
   private prepareSend():
     | { request: ChangeRequest; pairs: Array<[TaggedElement, ElementChange]> }
     | 'no-changes'
@@ -198,7 +201,7 @@ export class DesignMode {
     const { request, elements } = buildChangeRequestWithElements(this.drafts)
     const pairs = [...elements.entries()].filter(([el, change]) => !this.sent.isDuplicate(el, change.changes))
     request.elements = pairs.map(([, change]) => change)
-    if (request.elements.length === 0) return this.sent.size() > 0 ? 'already-sent' : 'no-changes'
+    if (request.elements.length === 0) return elements.size > 0 ? 'already-sent' : 'no-changes'
     return { request, pairs }
   }
 

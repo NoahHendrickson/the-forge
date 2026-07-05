@@ -1,5 +1,11 @@
 import type { TaggedElement } from './source'
 
+/** One sent property delta — named once so SentEntry and isDuplicate can't drift apart. */
+export interface SentChange {
+  property: string
+  afterCss: string
+}
+
 export interface SentEntry {
   id: string
   elements: Array<{
@@ -9,7 +15,7 @@ export interface SentEntry {
      * since `changes` may use collapsed shorthand property names (see COLLAPSE in request.ts)
      * that don't match any DraftStore key. */
     draftProps: string[]
-    changes: Array<{ property: string; afterCss: string }>
+    changes: SentChange[]
   }>
 }
 
@@ -35,7 +41,7 @@ export class SentRegistry {
    * identical request tells the agent to redo utility renames whose "before" class the first
    * apply already removed. Identical-only on purpose — an element re-edited to DIFFERENT
    * values is a genuinely new request and must go through. */
-  isDuplicate(el: TaggedElement, changes: Array<{ property: string; afterCss: string }>): boolean {
+  isDuplicate(el: TaggedElement, changes: SentChange[]): boolean {
     for (const entry of this.entries.values()) {
       for (const sent of entry.elements) {
         if (sent.el !== el || sent.changes.length !== changes.length) continue

@@ -109,6 +109,12 @@ interface Counters {
 const MAX_FAILED_NOTES = 3
 const MAX_NOTE_CHARS = 120
 
+/** Shape of GET /__the-forge/status — the one I/O boundary this module reads. */
+interface StatusResponse {
+  items: Array<{ id: string; status: string; note: string | null }>
+  watcher?: unknown
+}
+
 /**
  * Renders the sent-status prefix. Manual rung (spec): nothing applies to the user's code until
  * they actually type /forge-design into their agent session — so as long as ANY sent item is still
@@ -197,12 +203,9 @@ export class Verifier {
           }
           return null
         }
-        return res.json() as Promise<{
-          items: Array<{ id: string; status: string; note: string | null }>
-          watcher?: unknown
-        }>
+        return res.json() as Promise<StatusResponse>
       })
-      .then((body: { items: Array<{ id: string; status: string; note: string | null }>; watcher?: unknown } | null) => {
+      .then((body: StatusResponse | null) => {
         if (body === null) return
         this.consecutiveFailures = 0
         this.delayMs = POLL_MS

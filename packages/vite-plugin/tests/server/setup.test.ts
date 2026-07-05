@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { setupProjectConfig, resolveProjectRoot, migrateLegacyForgeDir } from '../../src/server/setup'
+import { fileURLToPath } from 'node:url'
+import { setupProjectConfig, resolveProjectRoot, migrateLegacyForgeDir, HISTORICAL_WATCH_COMMANDS } from '../../src/server/setup'
 import { Queue } from '../../src/server/queue'
 
 let root: string
@@ -40,6 +41,31 @@ describe('setupProjectConfig', () => {
     const before = fs.statSync(file).mtimeMs
     setupProjectConfig(root, '/abs/dist/mcp.js')
     expect(fs.statSync(file).mtimeMs).toBe(before)
+  })
+
+  describe('command-text conventions (mechanized — no more remember-to-sync)', () => {
+    it("the repo's own dogfooded .claude/commands/forge-watch.md byte-matches the shipped WATCH_COMMAND", () => {
+      // This repo dogfoods the plugin: its checked-in forge-watch.md is written by the same
+      // setupProjectConfig that runs in user projects. Before this test, keeping it in sync
+      // was a manual ritual (a dedicated re-sync commit exists on the branch that added this).
+      setupProjectConfig(root, '/abs/dist/mcp.js')
+      const written = fs.readFileSync(path.join(root, '.claude', 'commands', 'forge-watch.md'), 'utf8')
+      const dogfooded = fs.readFileSync(
+        fileURLToPath(new URL('../../../../.claude/commands/forge-watch.md', import.meta.url)),
+        'utf8'
+      )
+      expect(dogfooded).toBe(written)
+    })
+
+    it('the freeze convention holds: the current watch text is NOT in HISTORICAL_WATCH_COMMANDS, and entries are distinct', () => {
+      setupProjectConfig(root, '/abs/dist/mcp.js')
+      const current = fs.readFileSync(path.join(root, '.claude', 'commands', 'forge-watch.md'), 'utf8')
+      // If this fails, WATCH_COMMAND was edited without freezing the outgoing text: append the
+      // OLD text to HISTORICAL_WATCH_COMMANDS (and never the new one — it hasn't shipped yet).
+      expect(HISTORICAL_WATCH_COMMANDS).not.toContain(current)
+      expect(HISTORICAL_WATCH_COMMANDS.length).toBeGreaterThan(0)
+      expect(new Set(HISTORICAL_WATCH_COMMANDS).size).toBe(HISTORICAL_WATCH_COMMANDS.length)
+    })
   })
 
   it('both command files carry the needs-confirmation protocol (mark failed, never leave unresolved)', () => {
