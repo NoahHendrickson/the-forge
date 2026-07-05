@@ -91,6 +91,16 @@ describe('withForge', () => {
     expect(outConfig.module.rules[0].exclude).toEqual(/node_modules/)
     expect(outConfig.module.rules[0].use[0].loader).toMatch(/next-loader\.cjs$/)
     expect(outConfig.module.rules[0].use[0].options).toEqual({ root: expect.any(String) })
+    // `enforce: 'pre'` — found via the next-demo webpack E2E (N8a): Next's own next-swc-loader
+    // is registered as a *separate*, later-in-array `oneOf` rule matching the same `.tsx`
+    // test. Without `enforce: 'pre'`, webpack runs later-array-position rules' loaders BEFORE
+    // earlier-position ones on the same request, so SWC transpiled JSX to
+    // `_jsxDEV(...)` calls before our loader ever saw it — tagJsxSource found zero
+    // JSXOpeningElement nodes (JSX syntax was already gone) and silently passed through
+    // untagged source. `enforce: 'pre'` runs our loader in the pre-loader stage, ahead of
+    // every normal-stage rule (including Next's SWC rule), guaranteeing it sees raw JSX —
+    // matching the Turbopack path, where forgeLoader is the only registered transform.
+    expect(outConfig.module.rules[0].enforce).toBe('pre')
     expect(outConfig.module.rules[1].test).toEqual(/\.css$/)
   })
 
@@ -102,6 +112,7 @@ describe('withForge', () => {
     const outConfig = result.webpack(config, { dev: true })
     expect(outConfig.module.rules).toHaveLength(1)
     expect(outConfig.module.rules[0].test).toEqual(/\.[jt]sx$/)
+    expect(outConfig.module.rules[0].enforce).toBe('pre')
   })
 
   it('rewrites: user had none -> forge-only array', async () => {

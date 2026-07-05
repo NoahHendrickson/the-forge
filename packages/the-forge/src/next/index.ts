@@ -81,6 +81,17 @@ function chainWebpack(
     out.module.rules.unshift({
       test: /\.[jt]sx$/,
       exclude: /node_modules/,
+      // `enforce: 'pre'` — found via the next-demo webpack E2E (N8a): Next registers its own
+      // next-swc-loader as a separate, later-in-array `oneOf` rule matching the same `.tsx`
+      // test. Without `enforce: 'pre'` our loader and SWC's loader both match the same
+      // request but webpack applies the later-array-position rule's loader BEFORE the
+      // earlier one, so SWC transpiled JSX to `_jsxDEV(...)` calls before this loader ever
+      // ran — tagJsxSource found zero JSXOpeningElement nodes (the JSX syntax was already
+      // gone) and silently passed the untagged, already-compiled source through. `pre`
+      // guarantees our loader runs in webpack's pre-loader stage, ahead of every
+      // normal-stage rule including Next's, so it always sees raw JSX — matching Turbopack,
+      // where forgeLoader is the only registered transform for these files.
+      enforce: 'pre',
       use: [loaderRule],
     })
     return out
