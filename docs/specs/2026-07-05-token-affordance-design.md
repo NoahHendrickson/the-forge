@@ -20,7 +20,7 @@ Users should be able to choose between a raw value and a project token from any 
 
 ### 1. Hover token icon (new trigger)
 
-- Every field whose spec yields token entries gets a small icon button (inline SVG hexagon, Figma-style) docked at the right edge of the input row.
+- Every field whose spec yields token entries gets a small icon button docked at the right edge of the input row. The glyph is a curly-braces token icon (`{ }`, inline SVG) — deliberately NOT Figma's hexagon (user-ratified); braces read as "token/variable" to The Forge's developer audience and echo the `{token.name}` notation of the design-token world.
 - Revealed purely via CSS on row `:hover` / `:focus-within` — no JS listeners for the reveal. Buttons exist only while the panel is open (design mode on), preserving the zero-idle-overhead constraint.
 - Gate is the existing one: `tokenEntriesFor(spec, theme, tokens) === null` → no icon rendered (opacity, border width, and any scale the theme doesn't define stay icon-free).
 - The `=` keyboard shortcut remains as-is.
