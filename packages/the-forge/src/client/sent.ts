@@ -30,6 +30,12 @@ export class SentRegistry {
     return [...this.entries.keys()]
   }
 
+  /** Read-only lookup — unlike take(), the entry stays registered. Used by the verifier's
+   * poll loop to emit per-element stage events for entries that are still in flight. */
+  get(id: string): SentEntry | undefined {
+    return this.entries.get(id)
+  }
+
   take(id: string): SentEntry | undefined {
     const entry = this.entries.get(id)
     if (entry) this.entries.delete(id)

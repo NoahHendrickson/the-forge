@@ -109,4 +109,15 @@ describe('SentRegistry', () => {
       expect(registry.isDuplicate(other, CHANGES)).toBe(false)
     })
   })
+
+  describe('get', () => {
+    it('returns the entry without removing it', () => {
+      const reg = new SentRegistry()
+      const el = document.createElement('div')
+      reg.add('q1', [{ el, dcSource: 'a.tsx:1:1', draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }])
+      expect(reg.get('q1')?.id).toBe('q1')
+      expect(reg.size()).toBe(1)
+      expect(reg.get('missing')).toBeUndefined()
+    })
+  })
 })
