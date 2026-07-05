@@ -22,9 +22,11 @@ export function clampWidth(width: number, viewportWidth: number): number {
 }
 
 export function loadPrefs(): PanelPrefs {
+  // Every return path clamps — an unclamped DEFAULT on a very narrow first-run/error
+  // viewport would seed the dock wider than the 50vw/MIN policy allows (Bugbot, PR #2).
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return { width: DEFAULT_WIDTH, mode: 'docked' }
+    if (!raw) return { width: clampWidth(DEFAULT_WIDTH, window.innerWidth), mode: 'docked' }
     // unknown + manual checks at the I/O boundary — project convention, no schema libs.
     const parsed: unknown = JSON.parse(raw)
     const obj = (typeof parsed === 'object' && parsed !== null ? parsed : {}) as {
@@ -37,7 +39,7 @@ export function loadPrefs(): PanelPrefs {
     return { width: clampWidth(width, window.innerWidth), mode }
   } catch {
     // Storage disabled (some privacy modes throw) or corrupt JSON — defaults, never crash.
-    return { width: DEFAULT_WIDTH, mode: 'docked' }
+    return { width: clampWidth(DEFAULT_WIDTH, window.innerWidth), mode: 'docked' }
   }
 }
 
@@ -64,6 +66,10 @@ export class Dock {
   /** null = we have not touched the html margin; '' = touched, page had no inline value. */
   private savedHtmlMarginRight: string | null = null
   private active = false
+  /** True only between applyDocked() and removeDocked() — exit()/mode-switches must
+   * only undo what was actually applied (a floating-mode exit() re-appending #status
+   * to the shadow root would needlessly reorder DOM it never touched). */
+  private dockedApplied = false
 
   constructor(
     private host: HTMLElement,
@@ -73,7 +79,7 @@ export class Dock {
   ) {
     this.prefs = loadPrefs()
     // Seed the width var at boot — pure inline style, no listeners, zero idle overhead.
-    this.host.style.setProperty('--forge-dock-w', `${this.prefs.width}px`)
+    this.host.style.setProperty('--forge-dock-w', `${this.appliedWidth()}px`)
     // Element-scoped listeners on our own shadow DOM (same pattern as Overlay's toggle
     // click) — the document/window-level drag listeners exist only during a drag.
     this.panel.resizeHandle.addEventListener('pointerdown', this.onResizeStart)
@@ -115,7 +121,24 @@ export class Dock {
     else this.removeDocked()
   }
 
+  /** The width actually painted/pushed: the stored DESIRED width, clamped against the
+   * LIVE viewport. Kept separate from prefs.width so a transient window shrink never
+   * destroys the user's wider choice (PR #2 final review). */
+  private appliedWidth(): number {
+    return clampWidth(this.prefs.width, window.innerWidth)
+  }
+
+  /** Re-paints the width var (and, when docked, the html margin) from appliedWidth(). */
+  private syncWidth(): void {
+    const width = this.appliedWidth()
+    this.host.style.setProperty('--forge-dock-w', `${width}px`)
+    if (this.active && this.prefs.mode === 'docked') {
+      document.documentElement.style.marginRight = `${width}px`
+    }
+  }
+
   private applyDocked(): void {
+    this.dockedApplied = true
     this.panel.setDocked(true)
     // Same DOM node moves — ids, listeners, and updateStatus() lookups all survive.
     this.panel.footer.appendChild(this.status)
@@ -123,10 +146,12 @@ export class Dock {
     if (this.savedHtmlMarginRight === null) {
       this.savedHtmlMarginRight = document.documentElement.style.marginRight
     }
-    document.documentElement.style.marginRight = `${this.prefs.width}px`
+    document.documentElement.style.marginRight = `${this.appliedWidth()}px`
   }
 
   private removeDocked(): void {
+    if (!this.dockedApplied) return
+    this.dockedApplied = false
     this.panel.setDocked(false)
     this.host.shadowRoot!.appendChild(this.status)
     this.toggle.classList.remove('dock-open')
@@ -138,27 +163,24 @@ export class Dock {
 
   private applyWidth(width: number): void {
     this.prefs = { ...this.prefs, width }
-    this.host.style.setProperty('--forge-dock-w', `${width}px`)
-    if (this.active && this.prefs.mode === 'docked') {
-      document.documentElement.style.marginRight = `${width}px`
-    }
+    this.syncWidth()
   }
 
   private onWindowResize = (): void => {
-    const clamped = clampWidth(this.prefs.width, window.innerWidth)
-    if (clamped !== this.prefs.width) {
-      this.applyWidth(clamped)
-      savePrefs(this.prefs)
-    }
+    // Apply-only: repaint the clamped width but leave prefs/storage untouched, so
+    // growing the window back restores the user's desired width.
+    this.syncWidth()
   }
 
   private onResizeStart = (e: PointerEvent): void => {
+    if (e.button !== 0) return // primary button only — a right-click must not start a drag
     e.preventDefault()
     const startX = e.clientX
     const startWidth = this.prefs.width
     // Window-level move/up listeners live only for the duration of the drag. No
     // setPointerCapture — jsdom doesn't implement it, and window listeners cover
-    // the pointer leaving the handle anyway.
+    // the pointer leaving the handle anyway. pointercancel (touch scroll takeover,
+    // OS gesture) tears down exactly like pointerup so no move listener leaks.
     const onMove = (ev: PointerEvent): void => {
       // Panel is on the RIGHT: dragging the handle LEFT (clientX decreases) widens.
       this.applyWidth(clampWidth(startWidth + (startX - ev.clientX), window.innerWidth))
@@ -166,10 +188,12 @@ export class Dock {
     const onUp = (): void => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
       savePrefs(this.prefs)
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
   }
 
   private syncModeButton(): void {

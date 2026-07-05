@@ -386,3 +386,9 @@ describe('Dock CSS (docked-panel spec)', () => {
     expect(CSS).toMatch(/\.panel-resize\s*{[^}]*cursor:\s*col-resize/s)
   })
 })
+
+describe('Dock polish CSS (PR #2 follow-ups)', () => {
+  it('panel head reserves right padding so the absolute mode button cannot overlap a long tag', () => {
+    expect(CSS).toContain('#panel .panel-head { position: relative; padding: 12px 36px 10px 12px; }')
+  })
+})

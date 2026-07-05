@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   clampWidth,
   loadPrefs,
@@ -178,5 +178,73 @@ describe('Dock resize drag', () => {
     window.dispatchEvent(new MouseEvent('pointermove', { clientX: 100 }))
     expect(dock.width()).toBe(w)
     dock.exit()
+  })
+})
+
+describe('Dock polish (PR #2 follow-ups)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('a transient window shrink re-clamps the APPLIED width but never overwrites the stored width', () => {
+    vi.stubGlobal('innerWidth', 1280)
+    savePrefs({ width: 560, mode: 'docked' })
+    const { overlay, dock } = dockSetup()
+    dock.enter()
+    expect(document.documentElement.style.marginRight).toBe('560px')
+    vi.stubGlobal('innerWidth', 800) // 50vw cap -> 400
+    window.dispatchEvent(new Event('resize'))
+    expect(overlay.host.style.getPropertyValue('--forge-dock-w')).toBe('400px')
+    expect(document.documentElement.style.marginRight).toBe('400px')
+    // Storage still holds the user's DESIRED width — a transient shrink must not destroy it.
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).width).toBe(560)
+    vi.stubGlobal('innerWidth', 1280)
+    window.dispatchEvent(new Event('resize'))
+    expect(overlay.host.style.getPropertyValue('--forge-dock-w')).toBe('560px')
+    expect(document.documentElement.style.marginRight).toBe('560px')
+    dock.exit()
+  })
+
+  it('non-primary-button pointerdown does not start a resize', () => {
+    const { dock, panel } = dockSetup()
+    dock.enter()
+    panel.resizeHandle.dispatchEvent(
+      new MouseEvent('pointerdown', { clientX: 700, button: 2, bubbles: true, cancelable: true })
+    )
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 600 }))
+    expect(dock.width()).toBe(DEFAULT_WIDTH)
+    dock.exit()
+  })
+
+  it('pointercancel tears the drag down like pointerup — no live pointermove listener left behind', () => {
+    const { dock, panel } = dockSetup()
+    dock.enter()
+    panel.resizeHandle.dispatchEvent(
+      new MouseEvent('pointerdown', { clientX: 700, button: 0, bubbles: true, cancelable: true })
+    )
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 660 }))
+    expect(dock.width()).toBe(360)
+    window.dispatchEvent(new MouseEvent('pointercancel', {}))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 400 }))
+    expect(dock.width()).toBe(360)
+    dock.exit()
+  })
+
+  it('exit() while floating does not re-append #status (only undoes what applyDocked applied)', () => {
+    savePrefs({ width: 320, mode: 'floating' })
+    const { overlay, dock } = dockSetup()
+    // attachPanel appended the panel root AFTER #status — if exit() re-appends the
+    // status, it would become the shadow root's last child. It must not move.
+    expect(overlay.host.shadowRoot!.lastElementChild).not.toBe(overlay.status)
+    dock.enter()
+    dock.exit()
+    expect(overlay.host.shadowRoot!.lastElementChild).not.toBe(overlay.status)
+  })
+
+  it('loadPrefs clamps the DEFAULT fallback against the viewport too (Bugbot: narrow first run)', () => {
+    vi.stubGlobal('innerWidth', 400) // 50vw = 200 < MIN -> MIN wins
+    expect(loadPrefs().width).toBe(MIN_WIDTH)
+    localStorage.setItem(STORAGE_KEY, '{corrupt')
+    expect(loadPrefs().width).toBe(MIN_WIDTH)
   })
 })

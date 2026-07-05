@@ -101,7 +101,9 @@ button {
 .panel-body::-webkit-scrollbar { width: 8px; }
 .panel-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
 
-#panel .panel-head { position: relative; padding: 12px 12px 10px; }
+/* Right padding reserves the absolute .panel-mode button's footprint so a long tag
+ * (or "No selection") never runs underneath it. */
+#panel .panel-head { position: relative; padding: 12px 36px 10px 12px; }
 #panel .panel-head-tag { font: 600 12px system-ui, sans-serif; color: #F5F5F5; }
 /* Dir + tail spans: the DIRECTORY ellipsizes while the filename:line:col tail keeps
  * flex: none — the useful part of a source path is its end, which plain end-ellipsis
