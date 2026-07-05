@@ -349,6 +349,15 @@ function mountDesignModePages(source: string, program: AstNode): EditResult {
   if (componentElements.length === 0) {
     return { kind: 'fallback', reason: 'no <Component> element found in _app' }
   }
+  // Ambiguous target: with more than one <Component> we can't safely pick one
+  // to mount into (same conservative-fallback rule as the <body> guard above)
+  // — bail rather than guess which is "the" Component.
+  if (componentElements.length !== 1) {
+    return {
+      kind: 'fallback',
+      reason: `expected exactly one <Component> element, found ${componentElements.length}`,
+    }
+  }
 
   const componentEl = componentElements[0]
   if (typeof componentEl.start !== 'number' || typeof componentEl.end !== 'number') {

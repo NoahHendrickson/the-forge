@@ -78,6 +78,39 @@ export function isAllowedHost(host: string | undefined, allowedHosts: string[]):
   return allowedHosts.includes(hostname)
 }
 
+/** The single DNS-rebinding host gate, shared by the devtools well-known route and the main
+ * /__the-forge/ path below. Always checks the real Host header via isAllowedHost. Next's
+ * rewrites() proxy rewrites Host to the sidecar's own loopback address (127.0.0.1:<port>)
+ * before this middleware ever sees the request — the browser's real page origin survives only
+ * in X-Forwarded-Host. On the main path that rewrite is handled by the separate Origin-vs-
+ * effective-host check further down (it already prefers X-Forwarded-Host when present), so this
+ * helper leaves opts.checkForwarded false there. The devtools route has no secret to fall back
+ * on — its response body is an absolute filesystem path, and Chrome DevTools can't send a
+ * custom header for the Origin check to key off — so it opts into checkForwarded: true here,
+ * additionally requiring X-Forwarded-Host (when present) to pass the same allowlist as Host.
+ * That's the deliberate asymmetry between the two call sites, not an inconsistency. Returns
+ * true (having already sent the 403) when the request should be rejected; the caller returns
+ * immediately in that case. */
+function rejectDisallowedHost(
+  req: IncomingMessage,
+  res: ServerResponse,
+  allowedHosts: string[],
+  opts: { checkForwarded: boolean }
+): boolean {
+  if (!isAllowedHost(req.headers.host, allowedHosts)) {
+    send(res, 403, { error: 'host not allowed' })
+    return true
+  }
+  if (opts.checkForwarded) {
+    const forwardedHost = req.headers['x-forwarded-host']
+    if (typeof forwardedHost === 'string' && !isAllowedHost(forwardedHost, allowedHosts)) {
+      send(res, 403, { error: 'host not allowed' })
+      return true
+    }
+  }
+  return false
+}
+
 // Mutating endpoints that require the shared secret when one is configured. GET /status is
 // deliberately excluded: it's read-only and only exposes ids/statuses, which are non-sensitive.
 const MUTATING_PATHS = new Set([
@@ -118,30 +151,17 @@ export function createForgeMiddleware(
       applying: () => queue.hasFreshClaims(),
     })
   return (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
-    const url = req.url ?? ''
+    const [pathname, query = ''] = (req.url ?? '').split('?')
 
     // Chrome DevTools' Automatic Workspace Folders probe — served BEFORE the /__the-forge/
     // prefix gate below because its path lives outside that prefix. Only handled when
     // dispatchConfig.cwd is set (the resolved project root): legacy tests/callers that never
     // pass a cwd get this route falling through to next() unchanged, same as before this route
-    // existed. Gated on isAllowedHost even though it needs no secret (DevTools can't send
-    // custom headers) — the response body is an absolute filesystem path, and a DNS-rebinding
-    // page tricking a browser into fetching this well-known URL must never be able to read it.
-    const [devtoolsPathname] = url.split('?')
-    if (devtoolsPathname === DEVTOOLS_JSON_PATH && dispatchConfig.cwd !== undefined) {
-      if (!isAllowedHost(req.headers.host, allowedHosts)) {
-        return send(res, 403, { error: 'host not allowed' })
-      }
-      // Next's rewrites() proxy rewrites Host to the sidecar's own loopback address before this
-      // middleware ever sees the request (same phenomenon as the Origin check below) — so on the
-      // Next path the Host check above always passes with a loopback address regardless of the
-      // real browser origin, and a DNS-rebinding page could otherwise reach this route and read
-      // the absolute project path back out. Require X-Forwarded-Host to also pass the allowlist
-      // when present so the proxied path gets the same DNS-rebinding defense as direct Vite.
-      const devtoolsForwardedHost = req.headers['x-forwarded-host']
-      if (typeof devtoolsForwardedHost === 'string' && !isAllowedHost(devtoolsForwardedHost, allowedHosts)) {
-        return send(res, 403, { error: 'host not allowed' })
-      }
+    // existed.
+    if (pathname === DEVTOOLS_JSON_PATH && dispatchConfig.cwd !== undefined) {
+      // checkForwarded: true — see rejectDisallowedHost's doc comment for why this route
+      // additionally allowlists X-Forwarded-Host.
+      if (rejectDisallowedHost(req, res, allowedHosts, { checkForwarded: true })) return
       if (req.method !== 'GET') return send(res, 405, { error: 'use GET' })
       const forgeDir = path.join(dispatchConfig.cwd, '.the-forge')
       return send(res, 200, {
@@ -149,11 +169,11 @@ export function createForgeMiddleware(
       })
     }
 
-    if (!url.startsWith('/__the-forge/')) return next()
+    if (!pathname.startsWith('/__the-forge/')) return next()
 
-    if (!isAllowedHost(req.headers.host, allowedHosts)) {
-      return send(res, 403, { error: 'host not allowed' })
-    }
+    // checkForwarded: false — X-Forwarded-Host is instead consulted by the Origin-vs-
+    // effective-host check just below, which is a separate, non-consolidated check.
+    if (rejectDisallowedHost(req, res, allowedHosts, { checkForwarded: false })) return
 
     const origin = req.headers.origin
     if (typeof origin === 'string') {
@@ -179,8 +199,6 @@ export function createForgeMiddleware(
         return send(res, 403, { error: 'cross-origin request rejected' })
       }
     }
-
-    const [pathname, query = ''] = url.split('?')
 
     // Belt-and-braces against cross-origin/DNS-rebinding bypasses of the Origin/Host checks
     // above — same-origin page scripts are the user's own app and not the adversary, so this

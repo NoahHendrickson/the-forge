@@ -433,4 +433,25 @@ export default function App({ Component, pageProps }: AppProps) {
     if (result.kind !== 'fallback') throw new Error('unreachable')
     expect(result.reason.length).toBeGreaterThan(0)
   })
+
+  it('falls back when there is more than one <Component> element (ambiguous target)', () => {
+    const source = `import type { AppProps } from 'next/app'
+
+export default function App({ Component, pageProps }: AppProps) {
+  if (pageProps.noLayout) {
+    return <Component {...pageProps} />
+  }
+  return (
+    <Layout>
+      <Component {...pageProps} />
+    </Layout>
+  )
+}
+`
+    const result = mountDesignMode(source, 'pages')
+    expect(result.kind).toBe('fallback')
+    if (result.kind !== 'fallback') throw new Error('unreachable')
+    expect(result.reason).toContain('expected exactly one <Component> element, found 2')
+    expect((result as { code?: string }).code).toBeUndefined()
+  })
 })
