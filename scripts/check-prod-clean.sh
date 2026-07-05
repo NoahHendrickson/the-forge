@@ -22,7 +22,11 @@ fi
 # .next/ build metadata legitimately contains the devDependency's package name (e.g. in
 # trace files and manifests), whereas the three markers below are the actual runtime
 # traces we must never ship.
-if grep -riq "data-dc-source\|__the-forge\|__THE_FORGE__" fixtures/next-demo/.next/; then
+# Sourcemaps are excluded: they embed pre-DCE sourcesContent verbatim (Turbopack keeps
+# ForgeDesignMode's dev branch there for stack traces); they are debug metadata, never
+# served to browsers, and the component is explicitly user-mounted. The gate's guarantee
+# is about executed/served output — the chunks themselves must stay clean.
+if grep -riq --exclude='*.map' "data-dc-source\|__the-forge\|__THE_FORGE__" fixtures/next-demo/.next/; then
   echo "FAIL: companion artifacts found in Next.js production build" >&2
   exit 1
 fi
