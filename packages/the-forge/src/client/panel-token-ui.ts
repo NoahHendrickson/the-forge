@@ -110,8 +110,20 @@ export class PanelTokenUi {
     this.bound.clear()
   }
 
-  /** B5 re-bind after field.set(): bind the pill back when the just-read value still equals
-   * the bound px; a real divergence drops the entry; Compare mode does neither. */
+  /**
+   * B5: the caller's field.set() above unconditionally cleared any pill (B1 contract) — re-apply it when
+   * this field has a bound token AND the just-read value still equals the bound px
+   * (same-field refresh with an unchanged draft). A DIFFERING value (user edited the
+   * field directly, or a different draft arrived) leaves the pill cleared and drops
+   * the stale entry from boundTokens so it doesn't keep getting checked forever.
+   *
+   * Compare mode is an exception to BOTH halves of that: while comparing, `values`
+   * was read from the ORIGINAL (pre-draft) computed style, not the live draft, so it
+   * diverging from bound.px is expected and must NOT be treated as "the user changed
+   * it" — skip the delete so un-compare can still re-bind. And the pill itself must
+   * stay hidden while comparing (a pristine-preview state showing a token pill would
+   * lie about what's actually drafted), so skip the bindToken call too.
+   */
   rebind(spec: { props: string[] }, field: NumberField, value: number | null, mixed: boolean, comparing: boolean): void {
     const key = spec.props.join(',')
     const bound = this.bound.get(key)
