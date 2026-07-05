@@ -354,11 +354,12 @@ button {
 
 export class Overlay {
   host = document.createElement('div')
-  toggle = createButton()
-  sendButton = createButton()
-  copyButton = createButton()
+  toggle = createButton({ label: 'Design' })
+  sendButton = createButton({ label: 'Send to agent' })
+  copyButton = createButton({ label: 'Copy for agent' })
+  // compareAllButton's label is state-dependent ('Before'/'After') — set in updateStatus().
   compareAllButton = createButton()
-  resetAllButton = createButton()
+  resetAllButton = createButton({ label: 'Reset all' })
 
   private outline = document.createElement('div')
   private selectOutline = document.createElement('div')
@@ -386,13 +387,9 @@ export class Overlay {
     const style = document.createElement('style')
     style.textContent = CSS
     this.toggle.id = 'toggle'
-    this.toggle.textContent = 'Design'
     this.outline.id = 'outline'
     this.selectOutline.id = 'select-outline'
     this.status.id = 'status'
-    this.sendButton.textContent = 'Send to agent'
-    this.copyButton.textContent = 'Copy for agent'
-    this.resetAllButton.textContent = 'Reset all'
     this.sentLabel.id = 'sent'
     this.sentLabel.hidden = true
     this.watchLabel.id = 'watch'

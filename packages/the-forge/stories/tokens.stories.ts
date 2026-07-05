@@ -17,13 +17,19 @@ interface Token {
  * the source — strip block comments first so those mentions can't be mistaken for real
  * declarations (a stray `--surface-2:` inside the comment would otherwise match and its
  * greedy value capture would swallow the real declaration that follows, up to the next `;`).
+ *
+ * Parsing is anchored to the `:host` rule that declares custom properties — element-scoped
+ * custom properties elsewhere in the sheet (the `--cp-hue` pattern) are not design tokens
+ * and must never appear in this catalog.
  */
 function parseTokens(): Token[] {
   const withoutComments = CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+  const hostBlocks = withoutComments.match(/:host\s*{[^}]*}/g) ?? []
+  const tokenBlock = hostBlocks.find((block) => block.includes('--')) ?? ''
   const tokens: Token[] = []
   const re = /--([a-z0-9-]+):\s*([^;]+);/gi
   let match: RegExpExecArray | null
-  while ((match = re.exec(withoutComments))) {
+  while ((match = re.exec(tokenBlock))) {
     tokens.push({ name: match[1], value: match[2].trim() })
   }
   return tokens
