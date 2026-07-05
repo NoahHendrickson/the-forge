@@ -163,6 +163,15 @@ button {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+.token-btn {
+  display: none; flex: none; width: 16px; height: 16px; padding: 0;
+  align-items: center; justify-content: center;
+  background: transparent; border: none; color: #9A9A9A; cursor: pointer;
+}
+.token-btn:hover { color: #F5F5F5; }
+.token-btn svg { width: 11px; height: 11px; display: block; }
+.nf:hover .token-btn, .nf:focus-within .token-btn, .color-row:hover .token-btn { display: flex; }
+
 .seg-field { display: flex; align-items: center; gap: 4px; }
 .seg-field-label { flex: none; width: 40px; color: #9A9A9A; font-size: 11px; }
 .seg-track {

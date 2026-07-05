@@ -743,6 +743,31 @@ export class Panel {
     const side = document.createElement('div')
     side.className = 'layout-side'
 
+    const openGapTokenPicker = (): void => {
+      if (!this.el || !this.gapField) return
+      const entries = tokenEntriesFor(GAP_SPEC, readTheme(), readTokens())
+      if (!entries) return
+      const field = this.gapField
+      this.tokenPicker.open({
+        anchor: field.root,
+        entries,
+        onApply: (entry) => {
+          // Gap's token picker only ever offers spacing-scale entries (tokenEntriesFor
+          // above) — this guard is a pure type-narrowing satisfier for TokenEntry's
+          // color-entry branch (T2), never actually reachable here.
+          if ('color' in entry) return
+          if (!this.el) return
+          this.onBeforeEdit(this.el)
+          this.drafts.apply(this.el, 'gap', px(entry.px))
+          this.refresh()
+          this.onEdited()
+          const label = this.pillLabelFor(GAP_SPEC, entry)
+          field.bindToken(label)
+          this.boundTokens.set(GAP_SPEC.props.join(','), { label, px: entry.px })
+        },
+      })
+    }
+
     this.gapField = new NumberField({
       label: 'Gap',
       min: 0,
@@ -759,32 +784,11 @@ export class Panel {
         // try to re-bind a pill the user explicitly detached via Backspace.
         this.boundTokens.delete(GAP_SPEC.props.join(','))
       },
-      onTokenKey: this.isMulti()
-        ? undefined
-        : () => {
-            if (!this.el || !this.gapField) return
-            const entries = tokenEntriesFor(GAP_SPEC, readTheme(), readTokens())
-            if (!entries) return
-            const field = this.gapField
-            this.tokenPicker.open({
-              anchor: field.root,
-              entries,
-              onApply: (entry) => {
-                // Gap's token picker only ever offers spacing-scale entries (tokenEntriesFor
-                // above) — this guard is a pure type-narrowing satisfier for TokenEntry's
-                // color-entry branch (T2), never actually reachable here.
-                if ('color' in entry) return
-                if (!this.el) return
-                this.onBeforeEdit(this.el)
-                this.drafts.apply(this.el, 'gap', px(entry.px))
-                this.refresh()
-                this.onEdited()
-                const label = this.pillLabelFor(GAP_SPEC, entry)
-                field.bindToken(label)
-                this.boundTokens.set(GAP_SPEC.props.join(','), { label, px: entry.px })
-              },
-            })
-          },
+      onTokenKey: this.isMulti() ? undefined : openGapTokenPicker,
+      onTokenOpen:
+        !this.isMulti() && tokenEntriesFor(GAP_SPEC, readTheme(), readTokens()) !== null
+          ? openGapTokenPicker
+          : undefined,
       onKeyword: (kw) => {
         if (!this.el || kw !== 'auto') return
         this.onBeforeEdit(this.el)
@@ -1385,6 +1389,26 @@ export class Panel {
     // lifetime of this field (buildBody() rebuilds fields fresh on every selection change).
     const multi = this.isMulti()
 
+    const openTokenPicker = (): void => {
+      if (!this.el) return
+      const entries = tokenEntriesFor(spec, readTheme(), readTokens())
+      if (!entries) return
+      this.tokenPicker.open({
+        anchor: field.root,
+        entries,
+        onApply: (entry) => {
+          // buildField's token picker only ever offers spacing/radius/text-scale entries
+          // (tokenEntriesFor above) — this guard is a pure type-narrowing satisfier for
+          // TokenEntry's color-entry branch (T2), never actually reachable here.
+          if ('color' in entry) return
+          commit(entry.px)
+          const label = this.pillLabelFor(spec, entry)
+          field.bindToken(label)
+          this.boundTokens.set(spec.props.join(','), { label, px: entry.px })
+        },
+      })
+    }
+
     const field = new NumberField({
       label: spec.label,
       min: spec.min,
@@ -1433,27 +1457,9 @@ export class Panel {
         // later refresh() doesn't try to re-bind a pill the user explicitly detached.
         this.boundTokens.delete(spec.props.join(','))
       },
-      onTokenKey: multi
-        ? undefined
-        : () => {
-            if (!this.el) return
-            const entries = tokenEntriesFor(spec, readTheme(), readTokens())
-            if (!entries) return
-            this.tokenPicker.open({
-              anchor: field.root,
-              entries,
-              onApply: (entry) => {
-                // buildField's token picker only ever offers spacing/radius/text-scale entries
-                // (tokenEntriesFor above) — this guard is a pure type-narrowing satisfier for
-                // TokenEntry's color-entry branch (T2), never actually reachable here.
-                if ('color' in entry) return
-                commit(entry.px)
-                const label = this.pillLabelFor(spec, entry)
-                field.bindToken(label)
-                this.boundTokens.set(spec.props.join(','), { label, px: entry.px })
-              },
-            })
-          },
+      onTokenKey: multi ? undefined : openTokenPicker,
+      onTokenOpen:
+        !multi && tokenEntriesFor(spec, readTheme(), readTokens()) !== null ? openTokenPicker : undefined,
     })
     const bound: BoundField = { field, spec }
     this.fields.push(bound)

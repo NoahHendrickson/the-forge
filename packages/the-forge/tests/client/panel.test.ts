@@ -1641,6 +1641,146 @@ describe('Panel Gap field + TokenPicker (B5 important #1)', () => {
   })
 })
 
+describe('Panel + token-btn icon (T4)', () => {
+  function setupTailwind(html?: string) {
+    document.documentElement.style.setProperty('--spacing', '4px')
+    document.documentElement.style.setProperty('--radius-sm', '4px')
+    document.documentElement.style.setProperty('--radius-md', '6px')
+    document.documentElement.style.setProperty('--radius-lg', '8px')
+    return setup(html)
+  }
+
+  function setupTailwindFlex(styleExtra = '') {
+    document.documentElement.style.setProperty('--spacing', '4px')
+    document.documentElement.style.setProperty('--radius-sm', '4px')
+    document.documentElement.style.setProperty('--radius-md', '6px')
+    document.documentElement.style.setProperty('--radius-lg', '8px')
+    return setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="display: flex; width: 200px; height: 100px; ${styleExtra}"></div>`
+    )
+  }
+
+  afterEach(() => {
+    document.documentElement.removeAttribute('style')
+    document.head.innerHTML = ''
+    resetTokensCache()
+  })
+
+  function pxField(panel: Panel, label: string): HTMLElement {
+    const nf = [...panel.root.querySelectorAll('.nf')].find(
+      (n) => n.querySelector('.nf-label')!.textContent === label
+    )
+    if (!nf) throw new Error(`no field labeled ${label}`)
+    return nf as HTMLElement
+  }
+
+  it('PX field root contains a .token-btn; Opacity (O) and Stroke width (W) do not', () => {
+    const { panel } = setupTailwind()
+    expect(pxField(panel, 'PX').querySelector('.token-btn')).not.toBeNull()
+    expect(pxField(panel, 'O').querySelector('.token-btn')).toBeNull()
+    // Two fields share the label 'W' (Size's Width and Stroke's border-width) — scope to
+    // the Stroke section so this asserts the border-width field, not Size's Width (which
+    // DOES get an icon, being on the spacing scale).
+    const strokeRows = panel.root.querySelector('.stroke-rows') as HTMLElement
+    const strokeWidth = [...strokeRows.querySelectorAll('.nf')].find(
+      (n) => n.querySelector('.nf-label')!.textContent === 'W'
+    )!
+    expect(strokeWidth.querySelector('.token-btn')).toBeNull()
+  })
+
+  it('clicking PX\'s .token-btn opens the token popover with spacing entries', () => {
+    const { panel } = setupTailwind()
+    const field = pxField(panel, 'PX')
+    const btn = field.querySelector('.token-btn') as HTMLButtonElement
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    btn.click()
+    expect(picker.root.hidden).toBe(false)
+    const rows = [...picker.root.querySelectorAll('.tp-row')]
+    expect(rows.some((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))).toBe(true)
+  })
+
+  it('picking an entry via the icon applies the draft and binds a pill (same end state as `=`)', () => {
+    const { el, panel, drafts } = setupTailwind()
+    const field = pxField(panel, 'PX')
+    const btn = field.querySelector('.token-btn') as HTMLButtonElement
+    const input = field.querySelector('input') as HTMLInputElement
+    btn.click()
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+
+    expect(drafts.current(el, 'padding-left')).toBe('16px')
+    expect(drafts.current(el, 'padding-right')).toBe('16px')
+    expect(input.readOnly).toBe(true)
+    expect(input.value).toBe('px-4')
+    expect(field.classList.contains('nf-pill')).toBe(true)
+
+    panel.refresh()
+    expect(input.value).toBe('px-4')
+  })
+
+  it('with a pill already bound, clicking the icon re-opens the picker and swaps the pill on a new pick', () => {
+    const { el, panel, drafts } = setupTailwind()
+    const field = pxField(panel, 'PX')
+    const btn = field.querySelector('.token-btn') as HTMLButtonElement
+    const input = field.querySelector('input') as HTMLInputElement
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+
+    btn.click()
+    const row4 = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row4 as HTMLElement).click()
+    expect(input.value).toBe('px-4')
+
+    // Icon click fires even while pill-bound (unlike onTokenKey, which is gated off once bound).
+    btn.click()
+    expect(picker.root.hidden).toBe(false)
+    const row8 = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('8') && r.textContent?.includes('32px'))
+    expect(row8).toBeDefined()
+    ;(row8 as HTMLElement).click()
+
+    expect(drafts.current(el, 'padding-left')).toBe('32px')
+    expect(input.value).toBe('px-8')
+    expect(field.classList.contains('nf-pill')).toBe(true)
+  })
+
+  it('multi-select: no .token-btn rendered on any field', () => {
+    document.documentElement.style.setProperty('--spacing', '4px')
+    document.body.innerHTML = `
+      <div data-dc-source="src/A.tsx:1:1" id="a" style="padding: 10px; width: 100px;"></div>
+      <div data-dc-source="src/B.tsx:2:2" id="b" style="padding: 20px; width: 100px;"></div>
+    `
+    const a = document.getElementById('a')! as HTMLElement
+    const b = document.getElementById('b')! as HTMLElement
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show([a, b], buildInspectorData(a))
+
+    expect(panel.root.querySelector('.token-btn')).toBeNull()
+
+    document.documentElement.removeAttribute('style')
+    resetTokensCache()
+  })
+
+  it('gap field (flex element) has a .token-btn with the same open/apply flow', () => {
+    const { el, panel, drafts } = setupTailwindFlex()
+    const gapField = (panel as unknown as { gapField: { root: HTMLElement } }).gapField
+    const btn = gapField.root.querySelector('.token-btn') as HTMLButtonElement
+    const input = gapField.root.querySelector('input') as HTMLInputElement
+    expect(btn).not.toBeNull()
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+
+    btn.click()
+    expect(picker.root.hidden).toBe(false)
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+
+    expect(drafts.current(el, 'gap')).toBe('16px')
+    expect(input.readOnly).toBe(true)
+    expect(input.value).toBe('gap-4')
+  })
+})
+
 describe('Panel + ColorPicker lifecycle', () => {
   it('show() closes any open color picker from a previous selection', () => {
     const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
