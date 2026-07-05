@@ -28,6 +28,14 @@ export interface SeedRecord {
   stage: LifecycleStage
   note?: string
   mismatches?: StageEvent['mismatches']
+  /** Set by take() instead of deleting the record. The verifier takes a snapshot via take()
+   * then SYNCHRONOUSLY emits a terminal StageEvent (done/mismatch/unverified/failed) for the
+   * same id in the same call — the record must still exist for that applyStage() to land, or
+   * the terminal chip never renders and the row just vanishes. `resolved` is what removes the
+   * id from in-flight views (pendingIds/size/isDuplicate/toPersistedSent) while records() (the
+   * UI view) keeps rendering it — receipts lingering after resolution is the spec'd UX (done
+   * lingers, failed pins) until clearResolved()/removeSeed()/clear() actually delete it. */
+  resolved?: boolean
 }
 
 /** Structural dependency the Verifier consumes — five methods, unchanged from the old
@@ -48,6 +56,12 @@ export type SessionChangeListener = () => void
  * consumption (SentStore), UI rows (records()), and persistence (toPersistedSent/restoreSent). */
 export class LifecycleSession implements SentStore {
   private entries = new Map<string, SeedRecord[]>()
+  /** Ids resolved via take() — tracked separately from per-record `resolved` flags so an id
+   * registered with ZERO seeds (register(id, [])) can still be resolved: there's no record to
+   * carry the flag, but the id itself must still leave every in-flight view. The per-record
+   * `resolved` flag (set alongside this) is what UI code (ChangeList) reads to render a
+   * terminal row's identity even after this id is no longer "in flight". */
+  private resolvedIds = new Set<string>()
   private listeners: SessionChangeListener[] = []
 
   onChange(fn: SessionChangeListener): void {
@@ -60,35 +74,51 @@ export class LifecycleSession implements SentStore {
 
   /** Registers a freshly-sent (or restored) batch of seeds under `id`, each starting at stage
    * 'sent'. Single construction point for what used to be SentRegistry.add + sentSeeds.set +
-   * ChangeList.addSent, called together everywhere. */
+   * ChangeList.addSent, called together everywhere. A fresh register() on an id that only has
+   * resolved leftovers (ids are server-generated UUIDs, so this shouldn't happen in practice)
+   * simply replaces — clearing any stale resolved marker so the new batch is in-flight again. */
   register(id: string, seeds: SentSeed[]): void {
     this.entries.set(id, seeds.map((seed) => ({ seed, stage: 'sent' as LifecycleStage })))
+    this.resolvedIds.delete(id)
     this.notify()
   }
 
   // ---- SentStore (verifier dependency) ----
 
+  /** In-flight (not-yet-resolved) ids only — a taken id's records still live in `entries` (see
+   * take()) purely so the UI view (records()) keeps rendering them; every in-flight view here
+   * must still filter them out. */
   pendingIds(): string[] {
-    return [...this.entries.keys()]
+    return [...this.entries.keys()].filter((id) => !this.resolvedIds.has(id))
   }
 
   /** Read-only lookup — unlike take(), the entry stays registered. Used by the verifier's
-   * poll loop to emit per-element stage events for entries that are still in flight. */
+   * poll loop to emit per-element stage events for entries that are still in flight. Resolved
+   * entries are excluded — same in-flight-only contract as pendingIds(). */
   get(id: string): SentEntry | undefined {
     const seeds = this.entries.get(id)
-    return seeds ? this.toSentEntry(id, seeds) : undefined
+    return seeds && !this.resolvedIds.has(id) ? this.toSentEntry(id, seeds) : undefined
   }
 
+  /** Resolves the id in place instead of deleting it: marks every record `resolved = true` and
+   * returns the same SentEntry-shaped snapshot as before. The verifier takes a snapshot then
+   * emits terminal stage events for the SAME id in the SAME cycle (handleApplied/handleFailed)
+   * — deleting here would leave nothing for that emit to find, and the row would vanish instead
+   * of showing its terminal chip. Returns undefined (no-op) once already resolved, matching the
+   * old delete-based "second take is a no-op" contract. */
   take(id: string): SentEntry | undefined {
     const seeds = this.entries.get(id)
-    if (!seeds) return undefined
-    this.entries.delete(id)
+    if (!seeds || this.resolvedIds.has(id)) return undefined
+    this.resolvedIds.add(id)
+    for (const rec of seeds) rec.resolved = true
     this.notify()
     return this.toSentEntry(id, seeds)
   }
 
+  /** Count of in-flight (not-yet-resolved) ids — resolved ids linger in `entries` for the UI
+   * view only and must not count here. */
   size(): number {
-    return this.entries.size
+    return this.pendingIds().length
   }
 
   /** True when an in-flight entry already carries this element with an IDENTICAL change set
@@ -98,7 +128,8 @@ export class LifecycleSession implements SentStore {
    * values is a genuinely new request and must go through. Ported verbatim from
    * SentRegistry.isDuplicate, including the dcSource-fallback-for-disconnected-entries. */
   isDuplicate(el: TaggedElement, changes: SentChange[]): boolean {
-    for (const seeds of this.entries.values()) {
+    for (const [id, seeds] of this.entries) {
+      if (this.resolvedIds.has(id)) continue // resolved entries leave the duplicate window — pre-refactor semantics
       for (const rec of seeds) {
         const sentEl = rec.seed.el
         const sentDcSource = rec.seed.dcSource
@@ -154,12 +185,16 @@ export class LifecycleSession implements SentStore {
     return true
   }
 
-  /** Removes every seed whose stage is 'done' or 'unverified' ("Clear done"). */
+  /** Removes every seed whose stage is 'done' or 'unverified' ("Clear done") — actual deletion,
+   * unlike take(): this is the UI's own explicit "I'm done looking at this" action, not the
+   * verifier's take-then-emit handoff, so there's no later event that still needs the record. */
   clearResolved(): void {
     for (const [id, seeds] of this.entries) {
       const kept = seeds.filter((rec) => rec.stage !== 'done' && rec.stage !== 'unverified')
-      if (kept.length === 0) this.entries.delete(id)
-      else this.entries.set(id, kept)
+      if (kept.length === 0) {
+        this.entries.delete(id)
+        this.resolvedIds.delete(id)
+      } else this.entries.set(id, kept)
     }
     this.notify()
   }
@@ -170,8 +205,10 @@ export class LifecycleSession implements SentStore {
     for (const [id, seeds] of this.entries) {
       const kept = seeds.filter((rec) => rec.seed !== seed)
       if (kept.length !== seeds.length) {
-        if (kept.length === 0) this.entries.delete(id)
-        else this.entries.set(id, kept)
+        if (kept.length === 0) {
+          this.entries.delete(id)
+          this.resolvedIds.delete(id)
+        } else this.entries.set(id, kept)
       }
     }
     this.notify()
@@ -197,6 +234,7 @@ export class LifecycleSession implements SentStore {
 
   clear(): void {
     this.entries.clear()
+    this.resolvedIds.clear()
     this.notify()
   }
 
@@ -206,6 +244,7 @@ export class LifecycleSession implements SentStore {
   toPersistedSent(): PersistedLifecycle['sent'] {
     const sent: PersistedLifecycle['sent'] = []
     for (const [id, seeds] of this.entries) {
+      if (this.resolvedIds.has(id)) continue // receipts don't survive reload
       sent.push({
         id,
         elements: seeds.map(({ seed }) => ({
@@ -239,6 +278,7 @@ export class LifecycleSession implements SentStore {
         change: pe.change,
       }))
       this.entries.set(s.id, seeds.map((seed) => ({ seed, stage: 'sent' as LifecycleStage })))
+      this.resolvedIds.delete(s.id)
     }
     this.notify()
   }

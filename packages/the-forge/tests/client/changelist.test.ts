@@ -337,6 +337,26 @@ describe('interactions', () => {
     expect(stages.sort()).toEqual(['failed', 'mismatch'])
   })
 
+  // Regression for the resolve-in-place bug: Verifier.handleApplied/handleFailed call
+  // session.take(id) FIRST, then synchronously emit the terminal StageEvent for the same id —
+  // if take() deleted the record, this applyStage() would find nothing and the row would vanish
+  // instead of showing its terminal chip.
+  it('a row survives session.take() so a subsequent applyStage(done) still renders chip-done', () => {
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
+    const session = (list as unknown as { session: LifecycleSession }).session
+    list.addSent('q1', [seed(tagged())])
+    session.take('q1')
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:8:11', stage: 'done' })
+
+    const row = list.root.querySelector('.change-row')!
+    expect(row).not.toBeNull()
+    expect(row.querySelector('.chip')!.className).toContain('chip-done')
+
+    // Clear done removes it once resolved+terminal.
+    ;(list.root.querySelector('.changes-clear') as HTMLElement).click()
+    expect(list.root.hidden).toBe(true)
+  })
+
   it('the Clear done button is hidden while nothing is clearable', () => {
     const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     list.addSent('q1', [seed(tagged())])

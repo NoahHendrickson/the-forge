@@ -826,6 +826,101 @@ describe('Verifier polling lifecycle', () => {
   })
 })
 
+// Regression test for the resolve-in-place bug: Verifier.handleApplied calls
+// this.sent.take(id) FIRST, then synchronously emits the terminal 'done' StageEvent for the
+// same id in the same call. Pre-fix, LifecycleSession.take() deleted the record outright, so
+// this emitted event found nothing (applyStage returned false) and any UI subscribed to
+// records() would lose the row entirely instead of rendering its terminal chip.
+describe('Verifier + LifecycleSession integration: take-then-emit lands on a real session', () => {
+  it('a status: applied poll leaves the record in records() with stage done', async () => {
+    const session = new LifecycleSession()
+    const drafts = new DraftStore()
+    const onUpdate = vi.fn()
+    const btn = el()
+    btn.id = 'integration-btn'
+    styleRule('integration-btn', 'padding-top', '24px')
+    drafts.apply(btn, 'padding-top', '24px')
+    session.register('q1', [
+      {
+        el: btn as never,
+        dcSource: null,
+        index: 0,
+        draftProps: ['padding-top'],
+        change: {
+          tag: 'div',
+          source: null,
+          className: '',
+          text: '',
+          selector: 'div',
+          changes: [{ property: 'padding-top', beforeCss: '', afterCss: '24px', beforeUtility: null, afterUtility: null, tokenExact: false }],
+        },
+      },
+    ])
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(session, drafts, onUpdate)
+    // Production wiring (index.ts): the verifier only EMITS stage events — something downstream
+    // must call session.applyStage(e) to actually flip the record's stage. Mirrored here so this
+    // test proves the real take()-then-emit sequence lands, not an artifact of skipping the wire.
+    verifier.subscribe((e) => session.applyStage(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    // in-flight views agree the item resolved
+    expect(session.pendingIds()).toEqual([])
+    expect(session.size()).toBe(0)
+    // but the UI-facing record is still there, terminal, ready to render its chip
+    const records = session.records()
+    expect(records).toHaveLength(1)
+    expect(records[0].stage).toBe('done')
+  })
+
+  it('a status: failed poll leaves the record in records() with stage failed + note', async () => {
+    const session = new LifecycleSession()
+    const drafts = new DraftStore()
+    const onUpdate = vi.fn()
+    const btn = el()
+    session.register('q1', [
+      {
+        el: btn as never,
+        dcSource: null,
+        index: 0,
+        draftProps: ['padding-top'],
+        change: {
+          tag: 'div',
+          source: null,
+          className: '',
+          text: '',
+          selector: 'div',
+          changes: [{ property: 'padding-top', beforeCss: '', afterCss: '24px', beforeUtility: null, afterUtility: null, tokenExact: false }],
+        },
+      },
+    ])
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'failed', note: 'could not apply' }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(session, drafts, onUpdate)
+    verifier.subscribe((e) => session.applyStage(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(session.pendingIds()).toEqual([])
+    const records = session.records()
+    expect(records).toHaveLength(1)
+    expect(records[0].stage).toBe('failed')
+    expect(records[0].note).toBe('could not apply')
+  })
+})
+
 describe('stage events', () => {
   function twoElEntry(sent: SentRegistry): { a: HTMLElement; b: HTMLElement } {
     const a = el()

@@ -105,8 +105,8 @@ describe('LifecycleSession: register/pendingIds/take/size round-trip', () => {
   })
 })
 
-describe('LifecycleSession: take() removes from all views atomically', () => {
-  it('take() clears pendingIds, records(), and get() together', () => {
+describe('LifecycleSession: take() resolves in place — in-flight views drop it, UI view keeps it', () => {
+  it('take() clears pendingIds/size/get (in-flight views) but records() still shows the row', () => {
     const session = new LifecycleSession()
     const btn = el()
     session.register('q1', [seed(btn)])
@@ -114,11 +114,68 @@ describe('LifecycleSession: take() removes from all views atomically', () => {
 
     const entry = session.take('q1')
     expect(entry).toBeDefined()
+    // in-flight views: resolved id is gone
     expect(session.size()).toBe(0)
     expect(session.pendingIds()).toEqual([])
-    expect(session.records()).toHaveLength(0)
     expect(session.get('q1')).toBeUndefined()
+    // UI view: the record survives so the verifier's terminal applyStage() can still land and
+    // the ChangeList row renders its terminal chip instead of vanishing.
+    expect(session.records()).toHaveLength(1)
+    expect(session.records()[0].seed.el).toBe(btn)
+  })
+
+  it('take() on the same id twice returns undefined the second time, but the record keeps rendering', () => {
+    const session = new LifecycleSession()
+    const btn = el()
+    session.register('q1', [seed(btn)])
+    expect(session.take('q1')).toBeDefined()
     expect(session.take('q1')).toBeUndefined()
+    expect(session.records()).toHaveLength(1)
+  })
+})
+
+describe('LifecycleSession: resolve-in-place — terminal stage events land after take()', () => {
+  it('register -> take(id) -> applyStage(done) returns true; record renders done; excluded from in-flight views', () => {
+    const session = new LifecycleSession()
+    const btn = el()
+    btn.dataset.dcSource = 'src/App.tsx:7:9'
+    session.register('q1', [seed(btn, { dcSource: 'src/App.tsx:7:9' })])
+
+    session.take('q1')
+    expect(session.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:7:9', stage: 'done' })).toBe(true)
+
+    expect(session.records()).toHaveLength(1)
+    expect(session.records()[0].stage).toBe('done')
+    expect(session.pendingIds()).toEqual([])
+    expect(session.size()).toBe(0)
+    expect(session.toPersistedSent()).toEqual([])
+  })
+
+  it('register -> take(id) -> applyStage(failed, note) returns true; record renders failed + note', () => {
+    const session = new LifecycleSession()
+    const btn = el()
+    session.register('q1', [seed(btn)])
+
+    session.take('q1')
+    expect(
+      session.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'failed', note: 'could not apply' })
+    ).toBe(true)
+
+    expect(session.records()).toHaveLength(1)
+    expect(session.records()[0].stage).toBe('failed')
+    expect(session.records()[0].note).toBe('could not apply')
+    expect(session.pendingIds()).toEqual([])
+    expect(session.toPersistedSent()).toEqual([])
+  })
+
+  it('a resolved record is excluded from isDuplicate — pre-refactor semantics preserved', () => {
+    const session = new LifecycleSession()
+    const btn = el()
+    session.register('q1', [seed(btn)])
+    expect(session.isDuplicate(btn as never, [{ property: 'padding-top', afterCss: '24px' }])).toBe(true)
+    session.take('q1')
+    session.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'done' })
+    expect(session.isDuplicate(btn as never, [{ property: 'padding-top', afterCss: '24px' }])).toBe(false)
   })
 })
 
