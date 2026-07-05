@@ -6,6 +6,7 @@ import { DraftStore } from '../../src/client/drafts'
 import { Panel } from '../../src/client/panel'
 import { readTokens, resetTokensCache } from '../../src/client/tokens'
 import * as tokensModule from '../../src/client/tokens'
+import { loadLifecycle, saveLifecycle } from '../../src/client/lifecycle-store'
 
 // DesignMode registers capture-phase listeners on `document`/`window`, which
 // persist across tests within this file (jsdom's `document` is shared per
@@ -1638,5 +1639,115 @@ describe('Dock integration (docked-panel spec)', () => {
     overlay.mount()
     new DesignMode(overlay)
     expect(addSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('lifecycle persistence', () => {
+  beforeEach(() => sessionStorage.clear())
+
+  it('persists design mode, drafts, and selection on change', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    const el = document.createElement('div')
+    el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
+    document.body.appendChild(el)
+    mode.setActive(true)
+    mode.select(el as never)
+    ;(mode as never as { drafts: DraftStore }).drafts.apply(el as never, 'padding-top', '24px')
+    const saved = loadLifecycle()
+    expect(saved?.designModeOn).toBe(true)
+    expect(saved?.selection).toEqual([{ dcSource: 'src/App.tsx:3:3', index: 0 }])
+    expect(saved?.drafts).toEqual([{ dcSource: 'src/App.tsx:3:3', index: 0, props: [['padding-top', '24px']] }])
+    mode.setActive(false)
+    expect(loadLifecycle()?.designModeOn).toBe(false)
+  })
+
+  it('restoreLifecycle re-activates, re-applies drafts, re-arms the verifier, and re-selects', () => {
+    document.body.innerHTML = `<div data-dc-source="src/App.tsx:3:3" id="target"></div>`
+    const target = document.getElementById('target')!
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    mode.restoreLifecycle({
+      v: 1,
+      designModeOn: true,
+      selection: [{ dcSource: 'src/App.tsx:3:3', index: 0 }],
+      drafts: [{ dcSource: 'src/App.tsx:3:3', index: 0, props: [['padding-top', '24px']] }],
+      sent: [
+        {
+          id: 'q1',
+          elements: [
+            {
+              dcSource: 'src/App.tsx:3:3',
+              index: 0,
+              tag: 'div',
+              draftProps: ['padding-top'],
+              changes: [{ property: 'padding-top', afterCss: '24px' }],
+              change: {
+                tag: 'div',
+                source: { file: 'src/App.tsx', line: 3, col: 3 },
+                className: '',
+                text: '',
+                selector: 'div',
+                changes: [{ property: 'padding-top', beforeCss: '8px', afterCss: '24px', beforeUtility: null, afterUtility: 'pt-6', tokenExact: true }],
+              },
+            },
+          ],
+        },
+      ],
+    })
+    expect(mode.active).toBe(true)
+    expect(target.style.getPropertyValue('padding-top')).toBe('24px') // draft preview re-applied
+    expect(mode.selection).toHaveLength(1)
+    expect(mode.sent.size()).toBe(1) // verifier re-armed against the restored registry
+    expect(mode.panelRoot.querySelector('.chip-sent')).not.toBeNull()
+  })
+
+  it('a sent element that cannot be located gets a greyed row, not a crash', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    mode.restoreLifecycle({
+      v: 1,
+      designModeOn: true,
+      selection: [],
+      drafts: [],
+      sent: [
+        {
+          id: 'q1',
+          elements: [
+            {
+              dcSource: 'gone.tsx:1:1',
+              index: 0,
+              tag: 'span',
+              draftProps: [],
+              changes: [{ property: 'color', afterCss: 'rgb(0, 0, 0)' }],
+              change: { tag: 'span', source: { file: 'gone.tsx', line: 1, col: 1 }, className: '', text: '', selector: 'span', changes: [{ property: 'color', beforeCss: 'rgb(255, 255, 255)', afterCss: 'rgb(0, 0, 0)', beforeUtility: null, afterUtility: null, tokenExact: false }] },
+            },
+          ],
+        },
+      ],
+    })
+    const row = mode.panelRoot.querySelector('.change-row')!
+    expect(row.className).toContain('row-gone')
+  })
+
+  it('boot restore is a no-op when design mode was off', () => {
+    saveLifecycle({ v: 1, designModeOn: false, selection: [], drafts: [], sent: [] })
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    const saved = loadLifecycle()
+    if (saved?.designModeOn) mode.restoreLifecycle(saved) // mirrors boot()
+    expect(mode.active).toBe(false)
   })
 })

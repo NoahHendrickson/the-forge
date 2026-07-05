@@ -12,6 +12,7 @@ import { resetTokensCache, readTheme } from './tokens'
 import { ChangeList, type SentSeed } from './changelist'
 import { type AgentName } from './agent'
 import { WatchStatus, sentLabelFor, watchIndicatorFor, type Rung } from './watch'
+import { saveLifecycle, loadLifecycle, sourceIndex, locateBySource, type PersistedLifecycle } from './lifecycle-store'
 
 /** Rapid edits (e.g. dragging a number field) within this window reuse the first snapshot. */
 const RIPPLE_DEBOUNCE_MS = 300
@@ -100,7 +101,10 @@ export class DesignMode {
       onResend: (seed) => this.resend(seed),
     })
     this.panel.changesSlot.appendChild(this.changeList.root)
-    this.verifier.subscribe((e) => this.changeList.applyStage(e))
+    this.verifier.subscribe((e) => {
+      this.changeList.applyStage(e)
+      this.persist() // registry contents change on resolution — keep storage in step
+    })
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
     overlay.sendButton.addEventListener('click', () => {
       if (overlay.sendButton.disabled) return // re-entrancy guard: a POST is already in flight
@@ -145,6 +149,7 @@ export class DesignMode {
         this.sentSeeds.set(id, seeds)
         this.changeList.addSent(id, seeds)
         this.verifier.start()
+        this.persist()
         fetch('/__the-forge/dispatch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
@@ -203,6 +208,7 @@ export class DesignMode {
     this.drafts.onChange = () => {
       this.refreshStatus()
       this.changeList.syncDrafts()
+      this.persist()
     }
   }
 
@@ -298,6 +304,7 @@ export class DesignMode {
       if (this.sent.size() > 0) this.verifier.start()
       this.watch.start()
       this.refreshStatus()
+      this.persist()
     } else {
       document.removeEventListener('mousemove', this.onMove, true)
       document.removeEventListener('click', this.onClick, true)
@@ -320,7 +327,42 @@ export class DesignMode {
       this.watch.stop()
       this.changeList.clear()
       this.sentSeeds.clear()
+      this.persist()
     }
+  }
+
+  /** Rebuilds the session from a persisted lifecycle after a full page reload: re-activates
+   * design mode, re-applies draft previews, re-registers in-flight requests (placeholder
+   * elements stay detached so the verifier's locate() re-resolves them by dcSource on every
+   * poll — self-healing when the DOM catches up), re-arms the verifier, and re-selects. */
+  restoreLifecycle(saved: PersistedLifecycle): void {
+    if (!saved.designModeOn) return
+    this.setActive(true)
+    for (const d of saved.drafts) {
+      const el = locateBySource(d.dcSource, d.index)
+      if (!el) continue
+      for (const [prop, value] of d.props) this.drafts.apply(el, prop, value)
+    }
+    for (const s of saved.sent) {
+      const seeds: SentSeed[] = s.elements.map((pe) => ({
+        el: (pe.dcSource && locateBySource(pe.dcSource, pe.index)) || (document.createElement(pe.tag) as TaggedElement),
+        dcSource: pe.dcSource,
+        draftProps: pe.draftProps,
+        change: pe.change,
+      }))
+      this.sent.add(
+        s.id,
+        seeds.map((seed, i) => ({ el: seed.el, dcSource: seed.dcSource, draftProps: seed.draftProps, changes: s.elements[i].changes }))
+      )
+      this.sentSeeds.set(s.id, seeds)
+      this.changeList.addSent(s.id, seeds)
+    }
+    if (this.sent.size() > 0) this.verifier.start()
+    const selected = saved.selection
+      .map((sel) => locateBySource(sel.dcSource, sel.index))
+      .filter((el): el is TaggedElement => el !== null)
+    if (selected.length > 0) this.setSelection(selected)
+    this.persist()
   }
 
   private refreshStatus(): void {
@@ -332,6 +374,48 @@ export class DesignMode {
       this.verifierSummary || undefined,
       watchIndicatorFor(this.watch.current(), agent)
     )
+  }
+
+  /** Serializes the full lifecycle to sessionStorage. Called only from state-change hooks
+   * while the tool is in use — an ordinary page load with design mode off never writes.
+   * Elements are addressed as (dcSource, index-among-matches) so list items sharing one
+   * source location survive a reload individually (lifecycle-store.ts). */
+  private persist(): void {
+    const drafts: PersistedLifecycle['drafts'] = []
+    for (const [el, props] of this.drafts.entries()) {
+      const dcSource = (el as TaggedElement).dataset?.dcSource
+      if (!dcSource) continue // untagged elements can't be re-located — preview-only, not persisted
+      drafts.push({
+        dcSource,
+        index: sourceIndex(el as TaggedElement, dcSource),
+        props: [...props.entries()].map(([p, d]) => [p, d.value] as [string, string]),
+      })
+    }
+    const sent: PersistedLifecycle['sent'] = []
+    for (const [id, seeds] of this.sentSeeds) {
+      if (!this.sent.get(id)) continue // resolved — receipts are session-visual only, not persisted
+      sent.push({
+        id,
+        elements: seeds.map((seed) => ({
+          dcSource: seed.dcSource,
+          index: seed.dcSource ? sourceIndex(seed.el, seed.dcSource) : 0,
+          tag: seed.change.tag,
+          draftProps: seed.draftProps,
+          changes: seed.change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
+          change: seed.change,
+        })),
+      })
+    }
+    saveLifecycle({
+      v: 1,
+      designModeOn: this.active,
+      selection: this.selection.flatMap((el) => {
+        const dcSource = el.dataset?.dcSource
+        return dcSource ? [{ dcSource, index: sourceIndex(el, dcSource) }] : []
+      }),
+      drafts,
+      sent,
+    })
   }
 
   /** Replaces the selection with just `el` (plain click / programmatic single-select). */
@@ -366,6 +450,7 @@ export class DesignMode {
       this.overlay.showSelectOutlines(next.map((el) => el.getBoundingClientRect()))
       this.panel.show(next, buildInspectorData(next[0]))
     }
+    this.persist()
   }
 
   /** Clears all layout-ripple debounce state, including the pending quiet-window timer. */
@@ -499,6 +584,12 @@ function boot(): void {
   const secret = window.__THE_FORGE__?.secret
   const agent = window.__THE_FORGE__?.agent
   window.__THE_FORGE__ = { mode, secret, agent }
+  // One synchronous sessionStorage read per page load — the only work done when design
+  // mode was off (zero idle overhead). A stored active session survives full reloads:
+  // some frameworks legitimately hard-reload (non-HMR-able edits), and losing every
+  // draft/sent state to that was half of the original "panel closes on Send" trust bug.
+  const saved = loadLifecycle()
+  if (saved?.designModeOn) mode.restoreLifecycle(saved)
 }
 
 if (typeof document !== 'undefined' && !import.meta.vitest) {
