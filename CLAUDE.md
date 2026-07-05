@@ -53,7 +53,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `controls.ts` | `NumberField` — scrubbing numeric input with math expressions and `auto` |
 | `layout-controls.ts` | `SegmentField` + 9-dot `AlignMatrix` |
 | `colorpicker.ts` | popover color picker (SV area, hex, contrast ratio) |
-| `tokenpicker.ts` | `=`-triggered searchable Tailwind token picker; bound values render as pills |
+| `tokenpicker.ts` | `=` / `{ }`-icon-triggered searchable Tailwind token picker (numeric scales + named colors); bound values render as pills |
 | `tokens.ts` | Tailwind v4 theme reader: spacing base, radius/text scales, palette, nearest-token |
 | `drafts.ts` | inline-style draft store: apply/current/commit, before-after compare |
 | `agent.ts` | which agent is targeted (`claude-code`/`cursor`/`codex`) + display names |
