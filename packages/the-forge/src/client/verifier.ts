@@ -23,6 +23,21 @@ export interface VerifyResult {
   missing: number
 }
 
+export type LifecycleStage = 'sent' | 'applying' | 'done' | 'mismatch' | 'unverified' | 'failed'
+
+/** One per-element-change lifecycle transition, consumed by the panel's ChangeList. The
+ * (requestId, elIndex) pair is the stable row key — dcSource can be null and, on lists,
+ * non-unique. Poll-driven stages (sent/applying) re-emit every tick; consumers must be
+ * idempotent. */
+export interface StageEvent {
+  requestId: string
+  elIndex: number
+  dcSource: string | null
+  stage: LifecycleStage
+  note?: string
+  mismatches?: Array<{ property: string; expected: string; actual: string }>
+}
+
 function locate(el: TaggedElement, dcSource: string | null, doc: Document): TaggedElement | null {
   if (el.isConnected) return el
   if (!dcSource) return null
@@ -153,12 +168,21 @@ export class Verifier {
   /** Bumped by every start()/stop() — a poll chained under an older generation is dead and
    * must not reschedule, even if a newer chain has since made this.timer non-null again. */
   private generation = 0
+  private stageListeners: Array<(e: StageEvent) => void> = []
 
   constructor(
     private sent: SentRegistry,
     private drafts: DraftStore,
     private onUpdate: (summary: string) => void
   ) {}
+
+  subscribe(fn: (e: StageEvent) => void): void {
+    this.stageListeners.push(fn)
+  }
+
+  private emitStage(e: StageEvent): void {
+    for (const fn of this.stageListeners) fn(e)
+  }
 
   start(): void {
     if (this.timer) return
@@ -222,8 +246,15 @@ export class Verifier {
         let pendingManual = 0
         for (const id of this.sent.pendingIds()) {
           const status = statusById.get(id)
+          const stage: LifecycleStage = status === 'claimed' ? 'applying' : 'sent'
           if (status === 'claimed') claimed++
           else pendingManual++ // status === 'pending', or unknown/missing from the response
+          const entry = this.sent.get(id)
+          if (entry) {
+            entry.elements.forEach((element, elIndex) =>
+              this.emitStage({ requestId: id, elIndex, dcSource: element.dcSource, stage })
+            )
+          }
         }
         if (this.sent.size() === 0) this.stop()
         const agentDisplayName = AGENT_DISPLAY_NAME[currentAgent()]
@@ -255,29 +286,34 @@ export class Verifier {
     // decide per-element: only commit drafts for an element whose changes ALL
     // matched computed style — a mismatched element keeps its drafts so the
     // user can retry or adjust rather than silently losing the edit.
-    for (const ev of verifyElements(entry)) {
+    verifyElements(entry).forEach((ev, elIndex) => {
+      const dcSource = entry.elements[elIndex].dcSource
       if (ev.missing > 0) {
         this.counters.unverified += 1
+        this.emitStage({ requestId: id, elIndex, dcSource, stage: 'unverified' })
       } else if (ev.mismatched.length > 0) {
         this.counters.mismatch += 1
+        this.emitStage({ requestId: id, elIndex, dcSource, stage: 'mismatch', mismatches: ev.mismatched })
       } else {
         this.drafts.commit(ev.el, ev.draftProps)
         this.counters.implemented += 1
+        this.emitStage({ requestId: id, elIndex, dcSource, stage: 'done' })
       }
-    }
+    })
   }
 
   private handleFailed(id: string, note?: string | null): void {
     const entry = this.sent.take(id)
     if (!entry) return
     this.counters.failed += 1
-    if (note) {
-      // Agent-authored free text headed for the status line: collapse whitespace and bound the
-      // length so a long note can't blow up the single-line summary.
-      const clean = note.replace(/\s+/g, ' ').trim().slice(0, MAX_NOTE_CHARS)
-      if (clean && !this.counters.failedNotes.includes(clean) && this.counters.failedNotes.length < MAX_FAILED_NOTES) {
-        this.counters.failedNotes.push(clean)
-      }
+    // Agent-authored free text headed for the status line: collapse whitespace and bound the
+    // length so a long note can't blow up the single-line summary.
+    const clean = note ? note.replace(/\s+/g, ' ').trim().slice(0, MAX_NOTE_CHARS) : ''
+    if (clean && !this.counters.failedNotes.includes(clean) && this.counters.failedNotes.length < MAX_FAILED_NOTES) {
+      this.counters.failedNotes.push(clean)
     }
+    entry.elements.forEach((element, elIndex) =>
+      this.emitStage({ requestId: id, elIndex, dcSource: element.dcSource, stage: 'failed', ...(clean ? { note: clean } : {}) })
+    )
   }
 }
