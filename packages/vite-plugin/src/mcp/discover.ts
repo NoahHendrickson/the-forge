@@ -62,3 +62,27 @@ export function discoverEndpoint(dir: string): ForgeEndpoint | null {
   if (!best) return null
   return { port: best.data.port as number, host: best.data.host, secret: best.data.secret }
 }
+
+/** Walk cap mirrors resolveProjectRoot's GIT_WALK_MAX_LEVELS (server/setup.ts). */
+const DISCOVER_WALK_MAX_LEVELS = 10
+
+/**
+ * Walks up from `startDir` (bounded) looking for the nearest directory whose `.the-forge`
+ * yields a live endpoint. This removes the historical requirement that the agent session run
+ * exactly at the git root: the plugin writes `.the-forge` at the resolved project root, and a
+ * session opened in any subdirectory now finds it. Nearest directory wins (so a nested
+ * project's own `.the-forge` beats an ancestor's); within a directory, discoverEndpoint's
+ * newest-live-pid rule applies unchanged. A dead or absent `.the-forge` never stops the walk —
+ * only a LIVE endpoint does.
+ */
+export function discoverEndpointFrom(startDir: string): ForgeEndpoint | null {
+  let dir = path.resolve(startDir)
+  for (let i = 0; i <= DISCOVER_WALK_MAX_LEVELS; i++) {
+    const found = discoverEndpoint(path.join(dir, '.the-forge'))
+    if (found) return found
+    const parent = path.dirname(dir)
+    if (parent === dir) break // reached filesystem root
+    dir = parent
+  }
+  return null
+}

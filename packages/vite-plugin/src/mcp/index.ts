@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-import path from 'node:path'
 import readline from 'node:readline'
 import { randomUUID } from 'node:crypto'
 import { handleMessage, type ForgeBackend, type JsonRpcMessage, type WaitOutcome } from './protocol'
 import { baseUrl, type ForgeEndpoint } from './url'
-import { discoverEndpoint } from './discover'
+import { discoverEndpointFrom } from './discover'
 
 const NOT_RUNNING_MESSAGE = 'The Forge dev server is not running — start your Vite dev server first.'
 
@@ -29,7 +28,9 @@ function rejectedMessage(status: number): string {
 }
 
 function readEndpoint(): ForgeEndpoint | null {
-  return discoverEndpoint(path.join(process.cwd(), '.the-forge'))
+  // Walk-up discovery: the session no longer has to run exactly at the git root — any
+  // subdirectory of the project finds the endpoint (see discoverEndpointFrom).
+  return discoverEndpointFrom(process.cwd())
 }
 
 function secretHeaders(endpoint: ForgeEndpoint): Record<string, string> {

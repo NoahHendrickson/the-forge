@@ -65,6 +65,26 @@ describe('WatcherHub', () => {
     await expect(promise).resolves.toEqual({ stop: false, items: [] })
   })
 
+  it('the re-arm window runs from hold END, not wait entry — a slow re-invoke keeps the full freshMs', async () => {
+    // Before the hold-end lastSeen stamp, the effective re-arm margin was freshMs - holdMs:
+    // a watcher whose agent took longer than that to re-invoke the tool read as 'asleep',
+    // and a Send in the gap went down the keystroke ladder INTO the watching session.
+    const { hub, advance } = makeHub({ holdMs: 5, freshMs: 150, idleStopMs: 60_000 })
+    const { promise } = hub.wait() // lastSeen stamped at entry (t=0)
+    advance(100) // the clock moves while the hold is open
+    await promise // hold expires at t=100 — lastSeen re-stamped there
+    advance(120) // t=220: stale measured from entry (220 > 150), fresh from hold end (120 < 150)
+    expect(hub.state()).toBe('live')
+  })
+
+  it('a dropped connection gets no hold-end heartbeat — cancel clears the timer before it can stamp', async () => {
+    const { hub, advance } = makeHub({ holdMs: 5, freshMs: 150, idleStopMs: 60_000 })
+    const w = hub.wait()
+    w.cancel() // socket closed mid-hold — the bin is gone
+    advance(1)
+    expect(hub.state()).toBe('asleep') // no ghost 'live' window from a phantom hold-end stamp
+  })
+
   it('idle auto-stop: a wait after idleStopMs of no deliveries gets {stop, idle} and the hub sleeps', async () => {
     const { hub, advance } = makeHub({ holdMs: 5, idleStopMs: 1_000, freshMs: 10_000 })
     await hub.wait().promise // empty tick — starts the watch, does NOT reset the idle clock

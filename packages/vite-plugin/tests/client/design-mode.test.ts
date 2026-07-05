@@ -487,6 +487,125 @@ describe('DesignMode send-to-agent (M4)', () => {
     for (let i = 0; i < 6; i++) await Promise.resolve()
   }
 
+  it('a send where every draft is a no-op does not POST and flashes "No changes"', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    // jsdom's UA stylesheet gives <button> a 2px default border-width — drafting the same
+    // value is a genuine no-op (same shape as a user scrubbing a value back to its original).
+    drafts.apply(btn, 'border-top-width', '2px')
+    overlay.sendButton.click()
+    await flushSend()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(overlay.sendButton.textContent).toBe('No changes')
+    expect(mode.sent.size()).toBe(0)
+  })
+
+  it('Copy for agent with only no-op drafts does not copy and flashes "No changes"', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'border-top-width', '2px') // jsdom UA default — a genuine no-op
+    overlay.copyButton.click()
+    await flushSend()
+    expect(writeText).not.toHaveBeenCalled()
+    expect(overlay.copyButton.textContent).toBe('No changes')
+  })
+
+  it('Copy for agent still works for an in-flight request (no duplicate filter on copy — manual fallback)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await flushSend() // request is now in flight
+
+    overlay.copyButton.click()
+    await flushSend()
+    expect(writeText).toHaveBeenCalledTimes(1) // copy is the manual escape hatch — never blocked by in-flight state
+  })
+
+  it('re-clicking Send with an identical in-flight request does not re-queue and flashes "Already sent"', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await flushSend() // first send settles — drafts stay live until verification
+
+    overlay.sendButton.click() // impatient second click, nothing re-edited
+    await flushSend()
+
+    const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
+    expect(queueCalls).toHaveLength(1)
+    expect(overlay.sendButton.textContent).toBe('Already sent')
+    expect(mode.sent.pendingIds()).toEqual(['q1'])
+  })
+
+  it("reverting all drafts while another send is in flight flashes 'No changes', not 'Already sent' (agrees with Copy)", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await flushSend() // q1 in flight
+
+    drafts.apply(btn, 'padding-top', '') // reverted to the original — the builder now produces nothing
+    overlay.sendButton.click()
+    await flushSend()
+
+    expect(overlay.sendButton.textContent).toBe('No changes')
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')).toHaveLength(1)
+  })
+
+  it('re-editing an in-flight element to a NEW value sends again (not a duplicate)', async () => {
+    let nextId = 1
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: `q${nextId++}` }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await flushSend()
+
+    drafts.apply(btn, 'padding-top', '32px') // user kept editing — new value
+    overlay.sendButton.click()
+    await flushSend()
+
+    const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
+    expect(queueCalls).toHaveLength(2)
+    expect(mode.sent.pendingIds().sort()).toEqual(['q1', 'q2'])
+  })
+
   it('send posts the request and registers pending ids', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
@@ -834,15 +953,19 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
     const { overlay, mode, drafts } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
-    // the verifier neutralizes draft inline styles before measuring, so "the code
-    // adopted the value" must come from somewhere other than the draft itself
-    const style = document.createElement('style')
-    style.textContent = '.btn { padding-top: 24px; }'
-    document.head.appendChild(style)
     drafts.apply(btn, 'padding-top', '24px')
     overlay.sendButton.click()
     await Promise.resolve()
     await Promise.resolve()
+
+    // the verifier neutralizes draft inline styles before measuring, so "the code
+    // adopted the value" must come from somewhere other than the draft itself. Inserted
+    // AFTER the send (matching reality — the agent applies post-Send): a stylesheet that
+    // already carries the drafted value at build time makes the draft a no-op, which
+    // buildChangeRequest now (correctly) drops instead of sending an empty request.
+    const style = document.createElement('style')
+    style.textContent = '.btn { padding-top: 24px; }'
+    document.head.appendChild(style)
 
     await vi.advanceTimersByTimeAsync(2000)
 
@@ -909,15 +1032,17 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
     const { overlay, mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
-    const style = document.createElement('style')
-    style.textContent = '.btn { padding-top: 24px; }'
-    document.head.appendChild(style)
     drafts.apply(btn, 'padding-top', '24px')
     mode.select(btn) // panel is showing this element, as it might be while awaiting verification
 
     overlay.sendButton.click()
     await Promise.resolve()
     await Promise.resolve()
+
+    // Inserted after the send — see the summary-strip test above for why.
+    const style = document.createElement('style')
+    style.textContent = '.btn { padding-top: 24px; }'
+    document.head.appendChild(style)
 
     const refreshSpy = vi.spyOn(panel, 'refresh')
 

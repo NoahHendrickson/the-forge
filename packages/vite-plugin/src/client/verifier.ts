@@ -98,6 +98,21 @@ interface Counters {
   mismatch: number
   unverified: number
   failed: number
+  /** Deduped mark_applied failure notes — the agent's one-line reasons travel the whole
+   * pipeline (mark → queue → /status) and this is the only surface the user actually sees, so
+   * dropping them here would waste the field entirely. A bounded list (not latest-wins): with
+   * several failures for different reasons, one surviving note would misdescribe the rest. */
+  failedNotes: string[]
+}
+
+/** Bounds for the failure-note portion of the one-line summary. */
+const MAX_FAILED_NOTES = 3
+const MAX_NOTE_CHARS = 120
+
+/** Shape of GET /__the-forge/status — the one I/O boundary this module reads. */
+interface StatusResponse {
+  items: Array<{ id: string; status: string; note: string | null }>
+  watcher?: unknown
 }
 
 /**
@@ -123,12 +138,15 @@ function renderSummary(
   if (counters.implemented) parts.push(`${counters.implemented} implemented ✓`)
   if (counters.mismatch) parts.push(`${counters.mismatch} mismatch ⚠`)
   if (counters.unverified) parts.push(`${counters.unverified} applied (unverified)`)
-  if (counters.failed) parts.push(`${counters.failed} failed ✗`)
+  if (counters.failed) {
+    const notes = counters.failedNotes.join('; ').slice(0, MAX_NOTE_CHARS)
+    parts.push(`${counters.failed} failed ✗${notes ? ` — ${notes}` : ''}`)
+  }
   return parts.join(' · ')
 }
 
 export class Verifier {
-  private counters: Counters = { implemented: 0, mismatch: 0, unverified: 0, failed: 0 }
+  private counters: Counters = { implemented: 0, mismatch: 0, unverified: 0, failed: 0, failedNotes: [] }
   private timer: ReturnType<typeof setTimeout> | null = null
   private consecutiveFailures = 0
   private delayMs = POLL_MS
@@ -185,19 +203,16 @@ export class Verifier {
           }
           return null
         }
-        return res.json() as Promise<{
-          items: Array<{ id: string; status: string; note: string | null }>
-          watcher?: unknown
-        }>
+        return res.json() as Promise<StatusResponse>
       })
-      .then((body: { items: Array<{ id: string; status: string; note: string | null }>; watcher?: unknown } | null) => {
+      .then((body: StatusResponse | null) => {
         if (body === null) return
         this.consecutiveFailures = 0
         this.delayMs = POLL_MS
         const statusById = new Map(body.items.map((item) => [item.id, item.status]))
         for (const item of body.items) {
           if (item.status === 'applied') this.handleApplied(item.id)
-          else if (item.status === 'failed') this.handleFailed(item.id)
+          else if (item.status === 'failed') this.handleFailed(item.id, item.note)
         }
         // Manual rung: nothing applies until the user types /forge-design, so any sent item the server
         // still reports (or simply hasn't reported back yet, i.e. missing from the response) as
@@ -252,9 +267,17 @@ export class Verifier {
     }
   }
 
-  private handleFailed(id: string): void {
+  private handleFailed(id: string, note?: string | null): void {
     const entry = this.sent.take(id)
     if (!entry) return
     this.counters.failed += 1
+    if (note) {
+      // Agent-authored free text headed for the status line: collapse whitespace and bound the
+      // length so a long note can't blow up the single-line summary.
+      const clean = note.replace(/\s+/g, ' ').trim().slice(0, MAX_NOTE_CHARS)
+      if (clean && !this.counters.failedNotes.includes(clean) && this.counters.failedNotes.length < MAX_FAILED_NOTES) {
+        this.counters.failedNotes.push(clean)
+      }
+    }
   }
 }

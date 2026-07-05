@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Queue } from './queue'
-import { dispatch as realDispatch, type DispatchOpts, type DispatchResult } from './dispatch'
+import { dispatch as realDispatch, augmentDispatchMarkdown, type DispatchOpts, type DispatchResult } from './dispatch'
 import { WatcherHub } from './watchers'
 
 const MAX_BODY = 1024 * 1024
@@ -230,10 +230,18 @@ export function createForgeMiddleware(
           if (!pending && markdown === undefined) {
             return send(res, 200, { rung: 'manual', detail: 'nothing pending' })
           }
+          const resolvedAgent = agent ?? dispatchConfig.agent
+          // A caller-posted markdown override is passed through verbatim (there is no queue
+          // item to mark); a queue-sourced markdown gets the agent-specific augmentation —
+          // see augmentDispatchMarkdown in dispatch.ts for why (Cursor loop closure).
+          const dispatchMarkdown =
+            markdown !== undefined
+              ? markdown
+              : augmentDispatchMarkdown(resolvedAgent, pending?.markdown ?? '', pending?.id ?? null)
           const opts: DispatchOpts = {
-            agent: agent ?? dispatchConfig.agent,
+            agent: resolvedAgent,
             channelsFlag: dispatchConfig.channelsFlag,
-            markdown: markdown ?? pending?.markdown ?? '',
+            markdown: dispatchMarkdown,
             ...(dispatchConfig.cwd !== undefined ? { cwd: dispatchConfig.cwd } : {}),
           }
           const run = dispatchConfig.dispatchFn ?? realDispatch

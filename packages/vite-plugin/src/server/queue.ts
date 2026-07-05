@@ -100,6 +100,10 @@ export class Queue {
     return []
   }
 
+  /** `request` is the structured ChangeRequest JSON, persisted for debugging/inspection only —
+   * deliberately write-only. No consumer reads it back: agents get `markdown`, and /status
+   * returns just id/status/note. Kept because queue.json is the only durable record of what a
+   * Send actually contained once the browser tab is gone. */
   add(request: unknown, markdown: string): QueueItem {
     const item: QueueItem = {
       id: randomUUID(),
