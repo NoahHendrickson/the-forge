@@ -1,0 +1,162 @@
+// @vitest-environment jsdom
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { ChangeList, type SentSeed } from '../../src/client/changelist'
+import { DraftStore } from '../../src/client/drafts'
+import type { ElementChange } from '../../src/client/request'
+
+function tagged(dcSource = 'src/App.tsx:8:11'): HTMLElement {
+  const el = document.createElement('h1')
+  el.setAttribute('data-dc-source', dcSource)
+  document.body.appendChild(el)
+  return el
+}
+
+function elementChange(overrides: Partial<ElementChange> = {}): ElementChange {
+  return {
+    tag: 'h1',
+    source: { file: 'src/App.tsx', line: 8, col: 11 },
+    className: 'pt-2',
+    text: 'Vitality',
+    selector: 'h1',
+    changes: [
+      { property: 'padding-top', beforeCss: '8px', afterCss: '24px', beforeUtility: 'pt-2', afterUtility: 'pt-6', tokenExact: true },
+    ],
+    ...overrides,
+  }
+}
+
+function seed(el: HTMLElement, change = elementChange()): SentSeed {
+  return { el: el as never, dcSource: el.getAttribute('data-dc-source'), draftProps: ['padding-top'], change }
+}
+
+const noop = { onHover: vi.fn(), onSelect: vi.fn(), onResend: vi.fn() }
+
+beforeEach(() => {
+  document.body.innerHTML = ''
+})
+
+describe('empty state', () => {
+  it('is hidden with no rows', () => {
+    const list = new ChangeList(new DraftStore(), noop)
+    expect(list.root.hidden).toBe(true)
+    expect(list.root.className).toBe('changes-section')
+  })
+})
+
+describe('draft rows', () => {
+  it('shows a draft row per drafted element after syncDrafts', () => {
+    const drafts = new DraftStore()
+    const el = tagged()
+    const list = new ChangeList(drafts, noop)
+    drafts.apply(el as never, 'padding-top', '24px')
+    list.syncDrafts()
+    expect(list.root.hidden).toBe(false)
+    const rows = list.root.querySelectorAll('.change-row')
+    expect(rows.length).toBe(1)
+    expect(rows[0].querySelector('.chip')!.className).toContain('chip-draft')
+    expect(rows[0].querySelector('.change-el')!.textContent).toContain('h1')
+    expect(rows[0].querySelector('.change-summary')!.textContent).toContain('padding-top')
+    expect(rows[0].querySelector('.change-summary')!.textContent).toContain('24px')
+  })
+
+  it('removes the draft row when the draft is discarded', () => {
+    const drafts = new DraftStore()
+    const el = tagged()
+    const list = new ChangeList(drafts, noop)
+    drafts.apply(el as never, 'padding-top', '24px')
+    list.syncDrafts()
+    drafts.discard(el as never)
+    list.syncDrafts()
+    expect(list.root.hidden).toBe(true)
+  })
+
+  it('excludes props covered by an in-flight sent row for the same element', () => {
+    const drafts = new DraftStore()
+    const el = tagged()
+    const list = new ChangeList(drafts, noop)
+    drafts.apply(el as never, 'padding-top', '24px')
+    list.addSent('q1', [seed(el)])
+    list.syncDrafts()
+    // padding-top is in flight — only the sent row shows
+    const chips = [...list.root.querySelectorAll('.chip')].map((c) => c.className)
+    expect(chips.filter((c) => c.includes('chip-draft'))).toHaveLength(0)
+    expect(chips.filter((c) => c.includes('chip-sent'))).toHaveLength(1)
+    // a second, un-sent prop on the same element gets its own draft row
+    drafts.apply(el as never, 'margin-top', '8px')
+    list.syncDrafts()
+    const draftRow = [...list.root.querySelectorAll('.change-row')].find((r) => r.querySelector('.chip-draft'))
+    expect(draftRow?.querySelector('.change-summary')?.textContent).toContain('margin-top')
+    expect(draftRow?.querySelector('.change-summary')?.textContent).not.toContain('padding-top')
+  })
+})
+
+describe('sent rows and stages', () => {
+  it('renders sent rows with token-vocabulary summaries', () => {
+    const list = new ChangeList(new DraftStore(), noop)
+    list.addSent('q1', [seed(tagged())])
+    const row = list.root.querySelector('.change-row')!
+    expect(row.querySelector('.chip')!.className).toContain('chip-sent')
+    expect(row.querySelector('.change-summary')!.textContent).toBe('pt-2 → pt-6')
+    expect(row.querySelector('.change-el')!.textContent).toBe('h1 · App.tsx:8')
+  })
+
+  it('summarizes multi-change elements with +N more', () => {
+    const change = elementChange({
+      changes: [
+        { property: 'padding-top', beforeCss: '8px', afterCss: '24px', beforeUtility: 'pt-2', afterUtility: 'pt-6', tokenExact: true },
+        { property: 'margin-top', beforeCss: '0px', afterCss: '8px', beforeUtility: null, afterUtility: 'mt-2', tokenExact: true },
+      ],
+    })
+    const list = new ChangeList(new DraftStore(), noop)
+    list.addSent('q1', [seed(tagged(), change)])
+    expect(list.root.querySelector('.change-summary')!.textContent).toBe('pt-2 → pt-6 +1 more')
+  })
+
+  it('advances stages idempotently and allows applying → sent regression', () => {
+    const list = new ChangeList(new DraftStore(), noop)
+    list.addSent('q1', [seed(tagged())])
+    const chip = () => list.root.querySelector('.chip')!.className
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:8:11', stage: 'applying' })
+    expect(chip()).toContain('chip-applying')
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:8:11', stage: 'applying' })
+    expect(list.root.querySelectorAll('.change-row')).toHaveLength(1)
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:8:11', stage: 'sent' })
+    expect(chip()).toContain('chip-sent')
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:8:11', stage: 'done' })
+    expect(chip()).toContain('chip-done')
+  })
+
+  it('a terminal row no longer regresses on late poll events', () => {
+    const list = new ChangeList(new DraftStore(), noop)
+    list.addSent('q1', [seed(tagged())])
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:8:11', stage: 'done' })
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:8:11', stage: 'sent' })
+    expect(list.root.querySelector('.chip')!.className).toContain('chip-done')
+  })
+
+  it('renders the failed note', () => {
+    const list = new ChangeList(new DraftStore(), noop)
+    list.addSent('q1', [seed(tagged())])
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: 'src/App.tsx:8:11', stage: 'failed', note: 'needs confirmation: shared component' })
+    expect(list.root.querySelector('.chip')!.className).toContain('chip-failed')
+    expect(list.root.querySelector('.change-note')!.textContent).toBe('needs confirmation: shared component')
+  })
+
+  it('ignores events for unknown rows', () => {
+    const list = new ChangeList(new DraftStore(), noop)
+    expect(() => list.applyStage({ requestId: 'zzz', elIndex: 3, dcSource: null, stage: 'done' })).not.toThrow()
+    expect(list.root.hidden).toBe(true)
+  })
+
+  it('clear() drops everything', () => {
+    const drafts = new DraftStore()
+    const el = tagged()
+    const list = new ChangeList(drafts, noop)
+    drafts.apply(el as never, 'padding-top', '24px')
+    list.syncDrafts()
+    list.addSent('q1', [seed(tagged('src/B.tsx:1:1'))])
+    list.clear()
+    expect(list.root.hidden).toBe(true)
+    expect(list.root.querySelectorAll('.change-row')).toHaveLength(0)
+  })
+})

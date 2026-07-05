@@ -55,6 +55,10 @@ export class Panel {
   footer = document.createElement('div')
   resizeHandle = document.createElement('div')
   modeButton = document.createElement('button')
+  /** Mount slot for the Changes lifecycle list (changelist.ts) — owned/populated by
+   * DesignMode, positioned here so it pins between the scrolling sections and the footer
+   * and stays visible in the docked no-selection empty state (body hidden, footer kept). */
+  changesSlot = document.createElement('div')
 
   private head = document.createElement('div')
   private headTag = document.createElement('div')
@@ -186,7 +190,7 @@ export class Panel {
     this.modeButton.className = 'panel-mode'
     this.modeButton.type = 'button'
     this.head.append(this.modeButton)
-    this.root.append(this.resizeHandle, this.head, this.actions, this.emptyEl, this.body, this.footer)
+    this.root.append(this.resizeHandle, this.head, this.actions, this.emptyEl, this.body, this.changesSlot, this.footer)
     // Popovers mount in the BODY (the scroll container), not the root — anchor.offsetTop
     // and the popover's absolute top must share the body's scrolled coordinate space or
     // the popover stops tracking its row the moment the sections scroll (see overlay.ts

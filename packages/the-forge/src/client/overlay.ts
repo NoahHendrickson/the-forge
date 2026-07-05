@@ -324,6 +324,49 @@ button {
 }
 .tp-row:hover, .tp-row-active { background: rgba(255,255,255,0.08); }
 .tp-row-px { color: #9A9A9A; font-size: 10.5px; margin-left: auto; }
+
+/* Changes lifecycle list (send-lifecycle spec) — chips reuse the design tokens above:
+ * applying/mismatch share the ripple amber, done the watch-live green. */
+.changes-section {
+  flex: none; display: flex; flex-direction: column; max-height: 180px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+}
+.changes-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px 4px; font: 600 11px system-ui, sans-serif; color: #E8E8E8;
+}
+.changes-list { overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+.changes-list::-webkit-scrollbar { width: 8px; }
+.changes-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+.change-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 4px 6px; border-radius: 6px; font: 400 11px system-ui, sans-serif; color: #D4D4D4;
+  cursor: default;
+}
+.change-row:hover { background: rgba(255,255,255,0.06); }
+.change-row.row-gone { opacity: 0.5; }
+.chip {
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  font: 500 10px system-ui, sans-serif; border-radius: 999px; padding: 1px 7px;
+}
+.chip::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.chip-draft { color: #B8B8B8; border: 1px dashed rgba(255,255,255,0.25); }
+.chip-sent { color: #B8B8B8; background: rgba(255,255,255,0.08); }
+.chip-applying { color: #E2954A; background: rgba(226,149,74,0.12); }
+@keyframes forge-chip-pulse { 50% { opacity: 0.4; } }
+.chip-applying::before { animation: forge-chip-pulse 1.2s ease-in-out infinite; }
+.chip-done { color: #62C073; background: rgba(98,192,115,0.12); }
+.chip-mismatch { color: #E2954A; background: rgba(226,149,74,0.12); }
+.chip-unverified { color: #B8B8B8; background: rgba(255,255,255,0.08); }
+.chip-failed { color: #F87171; background: rgba(248,113,113,0.12); }
+.change-el { flex: none; color: #F5F5F5; }
+.change-summary {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #9A9A9A;
+}
+.change-note { flex-basis: 100%; color: #F87171; font-size: 10.5px; padding: 0 6px 2px 22px; white-space: normal; }
+.change-note-mismatch { color: #E2954A; }
+.change-actions { display: flex; gap: 4px; flex-basis: 100%; padding: 0 6px 2px 22px; }
 `
 
 export class Overlay {
