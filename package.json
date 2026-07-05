@@ -3,7 +3,11 @@
   "private": true,
   "workspaces": ["packages/*", "fixtures/*"],
   "scripts": {
-    "test": "npm run typecheck -w @the-forge/vite && npm run test -w @the-forge/vite",
-    "build": "npm run build -w @the-forge/vite"
+    "test": "npm run typecheck -w the-forge && npm run test -w the-forge",
+    "build": "npm run build -w the-forge"
+  },
+  "devDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   }
 }
