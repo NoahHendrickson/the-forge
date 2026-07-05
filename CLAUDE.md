@@ -88,3 +88,11 @@ The build produces three bundles in `packages/vite-plugin/dist/`: `index.js` (th
 - Items stay queued until `mark_applied` — but an immediate re-pull returns nothing (pull flips them to `claimed`; a dropped claim only re-queues after 5 min). The `/forge-design` flow is pull → apply → mark in one pass.
 - Watcher liveness (`/forge-watch`) is per-dev-server-process in-memory state — with two dev servers on one project, the watcher belongs to whichever server the MCP bin discovered (newest live endpoint file), while the browser may be talking to the other. Kill stale servers (same rule as E2E).
 - The watch loop's per-cycle texts (WATCH_COMMAND in `setup.ts`, canned wait texts in `mcp/protocol.ts`) are a per-tick token cost — keep them terse, and never interpolate server data into them.
+
+## Cursor Cloud specific instructions
+
+Startup dependency refresh (`npm install`) is handled automatically; the notes below are the non-obvious run/verify caveats — standard commands live in the `## Commands` section above.
+
+- **Build the plugin before running the demo app.** `fixtures/demo-app/vite.config.ts` imports `theForge` from `@the-forge/vite`, which resolves to `packages/vite-plugin/dist/index.js`. A fresh checkout has no `dist/`, so `npm run dev -w demo-app` will fail to resolve the plugin until you run `npm run build` first (`dist/` is gitignored, so it never arrives with the repo).
+- **Reaching the dev server:** it prints `http://localhost:5173/` but binds IPv6 (`[::1]:5173`); `localhost:5173` works from the browser and `curl` in this VM. Verify the transform is live with `curl -s http://localhost:5173/src/App.tsx` — served JSX carries `"data-dc-source": "file:line:col"` attributes (JSON-quoted in the compiled output, not raw `data-dc-source="..."`).
+- **The demo dev server is the E2E harness** for the design-mode loop (toggle bottom-right → select element → edit in panel → "Send to agent"). A successful send writes a pending item to `.the-forge/queue.json` at the git root; that plus the plugin-written `.mcp.json` and `.claude/commands/` are gitignored runtime state — never commit them.
