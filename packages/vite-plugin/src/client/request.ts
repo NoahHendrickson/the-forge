@@ -263,7 +263,10 @@ export function renderMarkdown(req: ChangeRequest): string {
     if (el.className) lines.push(`Current classes: \`${el.className}\``)
     lines.push('')
     for (const c of el.changes) {
-      if (c.beforeCss === c.afterCss) continue // no-op — nothing actually changed
+      // Defense-in-depth: buildChangeRequestWithElements already drops no-ops at the source,
+      // but renderMarkdown also accepts hand-built ChangeRequests (tests, future callers) —
+      // a no-op bullet must never reach the agent regardless of who built the request.
+      if (c.beforeCss === c.afterCss) continue
       let line = `- ${c.property}: ${c.beforeCss} → ${c.afterCss}`
       if (c.afterUtility) {
         line += c.beforeUtility

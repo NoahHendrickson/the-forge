@@ -241,6 +241,21 @@ async function tryAppleScript(
   return null
 }
 
+/** Agent-specific markdown augmentation for /dispatch, kept HERE (beside the ladder) so the
+ * endpoint middleware stays orchestration-only. Cursor's deeplink is the one rung that carries
+ * the request content itself AND bypasses pull_design_edits — without this trailer the queue
+ * item stays pending forever and the browser verifier can never flip drafts to Implemented.
+ * The item id is the ONLY dynamic value spliced in, mirroring renderItems' reminder format in
+ * mcp/protocol.ts (server-generated UUID, never user content). Other agents get the markdown
+ * untouched — their reminder arrives via the MCP tool result. */
+export function augmentDispatchMarkdown(agent: DispatchOpts['agent'], markdown: string, pendingId: string | null): string {
+  if (agent !== 'cursor' || pendingId === null) return markdown
+  return (
+    markdown +
+    `\n\nWhen done, call the \`mark_applied\` tool from the \`the-forge\` MCP server with ids: ${pendingId} and status "applied" (or "failed" with a one-line note).`
+  )
+}
+
 /** Cursor deeplink — the ONE place request content (markdown) travels anywhere near a
  * terminal/URL: it is URL-encoded into a `cursor://` deeplink opened via `open`, which hands
  * the URL to the OS/Cursor — never interpreted by a shell. User still presses Enter in Cursor

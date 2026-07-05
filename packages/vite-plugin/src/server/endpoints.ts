@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Queue } from './queue'
-import { dispatch as realDispatch, type DispatchOpts, type DispatchResult } from './dispatch'
+import { dispatch as realDispatch, augmentDispatchMarkdown, type DispatchOpts, type DispatchResult } from './dispatch'
 import { WatcherHub } from './watchers'
 
 const MAX_BODY = 1024 * 1024
@@ -231,15 +231,13 @@ export function createForgeMiddleware(
             return send(res, 200, { rung: 'manual', detail: 'nothing pending' })
           }
           const resolvedAgent = agent ?? dispatchConfig.agent
-          let dispatchMarkdown = markdown ?? pending?.markdown ?? ''
-          // Cursor's deeplink is the one rung that carries the request content itself, and it
-          // bypasses pull_design_edits — so without this trailer the queue item stays pending
-          // forever and the browser verifier can never flip drafts to Implemented. The item id
-          // is the ONLY dynamic value spliced in, mirroring renderItems' reminder format in
-          // mcp/protocol.ts (server-generated UUID, never user content).
-          if (resolvedAgent === 'cursor' && markdown === undefined && pending) {
-            dispatchMarkdown += `\n\nWhen done, call the \`mark_applied\` tool from the \`the-forge\` MCP server with ids: ${pending.id} and status "applied" (or "failed" with a one-line note).`
-          }
+          // A caller-posted markdown override is passed through verbatim (there is no queue
+          // item to mark); a queue-sourced markdown gets the agent-specific augmentation —
+          // see augmentDispatchMarkdown in dispatch.ts for why (Cursor loop closure).
+          const dispatchMarkdown =
+            markdown !== undefined
+              ? markdown
+              : augmentDispatchMarkdown(resolvedAgent, pending?.markdown ?? '', pending?.id ?? null)
           const opts: DispatchOpts = {
             agent: resolvedAgent,
             channelsFlag: dispatchConfig.channelsFlag,

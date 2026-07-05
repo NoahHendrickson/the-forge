@@ -316,6 +316,34 @@ describe('Verifier polling lifecycle', () => {
     expect(lastSummary).toContain('failed ✗ — needs confirmation: shared Button component')
   })
 
+  it('aggregates distinct notes across multiple failures instead of latest-wins', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const onUpdate = vi.fn()
+    const a = el()
+    const b = el()
+    sent.add('q1', makeEntry([{ el: a, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+    sent.add('q2', makeEntry([{ el: b, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '32px' }] }]))
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          { id: 'q1', status: 'failed', note: 'reason one' },
+          { id: 'q2', status: 'failed', note: 'reason two' },
+        ],
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, onUpdate)
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const lastSummary = onUpdate.mock.calls.at(-1)![0] as string
+    expect(lastSummary).toContain('2 failed ✗ — reason one; reason two')
+  })
+
   it('collapses whitespace and bounds the length of a failure note headed for the one-line summary', async () => {
     const sent = new SentRegistry()
     const drafts = new DraftStore()

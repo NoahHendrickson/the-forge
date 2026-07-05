@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Queue } from './queue'
+import type { DispatchOpts } from './dispatch'
 
 const DESIGN_COMMAND = `Pull pending design edits from The Forge and apply them.
 
@@ -223,7 +224,9 @@ export function setupProjectConfig(
   root: string,
   mcpBinPath: string,
   viteRoot?: string,
-  agent: 'claude-code' | 'cursor' | 'codex' = 'claude-code'
+  // DispatchOpts['agent'] (not an inline union): a fourth agent added to the plugin must fail
+  // to compile here too, or it would silently skip its per-agent config registration.
+  agent: DispatchOpts['agent'] = 'claude-code'
 ): void {
   ensureMcpEntry(path.join(root, '.mcp.json'), mcpBinPath, '.mcp.json')
 

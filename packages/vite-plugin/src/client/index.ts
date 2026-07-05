@@ -3,7 +3,7 @@ import { findTaggedElement, type TaggedElement } from './source'
 import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
-import { buildChangeRequestWithElements, renderMarkdown } from './request'
+import { buildChangeRequestWithElements, renderMarkdown, type ChangeRequest, type ElementChange } from './request'
 import { SentRegistry } from './sent'
 import { Verifier } from './verifier'
 import { snapshotRects, diffRects } from './ripple'
@@ -89,19 +89,12 @@ export class DesignMode {
     overlay.sendButton.addEventListener('click', () => {
       if (overlay.sendButton.disabled) return // re-entrancy guard: a POST is already in flight
       const originalLabel = 'Send to agent'
-      const { request, elements } = buildChangeRequestWithElements(this.drafts)
-      // Double-Send guard: drop elements whose exact change set is already in flight (sent,
-      // not yet verified). Re-queueing an identical request would instruct the agent to redo
-      // utility renames whose "before" class the first apply already removed. Elements edited
-      // to NEW values since the send pass through — that's a genuinely new request.
-      const pairs = [...elements.entries()].filter(([el, change]) => !this.sent.isDuplicate(el, change.changes))
-      request.elements = pairs.map(([, change]) => change)
-      if (request.elements.length === 0) {
-        // Nothing actionable: every draft is either a no-op (scrubbed back to its original —
-        // buildChangeRequest already dropped it) or an identical request already in flight.
-        this.flashButton(overlay.sendButton, this.sent.size() > 0 ? 'Already sent' : 'No changes', originalLabel)
+      const prepared = this.prepareSend()
+      if (prepared === 'no-changes' || prepared === 'already-sent') {
+        this.flashButton(overlay.sendButton, prepared === 'already-sent' ? 'Already sent' : 'No changes', originalLabel)
         return
       }
+      const { request, pairs } = prepared
       const md = renderMarkdown(request)
       const onSendFailed = (): void => {
         overlay.sendButton.disabled = false
@@ -159,7 +152,16 @@ export class DesignMode {
         .catch(onSendFailed)
     })
     overlay.copyButton.addEventListener('click', () => {
-      const md = renderMarkdown(buildChangeRequestWithElements(this.drafts).request)
+      // Same empty guard as Send, but deliberately NOT the in-flight duplicate filter: copying
+      // the markdown of a request that is still queued is a legitimate manual fallback (e.g.
+      // pasting into a session the dispatch ladder couldn't reach); copying a request with
+      // zero actionable edits is never useful.
+      const { request } = buildChangeRequestWithElements(this.drafts)
+      if (request.elements.length === 0) {
+        this.flashButton(overlay.copyButton, 'No changes', 'Copy for agent')
+        return
+      }
+      const md = renderMarkdown(request)
       navigator.clipboard
         .writeText(md)
         .then(() => this.flashButton(overlay.copyButton, 'Copied ✓', 'Copy for agent'))
@@ -179,6 +181,25 @@ export class DesignMode {
 
   get panelRoot(): HTMLElement {
     return this.panel.root
+  }
+
+  /** The Send gate, kept out of the click handler so that stays wiring-only: builds the
+   * request, applies the double-Send guard, and names why nothing survived. Duplicate
+   * filtering drops elements whose exact change set is already in flight (sent, not yet
+   * verified) — re-queueing an identical request would instruct the agent to redo utility
+   * renames whose "before" class the first apply already removed. Elements edited to NEW
+   * values since the send pass through: that's a genuinely new request. 'no-changes' means
+   * every draft was a no-op (scrubbed back to its original — buildChangeRequest drops those);
+   * 'already-sent' means whatever remained is in flight. */
+  private prepareSend():
+    | { request: ChangeRequest; pairs: Array<[TaggedElement, ElementChange]> }
+    | 'no-changes'
+    | 'already-sent' {
+    const { request, elements } = buildChangeRequestWithElements(this.drafts)
+    const pairs = [...elements.entries()].filter(([el, change]) => !this.sent.isDuplicate(el, change.changes))
+    request.elements = pairs.map(([, change]) => change)
+    if (request.elements.length === 0) return this.sent.size() > 0 ? 'already-sent' : 'no-changes'
+    return { request, pairs }
   }
 
   /** First selection member (or null) — kept for single-selection call sites/tests. */

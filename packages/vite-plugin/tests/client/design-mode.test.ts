@@ -490,6 +490,40 @@ describe('DesignMode send-to-agent (M4)', () => {
     expect(mode.sent.size()).toBe(0)
   })
 
+  it('Copy for agent with only no-op drafts does not copy and flashes "No changes"', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'border-top-width', '2px') // jsdom UA default — a genuine no-op
+    overlay.copyButton.click()
+    await flushSend()
+    expect(writeText).not.toHaveBeenCalled()
+    expect(overlay.copyButton.textContent).toBe('No changes')
+  })
+
+  it('Copy for agent still works for an in-flight request (no duplicate filter on copy — manual fallback)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await flushSend() // request is now in flight
+
+    overlay.copyButton.click()
+    await flushSend()
+    expect(writeText).toHaveBeenCalledTimes(1) // copy is the manual escape hatch — never blocked by in-flight state
+  })
+
   it('re-clicking Send with an identical in-flight request does not re-queue and flashes "Already sent"', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
