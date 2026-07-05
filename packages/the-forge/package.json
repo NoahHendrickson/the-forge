@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Figma-style design mode for your running Vite or Next.js app — sends deterministic, token-aware change requests to the AI coding agent you already use.",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/NoahHendrickson/the-forge.git" },
+  "repository": { "type": "git", "url": "git+https://github.com/NoahHendrickson/the-forge.git", "directory": "packages/the-forge" },
   "homepage": "https://github.com/NoahHendrickson/the-forge#readme",
   "keywords": ["design-mode", "vite-plugin", "nextjs", "mcp", "claude-code", "cursor", "tailwind", "devtools"],
   "engines": { "node": ">=20" },
@@ -32,6 +32,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsup",
+    "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
