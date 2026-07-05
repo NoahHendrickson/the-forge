@@ -3,6 +3,7 @@ import type { StageEvent, LifecycleStage } from './verifier'
 import type { ElementChange, ChangeItem } from './request'
 import type { TaggedElement } from './source'
 import { parseSourceAttr } from './source'
+import { locateBySource } from './lifecycle-store'
 
 export interface SentSeed {
   el: TaggedElement
@@ -87,15 +88,20 @@ export class ChangeList {
     this.render()
   }
 
-  applyStage(e: StageEvent): void {
+  /** Returns true only when this event actually changed a row's stage — poll re-emissions of
+   * an unchanged stage (verifier ticks every ~2s while a request is pending) are expected and
+   * must be a no-op, not just for rendering but for the caller's own state-change bookkeeping
+   * (index.ts persists to sessionStorage only when this returns true — see final-review F4). */
+  applyStage(e: StageEvent): boolean {
     const row = this.sentRows.get(`${e.requestId}:${e.elIndex}`)
-    if (!row) return
-    if (row.stage === e.stage) return // poll re-emissions are expected — no re-render churn
-    if (TERMINAL.has(row.stage)) return
+    if (!row) return false
+    if (row.stage === e.stage) return false // poll re-emissions are expected — no re-render churn
+    if (TERMINAL.has(row.stage)) return false
     row.stage = e.stage
     row.note = e.note
     row.mismatches = e.mismatches
     this.render()
+    return true
   }
 
   clearDone(): void {
@@ -123,7 +129,29 @@ export class ChangeList {
     return props
   }
 
+  /** Restored sent seeds whose element couldn't be located at boot get a detached
+   * `document.createElement(tag)` placeholder (see lifecycle-store.ts / index.ts
+   * restoreLifecycle) — nothing ever re-located them afterward, so a restored row stayed
+   * greyed (`row-gone`) forever even once the framework mounted the real element, AND
+   * inFlightProps (which dedupes by `seed.el` identity) missed since the draft's el and the
+   * placeholder are different objects, letting a draft row and an in-flight row for the same
+   * change show up side by side. Heal at render time — every render is a natural re-check
+   * point — mirroring the verifier's own locate() fallback: a disconnected element with a
+   * dcSource always gets one more chance to resolve to its live DOM counterpart. MUTATING
+   * `seed.el` in place (not replacing the SentRow) is what makes the fix reach every consumer
+   * that shares the seed object: inFlightProps, persist(), and row click/hover handlers.
+   */
+  private healPlaceholders(): void {
+    for (const row of this.sentRows.values()) {
+      if (row.seed.el.isConnected) continue
+      if (!row.seed.dcSource) continue
+      const located = locateBySource(row.seed.dcSource, 0)
+      if (located) row.seed.el = located
+    }
+  }
+
   private render(): void {
+    this.healPlaceholders()
     this.list.replaceChildren()
     let terminalOk = 0
 
@@ -223,7 +251,10 @@ export class ChangeList {
     resend.textContent = 'Re-send'
     resend.addEventListener('click', (e) => {
       e.stopPropagation() // row click selects the element — actions must not
-      this.dismissRow(row)
+      // Row removal moved to the resend SUCCESS path (final-review F5): dismissing here, before
+      // the re-queue POST resolves, left the user with nothing but a button flash if the POST
+      // failed — no record of the still-failed change. The host (index.ts resend()) now calls
+      // removeRow() itself right before re-registering the seed under the new id.
       this.cb.onResend(row.seed)
     })
     const dismiss = document.createElement('button')
@@ -240,6 +271,17 @@ export class ChangeList {
   private dismissRow(row: SentRow): void {
     for (const [key, r] of this.sentRows) {
       if (r === row) this.sentRows.delete(key)
+    }
+    this.render()
+  }
+
+  /** Public counterpart to dismissRow, keyed by seed rather than the internal SentRow — the
+   * host (index.ts resend()) calls this right before addSent() once its re-queue POST actually
+   * resolves, so a failed POST leaves the old failed row in place instead of vanishing on
+   * click (final-review F5). */
+  removeRow(seed: SentSeed): void {
+    for (const [key, r] of this.sentRows) {
+      if (r.seed === seed) this.sentRows.delete(key)
     }
     this.render()
   }

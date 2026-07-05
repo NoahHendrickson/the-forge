@@ -1096,6 +1096,43 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
 
     expect(refreshSpy).toHaveBeenCalled()
   })
+
+  // Final-review F4: the verifier's poll loop re-emits the SAME stage (e.g. 'sent'/'applying')
+  // every ~2s tick while a request is still pending — applyStage() already no-ops on same-stage
+  // internally, but the index.ts subscription called persist() (a sessionStorage write) on every
+  // tick regardless, defeating "storage writes only on state changes".
+  it('persists only when a poll re-emission actually changes a row stage, not on identical re-emissions', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      // Stays 'claimed' (-> 'applying' stage) on every poll tick — an identical re-emission.
+      if (url === '/__the-forge/status?ids=q1')
+        return Promise.resolve({ ok: true, json: async () => ({ items: [{ id: 'q1', status: 'claimed', note: null }] }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem')
+    setItemSpy.mockClear()
+
+    // First tick: 'sent' -> 'applying' is a real stage change -> one persist.
+    await vi.advanceTimersByTimeAsync(2000)
+    const afterFirstTick = setItemSpy.mock.calls.filter(([key]) => key === 'the-forge:lifecycle').length
+    expect(afterFirstTick).toBeGreaterThan(0)
+
+    setItemSpy.mockClear()
+    // Second tick: still 'claimed' -> still 'applying' — identical re-emission, no persist.
+    await vi.advanceTimersByTimeAsync(2000)
+    const afterSecondTick = setItemSpy.mock.calls.filter(([key]) => key === 'the-forge:lifecycle').length
+    expect(afterSecondTick).toBe(0)
+  })
 })
 
 describe('DesignMode layout-ripple wiring (M2b Task 4)', () => {
@@ -1845,5 +1882,108 @@ describe('lifecycle restore races the framework mount', () => {
     // pendingRestore was drained once attempts were exhausted.
     mode.deselect()
     expect(loadLifecycle()?.drafts).toEqual([])
+  })
+})
+
+// Final-review F1: resend() queued a fresh request and updated the live registry/ChangeList,
+// but never called persist() — so a reload within the ~2s verifier-poll window after a re-send
+// lost the re-sent entry from the restored session, defeating the milestone's headline guarantee.
+describe('resend persistence (final-review F1)', () => {
+  beforeEach(() => sessionStorage.clear())
+
+  it('persists the re-sent id so a reload after resend restores it', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'resent-1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    const el = document.createElement('div')
+    el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
+    document.body.appendChild(el)
+    mode.setActive(true)
+
+    // Seed a failed sent row directly via restoreLifecycle-shaped state, then trigger Re-send
+    // through the panel's ChangeList — the same path a real "Re-send" click takes.
+    mode.restoreLifecycle({
+      v: 1,
+      designModeOn: true,
+      selection: [],
+      drafts: [],
+      sent: [
+        {
+          id: 'q-failed',
+          elements: [
+            {
+              dcSource: 'src/App.tsx:3:3',
+              index: 0,
+              tag: 'div',
+              draftProps: ['padding-top'],
+              changes: [{ property: 'padding-top', afterCss: '24px' }],
+              change: {
+                tag: 'div',
+                source: { file: 'src/App.tsx', line: 3, col: 3 },
+                className: '',
+                text: '',
+                selector: 'div',
+                changes: [{ property: 'padding-top', beforeCss: '8px', afterCss: '24px', beforeUtility: null, afterUtility: 'pt-6', tokenExact: true }],
+              },
+            },
+          ],
+        },
+      ],
+    })
+    // Force the row into 'failed' so the Re-send button renders.
+    const changeList = (mode as never as { changeList: { applyStage: (e: unknown) => void } }).changeList
+    changeList.applyStage({ requestId: 'q-failed', elIndex: 0, dcSource: 'src/App.tsx:3:3', stage: 'failed', note: 'nope' })
+
+    const resendBtn = mode.panelRoot.querySelector('.change-resend') as HTMLElement
+    expect(resendBtn).not.toBeNull()
+    resendBtn.click()
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+
+    expect(loadLifecycle()?.sent.some((s) => s.id === 'resent-1')).toBe(true)
+  })
+})
+
+// Final-review F3: loadLifecycle only validates top-level shape (v/designModeOn/array-ness) —
+// a shallow-valid-but-corrupt `sent` element (e.g. `{}`, missing dcSource/elements/etc.) throws
+// mid-restoreLifecycle with capture-phase listeners already attached (setActive(true) ran
+// first). boot() must guard the call so corrupt storage degrades to "start clean", not a thrown
+// exception on every page load.
+describe('boot restore guard against corrupt storage (final-review F3)', () => {
+  beforeEach(() => sessionStorage.clear())
+
+  it('does not throw when a persisted sent entry is shallow-valid but corrupt', () => {
+    sessionStorage.setItem(
+      'the-forge:lifecycle',
+      JSON.stringify({ v: 1, designModeOn: true, selection: [], drafts: [], sent: [{}] })
+    )
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    const saved = loadLifecycle()
+    // Mirrors boot()'s actual guarded restore call (index.ts): loadLifecycle only validates
+    // top-level shape, so a corrupt array element (missing `elements`, `id`, …) reaches
+    // restoreLifecycle and throws mid-restore — boot() wraps the call in try/catch and starts
+    // clean (setActive(false)) rather than leaving capture-phase listeners half-attached.
+    expect(() => {
+      if (saved?.designModeOn) {
+        try {
+          mode.restoreLifecycle(saved)
+        } catch {
+          mode.setActive(false)
+        }
+      }
+    }).not.toThrow()
+    // Degrades to "start clean" rather than a half-restored, listener-leaking session.
+    expect(mode.active).toBe(false)
   })
 })

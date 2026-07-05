@@ -207,7 +207,12 @@ describe('interactions', () => {
     expect(list.root.hidden).toBe(true)
   })
 
-  it('Re-send removes the row and forwards the seed', () => {
+  // Final-review F5: Re-send used to dismiss the row immediately on click, before the re-queue
+  // POST resolved — a failed /queue POST then left the user with nothing but a button flash and
+  // no record of the still-failed change. Row removal now moves to the resend success path
+  // (index.ts's resend() calls the new removeRow() right before addSent); Re-send's click
+  // handler only forwards the seed and no longer dismisses.
+  it('Re-send forwards the seed and keeps the row until the host confirms success', () => {
     const onResend = vi.fn()
     const list = new ChangeList(new DraftStore(), { ...noop, onResend })
     const el = tagged()
@@ -216,7 +221,81 @@ describe('interactions', () => {
     list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'failed' })
     ;(list.root.querySelector('.change-resend') as HTMLElement).click()
     expect(onResend).toHaveBeenCalledWith(s)
+    // Row still present — removal is the HOST's job, on resend success.
+    expect(list.root.hidden).toBe(false)
+    expect(list.root.querySelector('.change-row')).not.toBeNull()
+
+    // Host confirms success: it calls removeRow with the seed right before addSent(newId, [seed]).
+    list.removeRow(s)
     expect(list.root.hidden).toBe(true)
+  })
+
+  it('a failed re-queue POST leaves the row present with its note (host never calls removeRow)', () => {
+    const onResend = vi.fn()
+    const list = new ChangeList(new DraftStore(), { ...noop, onResend })
+    const el = tagged()
+    const s = seed(el)
+    list.addSent('q1', [s])
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'failed', note: 'network down' })
+    ;(list.root.querySelector('.change-resend') as HTMLElement).click()
+    expect(onResend).toHaveBeenCalledWith(s)
+    // Simulates a resend() whose /queue POST failed — the host does NOT call removeRow.
+    const row = list.root.querySelector('.change-row')!
+    expect(row.querySelector('.chip')!.className).toContain('chip-failed')
+    expect(row.querySelector('.change-note')!.textContent).toBe('network down')
+    expect(list.root.hidden).toBe(false)
+  })
+
+  // Final-review F2: restored placeholder seeds (from restoreLifecycle, a locate() miss on
+  // boot) carry a detached `document.createElement(tag)` element forever — nothing ever
+  // re-locates them, so the row stays greyed even after the framework mounts the real element,
+  // and inFlightProps (which dedupes by `seed.el` identity) misses because the draft's `el` and
+  // the placeholder are different objects.
+  it('a placeholder seed heals to the real element once it renders, un-greying the row', () => {
+    const dcSource = 'src/App.tsx:9:1'
+    const placeholder = document.createElement('h1') as unknown as never // detached — never appended
+    const list = new ChangeList(new DraftStore(), noop)
+    const placeholderSeed: SentSeed = {
+      el: placeholder,
+      dcSource,
+      draftProps: ['padding-top'],
+      change: elementChange({ source: { file: 'src/App.tsx', line: 9, col: 1 } }),
+    }
+    list.addSent('q1', [placeholderSeed])
+    let row = list.root.querySelector('.change-row')!
+    expect(row.className).toContain('row-gone')
+
+    // The framework mounts the real, tagged element after the fact.
+    const real = tagged(dcSource)
+    list.syncDrafts() // a render trigger, same as any other state change
+
+    row = list.root.querySelector('.change-row')!
+    expect(row.className).not.toContain('row-gone')
+    row.dispatchEvent(new MouseEvent('click'))
+    expect(placeholderSeed.el).toBe(real) // healed in place — shared by inFlightProps/persist too
+  })
+
+  it('healing a placeholder seed excludes the draft row for the same now-located element (no duplicate)', () => {
+    const dcSource = 'src/App.tsx:9:1'
+    const placeholder = document.createElement('h1') as unknown as never
+    const drafts = new DraftStore()
+    const list = new ChangeList(drafts, noop)
+    const placeholderSeed: SentSeed = {
+      el: placeholder,
+      dcSource,
+      draftProps: ['padding-top'],
+      change: elementChange({ source: { file: 'src/App.tsx', line: 9, col: 1 } }),
+    }
+    list.addSent('q1', [placeholderSeed])
+    const real = tagged(dcSource)
+    drafts.apply(real as never, 'padding-top', '24px')
+    list.syncDrafts()
+
+    // Healed: the sent row now shares `real`, so inFlightProps(real) should cover padding-top —
+    // the draft row for the same prop on the same element must not also render.
+    const chips = [...list.root.querySelectorAll('.chip')].map((c) => c.className)
+    expect(chips.filter((c) => c.includes('chip-draft'))).toHaveLength(0)
+    expect(chips.filter((c) => c.includes('chip-sent'))).toHaveLength(1)
   })
 
   it('Clear done removes done and unverified rows, keeps failed and mismatch', () => {

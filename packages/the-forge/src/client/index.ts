@@ -109,8 +109,11 @@ export class DesignMode {
     })
     this.panel.changesSlot.appendChild(this.changeList.root)
     this.verifier.subscribe((e) => {
-      this.changeList.applyStage(e)
-      this.persist() // registry contents change on resolution — keep storage in step
+      // applyStage returns false for poll re-emissions of an unchanged stage (the verifier
+      // ticks every ~2s while a request is pending) — persisting on every tick regardless would
+      // defeat "storage writes only on state changes" (final-review F4). Only a real stage
+      // transition (sent -> applying, applying -> done, etc.) warrants a sessionStorage write.
+      if (this.changeList.applyStage(e)) this.persist()
     })
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
     overlay.sendButton.addEventListener('click', () => {
@@ -273,8 +276,14 @@ export class DesignMode {
           },
         ])
         this.sentSeeds.set(body.id, [seed])
+        // Remove the OLD failed row only once the re-queue actually succeeded (final-review
+        // F5) — a failed POST below (see .catch) leaves the failed row and its note in place
+        // instead of vanishing on click with nothing to show for it.
+        this.changeList.removeRow(seed)
         this.changeList.addSent(body.id, [seed])
         this.verifier.start()
+        this.persist() // final-review F1: without this, a reload within the ~2s verifier-poll
+        // window after a re-send loses the re-sent entry from the restored session.
         fetch('/__the-forge/dispatch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
@@ -662,7 +671,19 @@ function boot(): void {
   // some frameworks legitimately hard-reload (non-HMR-able edits), and losing every
   // draft/sent state to that was half of the original "panel closes on Send" trust bug.
   const saved = loadLifecycle()
-  if (saved?.designModeOn) mode.restoreLifecycle(saved)
+  // loadLifecycle only validates TOP-LEVEL shape (v/designModeOn/array-ness of
+  // selection/drafts/sent) — it does not descend into each `sent` array element. A corrupt
+  // element (e.g. `{}`) reaches restoreLifecycle and throws mid-restore (e.g. destructuring
+  // `s.elements`), which — since setActive(true) runs first inside restoreLifecycle — would
+  // leave capture-phase listeners attached to a half-restored session. Catch and start clean,
+  // same posture as loadLifecycle's own shape-violation fallback (final-review F3).
+  if (saved?.designModeOn) {
+    try {
+      mode.restoreLifecycle(saved)
+    } catch {
+      mode.setActive(false)
+    }
+  }
 }
 
 if (typeof document !== 'undefined' && !import.meta.vitest) {
