@@ -179,13 +179,7 @@ export function addViteForgePlugin(source: string): EditResult {
     return { kind: 'fallback', reason: 'could not locate insertion point in plugins array' }
   }
 
-  const importLine = `import { theForge } from 'the-forge/vite'\n`
-  const afterLastImport = lastImportEnd(program)
-  if (afterLastImport !== null) {
-    s.appendLeft(afterLastImport, `\n${importLine.slice(0, -1)}`)
-  } else {
-    s.prepend(`${importLine}\n`)
-  }
+  insertImportInto(s, program, `import { theForge } from 'the-forge/vite'`)
 
   return { kind: 'edited', code: s.toString() }
 }
@@ -221,13 +215,7 @@ export function wrapNextConfigExport(source: string): EditResult {
       s.appendLeft(declaration.start, 'withForge(')
       s.appendRight(declaration.end, ')')
 
-      const importLine = `import { withForge } from 'the-forge/next'\n`
-      const afterLastImport = lastImportEnd(esmProgram)
-      if (afterLastImport !== null) {
-        s.appendLeft(afterLastImport, `\n${importLine.slice(0, -1)}`)
-      } else {
-        s.prepend(`${importLine}\n`)
-      }
+      insertImportInto(s, esmProgram, `import { withForge } from 'the-forge/next'`)
 
       return { kind: 'edited', code: s.toString() }
     }
@@ -281,15 +269,21 @@ function jsxElementName(el: AstNode): string | null {
   return (name.name as string) ?? null
 }
 
-function insertImport(source: string, program: AstNode, importLine: string): MagicString {
-  const s = new MagicString(source)
+// Shared by all three edit functions: insert `importLine` (no trailing
+// newline) immediately after the last existing ImportDeclaration, or prepend
+// it (plus a blank line) when the file has no imports at all. Consolidated
+// here so addViteForgePlugin, wrapNextConfigExport's ESM path, and both
+// mountDesignMode* functions don't each reimplement the same splice.
+function insertImportInto(s: MagicString, program: AstNode, importLine: string): void {
   const afterLastImport = lastImportEnd(program)
   if (afterLastImport !== null) {
     s.appendLeft(afterLastImport, `\n${importLine}`)
   } else {
-    s.prepend(`${importLine}\n`)
+    // No existing imports — prepend the import followed by a blank line so
+    // it reads as its own paragraph rather than butting against the first
+    // statement.
+    s.prepend(`${importLine}\n\n`)
   }
-  return s
 }
 
 function mountDesignModeApp(source: string, program: AstNode): EditResult {
@@ -298,6 +292,15 @@ function mountDesignModeApp(source: string, program: AstNode): EditResult {
   )
   if (bodyElements.length === 0) {
     return { kind: 'fallback', reason: 'no literal <body> element found in layout' }
+  }
+  // Ambiguous target: with more than one <body> we can't safely pick one to
+  // mount into (ties back to the conservative-fallback rule at the top of
+  // this file) — bail rather than guess which is "the" body.
+  if (bodyElements.length !== 1) {
+    return {
+      kind: 'fallback',
+      reason: `expected exactly one <body> element, found ${bodyElements.length}`,
+    }
   }
 
   const bodyEl = bodyElements[0]
@@ -314,11 +317,8 @@ function mountDesignModeApp(source: string, program: AstNode): EditResult {
   const indentSource = children.length > 0 ? (children[0].start as number) : (opening.start as number)
   const indent = children.length > 0 ? lineIndentAt(source, indentSource) : lineIndentAt(source, opening.start as number) + '  '
 
-  const s = insertImport(
-    source,
-    program,
-    `import { ForgeDesignMode } from 'the-forge/design-mode'`
-  )
+  const s = new MagicString(source)
+  insertImportInto(s, program, `import { ForgeDesignMode } from 'the-forge/design-mode'`)
   s.appendLeft(opening.end, `\n${indent}<ForgeDesignMode />`)
 
   return { kind: 'edited', code: s.toString() }
@@ -345,7 +345,8 @@ function mountDesignModePages(source: string, program: AstNode): EditResult {
 
   if (parent && (parent.type === 'JSXElement' || parent.type === 'JSXFragment')) {
     const indent = lineIndentAt(source, componentEl.start)
-    const s = insertImport(source, program, importLine)
+    const s = new MagicString(source)
+    insertImportInto(s, program, importLine)
     s.appendRight(componentEl.end, `\n${indent}<ForgeDesignMode />`)
     return { kind: 'edited', code: s.toString() }
   }
@@ -357,7 +358,8 @@ function mountDesignModePages(source: string, program: AstNode): EditResult {
     return { kind: 'fallback', reason: '<Component> is not directly returned or nested in a JSX parent' }
   }
 
-  const s = insertImport(source, program, importLine)
+  const s = new MagicString(source)
+  insertImportInto(s, program, importLine)
   const original = source.slice(componentEl.start, componentEl.end)
   s.overwrite(componentEl.start, componentEl.end, `<>${original}<ForgeDesignMode /></>`)
   return { kind: 'edited', code: s.toString() }

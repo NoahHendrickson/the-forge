@@ -106,6 +106,13 @@ export default defineConfig({
     if (result.kind !== 'edited') throw new Error('unreachable')
     expect(result.code).toContain(`plugins: [theForge(), ...extraPlugins(), react()],`)
   })
+
+  it('falls back on unparseable input', () => {
+    const result = addViteForgePlugin('{{{ not valid')
+    expect(result.kind).toBe('fallback')
+    if (result.kind !== 'fallback') throw new Error('unreachable')
+    expect(result.reason.length).toBeGreaterThan(0)
+  })
 })
 
 describe('wrapNextConfigExport', () => {
@@ -210,6 +217,13 @@ describe('wrapNextConfigExport', () => {
     if (result.kind !== 'fallback') throw new Error('unreachable')
     expect(result.reason.length).toBeGreaterThan(0)
   })
+
+  it('falls back on unparseable input', () => {
+    const result = wrapNextConfigExport('{{{ not valid')
+    expect(result.kind).toBe('fallback')
+    if (result.kind !== 'fallback') throw new Error('unreachable')
+    expect(result.reason.length).toBeGreaterThan(0)
+  })
 })
 
 describe('mountDesignMode (app router)', () => {
@@ -266,6 +280,40 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   it('falls back when there is no literal <body> in the file', () => {
     const source = `export default function RootLayout({ children }: { children: React.ReactNode }) {\n  return <Providers>{children}</Providers>\n}\n`
     const result = mountDesignMode(source, 'app')
+    expect(result.kind).toBe('fallback')
+    if (result.kind !== 'fallback') throw new Error('unreachable')
+    expect(result.reason.length).toBeGreaterThan(0)
+  })
+
+  it('falls back when there is more than one <body> element (ambiguous target)', () => {
+    const source = `export default function RootLayout({ children }: { children: React.ReactNode }) {
+  if (children) {
+    return (
+      <html>
+        <body>
+          {children}
+        </body>
+      </html>
+    )
+  }
+  return (
+    <html>
+      <body>
+        <p>fallback</p>
+      </body>
+    </html>
+  )
+}
+`
+    const result = mountDesignMode(source, 'app')
+    expect(result.kind).toBe('fallback')
+    if (result.kind !== 'fallback') throw new Error('unreachable')
+    expect(result.reason).toContain('expected exactly one <body> element, found 2')
+    expect((result as { code?: string }).code).toBeUndefined()
+  })
+
+  it('falls back on unparseable input', () => {
+    const result = mountDesignMode('{{{ not valid', 'app')
     expect(result.kind).toBe('fallback')
     if (result.kind !== 'fallback') throw new Error('unreachable')
     expect(result.reason.length).toBeGreaterThan(0)
