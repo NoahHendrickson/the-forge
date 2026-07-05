@@ -59,6 +59,8 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `agent.ts` | which agent is targeted (`claude-code`/`cursor`/`codex`) + display names |
 | `ripple.ts` | measures which elements move when a draft lands; flashes ripple outlines |
 | `sent.ts` | registry of sent-but-unverified change requests |
+| `changelist.ts` | Changes lifecycle list: per-change rows `draft` → `sent` → `applying` → `done`/`failed`, re-send/dismiss |
+| `lifecycle-store.ts` | sessionStorage persistence of drafts/sent/design-mode across full reloads |
 | `request.ts` | change-request builder: before/after CSS + utility deltas, markdown |
 | `verifier.ts` | post-send polling, computed-style verification, backoff when server is gone |
 | `watch.ts` | watcher-state poller (design-mode-on only) for the linked-session indicator |
@@ -71,7 +73,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
   - `wait_for_design_edits` — no args; the `/forge-watch` loop (long-poll `POST /__the-forge/wait`, ~20s hold). Lifecycle: wait → apply → mark → re-wait; the server tells the loop to stop after 20 idle minutes (idle auto-stop), on preemption by another watch session, or when no dev server is found. A live watcher makes `/dispatch` return the `watcher` rung and skip the keystroke ladder entirely (`WatcherHub` in `src/server/watchers.ts`).
 - **Endpoint discovery:** the plugin resolves the project root by walking up from Vite's (or Next's) root to the nearest `.git` (`resolveProjectRoot` in `src/server/setup.ts`, monorepo-safe) and writes `.the-forge/endpoint-<pid>.json` (`{port, host, pid, secret}`, written by `writeEndpointFile` in `src/server/endpoints.ts`). The bin (`src/mcp/discover.ts`) walks up from `process.cwd()` (max 10 levels) to the nearest `.the-forge/` with a live endpoint; within a directory it filters entries to live pids, newest mtime wins; legacy `endpoint.json` is only used when no per-pid file exists. Identical on Next — the sidecar writes the same file shape, just from a loopback server instead of Vite's own.
 - **Auth:** mutating endpoints (`POST /__the-forge/pull`, `/mark`, `/queue`, `/dispatch`, `/wait`) require the `X-Forge-Secret` header from the endpoint file.
-- **Install side-effects (auto, idempotent):** the plugin writes a `the-forge` entry into `.mcp.json` and the `/forge-design` + `/forge-watch` commands at `.claude/commands/`, all at the git root; with `agent: 'cursor'` it also writes the entry into `.cursor/mcp.json` so Cursor can `mark_applied` and close the verification loop. `.the-forge/` is gitignored runtime state.
+- **Install side-effects (auto, idempotent):** the plugin writes a `the-forge` entry into `.mcp.json` and the `/forge-design` + `/forge-watch` commands at `.claude/commands/`, all at the git root; with `agent: 'cursor'` it also writes the entry into `.cursor/mcp.json` so Cursor can `mark_applied` and close the verification loop; it also writes a `.gitignore` entry for `.the-forge/` at the git root. `.the-forge/` is gitignored runtime state.
 - **Queue lifecycle:** `pending` → `claimed` (stale claims re-queue after 5 min) → `applied`/`failed`; terminal items pruned after 24h, 200-item cap; corrupt `queue.json` is quarantined to `queue.json.corrupt-<ts>`, never silently discarded. An edit needing user confirmation is marked `failed` with note `needs confirmation: <why>` — never left claimed-but-unmarked, or the stale-claim timeout re-delivers it every 5 min.
 - The MCP server is a hand-rolled zero-dependency JSON-RPC subset (`src/mcp/protocol.ts`). **Do not replace it with `@modelcontextprotocol/sdk`** — zero runtime dependencies is a deliberate, headline footprint feature.
 
@@ -108,6 +110,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 - The React 18/19 workspace split is deliberate: root and `packages/the-forge` pin React 19, while `fixtures/demo-app` deliberately nests React 18 — two React copies in one page break rendering, so don't "unify" the versions without re-testing both fixture families.
 - After `npm run build`, a running demo dev server keeps serving the OLD client bundle — Vite caches the virtual client module; restart the dev server, a browser reload isn't enough.
 - Fresh git worktrees need their own `npm install` — otherwise Vite silently resolves `the-forge` to the main checkout's stale build.
+- An unignored `.the-forge/` full-reloads Tailwind v4 apps on every Send — the queue markdown is made of class names, so Tailwind's scanner tracks `queue.json`. The plugin now writes the `.gitignore` entry and watcher excludes itself; if a consumer still sees reload-on-send, check that the `.gitignore` write didn't fail.
 
 ## Cursor Cloud specific instructions
 
