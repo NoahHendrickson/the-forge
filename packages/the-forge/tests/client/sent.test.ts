@@ -108,6 +108,43 @@ describe('SentRegistry', () => {
       addInFlight(registry, btn)
       expect(registry.isDuplicate(other, CHANGES)).toBe(false)
     })
+
+    it('true for a detached placeholder entry when the re-mounted real element shares its dcSource and change set', () => {
+      const registry = new SentRegistry()
+      const placeholder = document.createElement('div')
+      placeholder.dataset.dcSource = 'a.tsx:1:1'
+      // NOT appended to document.body — mirrors restoreLifecycle's detached placeholder.
+      registry.add('q1', [
+        { el: placeholder, dcSource: 'a.tsx:1:1', draftProps: ['padding-top'], changes: CHANGES },
+      ])
+      const real = el()
+      real.dataset.dcSource = 'a.tsx:1:1'
+      expect(registry.isDuplicate(real, CHANGES)).toBe(true)
+    })
+
+    it('false for a detached placeholder entry when the re-mounted real element has a different change set', () => {
+      const registry = new SentRegistry()
+      const placeholder = document.createElement('div')
+      placeholder.dataset.dcSource = 'a.tsx:1:1'
+      registry.add('q1', [
+        { el: placeholder, dcSource: 'a.tsx:1:1', draftProps: ['padding-top'], changes: CHANGES },
+      ])
+      const real = el()
+      real.dataset.dcSource = 'a.tsx:1:1'
+      expect(registry.isDuplicate(real, [{ property: 'padding-top', afterCss: '32px' }])).toBe(false)
+    })
+
+    it('false when the registry element shares dcSource but IS connected (two live list items sharing a source)', () => {
+      const registry = new SentRegistry()
+      const first = el()
+      first.dataset.dcSource = 'a.tsx:1:1'
+      registry.add('q1', [
+        { el: first, dcSource: 'a.tsx:1:1', draftProps: ['padding-top'], changes: CHANGES },
+      ])
+      const second = el()
+      second.dataset.dcSource = 'a.tsx:1:1'
+      expect(registry.isDuplicate(second, CHANGES)).toBe(false)
+    })
   })
 
   describe('get', () => {

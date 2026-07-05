@@ -145,6 +145,8 @@ export class ChangeList {
     for (const row of this.sentRows.values()) {
       if (row.seed.el.isConnected) continue
       if (!row.seed.dcSource) continue
+      // Index 0: the seed doesn't carry its original per-instance list index, so first-match
+      // is the best we can do — mirrors the verifier's own locate() fallback for list elements.
       const located = locateBySource(row.seed.dcSource, 0)
       if (located) row.seed.el = located
     }

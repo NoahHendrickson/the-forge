@@ -50,7 +50,14 @@ export class SentRegistry {
   isDuplicate(el: TaggedElement, changes: SentChange[]): boolean {
     for (const entry of this.entries.values()) {
       for (const sent of entry.elements) {
-        if (sent.el !== el || sent.changes.length !== changes.length) continue
+        // Strict reference match first; then the same dcSource fallback the verifier's
+        // locate() uses — a reload restores in-flight entries with detached placeholder
+        // elements (see restoreLifecycle), and a placeholder must still shield its real,
+        // re-mounted element from an identical re-queue.
+        const sameEl =
+          sent.el === el ||
+          (!sent.el.isConnected && sent.dcSource !== null && el.dataset.dcSource === sent.dcSource)
+        if (!sameEl || sent.changes.length !== changes.length) continue
         const sentAfter = new Map(sent.changes.map((c) => [c.property, c.afterCss]))
         if (changes.every((c) => sentAfter.get(c.property) === c.afterCss)) return true
       }
