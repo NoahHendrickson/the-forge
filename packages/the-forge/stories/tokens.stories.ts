@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/html-vite'
-import { CSS } from '../src/client/overlay'
+import { TOKENS } from '../src/client/overlay'
 import { mountInShadow } from './mount'
 
 interface Token {
@@ -7,32 +7,10 @@ interface Token {
   value: string
 }
 
-/**
- * Parses every `--name: value;` custom-property declaration out of the product's own `CSS`
- * const (the `:host { ... }` token block in src/client/overlay.ts) — single source, so this
- * story can never show a stale palette/type-scale relative to the shipped overlay.
- *
- * The token block is preceded by a `/* ... *\/` doc comment that itself lists token names
- * (e.g. "--surface / --surface-2: panel and elevated-popover backgrounds.") for humans reading
- * the source — strip block comments first so those mentions can't be mistaken for real
- * declarations (a stray `--surface-2:` inside the comment would otherwise match and its
- * greedy value capture would swallow the real declaration that follows, up to the next `;`).
- *
- * Parsing is anchored to the `:host` rule that declares custom properties — element-scoped
- * custom properties elsewhere in the sheet (the `--cp-hue` pattern) are not design tokens
- * and must never appear in this catalog.
- */
+// TOKENS is the canonical registry (overlay.ts generates its :host block from it),
+// so this catalog is in sync with the shipped stylesheet by construction.
 function parseTokens(): Token[] {
-  const withoutComments = CSS.replace(/\/\*[\s\S]*?\*\//g, '')
-  const hostBlocks = withoutComments.match(/:host\s*{[^}]*}/g) ?? []
-  const tokenBlock = hostBlocks.find((block) => block.includes('--')) ?? ''
-  const tokens: Token[] = []
-  const re = /--([a-z0-9-]+):\s*([^;]+);/gi
-  let match: RegExpExecArray | null
-  while ((match = re.exec(tokenBlock))) {
-    tokens.push({ name: match[1], value: match[2].trim() })
-  }
-  return tokens
+  return Object.entries(TOKENS).map(([name, value]) => ({ name, value }))
 }
 
 function isColor(value: string): boolean {

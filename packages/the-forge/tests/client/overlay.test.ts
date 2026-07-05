@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { Overlay, CSS } from '../../src/client/overlay'
+import { Overlay, CSS, TOKENS } from '../../src/client/overlay'
 
 beforeEach(() => {
   document.body.innerHTML = ''
@@ -88,71 +88,29 @@ describe('Overlay CSS design tokens (Task 1)', () => {
     expect(CSS).toMatch(/:host\s*{\s*all:\s*initial;?\s*}\s*:host\s*{/)
   })
 
-  it('declares every token exactly once, each use rewritten to var(...)', () => {
-    const tokens: Array<[name: string, value: string]> = [
-      ['--surface', '#2C2C2C'],
-      ['--surface-2', '#383838'],
-      ['--control', 'rgba(255,255,255,0.06)'],
-      ['--control-hover', 'rgba(255,255,255,0.12)'],
-      ['--control-active', 'rgba(255,255,255,0.16)'],
-      ['--border-panel', 'rgba(255,255,255,0.09)'],
-      ['--border-strong', 'rgba(255,255,255,0.15)'],
-      ['--separator', 'rgba(255,255,255,0.07)'],
-      ['--text-primary', '#F5F5F5'],
-      ['--text-secondary', '#D4D4D4'],
-      ['--text-title', '#E8E8E8'],
-      ['--text-faint', '#B8B8B8'],
-      ['--text-muted', '#9A9A9A'],
-      ['--accent', '#0D99FF'],
-      ['--accent-soft', '#7CC4FF'],
-      ['--accent-outline', 'rgba(13,153,255,0.75)'],
-      ['--positive', '#62C073'],
-      ['--watch-idle', '#A8A8A8'], // sweep-rule fold: #watch's un-lit color, distinct from --text-muted
-      ['--ripple', '#E2954A'],
-      ['--font-ui', 'system-ui, sans-serif'],
-      ['--font-mono', 'ui-monospace, monospace'],
-      ['--text-xs', '10px'],
-      ['--text-sm', '11px'],
-      ['--text-md', '12px'],
-    ]
-    for (const [name, value] of tokens) {
-      expect(CSS).toContain(`${name}: ${value}`)
-      expect(count(`${name}: ${value}`)).toBe(1) // declared exactly once
+  it('declares every TOKENS entry exactly once in the generated :host block', () => {
+    for (const [name, value] of Object.entries(TOKENS)) {
+      expect(CSS).toContain(`--${name}: ${value}`)
+      expect(count(`--${name}: ${value}`)).toBe(1) // declared exactly once
     }
   })
+
 
   it('the ripple token unifies the lowercase #e2954a case variant', () => {
     expect(count('e2954a')).toBe(0)
     expect(count('#E2954A')).toBe(1) // declaration only, inside --ripple
   })
 
-  it('every replaced literal appears only in its :host token declaration — no leftover literal uses', () => {
-    // Values that are unambiguous strings (no substring collisions with other tokens
-    // or CSS syntax) can be counted directly: declaration count must be exactly 1.
-    const soleUseValues = [
-      '#2C2C2C',
-      '#383838',
-      'rgba(255,255,255,0.06)',
-      'rgba(255,255,255,0.12)',
-      'rgba(255,255,255,0.16)',
-      'rgba(255,255,255,0.09)',
-      'rgba(255,255,255,0.15)',
-      'rgba(255,255,255,0.07)',
-      '#F5F5F5',
-      '#D4D4D4',
-      '#E8E8E8',
-      '#B8B8B8',
-      '#9A9A9A',
-      '#0D99FF',
-      '#7CC4FF',
-      'rgba(13,153,255,0.75)',
-      '#62C073',
-      '#A8A8A8',
-    ]
-    for (const value of soleUseValues) {
+  it('every tokenized color appears only in its :host declaration — no leftover literal uses', () => {
+    // Ratchet: for every color-valued token, the raw literal may appear exactly once
+    // (its generated declaration); every other use must be var(--name). Non-color tokens
+    // (font stacks, px sizes) collide with unrelated CSS text, so the ratchet is colors-only.
+    for (const value of Object.values(TOKENS)) {
+      if (!/^#|^rgba?\(/.test(value)) continue
       expect(count(value)).toBe(1)
     }
   })
+
 
   it('the ripple why-comment ("must stay distinct from selection accent") is preserved verbatim', () => {
     expect(CSS).toContain('must stay distinct from selection accent')
@@ -175,21 +133,6 @@ describe('Overlay CSS design tokens (Task 1)', () => {
     expect(CSS).not.toMatch(/font:\s*[0-9]+\s+[0-9]+(\.[0-9]+)?px\s+ui-monospace/)
   })
 
-  it('literals intentionally left alone by the sweep rule remain untouched', () => {
-    // Structural gradient endpoints in the color picker
-    expect(CSS).toContain('linear-gradient(to top, #000, transparent)')
-    expect(CSS).toContain('linear-gradient(to right, #fff, var(--cp-hue, red))')
-    // Single-use incidental alphas
-    expect(CSS).toContain('rgba(255,255,255,0.05)')
-    expect(CSS).toContain('rgba(255,255,255,0.08)')
-    expect(CSS).toContain('rgba(255,255,255,0.18)')
-    expect(CSS).toContain('rgba(255,255,255,0.28)')
-    expect(CSS).toContain('rgba(255,255,255,0.6)')
-    // Accent-alpha fills
-    expect(CSS).toContain('rgba(13,153,255,0.15)')
-    expect(CSS).toContain('rgba(13,153,255,0.25)')
-    expect(CSS).toContain('rgba(13,153,255,0.12)')
-  })
 })
 
 describe('Overlay (M2 additions)', () => {

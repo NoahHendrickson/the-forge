@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/html-vite'
 import { createSelect } from '../src/client/ui/select'
-import { WEIGHTS } from '../src/client/panel-specs'
+import { WEIGHTS, STROKE_STYLES, SIZE_MODES } from '../src/client/panel-specs'
 import { mountInShadow } from './mount'
 
 const meta: Meta = {
@@ -39,18 +39,13 @@ export const Weight: Story = {
     ),
 }
 
-// Stroke style — the real option set from buildStrokeSection in panel.ts.
+// Stroke style — the real STROKE_STYLES table from panel-specs.ts.
 export const StrokeStyle: Story = {
   render: () =>
     mountInShadow(
       createSelect({
         className: 'stroke-style',
-        options: [
-          { value: 'none', label: 'None' },
-          { value: 'solid', label: 'Solid' },
-          { value: 'dashed', label: 'Dashed' },
-          { value: 'dotted', label: 'Dotted' },
-        ],
+        options: STROKE_STYLES.map(([value, label]) => ({ value, label })),
         value: 'solid',
         onChange: () => {},
       }),
@@ -58,16 +53,12 @@ export const StrokeStyle: Story = {
     ),
 }
 
-// Size mode — Fixed/Hug/Fill, the per-row sibling select built in buildRow.
+// Size mode — the real SIZE_MODES table from panel-specs.ts (per-row sibling select in buildRow).
 export const SizeMode: Story = {
   render: () =>
     mountInShadow(
       createSelect({
-        options: [
-          { value: 'fixed', label: 'Fixed' },
-          { value: 'hug', label: 'Hug' },
-          { value: 'fill', label: 'Fill' },
-        ],
+        options: SIZE_MODES.map(([value, label]) => ({ value, label })),
         value: 'fixed',
         onChange: () => {},
       }),

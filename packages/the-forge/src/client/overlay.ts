@@ -1,6 +1,43 @@
 import { DEFAULT_WIDTH } from './dock'
 import { createButton } from './ui/button'
 
+/**
+ * The design-token registry — the single canonical source for the overlay's palette,
+ * font stacks, and type scale. The CSS `:host` token block below is GENERATED from this
+ * map, and tokens.stories.ts + overlay.test.ts consume this same export, so adding a
+ * token is a one-line change here (plus using it).
+ */
+export const TOKENS = {
+  surface: '#2C2C2C',
+  'surface-2': '#383838',
+  control: 'rgba(255,255,255,0.06)',
+  'control-hover': 'rgba(255,255,255,0.12)',
+  'control-active': 'rgba(255,255,255,0.16)',
+  'border-panel': 'rgba(255,255,255,0.09)',
+  'border-strong': 'rgba(255,255,255,0.15)',
+  separator: 'rgba(255,255,255,0.07)',
+  'text-primary': '#F5F5F5',
+  'text-secondary': '#D4D4D4',
+  'text-title': '#E8E8E8',
+  'text-faint': '#B8B8B8',
+  'text-muted': '#9A9A9A',
+  accent: '#0D99FF',
+  'accent-soft': '#7CC4FF',
+  'accent-outline': 'rgba(13,153,255,0.75)',
+  positive: '#62C073',
+  'watch-idle': '#A8A8A8',
+  ripple: '#E2954A',
+  'font-ui': 'system-ui, sans-serif',
+  'font-mono': 'ui-monospace, monospace',
+  'text-xs': '10px',
+  'text-sm': '11px',
+  'text-md': '12px',
+} as const
+
+const tokenBlock = Object.entries(TOKENS)
+  .map(([name, value]) => `  --${name}: ${value};`)
+  .join('\n')
+
 export const CSS = `
 [hidden] { display: none !important; }
 *, *::before, *::after { box-sizing: border-box; }
@@ -21,30 +58,7 @@ export const CSS = `
    * --text-xs / --text-sm / --text-md: the 10/11/12px type scale.
    * Radius: panel 12px, controls 6px, matrix tile 8px.
    */
-  --surface: #2C2C2C;
-  --surface-2: #383838;
-  --control: rgba(255,255,255,0.06);
-  --control-hover: rgba(255,255,255,0.12);
-  --control-active: rgba(255,255,255,0.16);
-  --border-panel: rgba(255,255,255,0.09);
-  --border-strong: rgba(255,255,255,0.15);
-  --separator: rgba(255,255,255,0.07);
-  --text-primary: #F5F5F5;
-  --text-secondary: #D4D4D4;
-  --text-title: #E8E8E8;
-  --text-faint: #B8B8B8;
-  --text-muted: #9A9A9A;
-  --accent: #0D99FF;
-  --accent-soft: #7CC4FF;
-  --accent-outline: rgba(13,153,255,0.75);
-  --positive: #62C073;
-  --watch-idle: #A8A8A8;
-  --ripple: #E2954A;
-  --font-ui: system-ui, sans-serif;
-  --font-mono: ui-monospace, monospace;
-  --text-xs: 10px;
-  --text-sm: 11px;
-  --text-md: 12px;
+${tokenBlock}
 }
 
 

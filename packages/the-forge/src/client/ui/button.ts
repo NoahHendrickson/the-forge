@@ -1,5 +1,7 @@
-// The single place overlay buttons are born — markup only; call sites keep their own
-// ids, event listeners, and data attributes.
+// Where NEW overlay buttons are born (see CLAUDE.md conventions) — markup only; call
+// sites keep their own ids, event listeners, and data attributes. Buttons internal to
+// a composite control (segment buttons, matrix dots, palette swatches) stay local to
+// their control by design.
 export interface ButtonOpts {
   label?: string
   title?: string

@@ -20,6 +20,8 @@ import {
   draftSolidIfNone,
   tokenEntriesFor,
   WEIGHTS,
+  STROKE_STYLES,
+  SIZE_MODES,
   SECTIONS,
 } from './panel-specs'
 import {
@@ -1011,12 +1013,7 @@ export class Panel {
 
     const styleSelect = createSelect({
       className: 'stroke-style',
-      options: [
-        { value: 'none', label: 'None' },
-        { value: 'solid', label: 'Solid' },
-        { value: 'dashed', label: 'Dashed' },
-        { value: 'dotted', label: 'Dotted' },
-      ],
+      options: STROKE_STYLES.map(([value, label]) => ({ value, label })),
       onChange: (value) => {
         if (!this.el) return
         this.onBeforeEdit(this.el)
@@ -1174,11 +1171,7 @@ export class Panel {
     row.append(bound.field.root)
 
     const select = createSelect({
-      options: [
-        { value: 'fixed', label: 'Fixed' },
-        { value: 'hug', label: 'Hug' },
-        { value: 'fill', label: 'Fill' },
-      ],
+      options: SIZE_MODES.map(([value, label]) => ({ value, label })),
       onChange: (value) => {
         this.onSizeModeChange(spec, value)
       },
