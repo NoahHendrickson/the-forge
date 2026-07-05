@@ -52,12 +52,22 @@ export class Panel {
   root = document.createElement('div')
   compareButton = document.createElement('button')
   resetButton = document.createElement('button')
+  footer = document.createElement('div')
+  resizeHandle = document.createElement('div')
+  modeButton = document.createElement('button')
 
   private head = document.createElement('div')
   private headTag = document.createElement('div')
   private headSrc = document.createElement('div')
   private actions = document.createElement('div')
   private body = document.createElement('div')
+  /** The per-selection rebuild target inside `body`. Sections live HERE, the popover
+   * singletons live directly in `body` — so buildBody() can wipe sectionsRoot freely
+   * without any "remember to re-seed the pickers" invariant (PR #2 review). */
+  private sectionsRoot = document.createElement('div')
+  private emptyEl = document.createElement('div')
+  /** Dock currently active (NOT the persisted preference — Dock owns that). */
+  private docked = false
   private fields: BoundField[] = []
   // `els` holds the section TITLE plus every body wrap belonging to that section (rowWrap,
   // expandWrap, custom-body wrap — whatever buildBody appended for it) so refresh() can hide
@@ -165,9 +175,24 @@ export class Panel {
       this.onEdited()
     })
     this.actions.append(this.compareButton, this.resetButton)
-    this.root.append(this.head, this.actions, this.body)
-    this.colorPicker = new ColorPicker(this.root)
-    this.tokenPicker = new TokenPicker(this.root)
+    this.body.className = 'panel-body'
+    this.sectionsRoot.className = 'panel-sections'
+    this.body.append(this.sectionsRoot)
+    this.emptyEl.className = 'panel-empty'
+    this.emptyEl.textContent = 'Click an element to edit'
+    this.emptyEl.hidden = true
+    this.footer.className = 'panel-footer'
+    this.resizeHandle.className = 'panel-resize'
+    this.modeButton.className = 'panel-mode'
+    this.modeButton.type = 'button'
+    this.head.append(this.modeButton)
+    this.root.append(this.resizeHandle, this.head, this.actions, this.emptyEl, this.body, this.footer)
+    // Popovers mount in the BODY (the scroll container), not the root — anchor.offsetTop
+    // and the popover's absolute top must share the body's scrolled coordinate space or
+    // the popover stops tracking its row the moment the sections scroll (see overlay.ts
+    // .panel-body comment).
+    this.colorPicker = new ColorPicker(this.body)
+    this.tokenPicker = new TokenPicker(this.body)
     // Mutual exclusivity (final review fix #11): opening one popover must close the other —
     // two open at once would overlap/fight for the same anchor-relative position. Wired here
     // (wrapping each instance's own open(), rather than editing every call site or having the
@@ -194,6 +219,9 @@ export class Panel {
     this.tokenPicker.close()
     this.boundTokens.clear()
     this.root.hidden = false
+    this.actions.hidden = false
+    this.body.hidden = false
+    this.emptyEl.hidden = true
     if (els.length > 1) {
       this.headTag.textContent = `${els.length} selected`
       this.headSrc.remove()
@@ -201,7 +229,14 @@ export class Panel {
       this.headTag.textContent = data.tag
       if (data.source) {
         const srcText = `${data.source.file}:${data.source.line}:${data.source.col}`
-        this.headSrc.textContent = srcText
+        const slash = data.source.file.lastIndexOf('/')
+        const dirSpan = document.createElement('span')
+        dirSpan.className = 'src-dir'
+        dirSpan.textContent = slash === -1 ? '' : data.source.file.slice(0, slash + 1)
+        const tailSpan = document.createElement('span')
+        tailSpan.className = 'src-tail'
+        tailSpan.textContent = `${slash === -1 ? data.source.file : data.source.file.slice(slash + 1)}:${data.source.line}:${data.source.col}`
+        this.headSrc.replaceChildren(dirSpan, tailSpan)
         this.headSrc.title = srcText
         if (!this.headSrc.isConnected) this.head.append(this.headSrc)
       } else {
@@ -218,9 +253,32 @@ export class Panel {
   hide(): void {
     this.el = null
     this.els = []
-    this.root.hidden = true
     this.colorPicker.close()
     this.tokenPicker.close()
+    if (this.docked) {
+      // Docked empty state: root stays visible (the dock holds its space), header says
+      // why the controls are gone, footer (status strip) remains usable.
+      this.root.hidden = false
+      this.headTag.textContent = 'No selection'
+      this.headSrc.remove()
+      this.actions.hidden = true
+      this.body.hidden = true
+      this.emptyEl.hidden = false
+    } else {
+      this.root.hidden = true
+    }
+  }
+
+  /**
+   * Dock-active flag (set by Dock, not persisted here). Docked changes what "no
+   * selection" looks like: the root stays visible with an empty-state hint instead of
+   * hiding, so the dock never collapses mid-session. Re-runs hide() when nothing is
+   * selected so the visibility rules of the NEW mode apply immediately.
+   */
+  setDocked(on: boolean): void {
+    this.docked = on
+    this.root.classList.toggle('docked', on)
+    if (!this.el) this.hide()
   }
 
   /**
@@ -508,7 +566,11 @@ export class Panel {
     // previous selection's baselines.
     this.scrubbingField = null
     this.scrubBaselines = null
-    this.body.replaceChildren()
+    // Only sectionsRoot is wiped — the popover singletons are siblings of it directly in
+    // `body` (same scrolled coordinate space, see the constructor's why-comment) and are
+    // structurally untouchable by rebuilds. An earlier version cleared `body` itself and
+    // had to remember to re-seed the pickers; the wrapper deletes that invariant.
+    this.sectionsRoot.replaceChildren()
     this.fields = []
     this.sectionEls = []
     this.directionField = null
@@ -537,7 +599,7 @@ export class Panel {
       const title = document.createElement('div')
       title.className = 'panel-section'
       title.textContent = section.title
-      this.body.append(title)
+      this.sectionsRoot.append(title)
       // Every body element belonging to this section (title + rowWrap + custom body +
       // expandWrap, whichever apply) collects here so refresh() can hide them all together —
       // see the sectionEls field comment (final review finding E2).
@@ -545,7 +607,7 @@ export class Panel {
 
       if (section.custom === 'layout') {
         const layoutBody = this.buildLayoutSection()
-        this.body.append(layoutBody)
+        this.sectionsRoot.append(layoutBody)
         sectionBodyEls.push(layoutBody)
         this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
@@ -553,7 +615,7 @@ export class Panel {
 
       if (section.custom === 'typography') {
         const typographyBody = this.buildTypographySection(multi)
-        this.body.append(typographyBody)
+        this.sectionsRoot.append(typographyBody)
         sectionBodyEls.push(typographyBody)
         this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
@@ -561,7 +623,7 @@ export class Panel {
 
       if (section.custom === 'fill') {
         const fillBody = this.buildFillSection()
-        this.body.append(fillBody)
+        this.sectionsRoot.append(fillBody)
         sectionBodyEls.push(fillBody)
         this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
@@ -574,11 +636,11 @@ export class Panel {
         // (BT/BR/BB/BL) as the next body child after it, same shape as every other
         // expandable section.
         rowWrap = this.buildStrokeSection()
-        this.body.append(rowWrap)
+        this.sectionsRoot.append(rowWrap)
       } else {
         rowWrap = document.createElement('div')
         rowWrap.className = 'panel-rows'
-        this.body.append(rowWrap)
+        this.sectionsRoot.append(rowWrap)
         for (const row of section.rows) rowWrap.append(this.buildRow(row))
       }
       sectionBodyEls.push(rowWrap)
@@ -601,7 +663,7 @@ export class Panel {
         })
         title.append(btn)
         for (const row of section.expandRows) expandWrap.append(this.buildRow(row))
-        this.body.append(expandWrap)
+        this.sectionsRoot.append(expandWrap)
         sectionBodyEls.push(expandWrap)
       }
 
@@ -613,7 +675,7 @@ export class Panel {
       // isn't created at all in single-select — keeps the pre-existing single-el section
       // list assertion (Layout..Appearance, no 9th entry) untouched.
       if (section.title === 'Stroke' && multi) {
-        this.body.append(this.buildSelectionColorsSection())
+        this.sectionsRoot.append(this.buildSelectionColorsSection())
       }
     }
   }
@@ -653,6 +715,9 @@ export class Panel {
         this.onEdited()
       },
     })
+    // Marks the row for the stacked label-above-track CSS ([data-flex-direction] in
+    // overlay.ts) — the "Direction" label overflows the shared 40px label column.
+    this.directionField.root.setAttribute('data-flex-direction', '')
     controls.append(this.directionField.root)
 
     const grid = document.createElement('div')
@@ -1026,7 +1091,7 @@ export class Panel {
     title.className = 'panel-section'
     title.textContent = 'Selection colors'
     this.selectionColorsTitle = title
-    this.body.append(title)
+    this.sectionsRoot.append(title)
 
     const rows = document.createElement('div')
     rows.className = 'panel-rows sc-rows'

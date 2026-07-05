@@ -52,6 +52,31 @@ describe('Overlay CSS (Track A visibility correctness)', () => {
     expect(CSS).toMatch(/\[data-text-align\]\s*{\s*flex-direction:\s*column;\s*align-items:\s*stretch;\s*gap:\s*3px;?\s*}/)
     expect(CSS).toContain('[data-text-align] .seg-field-label { width: auto; }')
   })
+
+  it('[data-flex-direction] gets the same stacked (label-above-full-width-track) treatment, fixing the "Direction" label overflowing its 40px column at 280px (clipping audit)', () => {
+    // The Layout Direction row's "Direction" label needs ~48px at 11px against the fixed
+    // 40px .seg-field-label column — with overflow: visible it paints under the seg track.
+    // [data-align-self]/[data-text-align] already solve this by stacking the label above a
+    // full-width track; the Direction row must get the same rule.
+    // flex-basis 100% is part of the fix: inside the wrapping .panel-rows the field is
+    // otherwise content-sized (~64px) and the track would still crush "Column".
+    expect(CSS).toMatch(
+      /\[data-flex-direction\]\s*{\s*flex-direction:\s*column;\s*align-items:\s*stretch;\s*gap:\s*3px;\s*flex:\s*1\s+1\s+100%;?\s*}/
+    )
+    expect(CSS).toContain('[data-flex-direction] .seg-field-label { width: auto; }')
+  })
+
+  it('seg labels ellipsize instead of hard-clipping', () => {
+    expect(CSS).toMatch(/\.seg\s*{[^}]*text-overflow:\s*ellipsis/s)
+  })
+  it('token pills ellipsize instead of hard-clipping', () => {
+    expect(CSS).toMatch(/\.nf-pill input\s*{[^}]*text-overflow:\s*ellipsis/s)
+  })
+  it('head-src is a flex row: dir ellipsizes, tail never shrinks', () => {
+    expect(CSS).toMatch(/\.panel-head-src\s*{[^}]*display:\s*flex/s)
+    expect(CSS).toMatch(/\.src-dir\s*{[^}]*text-overflow:\s*ellipsis/s)
+    expect(CSS).toMatch(/\.src-tail\s*{[^}]*flex:\s*none/s)
+  })
 })
 
 describe('Overlay (M2 additions)', () => {
@@ -327,5 +352,43 @@ describe('Overlay.showRipples (M2b Task 4)', () => {
     expect(el.style.top).toBe('18px')
     expect(el.style.width).toBe('104px')
     expect(el.style.height).toBe('54px')
+  })
+})
+
+describe('Dock CSS (docked-panel spec)', () => {
+  it('panel width is driven by --forge-dock-w with a 320px default (resize hook)', () => {
+    expect(CSS).toContain('width: var(--forge-dock-w, 320px)')
+    expect(CSS).not.toContain('width: 280px')
+  })
+  it('panel is a flex column so the footer can pin and the body can scroll', () => {
+    expect(CSS).toMatch(/#panel\s*{[^}]*display:\s*flex;\s*flex-direction:\s*column/s)
+  })
+  it('scrolling moved from #panel to .panel-body (popover-tracking prerequisite)', () => {
+    expect(CSS).toMatch(/\.panel-body\s*{[^}]*overflow-y:\s*auto/s)
+    expect(CSS).toMatch(/\.panel-body\s*{[^}]*position:\s*relative/s)
+    expect(CSS).toContain('.panel-body::-webkit-scrollbar')
+    expect(CSS).not.toContain('#panel::-webkit-scrollbar')
+  })
+  it('docked modifier pins the panel full-height right with square corners', () => {
+    expect(CSS).toMatch(/#panel\.docked\s*{[^}]*top:\s*0;\s*right:\s*0;\s*bottom:\s*0/s)
+    expect(CSS).toMatch(/#panel\.docked\s*{[^}]*border-radius:\s*0/s)
+    expect(CSS).toMatch(/#panel\.docked\s*{[^}]*max-height:\s*none/s)
+  })
+  it('status strip restyles to static inside the footer', () => {
+    expect(CSS).toMatch(/\.panel-footer\s+#status\s*{[^}]*position:\s*static/s)
+    expect(CSS).toMatch(/\.panel-footer\s+#status\s*{[^}]*flex-wrap:\s*wrap/s)
+  })
+  it('Design toggle shifts left of the dock via the dock-open class', () => {
+    expect(CSS).toContain('#toggle.dock-open { right: calc(16px + var(--forge-dock-w, 320px)); }')
+  })
+  it('resize handle spans the left edge with a col-resize cursor', () => {
+    expect(CSS).toMatch(/\.panel-resize\s*{[^}]*left:\s*0;\s*top:\s*0;\s*bottom:\s*0/s)
+    expect(CSS).toMatch(/\.panel-resize\s*{[^}]*cursor:\s*col-resize/s)
+  })
+})
+
+describe('Dock polish CSS (PR #2 follow-ups)', () => {
+  it('panel head reserves right padding so the absolute mode button cannot overlap a long tag', () => {
+    expect(CSS).toContain('#panel .panel-head { position: relative; padding: 12px 36px 10px 12px; }')
   })
 })

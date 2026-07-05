@@ -1,3 +1,5 @@
+import { DEFAULT_WIDTH } from './dock'
+
 export const CSS = `
 [hidden] { display: none !important; }
 *, *::before, *::after { box-sizing: border-box; }
@@ -63,21 +65,59 @@ button {
 }
 #panel {
   position: fixed; right: 16px; top: 16px; z-index: 2147483647;
-  width: 280px; max-height: 80vh; overflow-y: auto; overflow-x: hidden;
+  width: var(--forge-dock-w, ${DEFAULT_WIDTH}px); max-height: 80vh;
+  display: flex; flex-direction: column; overflow: hidden;
   font: 400 12px system-ui, sans-serif; background: #2C2C2C; color: #F5F5F5;
   border: 1px solid rgba(255,255,255,0.09); border-radius: 12px; padding: 0;
   box-shadow: 0 5px 24px rgba(0,0,0,0.35);
   -webkit-font-smoothing: antialiased;
 }
-#panel::-webkit-scrollbar { width: 8px; }
-#panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+/* Docked: full-height right sidebar; page content is pushed left by Dock's html
+ * margin-right (the VisBug-style mechanism — see dock.ts). */
+#panel.docked {
+  top: 0; right: 0; bottom: 0; max-height: none;
+  border-radius: 0; border: none; border-left: 1px solid rgba(255,255,255,0.09);
+  box-shadow: none;
+}
+/* The scroll container is the BODY, not the root: the root is a flex column so the
+ * footer pins, and popovers live inside the body (position: relative) so they keep
+ * tracking their anchor rows when the sections scroll. */
+.panel-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative;
+}
+#panel .panel-head, #panel .panel-actions { flex: none; }
+.panel-empty { padding: 28px 12px; color: #9A9A9A; font: 400 11px system-ui, sans-serif; text-align: center; }
+.panel-footer { flex: none; border-top: 1px solid rgba(255,255,255,0.07); padding: 8px 10px; }
+.panel-footer:has(> #status[hidden]) { display: none; }
+.panel-footer #status { position: static; border-radius: 8px; padding: 5px 8px; flex-wrap: wrap; }
+.panel-resize {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 6px;
+  cursor: col-resize; z-index: 20;
+}
+.panel-resize:hover, .panel-resize:active { background: rgba(13,153,255,0.4); }
+.panel-mode {
+  position: absolute; top: 10px; right: 10px;
+  width: 22px; height: 20px; padding: 0; line-height: 1;
+}
+#toggle.dock-open { right: calc(16px + var(--forge-dock-w, ${DEFAULT_WIDTH}px)); }
+.panel-body::-webkit-scrollbar { width: 8px; }
+.panel-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
 
-#panel .panel-head { padding: 12px 12px 10px; }
+/* Right padding reserves the absolute .panel-mode button's footprint so a long tag
+ * (or "No selection") never runs underneath it. */
+#panel .panel-head { position: relative; padding: 12px 36px 10px 12px; }
 #panel .panel-head-tag { font: 600 12px system-ui, sans-serif; color: #F5F5F5; }
+/* Dir + tail spans: the DIRECTORY ellipsizes while the filename:line:col tail keeps
+ * flex: none — the useful part of a source path is its end, which plain end-ellipsis
+ * used to cut first. (Chosen over a direction:rtl clip trick, which mangles
+ * punctuation, and over JS width-measuring truncation, which needs re-running on
+ * every resize.) */
 #panel .panel-head-src {
   font: 400 10px ui-monospace, monospace; color: #9A9A9A; margin-top: 2px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; min-width: 0;
 }
+#panel .panel-head-src .src-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+#panel .panel-head-src .src-tail { white-space: nowrap; flex: none; }
 #panel .panel-actions { display: flex; gap: 6px; padding: 0 12px 10px; }
 
 #panel .panel-section {
@@ -120,6 +160,7 @@ button {
 .nf-pill input {
   background: rgba(13,153,255,0.15); color: #7CC4FF; border-radius: 4px;
   padding: 1px 5px; width: auto; flex: 0 1 auto; font-size: 10.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 .seg-field { display: flex; align-items: center; gap: 4px; }
@@ -137,10 +178,18 @@ button {
  * the row's horizontal space with the label. */
 [data-text-align] { flex-direction: column; align-items: stretch; gap: 3px; }
 [data-text-align] .seg-field-label { width: auto; }
+/* Layout's Direction row: "Direction" needs ~48px at 11px, overflowing the fixed 40px
+ * label column and painting under the seg track (found by the 280px clipping audit).
+ * Same fix as [data-align-self] above: stack the label above a full-width track — which
+ * also gives "Row"/"Column" enough room to render without ellipsis at minimum width.
+ * flex-basis 100% is load-bearing: inside the wrapping .panel-rows the field would
+ * otherwise be content-sized (~64px) and the track would still crush "Column". */
+[data-flex-direction] { flex-direction: column; align-items: stretch; gap: 3px; flex: 1 1 100%; }
+[data-flex-direction] .seg-field-label { width: auto; }
 .seg {
   flex: 1; padding: 3px 0; text-align: center; border-radius: 4px;
   background: transparent; color: #B8B8B8; font-size: 10px; white-space: nowrap;
-  overflow: hidden; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
 .seg:hover { color: #F5F5F5; }
 .seg-active { background: rgba(255,255,255,0.16); color: #fff; }
@@ -287,7 +336,7 @@ export class Overlay {
 
   private outline = document.createElement('div')
   private selectOutline = document.createElement('div')
-  private status = document.createElement('div')
+  status = document.createElement('div')
   private statusLabel = document.createElement('span')
   private sentLabel = document.createElement('span')
   private watchLabel = document.createElement('span')

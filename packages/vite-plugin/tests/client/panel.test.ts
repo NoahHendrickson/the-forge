@@ -73,6 +73,17 @@ describe('Panel', () => {
     expect(srcEl).toBeFalsy()
   })
 
+  it('source path renders as dir + tail spans so the filename:line never gets cut', () => {
+    const { panel } = setup()
+    const src = panel.root.querySelector('.panel-head-src') as HTMLElement
+    const dir = src.querySelector('.src-dir') as HTMLElement
+    const tail = src.querySelector('.src-tail') as HTMLElement
+    expect(dir.textContent).toBe('src/')
+    expect(tail.textContent).toBe('Card.tsx:4:7')
+    expect(src.textContent).toBe('src/Card.tsx:4:7') // concatenation unchanged
+    expect(src.title).toBe('src/Card.tsx:4:7')
+  })
+
   it('wraps Compare/Reset buttons in a .panel-actions container', () => {
     const { panel } = setup()
     const actions = panel.root.querySelector('.panel-actions') as HTMLElement
@@ -266,6 +277,13 @@ describe('Panel', () => {
     const column = buttons.find((b) => b.textContent === 'Column')!
     column.click()
     expect(drafts.current(el, 'flex-direction')).toBe('column')
+  })
+
+  it('direction field carries [data-flex-direction] so the stacked-label CSS applies (280px clipping audit)', () => {
+    const { panel } = flexSetup()
+    const seg = panel.root.querySelector('[data-flex-direction]')!
+    expect(seg).toBeTruthy()
+    expect(seg.querySelector('.seg-field-label')?.textContent).toBe('Direction')
   })
 
   it('gap field drafts gap:Npx on a number', () => {
@@ -2062,5 +2080,105 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
     panel.refresh()
     expect(scRows(panel)).toHaveLength(1)
     expect((scRows(panel)[0].querySelector('.sc-count') as HTMLElement).textContent).toBe('×2')
+  })
+})
+
+describe('Docked mode structure (docked-panel spec)', () => {
+  function freshPanel() {
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, () => {})
+    document.body.appendChild(panel.root)
+    return panel
+  }
+
+  function makeTagged(): HTMLElement {
+    document.body.innerHTML = `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px; width: 200px;"></div>`
+    return document.getElementById('t')! as HTMLElement
+  }
+
+  it('creates footer, resize handle, and mode button with their hook classes', () => {
+    const panel = freshPanel()
+    expect(panel.footer.className).toBe('panel-footer')
+    expect(panel.resizeHandle.className).toBe('panel-resize')
+    expect(panel.modeButton.className).toBe('panel-mode')
+    expect(panel.root.contains(panel.footer)).toBe(true)
+    expect(panel.root.contains(panel.resizeHandle)).toBe(true)
+    expect(panel.root.contains(panel.modeButton)).toBe(true)
+  })
+
+  it('body div carries the panel-body scroll-container class', () => {
+    const panel = freshPanel()
+    expect(panel.root.querySelector('.panel-body')).not.toBeNull()
+  })
+
+  it('setDocked(true) with no selection shows the root with the empty state', () => {
+    const panel = freshPanel()
+    panel.setDocked(true)
+    expect(panel.root.classList.contains('docked')).toBe(true)
+    expect(panel.root.hidden).toBe(false)
+    const empty = panel.root.querySelector('.panel-empty') as HTMLElement
+    expect(empty.hidden).toBe(false)
+    expect(empty.textContent).toBe('Click an element to edit')
+    expect((panel.root.querySelector('.panel-body') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('show() in docked mode hides the empty state and reveals body/actions', () => {
+    const panel = freshPanel()
+    panel.setDocked(true)
+    const el = makeTagged()
+    panel.show(el, buildInspectorData(el))
+    expect((panel.root.querySelector('.panel-empty') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('.panel-body') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('hide() in docked mode returns to the empty state with "No selection" header', () => {
+    const panel = freshPanel()
+    panel.setDocked(true)
+    const el = makeTagged()
+    panel.show(el, buildInspectorData(el))
+    panel.hide()
+    expect(panel.root.hidden).toBe(false)
+    expect((panel.root.querySelector('.panel-empty') as HTMLElement).hidden).toBe(false)
+    expect(panel.root.querySelector('.panel-head-tag')!.textContent).toBe('No selection')
+  })
+
+  it('setDocked(false) with no selection hides the root (floating behavior)', () => {
+    const panel = freshPanel()
+    panel.setDocked(true)
+    panel.setDocked(false)
+    expect(panel.root.classList.contains('docked')).toBe(false)
+    expect(panel.root.hidden).toBe(true)
+  })
+
+  it('popovers mount inside the panel-body scroll container, not the root', () => {
+    const panel = freshPanel()
+    const body = panel.root.querySelector('.panel-body') as HTMLElement
+    expect(body.querySelector('.color-popover')).not.toBeNull()
+    expect(body.querySelector('.token-popover')).not.toBeNull()
+  })
+
+  it('popovers survive buildBody() on show() — regression for the body-rebuild wipeout', () => {
+    // buildBody() runs on every show() and used to unconditionally replaceChildren() the
+    // body, which also wiped the constructor-created popover roots living in that same
+    // container (they're only ever appended once, at construction). Rebuilds now wipe only
+    // the .panel-sections wrapper; the popovers are its siblings directly in .panel-body,
+    // structurally out of reach. Guard both the first rebuild and a second one
+    // (re-selection), since the first show() was the one that silently destroyed the
+    // popovers in production.
+    const panel = freshPanel()
+    const body = panel.root.querySelector('.panel-body') as HTMLElement
+    const el = makeTagged()
+    panel.show(el, buildInspectorData(el))
+    expect(body.querySelector('.color-popover')).not.toBeNull()
+    expect(body.querySelector('.token-popover')).not.toBeNull()
+    panel.show(el, buildInspectorData(el))
+    expect(body.querySelector('.color-popover')).not.toBeNull()
+    expect(body.querySelector('.token-popover')).not.toBeNull()
+    // The structural guarantee: sections rebuild inside the wrapper, popovers outside it.
+    const sections = body.querySelector('.panel-sections') as HTMLElement
+    expect(sections).not.toBeNull()
+    expect(sections.querySelector('.panel-section')).not.toBeNull()
+    expect(sections.querySelector('.color-popover')).toBeNull()
+    expect(sections.querySelector('.token-popover')).toBeNull()
   })
 })

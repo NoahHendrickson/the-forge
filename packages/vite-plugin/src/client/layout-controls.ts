@@ -28,6 +28,9 @@ export class SegmentField {
       button.className = 'seg'
       button.textContent = option.label
       button.dataset.value = option.value
+      // .seg hard-clips overflow (overflow: hidden; nowrap) — the title is the escape hatch
+      // for any label that still doesn't fit at the current panel width.
+      button.title = option.label
       button.addEventListener('click', () => {
         this.setActiveValue(option.value)
         this.opts.onInput(option.value)

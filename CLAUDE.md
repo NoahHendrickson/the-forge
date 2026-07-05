@@ -88,6 +88,8 @@ The build produces three bundles in `packages/vite-plugin/dist/`: `index.js` (th
 - Items stay queued until `mark_applied` — but an immediate re-pull returns nothing (pull flips them to `claimed`; a dropped claim only re-queues after 5 min). The `/forge-design` flow is pull → apply → mark in one pass.
 - Watcher liveness (`/forge-watch`) is per-dev-server-process in-memory state — with two dev servers on one project, the watcher belongs to whichever server the MCP bin discovered (newest live endpoint file), while the browser may be talking to the other. Kill stale servers (same rule as E2E).
 - The watch loop's per-cycle texts (WATCH_COMMAND in `setup.ts`, canned wait texts in `mcp/protocol.ts`) are a per-tick token cost — keep them terse, and never interpolate server data into them.
+- After `npm run build`, a running demo dev server keeps serving the OLD client bundle — Vite caches the virtual client module; restart the dev server, a browser reload isn't enough.
+- Fresh git worktrees need their own `npm install` — otherwise Vite silently resolves `@the-forge/vite` to the main checkout's stale build.
 
 ## Cursor Cloud specific instructions
 
