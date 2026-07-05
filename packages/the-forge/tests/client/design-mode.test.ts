@@ -1694,12 +1694,16 @@ describe('lifecycle persistence', () => {
     mode.setActive(true)
     mode.select(el as never)
     ;(mode as never as { drafts: DraftStore }).drafts.apply(el as never, 'padding-top', '24px')
+    // R2 F-C: draft persistence is now debounced (trailing 300ms) off drafts.onChange — selection
+    // is persisted synchronously (setSelection's own persist() call), but the draft write lands
+    // only once setActive(false) below flushes it (or the debounce timer fires).
     const saved = loadLifecycle()
     expect(saved?.designModeOn).toBe(true)
     expect(saved?.selection).toEqual([{ dcSource: 'src/App.tsx:3:3', index: 0 }])
-    expect(saved?.drafts).toEqual([{ dcSource: 'src/App.tsx:3:3', index: 0, props: [['padding-top', '24px']] }])
     mode.setActive(false)
     expect(loadLifecycle()?.designModeOn).toBe(false)
+    // setActive(false)'s flush must have carried the draft through before teardown cleared it.
+    expect(loadLifecycle()?.drafts).toEqual([{ dcSource: 'src/App.tsx:3:3', index: 0, props: [['padding-top', '24px']] }])
   })
 
   // R1: seeds now carry their own instance index end-to-end (send -> persist -> restore),
@@ -1830,6 +1834,89 @@ describe('lifecycle persistence', () => {
   })
 })
 
+// R2 F-C: drafts.onChange previously ran refreshStatus() + changeList.syncDrafts() + persist()
+// on EVERY scrub tick — querySelectorAll + JSON.stringify + a synchronous sessionStorage.setItem
+// + replaceChildren per drag frame, against the codebase's own "React never re-renders while
+// scrubbing" discipline. Fix: refreshStatus() stays immediate (cheap label update);
+// syncDrafts()+persist() are debounced on a shared trailing 300ms timer (RIPPLE_DEBOUNCE_MS,
+// same "quiet window" concept as the ripple burst logic). flushDraftSync() cancels the timer and
+// runs both immediately — called from setActive(false) teardown and at the top of Send's click
+// handler so a send/deactivate always sees current, persisted drafts.
+describe('debounced scrub persistence (R2 F-C)', () => {
+  beforeEach(() => sessionStorage.clear())
+
+  it('a burst of drafts.apply calls debounces sessionStorage.setItem down to at most two calls, then settles to the final value after 300ms', () => {
+    vi.useFakeTimers()
+    try {
+      const { mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+
+      const setItemSpy = vi.spyOn(Storage.prototype, 'setItem')
+      setItemSpy.mockClear() // narrow to the burst window only — exclude setActive(true)'s own persist
+
+      for (let i = 0; i < 10; i++) drafts.apply(btn, 'padding-top', `${i}px`)
+
+      // At most: one immediate persist from some other synchronous trigger during the burst is
+      // NOT expected here (all 10 calls are drafts.apply — no selection change) — so the debounced
+      // path itself must not have flushed to storage yet.
+      const burstCalls = setItemSpy.mock.calls.filter(([key]) => key === 'the-forge:lifecycle').length
+      expect(burstCalls).toBeLessThanOrEqual(2)
+      // The Changes list must not have re-rendered per tick either — no draft row yet since
+      // syncDrafts() is debounced alongside persist().
+      const changeList = (mode as never as { changeList: { root: HTMLElement } }).changeList
+      expect(changeList.root.querySelector('.change-row')).toBeNull()
+
+      vi.advanceTimersByTime(300)
+
+      expect(loadLifecycle()?.drafts).toEqual([{ dcSource: 'src/Button.tsx:42:8', index: 0, props: [['padding-top', '9px']] }])
+      expect(changeList.root.querySelector('.change-row')).not.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('setActive(false) mid-debounce-window flushes drafts to storage immediately', () => {
+    vi.useFakeTimers()
+    try {
+      const { mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+
+      drafts.apply(btn, 'padding-top', '24px')
+      // No timer advance — still inside the debounce window.
+      mode.setActive(false)
+
+      expect(loadLifecycle()?.drafts).toEqual([{ dcSource: 'src/Button.tsx:42:8', index: 0, props: [['padding-top', '24px']] }])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clicking Send mid-debounce-window flushes drafts to storage before the request is built', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+        return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { overlay, mode, drafts } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+
+      overlay.sendButton.click()
+      // Flush microtasks under fake timers without advancing real time.
+      for (let i = 0; i < 6; i++) await Promise.resolve()
+
+      expect(loadLifecycle()?.drafts !== undefined).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 // Critical E2E finding: boot() runs restoreLifecycle() before the framework has rendered the
 // app, so locateBySource() finds nothing at that instant. These tests reproduce that race by
 // calling restoreLifecycle() against an EMPTY document, then appending the element afterward.
@@ -1926,6 +2013,104 @@ describe('lifecycle restore races the framework mount', () => {
   })
 })
 
+// R2 F-B: the boot pass and the retry pass used two divergent selection policies — boot applies
+// PARTIAL drafts but queues the ENTIRE saved.selection as unresolved; the retry pass only ever
+// touches selection when `this.selection.length === 0` (dead once boot selected anything) and
+// required ALL-or-nothing. A partial restore (one of two selected elements exists at boot) left
+// the second element's pending selection undrainable — the retry timer spun all 40 attempts as
+// a zombie. Fixed via one drainPendingRestore() used by both the boot pass and every retry tick,
+// with a per-item selection policy (add located elements while the selection is still
+// restore-owned; never stomp a user's own selection).
+describe('lifecycle restore: unified per-item drain (R2 F-B)', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const twoElementSelectionState = {
+    v: 1 as const,
+    designModeOn: true,
+    selection: [
+      { dcSource: 'src/App.tsx:3:3', index: 0 },
+      { dcSource: 'src/App.tsx:5:3', index: 0 },
+    ],
+    drafts: [],
+    sent: [],
+  }
+
+  it('partial restore: the element present at boot is selected; the late-appearing one is ADDED by retry and the timer stops', () => {
+    // First selection element exists at boot time — mirrors a real partial framework mount.
+    const first = document.createElement('div')
+    first.setAttribute('data-dc-source', 'src/App.tsx:3:3')
+    document.body.appendChild(first)
+
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    mode.restoreLifecycle(twoElementSelectionState)
+
+    expect(mode.selection).toHaveLength(1)
+    expect(mode.selection[0]).toBe(first as never)
+
+    // Second element appears later.
+    const second = document.createElement('div')
+    second.setAttribute('data-dc-source', 'src/App.tsx:5:3')
+    document.body.appendChild(second)
+
+    vi.advanceTimersByTime(300)
+
+    expect(mode.selection).toHaveLength(2)
+    expect(mode.selection).toContain(second as never)
+
+    // Timer must have stopped — advancing well past the full 40x300ms window must cause no
+    // further state change (no throw, no further retry work scheduled).
+    const selectionBefore = [...mode.selection]
+    expect(() => vi.advanceTimersByTime(15000)).not.toThrow()
+    expect(mode.selection).toEqual(selectionBefore)
+  })
+
+  it("a user selection made mid-window is never stomped by a late-appearing restore element, and pending drains to done", () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    // Neither element exists at boot — both selection entries are pending.
+    mode.restoreLifecycle(twoElementSelectionState)
+    expect(mode.selection).toHaveLength(0)
+
+    // User selects an unrelated element mid-window.
+    const userEl = document.createElement('div')
+    userEl.setAttribute('data-dc-source', 'src/Other.tsx:1:1')
+    document.body.appendChild(userEl)
+    mode.select(userEl)
+    expect(mode.selection).toEqual([userEl])
+
+    // Now the restore-targeted elements appear.
+    const first = document.createElement('div')
+    first.setAttribute('data-dc-source', 'src/App.tsx:3:3')
+    document.body.appendChild(first)
+    const second = document.createElement('div')
+    second.setAttribute('data-dc-source', 'src/App.tsx:5:3')
+    document.body.appendChild(second)
+
+    vi.advanceTimersByTime(300)
+
+    // The user's own selection must survive untouched.
+    expect(mode.selection).toEqual([userEl])
+
+    // Pending restore work must have drained to done (dropped as resolved-obsolete), not kept
+    // retrying forever — a later persist() must carry no leftover pending selection.
+    mode.select(userEl) // no-op selection change to force a fresh persist() read
+    expect(loadLifecycle()?.selection).toEqual([{ dcSource: 'src/Other.tsx:1:1', index: 0 }])
+  })
+})
+
 // Final-review F1: resend() queued a fresh request and updated the live registry/ChangeList,
 // but never called persist() — so a reload within the ~2s verifier-poll window after a re-send
 // lost the re-sent entry from the restored session, defeating the milestone's headline guarantee.
@@ -1989,6 +2174,106 @@ describe('resend persistence (final-review F1)', () => {
     for (let i = 0; i < 6; i++) await Promise.resolve()
 
     expect(loadLifecycle()?.sent.some((s) => s.id === 'resent-1')).toBe(true)
+  })
+})
+
+// R2 F-A: resend() had no re-entrancy guard — the failed row deliberately survives until the
+// re-queue POST resolves (F5), so a double-click on "Re-send" before the first POST settles
+// fires a second identical /queue POST. isDuplicate() can't catch this: the failed record is
+// already resolved (outside the sent-but-unverified duplicate window) by the time the second
+// click's prepareSend-equivalent path runs.
+describe('resend re-entrancy guard (R2 F-A)', () => {
+  beforeEach(() => sessionStorage.clear())
+
+  /** Seeds a failed sent row and returns its Re-send button — same setup as the F1 resend
+   * persistence test above, factored out for reuse. */
+  function setupFailedResend(fetchMock: ReturnType<typeof vi.fn>): { mode: DesignMode; resendBtn: HTMLElement } {
+    vi.stubGlobal('fetch', fetchMock)
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    const el = document.createElement('div')
+    el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
+    document.body.appendChild(el)
+    mode.setActive(true)
+    mode.restoreLifecycle({
+      v: 1,
+      designModeOn: true,
+      selection: [],
+      drafts: [],
+      sent: [
+        {
+          id: 'q-failed',
+          elements: [
+            {
+              dcSource: 'src/App.tsx:3:3',
+              index: 0,
+              tag: 'div',
+              draftProps: ['padding-top'],
+              changes: [{ property: 'padding-top', afterCss: '24px' }],
+              change: {
+                tag: 'div',
+                source: { file: 'src/App.tsx', line: 3, col: 3 },
+                className: '',
+                text: '',
+                selector: 'div',
+                changes: [{ property: 'padding-top', beforeCss: '8px', afterCss: '24px', beforeUtility: null, afterUtility: 'pt-6', tokenExact: true }],
+              },
+            },
+          ],
+        },
+      ],
+    })
+    const changeList = (mode as never as { changeList: { applyStage: (e: unknown) => void } }).changeList
+    changeList.applyStage({ requestId: 'q-failed', elIndex: 0, dcSource: 'src/App.tsx:3:3', stage: 'failed', note: 'nope' })
+    const resendBtn = mode.panelRoot.querySelector('.change-resend') as HTMLElement
+    expect(resendBtn).not.toBeNull()
+    return { mode, resendBtn }
+  }
+
+  it('clicking Re-send twice rapidly (before the first POST resolves) queues exactly one /queue POST', async () => {
+    let resolveQueue!: (v: { ok: boolean; json: () => Promise<{ id: string }> }) => void
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return new Promise((resolve) => (resolveQueue = resolve))
+      return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+    })
+    const { resendBtn } = setupFailedResend(fetchMock)
+
+    resendBtn.click()
+    resendBtn.click() // still in flight — must be a no-op, not a second POST
+    await Promise.resolve()
+    await Promise.resolve()
+
+    resolveQueue({ ok: true, json: async () => ({ id: 'resent-1' }) })
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+
+    const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
+    expect(queueCalls).toHaveLength(1)
+  })
+
+  it('a resend that fails clears the in-flight guard so a later Re-send click works', async () => {
+    let queueCallCount = 0
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') {
+        queueCallCount++
+        return queueCallCount === 1 ? Promise.reject(new Error('network down')) : Promise.resolve({ ok: true, json: async () => ({ id: 'resent-2' }) })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+    })
+    const { resendBtn } = setupFailedResend(fetchMock)
+
+    resendBtn.click()
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+
+    // First resend failed — the guard must have been released so a second, later click works.
+    resendBtn.click()
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+
+    const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
+    expect(queueCalls).toHaveLength(2)
+    expect(loadLifecycle()?.sent.some((s) => s.id === 'resent-2')).toBe(true)
   })
 })
 

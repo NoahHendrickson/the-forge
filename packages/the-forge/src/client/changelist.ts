@@ -19,10 +19,17 @@ function summarizeItem(c: ChangeItem): string {
   return `${c.property}: ${c.beforeCss} → ${c.afterCss}`
 }
 
-function summarize(changes: ChangeItem[]): { text: string; full: string } {
-  const all = changes.map(summarizeItem)
+/** Shared "+N more" collapse for both sent-row (summarize) and draft-row (renderDraftRow)
+ * summaries (R2 minor: this formatting existed twice, independently) — `text` is the visible
+ * summary (first entry, +N more if there's more than one), `full` is the newline-joined tooltip
+ * shown via the row's title attribute. */
+function collapseWithMore(all: string[]): { text: string; full: string } {
   const text = all.length > 1 ? `${all[0]} +${all.length - 1} more` : (all[0] ?? '')
   return { text, full: all.join('\n') }
+}
+
+function summarize(changes: ChangeItem[]): { text: string; full: string } {
+  return collapseWithMore(changes.map(summarizeItem))
 }
 
 function shortSource(dcSource: string | null): string {
@@ -84,10 +91,6 @@ export class ChangeList {
   applyStage(e: StageEvent): boolean {
     this.suppressSeedRecords = false
     return this.session.applyStage(e)
-  }
-
-  removeRow(seed: SentSeed): void {
-    this.session.removeSeed(seed)
   }
 
   /** Design-mode-off teardown: visually clears every row WITHOUT touching the session (the
@@ -171,8 +174,9 @@ export class ChangeList {
     const dcSource = el.dataset?.dcSource ?? null
     const [elLabel, summary] = this.label(el.tagName.toLowerCase(), dcSource)
     const all = props.map(([prop, d]) => `${prop} → ${d.value}`)
-    summary.textContent = all.length > 1 ? `${all[0]} +${all.length - 1} more` : all[0]
-    summary.title = all.join('\n')
+    const { text, full } = collapseWithMore(all)
+    summary.textContent = text
+    summary.title = full
     row.append(elLabel, summary)
     return row
   }
@@ -215,7 +219,9 @@ export class ChangeList {
       // Row removal moved to the resend SUCCESS path (final-review F5): dismissing here, before
       // the re-queue POST resolves, left the user with nothing but a button flash if the POST
       // failed — no record of the still-failed change. The host (index.ts resend()) now calls
-      // removeRow() itself right before re-registering the seed under the new id.
+      // session.removeSeed() itself right before re-registering the seed under the new id (R2
+      // minor: ChangeList's own removeRow() wrapper was removed — every real caller already
+      // called session.removeSeed directly).
       this.cb.onResend(row.seed)
     })
     const dismiss = document.createElement('button')

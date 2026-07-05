@@ -89,6 +89,20 @@ describe('draft rows', () => {
     expect(draftRow?.querySelector('.change-summary')?.textContent).toContain('margin-top')
     expect(draftRow?.querySelector('.change-summary')?.textContent).not.toContain('padding-top')
   })
+
+  // R2 minor: draft rows and sent rows each formatted "+N more" independently — extracted to one
+  // shared helper. This proves a multi-prop draft row uses the SAME "+N more" shape as the
+  // multi-change sent row test above ('summarizes multi-change elements with +N more').
+  it('summarizes a multi-prop draft row with +N more, same shape as sent rows', () => {
+    const drafts = new DraftStore()
+    const el = tagged()
+    const list = new ChangeList(drafts, new LifecycleSession(), noop)
+    drafts.apply(el as never, 'padding-top', '24px')
+    drafts.apply(el as never, 'margin-top', '8px')
+    list.syncDrafts()
+    const summary = list.root.querySelector('.change-summary')!
+    expect(summary.textContent).toBe('padding-top → 24px +1 more')
+  })
 })
 
 describe('sent rows and stages', () => {
@@ -211,11 +225,14 @@ describe('interactions', () => {
   // Final-review F5: Re-send used to dismiss the row immediately on click, before the re-queue
   // POST resolved — a failed /queue POST then left the user with nothing but a button flash and
   // no record of the still-failed change. Row removal now moves to the resend success path
-  // (index.ts's resend() calls the new removeRow() right before addSent); Re-send's click
-  // handler only forwards the seed and no longer dismisses.
+  // (index.ts's resend() calls session.removeSeed() directly right before addSent — R2 minor:
+  // ChangeList no longer wraps this in its own removeRow(), since removeRow() was just a thin,
+  // unused-in-production pass-through to the session method every real call site already used
+  // directly); Re-send's click handler only forwards the seed and no longer dismisses.
   it('Re-send forwards the seed and keeps the row until the host confirms success', () => {
     const onResend = vi.fn()
-    const list = new ChangeList(new DraftStore(), new LifecycleSession(), { ...noop, onResend })
+    const session = new LifecycleSession()
+    const list = new ChangeList(new DraftStore(), session, { ...noop, onResend })
     const el = tagged()
     const s = seed(el)
     list.addSent('q1', [s])
@@ -226,12 +243,12 @@ describe('interactions', () => {
     expect(list.root.hidden).toBe(false)
     expect(list.root.querySelector('.change-row')).not.toBeNull()
 
-    // Host confirms success: it calls removeRow with the seed right before addSent(newId, [seed]).
-    list.removeRow(s)
+    // Host confirms success: it calls session.removeSeed directly right before addSent(newId, [seed]).
+    session.removeSeed(s)
     expect(list.root.hidden).toBe(true)
   })
 
-  it('a failed re-queue POST leaves the row present with its note (host never calls removeRow)', () => {
+  it('a failed re-queue POST leaves the row present with its note (host never calls removeSeed)', () => {
     const onResend = vi.fn()
     const list = new ChangeList(new DraftStore(), new LifecycleSession(), { ...noop, onResend })
     const el = tagged()
@@ -240,7 +257,7 @@ describe('interactions', () => {
     list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'failed', note: 'network down' })
     ;(list.root.querySelector('.change-resend') as HTMLElement).click()
     expect(onResend).toHaveBeenCalledWith(s)
-    // Simulates a resend() whose /queue POST failed — the host does NOT call removeRow.
+    // Simulates a resend() whose /queue POST failed — the host does NOT call removeSeed.
     const row = list.root.querySelector('.change-row')!
     expect(row.querySelector('.chip')!.className).toContain('chip-failed')
     expect(row.querySelector('.change-note')!.textContent).toBe('network down')
