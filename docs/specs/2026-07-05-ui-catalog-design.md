@@ -1,7 +1,7 @@
 # UI catalog: tokens, atom factories, and a Storybook for the overlay
 
 **Date:** 2026-07-05
-**Status:** Draft — pending user review
+**Status:** Approved 2026-07-05 — plan at [docs/plans/2026-07-05-ui-catalog.md](../plans/2026-07-05-ui-catalog.md)
 
 ## Goal
 
