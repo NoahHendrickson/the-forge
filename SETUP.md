@@ -58,10 +58,12 @@ The build must produce `packages/the-forge/dist/` containing at least `index.js`
 From the host project root:
 
 ```bash
-npm install -D file:../the-forge/packages/the-forge
+npm install -D file:../the-forge/packages/the-forge --install-links
 ```
 
-Adjust the relative path if you cloned somewhere else. npm links folder dependencies, so rebuilding the checkout later updates the host project automatically.
+Adjust the relative path if you cloned somewhere else. The `--install-links` flag makes npm **copy** the package into `node_modules` instead of symlinking it — required because Turbopack (Next's default dev bundler since Next 15) cannot resolve `exports` subpaths like `the-forge/design-mode` through a symlink to a directory outside the project tree (`experimental.externalDir` and `turbopack.resolveAlias` don't fix it). Vite and webpack tolerate the symlink, but use the flag everywhere for one consistent install; it becomes unnecessary once the package is on npm.
+
+One trade-off of copying: rebuilding the `the-forge` checkout no longer updates the host project automatically — re-run the install command above after every rebuild.
 
 ### 3. Wire it into the framework config
 
@@ -205,4 +207,5 @@ The daily loop, once installed:
 - **Panel shows the watcher went idle** — type `/forge-watch` again in Claude Code; watchers deliberately stop after 20 idle minutes so a forgotten session never runs overnight.
 - **No Design toggle** — it only exists under `vite dev` (or Next's dev phase). Production builds contain zero trace of The Forge by design.
 - **On Next.js, `/__the-forge/*` requests 404** — something in the project is overwriting `rewrites()` instead of composing with it, so The Forge's proxy rule never reaches Next. Check that `withForge(...)` wraps the config that actually gets exported from `next.config.ts` (not an earlier, unwrapped version of it), and that nothing downstream re-defines `rewrites` after `withForge` has already set it.
-- **Updating The Forge** — `git pull && npm install && npm run build` in the `the-forge` checkout; the host project picks it up on the next dev-server restart.
+- **On Next.js (Turbopack), every route 500s with `Module not found: Can't resolve 'the-forge/design-mode'`** — the package was installed as a symlink (a plain `file:` install without `--install-links`), and Turbopack can't resolve `exports` subpaths through an out-of-tree symlink. Reinstall with the flag: `npm install -D file:../the-forge/packages/the-forge --install-links`, then restart the dev server. (`next dev --webpack` also works as a stopgap, but fix the install.)
+- **Updating The Forge** — `git pull && npm install && npm run build` in the `the-forge` checkout, then **re-run the install command (with `--install-links`) in the host project** — the copy in `node_modules` doesn't track the checkout — and restart the dev server.
