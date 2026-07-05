@@ -8,7 +8,8 @@ import { buildChangeRequestWithElements, renderMarkdown, type ChangeRequest, typ
 import { SentRegistry } from './sent'
 import { Verifier } from './verifier'
 import { snapshotRects, diffRects } from './ripple'
-import { resetTokensCache } from './tokens'
+import { resetTokensCache, readTheme } from './tokens'
+import { ChangeList, type SentSeed } from './changelist'
 import { type AgentName } from './agent'
 import { WatchStatus, sentLabelFor, watchIndicatorFor, type Rung } from './watch'
 
@@ -46,6 +47,10 @@ export class DesignMode {
   private dock: Dock
   private verifier: Verifier
   private verifierSummary = ''
+  private changeList: ChangeList
+  /** Seed payloads per sent request id — the single owner ChangeList rows and (Task 10)
+   * persistence read from; SentRegistry keeps only what verification needs. */
+  private sentSeeds = new Map<string, SentSeed[]>()
   /** Watcher-state poller — runs ONLY while design mode is on (started/stopped in
    * setActive), so watch mode adds zero idle overhead to the page. */
   private watch = new WatchStatus(() => this.refreshStatus())
@@ -89,6 +94,13 @@ export class DesignMode {
       this.panel.refresh()
       this.remeasure()
     })
+    this.changeList = new ChangeList(this.drafts, {
+      onHover: (el) => (el ? this.overlay.showOutline(el.getBoundingClientRect()) : this.overlay.hideOutline()),
+      onSelect: (el) => this.select(el),
+      onResend: (seed) => this.resend(seed),
+    })
+    this.panel.changesSlot.appendChild(this.changeList.root)
+    this.verifier.subscribe((e) => this.changeList.applyStage(e))
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
     overlay.sendButton.addEventListener('click', () => {
       if (overlay.sendButton.disabled) return // re-entrancy guard: a POST is already in flight
@@ -124,6 +136,14 @@ export class DesignMode {
           changes: change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
         }))
         this.sent.add(id, mapping)
+        const seeds: SentSeed[] = pairs.map(([el, change]) => ({
+          el,
+          dcSource: el.dataset.dcSource ?? null,
+          draftProps: [...(this.drafts.entries().get(el)?.keys() ?? [])],
+          change,
+        }))
+        this.sentSeeds.set(id, seeds)
+        this.changeList.addSent(id, seeds)
         this.verifier.start()
         fetch('/__the-forge/dispatch', {
           method: 'POST',
@@ -180,7 +200,10 @@ export class DesignMode {
       this.panel.refresh()
       this.remeasure()
     })
-    this.drafts.onChange = () => this.refreshStatus()
+    this.drafts.onChange = () => {
+      this.refreshStatus()
+      this.changeList.syncDrafts()
+    }
   }
 
   get panelRoot(): HTMLElement {
@@ -207,6 +230,47 @@ export class DesignMode {
     request.elements = pairs.map(([, change]) => change)
     if (request.elements.length === 0) return elements.size > 0 ? 'already-sent' : 'no-changes'
     return { request, pairs }
+  }
+
+  /** Re-queues one failed element-change as a fresh request. Safe and unfiltered by design:
+   * a failed apply changed no source, and failed items have already left the
+   * sent-but-unverified set the duplicate filter checks. Reuses the queue → dispatch path
+   * of Send; a dispatch failure degrades to manual copy exactly like Send does. */
+  private resend(seed: SentSeed): void {
+    const request: ChangeRequest = {
+      createdAt: new Date().toISOString(),
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      tailwind: readTheme().spacingBasePx !== null,
+      elements: [seed.change],
+    }
+    const md = renderMarkdown(request)
+    fetch('/__the-forge/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+      body: JSON.stringify({ request, markdown: md }),
+    })
+      .then((res) => (res.ok ? (res.json() as Promise<{ id: string }>) : Promise.reject(new Error('queue failed'))))
+      .then((body) => {
+        this.sent.add(body.id, [
+          {
+            el: seed.el,
+            dcSource: seed.dcSource,
+            draftProps: seed.draftProps,
+            changes: seed.change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
+          },
+        ])
+        this.sentSeeds.set(body.id, [seed])
+        this.changeList.addSent(body.id, [seed])
+        this.verifier.start()
+        fetch('/__the-forge/dispatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+          body: JSON.stringify({}),
+        }).catch(() => {
+          /* request is safely queued — manual rung, same as Send */
+        })
+      })
+      .catch(() => this.flashButton(this.overlay.sendButton, 'Send failed', 'Send to agent'))
   }
 
   /** First selection member (or null) — kept for single-selection call sites/tests. */
@@ -254,6 +318,8 @@ export class DesignMode {
       this.dock.exit()
       this.verifier.stop()
       this.watch.stop()
+      this.changeList.clear()
+      this.sentSeeds.clear()
     }
   }
 

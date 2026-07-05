@@ -928,6 +928,51 @@ describe('DesignMode send-to-agent (M4)', () => {
   })
 })
 
+describe('change list wiring', () => {
+  /** Flushes enough microtasks for the /queue POST *and* the chained /dispatch POST to settle —
+   * same convention as flushSend() in the send-to-agent describe block above. */
+  async function flushSend(): Promise<void> {
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+  }
+
+  it('mounts the ChangeList inside the panel changes slot', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    expect(mode.panelRoot.querySelector('.changes-section')).not.toBeNull()
+  })
+
+  it('seeds sent rows on a successful send and clears them on deactivate', async () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    const el = document.createElement('div')
+    el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
+    document.body.appendChild(el)
+    mode.setActive(true)
+    mode.select(el as never)
+    // draft an edit, then click Send with a stubbed queue/dispatch
+    ;(mode as never as { drafts: DraftStore }).drafts.apply(el as never, 'padding-top', '24px')
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q9' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    overlay.sendButton.click()
+    await flushSend()
+    expect(mode.panelRoot.querySelectorAll('.change-row').length).toBeGreaterThan(0)
+    expect(mode.panelRoot.querySelector('.chip-sent')).not.toBeNull()
+    mode.setActive(false)
+    mode.setActive(true)
+    expect(mode.panelRoot.querySelectorAll('.change-row')).toHaveLength(0)
+  })
+})
+
 describe('DesignMode verifier wiring (M4 Task 4)', () => {
   beforeEach(() => {
     vi.useFakeTimers()
