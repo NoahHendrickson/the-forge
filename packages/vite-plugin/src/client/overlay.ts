@@ -1,3 +1,5 @@
+import { DEFAULT_WIDTH } from './dock'
+
 export const CSS = `
 [hidden] { display: none !important; }
 *, *::before, *::after { box-sizing: border-box; }
@@ -63,7 +65,7 @@ button {
 }
 #panel {
   position: fixed; right: 16px; top: 16px; z-index: 2147483647;
-  width: var(--forge-dock-w, 320px); max-height: 80vh;
+  width: var(--forge-dock-w, ${DEFAULT_WIDTH}px); max-height: 80vh;
   display: flex; flex-direction: column; overflow: hidden;
   font: 400 12px system-ui, sans-serif; background: #2C2C2C; color: #F5F5F5;
   border: 1px solid rgba(255,255,255,0.09); border-radius: 12px; padding: 0;
@@ -97,7 +99,7 @@ button {
   position: absolute; top: 10px; right: 10px;
   width: 22px; height: 20px; padding: 0; line-height: 1;
 }
-#toggle.dock-open { right: calc(16px + var(--forge-dock-w, 320px)); }
+#toggle.dock-open { right: calc(16px + var(--forge-dock-w, ${DEFAULT_WIDTH}px)); }
 .panel-body::-webkit-scrollbar { width: 8px; }
 .panel-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
 

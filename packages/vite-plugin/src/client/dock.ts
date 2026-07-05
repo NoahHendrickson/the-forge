@@ -79,7 +79,8 @@ export class Dock {
   ) {
     this.prefs = loadPrefs()
     // Seed the width var at boot — pure inline style, no listeners, zero idle overhead.
-    this.host.style.setProperty('--forge-dock-w', `${this.appliedWidth()}px`)
+    // (syncWidth is the ONLY width painter; inactive here, so it writes just the var.)
+    this.syncWidth()
     // Element-scoped listeners on our own shadow DOM (same pattern as Overlay's toggle
     // click) — the document/window-level drag listeners exist only during a drag.
     this.panel.resizeHandle.addEventListener('pointerdown', this.onResizeStart)
@@ -146,7 +147,9 @@ export class Dock {
     if (this.savedHtmlMarginRight === null) {
       this.savedHtmlMarginRight = document.documentElement.style.marginRight
     }
-    document.documentElement.style.marginRight = `${this.appliedWidth()}px`
+    // Route through syncWidth — the single place that derives appliedWidth() and paints
+    // both the var and the margin, so the two can never desync (PR #2 review).
+    this.syncWidth()
   }
 
   private removeDocked(): void {
