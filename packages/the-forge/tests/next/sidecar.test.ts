@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import http from 'node:http'
 
 let root: string
 let closers: Array<() => Promise<void>> = []
@@ -43,6 +44,23 @@ async function fetchJson(port: number, urlPath: string, init?: RequestInit) {
     // not json — fine, caller checks status/text directly
   }
   return { status: res.status, text, json, headers: res.headers }
+}
+
+/** fetch()/undici force the Host header to match the connection target, so it can't be used
+ * to simulate a spoofed Host the way a real DNS-rebound page's browser request would present
+ * one. Node's raw http.request has no such guard, letting the test connect to the sidecar's
+ * real loopback port while presenting an attacker-controlled Host — exactly what isAllowedHost
+ * must reject. */
+function requestWithHost(port: number, urlPath: string, host: string): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: urlPath, method: 'GET', headers: { Host: host } }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (c: Buffer) => chunks.push(c))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') }))
+    })
+    req.on('error', reject)
+    req.end()
+  })
 }
 
 describe('ensureSidecar', () => {
@@ -116,6 +134,17 @@ describe('ensureSidecar', () => {
     const embedded = JSON.parse(bootstrapLine.replace('globalThis.__THE_FORGE__ = ', '').replace(/;$/, ''))
     expect(embedded.secret).toBe(data.secret)
     expect(embedded.agent).toBe('claude-code')
+  })
+
+  it('GET /__the-forge/client.js with a non-loopback Host is rejected with 403 and never leaks the secret', async () => {
+    const { ensureSidecar } = await importSidecar()
+    const handle = await ensureSidecar(baseOpts())
+    closers.push(() => handle.close())
+
+    const res = await requestWithHost(handle.port, '/__the-forge/client.js', 'evil.example')
+    expect(res.status).toBe(403)
+    expect(res.text).not.toContain('secret')
+    expect(res.text).not.toContain(FAKE_CLIENT_JS)
   })
 
   it('POST /__the-forge/queue without X-Forge-Secret is rejected with 403 (middleware wiring intact)', async () => {

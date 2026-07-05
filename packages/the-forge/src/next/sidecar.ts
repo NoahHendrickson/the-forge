@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import http, { type Server } from 'node:http'
 import { fileURLToPath } from 'node:url'
-import { createForgeMiddleware, writeEndpointFile, removeEndpointFile } from '../server/endpoints'
+import { createForgeMiddleware, writeEndpointFile, removeEndpointFile, isAllowedHost } from '../server/endpoints'
 import { setupProjectConfig } from '../server/setup'
 import { createForgeRuntime } from '../server/runtime'
 import type { DispatchOpts } from '../server/dispatch'
@@ -93,6 +93,16 @@ async function createSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
 
   const server: Server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/__the-forge/client.js') {
+      // This is the one route createForgeMiddleware doesn't cover, and it embeds the
+      // per-start secret in the bootstrap line — so it needs its own copy of the same
+      // DNS-rebinding gate every other route gets for free. Costs nothing: the legitimate
+      // proxied request always presents a loopback Host (spike-confirmed in the comment
+      // above), so isAllowedHost passes it unconditionally.
+      if (!isAllowedHost(req.headers.host, [])) {
+        res.statusCode = 403
+        res.end()
+        return
+      }
       // Clear the missing-ForgeDesignMode hint the first time the client bundle is actually
       // fetched — proof the page loaded ForgeDesignMode and is talking to the sidecar.
       if (hintTimer) {
