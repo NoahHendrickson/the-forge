@@ -137,13 +137,23 @@ export class TokenPicker {
     } else {
       this.activeIndex = Math.min(this.filtered.length - 1, Math.max(0, this.activeIndex + delta))
     }
-    this.renderList()
+    this.updateActiveClasses()
     // Keep the keyboard-active row in view for long scale lists (e.g. the full spacing
     // scale) — jsdom elements don't implement scrollIntoView, so guard its existence.
     const activeRow = this.listEl.children[this.activeIndex] as (Element & { scrollIntoView?: (opts?: ScrollIntoViewOptions) => void }) | undefined
     if (activeRow && typeof activeRow.scrollIntoView === 'function') {
       activeRow.scrollIntoView({ block: 'nearest' })
     }
+  }
+
+  /** Toggles tp-row-active in place — hover/keyboard must NEVER rebuild the list:
+   *  replaceChildren under a live pointer re-fires mouseenter on the replacement node
+   *  (same coordinates), which re-rendered again, looping forever and starving the
+   *  row's own mousedown/click. Found by real-browser E2E; jsdom hover never sees it. */
+  private updateActiveClasses(): void {
+    Array.from(this.listEl.children).forEach((el, idx) => {
+      el.classList.toggle('tp-row-active', idx === this.activeIndex)
+    })
   }
 
   private applyActive(): void {
@@ -182,8 +192,9 @@ export class TokenPicker {
       }
 
       row.addEventListener('mouseenter', () => {
+        if (this.activeIndex === i) return
         this.activeIndex = i
-        this.renderList()
+        this.updateActiveClasses()
       })
       row.addEventListener('click', () => this.commit(entry))
 

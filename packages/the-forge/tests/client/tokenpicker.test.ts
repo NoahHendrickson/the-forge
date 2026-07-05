@@ -154,6 +154,45 @@ describe('TokenPicker', () => {
     expect(rowsAfter[3].classList.contains('tp-row-active')).toBe(true)
   })
 
+  it('hover toggles tp-row-active IN PLACE — never rebuilds the row nodes (real-browser regression)', () => {
+    // Under a real pointer, replaceChildren() on mouseenter replaces the hovered node at the
+    // same coordinates, which makes Chromium immediately re-fire mouseenter on the replacement
+    // -> infinite render loop, starving the row's own mousedown/click. jsdom never fires real
+    // hover so this only shows up as a node-identity break in a unit test, not a timeout.
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    const listEl = picker.root.querySelector('.tp-list') as HTMLElement
+    const rowsBefore = [...listEl.children]
+
+    rowsBefore[3].dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))
+
+    const rowsAfter = [...listEl.children]
+    expect(rowsAfter[3]).toBe(rowsBefore[3])
+    expect(rowsAfter[3].classList.contains('tp-row-active')).toBe(true)
+    // Previously-hovered row identity is unaffected, and its active class is cleared.
+    rowsBefore[1].dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))
+    const rowsAfter2 = [...listEl.children]
+    expect(rowsAfter2[1]).toBe(rowsBefore[1])
+    expect(rowsAfter2[1].classList.contains('tp-row-active')).toBe(true)
+    expect(rowsAfter2[3].classList.contains('tp-row-active')).toBe(false)
+  })
+
+  it('keyboard ArrowDown moves the active row in place — never rebuilds the row nodes', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    const listEl = picker.root.querySelector('.tp-list') as HTMLElement
+    const rowsBefore = [...listEl.children]
+    const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+
+    const rowsAfter = [...listEl.children]
+    expect(rowsAfter).toEqual(rowsBefore) // same node objects, same order
+    expect(rowsAfter[0].classList.contains('tp-row-active')).toBe(true)
+  })
+
   it('Escape closes the picker', () => {
     const { picker } = setupPicker()
     const anchor = anchorEl()
