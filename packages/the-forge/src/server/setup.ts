@@ -114,15 +114,18 @@ export function resolveProjectRoot(viteRoot: string): string {
  */
 export function ensureDevtoolsUuid(forgeDir: string): string {
   const uuidFile = path.join(forgeDir, 'devtools-uuid')
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
   try {
     const existing = fs.readFileSync(uuidFile, 'utf8').trim()
-    if (existing) return existing
+    // Validate the format: corrupt content (partial write, garbage, manual edit) must self-heal.
+    // Only trust content matching the canonical UUID shape; anything else falls through to re-minting.
+    if (existing && uuidRegex.test(existing)) return existing
   } catch {
     // no file yet — fall through and mint one
   }
   const uuid = randomUUID()
   fs.mkdirSync(forgeDir, { recursive: true })
-  fs.writeFileSync(uuidFile, uuid)
+  fs.writeFileSync(uuidFile, uuid, { mode: 0o644 })
   return uuid
 }
 

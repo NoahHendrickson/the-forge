@@ -525,10 +525,11 @@ describe('ensureDevtoolsUuid (Chrome DevTools Automatic Workspace Folders — ta
     expect(onDiskAfter).toBe(first)
   })
 
-  it('trims stray whitespace/newlines from a pre-existing file', () => {
+  it('trims stray whitespace/newlines from a pre-existing valid UUID file', () => {
     fs.mkdirSync(forgeDir, { recursive: true })
-    fs.writeFileSync(path.join(forgeDir, 'devtools-uuid'), '  some-existing-uuid-value  \n')
-    expect(ensureDevtoolsUuid(forgeDir)).toBe('some-existing-uuid-value')
+    const validUuid = '0f8fad5b-d9cb-469f-a165-70867728950e'
+    fs.writeFileSync(path.join(forgeDir, 'devtools-uuid'), `  ${validUuid}  \n`)
+    expect(ensureDevtoolsUuid(forgeDir)).toBe(validUuid)
   })
 
   it('creates forgeDir if it does not yet exist', () => {
@@ -537,5 +538,16 @@ describe('ensureDevtoolsUuid (Chrome DevTools Automatic Workspace Folders — ta
     const uuid = ensureDevtoolsUuid(freshDir)
     expect(fs.existsSync(path.join(freshDir, 'devtools-uuid'))).toBe(true)
     expect(uuid).toBeTruthy()
+  })
+
+  it('self-heals corrupt content by re-minting a valid UUID and rewriting the file', () => {
+    fs.mkdirSync(forgeDir, { recursive: true })
+    const corruptContent = 'not-a-uuid junk'
+    fs.writeFileSync(path.join(forgeDir, 'devtools-uuid'), corruptContent)
+    const result = ensureDevtoolsUuid(forgeDir)
+    expect(result).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+    expect(result).not.toBe(corruptContent)
+    const onDisk = fs.readFileSync(path.join(forgeDir, 'devtools-uuid'), 'utf8').trim()
+    expect(onDisk).toBe(result)
   })
 })
