@@ -18,6 +18,7 @@ Early development — building in the open. Current milestones on `main`:
 - **M2b — Panel depth:** Figma-style Layout section (9-dot align matrix, gap, size modes), Typography, Fill/Stroke with a popover color picker, `=` token picker with bound-value pills, and multi-select with relative deltas.
 - **M5 — Dispatch:** the Send button reaches your open agent session with zero keystrokes where the environment allows (tmux → AppleScript → deeplink ladder, manual `/forge-design` fallback), plus queue hardening (claim timeouts, atomic writes, pruning, shared-secret endpoints).
 - **Watch mode:** type `/forge-watch` once in any Claude Code session — including the Claude Code **desktop app**, where terminal injection can't reach — and that session becomes the linked watcher: every Send is delivered into it instantly over MCP long-poll, zero keystrokes per Send. The panel shows "● Linked" while it's live and tells you how to wake it (`/forge-watch`) if it goes idle; watchers auto-stop after 20 idle minutes so a forgotten session never ticks overnight. No watcher → the M5 ladder runs exactly as before.
+- **M-Next — the same loop on Next.js 15/16:** one package, `the-forge`, now works on Next (App Router and Pages Router, Turbopack and webpack dev) alongside Vite — same overlay, same panel, same MCP loop, same `/forge-design` and `/forge-watch` commands, no separate install path.
 
 Next: Effects (shadow, blur), gradients, and the rest of the open backlog in [docs/HANDOFF.md](docs/HANDOFF.md).
 
@@ -29,21 +30,54 @@ The fastest way: open your AI coding agent in the project you want to use The Fo
 
 Full setup and usage guide (for humans too): [SETUP.md](SETUP.md).
 
+**Vite + React:**
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import { theForge } from 'the-forge/vite'
+
+export default defineConfig({
+  plugins: [theForge(), react()], // theForge() first — it tags JSX before React compiles it
+})
+```
+
+**Next.js 15/16 (App Router or Pages Router):**
+
+```ts
+// next.config.ts
+import { withForge } from 'the-forge/next'
+
+export default withForge()
+```
+
+```tsx
+// app/layout.tsx (App Router) — or pages/_app.tsx (Pages Router)
+import { ForgeDesignMode } from 'the-forge/design-mode'
+// mount it once; it renders null outside development
+```
+
+Either framework: the package isn't on npm yet, so it installs from a local checkout —
+`npm install -D file:../the-forge/packages/the-forge`.
+
 ## Try the demo
 
 ```bash
 npm install
 npm run build
-npm run dev -w demo-app
+npm run dev -w demo-app     # Vite demo — fixtures/demo-app
+npm run dev -w next-demo    # Next demo, App Router + Turbopack — fixtures/next-demo, port 5175
+npm run dev -w next-pages   # Next demo, Pages Router — fixtures/next-pages, port 5176
 ```
 
 Open the printed URL, hit the **Design** toggle (bottom-right), click an element, and start scrubbing. When you have drafts, hit **Copy for agent** and paste into your agent of choice. Or hit **Send to agent**, then type /forge-design in a Claude Code session opened in the same project — it pulls the queued edits over MCP, applies them, and the browser marks your drafts Implemented once computed styles match.
 
-To use it on your own Vite + React project, see [SETUP.md](SETUP.md) — the package isn't on npm yet, so it installs from a local checkout (`npm install -D file:../the-forge/packages/the-forge`) and one line in `vite.config.ts`.
+To use it on your own Vite + React or Next.js project, see [SETUP.md](SETUP.md) — the package isn't on npm yet, so it installs from a local checkout (`npm install -D file:../the-forge/packages/the-forge`) plus a couple of lines of config.
 
 ## Guarantees
 
-- **Zero production impact** — the plugin only runs under `vite dev`; a CI-style check asserts production builds contain no trace of it.
+- **Zero production impact** — the plugin only runs under `vite dev` (or Next's `phase-development-server`); a CI-style check asserts production builds contain no trace of it, on both frameworks.
 - **Zero idle overhead** — no document listeners, observers, or timers until you toggle design mode on.
 - **Framework-bypass previews** — edits are inline styles; React never re-renders while you scrub.
 

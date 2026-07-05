@@ -1,6 +1,6 @@
 # Setting up The Forge
 
-The Forge is a dev-only Vite plugin that adds a Figma-style design mode to any Vite + React app: click an element in your running app, edit it live in a floating panel, and hand the change to the AI coding agent you already use (Claude Code, Cursor, Codex). It has **zero production footprint** — it only runs under `vite dev`.
+The Forge is a dev-only plugin that adds a Figma-style design mode to any Vite + React app or Next.js 15/16 app: click an element in your running app, edit it live in a floating panel, and hand the change to the AI coding agent you already use (Claude Code, Cursor, Codex). It has **zero production footprint** — it only runs under `vite dev` (or Next's development phase).
 
 This guide has three parts:
 
@@ -26,15 +26,16 @@ You are setting up The Forge in the repository you are currently working in (the
 
 ### 0. Check prerequisites
 
-The host project must:
+The host project must be **one of**:
 
-- Be a **Vite** project (`vite` ≥ 5 in its dependencies) with a config file (`vite.config.ts` / `vite.config.js`).
-- Use **React** (the plugin tags JSX elements with their source locations).
-- Be a **git repository** (the plugin anchors its config files at the git root).
+- A **Vite** project (`vite` ≥ 5 in its dependencies) with a config file (`vite.config.ts` / `vite.config.js`), using **React**, or
+- A **Next.js 15+** project (either the App Router or the Pages Router), using **React**.
+
+Either way, it must also be a **git repository** (the plugin anchors its config files at the git root).
 
 Nice to have, not required: **Tailwind CSS v4**. With it, change requests are written in the project's own token vocabulary (`py-2.5 → py-6`); without it, they fall back to plain CSS values. Either way works.
 
-If the project is not Vite + React, stop here and tell your human The Forge doesn't apply to this project.
+If the project is neither Vite nor Next.js, stop here and tell your human The Forge doesn't apply to this project.
 
 ### 1. Clone and build The Forge
 
@@ -50,7 +51,7 @@ cd -
 
 If `../the-forge` already exists, `git pull && npm install && npm run build` in it instead.
 
-The build must produce `packages/the-forge/dist/` containing `index.js`, `vite.js`, `client.js`, and `mcp.js`. Verify those files exist before continuing.
+The build must produce `packages/the-forge/dist/` containing at least `index.js`, `vite.js`, `next.js`, `design-mode.js`, `client.js`, and `mcp.js`. Verify those files exist before continuing.
 
 ### 2. Install it in the host project
 
@@ -62,7 +63,11 @@ npm install -D file:../the-forge/packages/the-forge
 
 Adjust the relative path if you cloned somewhere else. npm links folder dependencies, so rebuilding the checkout later updates the host project automatically.
 
-### 3. Add the plugin to the Vite config
+### 3. Wire it into the framework config
+
+Do whichever of these matches the host project.
+
+#### Vite + React
 
 In `vite.config.ts`, import `theForge` and add it to `plugins` — **before** the React plugin, so it can tag JSX before React compiles it:
 
@@ -78,6 +83,70 @@ export default defineConfig({
 
 Keep any other existing plugins exactly as they are; only add `theForge()` at the front.
 
+#### Next.js — either router
+
+Wrap the config in `next.config.ts` (or `.js`/`.mjs`) with `withForge`. It only activates in
+`next dev`; production builds pass through untouched:
+
+```ts
+import { withForge } from 'the-forge/next'
+
+export default withForge()
+```
+
+If the project already has a config object or function, pass it through instead of replacing it:
+
+```ts
+import { withForge } from 'the-forge/next'
+
+export default withForge({
+  // ...the project's existing next.config fields
+})
+```
+
+Make sure `withForge(...)` wraps the **final exported config** — if something else wraps or
+re-exports the config after this, The Forge's `rewrites()` can get overwritten instead of merged.
+
+Then mount `<ForgeDesignMode />` once, in whichever of these two the project uses:
+
+**App Router** — in the root layout:
+
+```tsx
+// app/layout.tsx
+import type { ReactNode } from 'react'
+import { ForgeDesignMode } from 'the-forge/design-mode'
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        {children}
+        <ForgeDesignMode />
+      </body>
+    </html>
+  )
+}
+```
+
+**Pages Router** — in `_app.tsx`:
+
+```tsx
+// pages/_app.tsx
+import type { AppProps } from 'next/app'
+import { ForgeDesignMode } from 'the-forge/design-mode'
+
+export default function App({ Component, pageProps }: AppProps) {
+  return (
+    <>
+      <Component {...pageProps} />
+      <ForgeDesignMode />
+    </>
+  )
+}
+```
+
+`<ForgeDesignMode />` renders nothing outside development, so it's safe to leave mounted.
+
 ### 4. Gitignore the runtime state
 
 Add this line to the host project's `.gitignore` (create the file if needed):
@@ -92,7 +161,7 @@ Also note: on first dev-server start the plugin writes a `the-forge` entry into 
 
 ### 5. Start the dev server once and verify
 
-Start the dev server the way the project normally does (`npm run dev` or `npx vite`). On startup the plugin auto-installs, at the **git root**:
+Start the dev server the way the project normally does (`npm run dev`, `npx vite`, or `npx next dev`). On startup the plugin auto-installs, at the **git root**:
 
 - `.mcp.json` — registers the `the-forge` MCP server (how the agent pulls edits).
 - `.claude/commands/forge-design.md` — the `/forge-design` command (pull + apply once).
@@ -127,12 +196,13 @@ The daily loop, once installed:
 4. **Send it.** Two ways to get changes into your source code:
    - **Send to agent** — queues a deterministic change request (exact `file:line`, `py-2.5 → py-6` style deltas). In Claude Code, `/forge-watch` links your session so every Send is applied automatically (the panel shows **● Linked**); or type `/forge-design` to pull and apply the queued batch once. Watchers auto-stop after 20 idle minutes — just type `/forge-watch` again.
    - **Copy for agent** — copies the same change request as markdown to paste into any agent (Cursor, Codex, a chat window, anything).
-5. **Verify.** After the agent edits your source and Vite hot-reloads, The Forge checks the computed styles and flips matching drafts to **Implemented**. If something doesn't match, the draft stays visible so nothing is silently lost.
+5. **Verify.** After the agent edits your source and the dev server hot-reloads (Vite HMR, or Next Fast Refresh), The Forge checks the computed styles and flips matching drafts to **Implemented**. If something doesn't match, the draft stays visible so nothing is silently lost.
 
 ### Troubleshooting
 
 - **`/forge-design` / `/forge-watch` don't exist in Claude Code** — the commands are installed on dev-server start; restart Claude Code after the first setup, and make sure the session is opened at the project's **git root** (the MCP server looks for `.the-forge/` in the directory Claude Code was launched from).
-- **Sends aren't arriving** — check the dev server is actually running, and that you don't have a stale second dev server on another port (kill old ones; on macOS: `lsof -iTCP:5173`). With two dev servers on one project, the watcher may be linked to the wrong one.
+- **Sends aren't arriving** — check the dev server is actually running, and that you don't have a stale second dev server on another port (kill old ones; on macOS: `lsof -iTCP:5173` for Vite's default port, or whatever port the project's dev server uses). With two dev servers on one project, the watcher may be linked to the wrong one.
 - **Panel shows the watcher went idle** — type `/forge-watch` again in Claude Code; watchers deliberately stop after 20 idle minutes so a forgotten session never runs overnight.
-- **No Design toggle** — it only exists under `vite dev`. Production builds contain zero trace of The Forge by design.
+- **No Design toggle** — it only exists under `vite dev` (or Next's dev phase). Production builds contain zero trace of The Forge by design.
+- **On Next.js, `/__the-forge/*` requests 404** — something in the project is overwriting `rewrites()` instead of composing with it, so The Forge's proxy rule never reaches Next. Check that `withForge(...)` wraps the config that actually gets exported from `next.config.ts` (not an earlier, unwrapped version of it), and that nothing downstream re-defines `rewrites` after `withForge` has already set it.
 - **Updating The Forge** — `git pull && npm install && npm run build` in the `the-forge` checkout; the host project picks it up on the next dev-server restart.
