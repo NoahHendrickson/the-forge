@@ -8,6 +8,7 @@ vi.mock('../../src/next/sidecar', () => ({
 
 // Imported after the mock so withForge picks up the mocked ensureSidecar.
 import { withForge } from '../../src/next/index'
+import { DEVTOOLS_JSON_PATH } from '../../src/server/endpoints'
 
 const PHASE_DEVELOPMENT_SERVER = 'phase-development-server'
 const PHASE_PRODUCTION_BUILD = 'phase-production-build'
@@ -122,6 +123,7 @@ describe('withForge', () => {
     const rewrites = await result.rewrites()
     expect(rewrites).toEqual([
       { source: '/__the-forge/:path*', destination: 'http://127.0.0.1:4568/__the-forge/:path*' },
+      { source: DEVTOOLS_JSON_PATH, destination: `http://127.0.0.1:4568${DEVTOOLS_JSON_PATH}` },
     ])
   })
 
@@ -135,6 +137,7 @@ describe('withForge', () => {
     expect(userRewritesFn).toHaveBeenCalledTimes(1)
     expect(rewrites).toEqual([
       { source: '/__the-forge/:path*', destination: 'http://127.0.0.1:4568/__the-forge/:path*' },
+      { source: DEVTOOLS_JSON_PATH, destination: `http://127.0.0.1:4568${DEVTOOLS_JSON_PATH}` },
       userRewrite,
     ])
   })
@@ -155,11 +158,24 @@ describe('withForge', () => {
     expect(rewrites).toEqual({
       beforeFiles: [
         { source: '/__the-forge/:path*', destination: 'http://127.0.0.1:4568/__the-forge/:path*' },
+        { source: DEVTOOLS_JSON_PATH, destination: `http://127.0.0.1:4568${DEVTOOLS_JSON_PATH}` },
         beforeFilesRewrite,
       ],
       afterFiles: [afterFilesRewrite],
       fallback: [fallbackRewrite],
     })
+  })
+
+  it('rewrites: both forge rules target the sidecar port, and the devtools rule source is the exact well-known path constant', async () => {
+    const wrapped = withForge({})
+    const result: any = await wrapped(PHASE_DEVELOPMENT_SERVER, { defaultConfig: {} })
+
+    const rewrites = await result.rewrites()
+    expect(rewrites).toHaveLength(2)
+    const [forgeRule, devtoolsRule] = rewrites
+    expect(forgeRule.destination).toBe('http://127.0.0.1:4568/__the-forge/:path*')
+    expect(devtoolsRule.source).toBe(DEVTOOLS_JSON_PATH)
+    expect(devtoolsRule.destination).toBe(`http://127.0.0.1:4568${DEVTOOLS_JSON_PATH}`)
   })
 
   it('function-form user config receives (phase, ctx) passthrough', async () => {

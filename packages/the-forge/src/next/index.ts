@@ -2,6 +2,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ensureSidecar } from './sidecar'
 import { resolveProjectRoot } from '../server/setup'
+import { DEVTOOLS_JSON_PATH } from '../server/endpoints'
 import type { DispatchOpts } from '../server/dispatch'
 
 // Never `import { PHASE_DEVELOPMENT_SERVER } from 'next'` — this module (and therefore the
@@ -152,15 +153,22 @@ function mergeRewritesWithSidecar(
   channelsFlag: boolean,
   root: string
 ): () => Promise<NextRewrites> {
-  const withSidecar = async (): Promise<NextRewriteRule> => {
+  // Two rules from the same ensureSidecar result: the existing catch-all proxy for the
+  // /__the-forge/* API surface, plus the Chrome DevTools well-known path (task A5) — the
+  // sidecar already serves DEVTOOLS_JSON_PATH through the identical createForgeMiddleware, so
+  // this is one more rewrite rule, not a new server/code path.
+  const withSidecar = async (): Promise<NextRewriteRule[]> => {
     const { port } = await ensureSidecar({ agent, channelsFlag, root })
-    return { source: '/__the-forge/:path*', destination: `http://127.0.0.1:${port}/__the-forge/:path*` }
+    return [
+      { source: '/__the-forge/:path*', destination: `http://127.0.0.1:${port}/__the-forge/:path*` },
+      { source: DEVTOOLS_JSON_PATH, destination: `http://127.0.0.1:${port}${DEVTOOLS_JSON_PATH}` },
+    ]
   }
 
   return async () => {
-    let forgeRule: NextRewriteRule | null = null
+    let forgeRules: NextRewriteRule[] = []
     try {
-      forgeRule = await withSidecar()
+      forgeRules = await withSidecar()
     } catch (err) {
       // Sidecar failure is never load-bearing (spec: Next dev continues unaffected) — warn
       // once per process and fall through to the user's rewrites untouched. Design mode is
@@ -172,15 +180,15 @@ function mergeRewritesWithSidecar(
       }
     }
 
-    if (!userRewrites) return forgeRule ? [forgeRule] : []
+    if (!userRewrites) return forgeRules
 
     const existing = await userRewrites()
-    if (!forgeRule) return existing
+    if (forgeRules.length === 0) return existing
 
-    if (Array.isArray(existing)) return [forgeRule, ...existing]
+    if (Array.isArray(existing)) return [...forgeRules, ...existing]
     return {
       ...existing,
-      beforeFiles: [forgeRule, ...(existing.beforeFiles ?? [])],
+      beforeFiles: [...forgeRules, ...(existing.beforeFiles ?? [])],
     }
   }
 }

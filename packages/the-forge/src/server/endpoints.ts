@@ -4,6 +4,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Queue } from './queue'
 import { dispatch as realDispatch, augmentDispatchMarkdown, type DispatchOpts, type DispatchResult } from './dispatch'
 import { WatcherHub } from './watchers'
+import { ensureDevtoolsUuid } from './setup'
+
+/** Chrome DevTools' Automatic Workspace Folders well-known path (task A5) — served by
+ * createForgeMiddleware below and proxied to it by src/next/index.ts's rewrites merge.
+ * Exported so next/index.ts imports this constant rather than duplicating the string. */
+export const DEVTOOLS_JSON_PATH = '/.well-known/appspecific/com.chrome.devtools.json'
 
 const MAX_BODY = 1024 * 1024
 
@@ -113,6 +119,26 @@ export function createForgeMiddleware(
     })
   return (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     const url = req.url ?? ''
+
+    // Chrome DevTools' Automatic Workspace Folders probe — served BEFORE the /__the-forge/
+    // prefix gate below because its path lives outside that prefix. Only handled when
+    // dispatchConfig.cwd is set (the resolved project root): legacy tests/callers that never
+    // pass a cwd get this route falling through to next() unchanged, same as before this route
+    // existed. Gated on isAllowedHost even though it needs no secret (DevTools can't send
+    // custom headers) — the response body is an absolute filesystem path, and a DNS-rebinding
+    // page tricking a browser into fetching this well-known URL must never be able to read it.
+    const [devtoolsPathname] = url.split('?')
+    if (devtoolsPathname === DEVTOOLS_JSON_PATH && dispatchConfig.cwd !== undefined) {
+      if (!isAllowedHost(req.headers.host, allowedHosts)) {
+        return send(res, 403, { error: 'host not allowed' })
+      }
+      if (req.method !== 'GET') return send(res, 405, { error: 'use GET' })
+      const forgeDir = path.join(dispatchConfig.cwd, '.the-forge')
+      return send(res, 200, {
+        workspace: { root: dispatchConfig.cwd, uuid: ensureDevtoolsUuid(forgeDir) },
+      })
+    }
+
     if (!url.startsWith('/__the-forge/')) return next()
 
     if (!isAllowedHost(req.headers.host, allowedHosts)) {
