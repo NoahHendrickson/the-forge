@@ -1,4 +1,5 @@
 import { DEFAULT_WIDTH } from './dock'
+import { createButton } from './ui/button'
 
 export const CSS = `
 [hidden] { display: none !important; }
@@ -352,11 +353,11 @@ button {
 
 export class Overlay {
   host = document.createElement('div')
-  toggle = document.createElement('button')
-  sendButton = document.createElement('button')
-  copyButton = document.createElement('button')
-  compareAllButton = document.createElement('button')
-  resetAllButton = document.createElement('button')
+  toggle = createButton()
+  sendButton = createButton()
+  copyButton = createButton()
+  compareAllButton = createButton()
+  resetAllButton = createButton()
 
   private outline = document.createElement('div')
   private selectOutline = document.createElement('div')

@@ -2,6 +2,8 @@ import type { TaggedElement } from './source'
 import type { InspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { NumberField } from './controls'
+import { createButton } from './ui/button'
+import { createSelect } from './ui/select'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { ColorPicker } from './colorpicker'
 import { TokenPicker, type TokenEntry } from './tokenpicker'
@@ -50,11 +52,11 @@ interface BoundSizeMode {
 
 export class Panel {
   root = document.createElement('div')
-  compareButton = document.createElement('button')
-  resetButton = document.createElement('button')
+  compareButton = createButton()
+  resetButton = createButton()
   footer = document.createElement('div')
   resizeHandle = document.createElement('div')
-  modeButton = document.createElement('button')
+  modeButton = createButton()
 
   private head = document.createElement('div')
   private headTag = document.createElement('div')
@@ -654,8 +656,7 @@ export class Panel {
         const expandWrap = document.createElement('div')
         expandWrap.className = 'panel-rows'
         expandWrap.hidden = !(this.expandState.get(expandKey) ?? false)
-        const btn = document.createElement('button')
-        btn.textContent = '⋯'
+        const btn = createButton({ label: '⋯' })
         btn.setAttribute('data-expand', expandKey)
         btn.addEventListener('click', () => {
           expandWrap.hidden = !expandWrap.hidden
@@ -684,8 +685,7 @@ export class Panel {
     const wrap = document.createElement('div')
     wrap.className = 'panel-rows layout-section'
 
-    const addBtn = document.createElement('button')
-    addBtn.textContent = '+ Add auto layout'
+    const addBtn = createButton({ label: '+ Add auto layout' })
     addBtn.setAttribute('data-add-layout', '')
     addBtn.addEventListener('click', () => {
       if (!this.el) return
@@ -825,8 +825,6 @@ export class Panel {
 
     if (!multi) {
       // Row 1 — Family.
-      const familySelect = document.createElement('select')
-      familySelect.className = 'size-mode type-family'
       const families = new Set<string>()
       if (this.el) {
         const current = firstFamily(getComputedStyle(this.el).getPropertyValue('font-family'))
@@ -834,37 +832,31 @@ export class Panel {
       }
       for (const f of documentFontFamilies()) families.add(f)
       for (const f of ['system-ui', 'serif', 'monospace']) families.add(f)
-      for (const f of families) {
-        const opt = document.createElement('option')
-        opt.value = f
-        opt.textContent = f
-        familySelect.append(opt)
-      }
-      familySelect.addEventListener('change', () => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        this.drafts.apply(this.el, 'font-family', cssFamilyValue(familySelect.value))
-        this.refresh()
-        this.onEdited()
+      const familySelect = createSelect({
+        className: 'type-family',
+        options: [...families].map((f) => ({ value: f, label: f })),
+        onChange: (value) => {
+          if (!this.el) return
+          this.onBeforeEdit(this.el)
+          this.drafts.apply(this.el, 'font-family', cssFamilyValue(value))
+          this.refresh()
+          this.onEdited()
+        },
       })
       this.typeFamilySelect = familySelect
       wrap.append(familySelect)
 
       // Row 2 — Weight.
-      const weightSelect = document.createElement('select')
-      weightSelect.className = 'size-mode type-weight'
-      for (const [value, label] of WEIGHTS) {
-        const opt = document.createElement('option')
-        opt.value = value
-        opt.textContent = label
-        weightSelect.append(opt)
-      }
-      weightSelect.addEventListener('change', () => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        this.drafts.apply(this.el, 'font-weight', weightSelect.value)
-        this.refresh()
-        this.onEdited()
+      const weightSelect = createSelect({
+        className: 'type-weight',
+        options: WEIGHTS.map(([value, label]) => ({ value, label })),
+        onChange: (value) => {
+          if (!this.el) return
+          this.onBeforeEdit(this.el)
+          this.drafts.apply(this.el, 'font-weight', value)
+          this.refresh()
+          this.onEdited()
+        },
       })
       this.typeWeightSelect = weightSelect
       wrap.append(weightSelect)
@@ -1038,25 +1030,21 @@ export class Panel {
     })
     row1.append(widthField.field.root)
 
-    const styleSelect = document.createElement('select')
-    styleSelect.className = 'size-mode stroke-style'
-    for (const [value, label] of [
-      ['none', 'None'],
-      ['solid', 'Solid'],
-      ['dashed', 'Dashed'],
-      ['dotted', 'Dotted'],
-    ] as const) {
-      const opt = document.createElement('option')
-      opt.value = value
-      opt.textContent = label
-      styleSelect.append(opt)
-    }
-    styleSelect.addEventListener('change', () => {
-      if (!this.el) return
-      this.onBeforeEdit(this.el)
-      for (const prop of BORDER_STYLE_PROPS) this.drafts.apply(this.el, prop, styleSelect.value)
-      this.refresh()
-      this.onEdited()
+    const styleSelect = createSelect({
+      className: 'stroke-style',
+      options: [
+        { value: 'none', label: 'None' },
+        { value: 'solid', label: 'Solid' },
+        { value: 'dashed', label: 'Dashed' },
+        { value: 'dotted', label: 'Dotted' },
+      ],
+      onChange: (value) => {
+        if (!this.el) return
+        this.onBeforeEdit(this.el)
+        for (const prop of BORDER_STYLE_PROPS) this.drafts.apply(this.el, prop, value)
+        this.refresh()
+        this.onEdited()
+      },
     })
     this.strokeStyleSelect = styleSelect
     row1.append(styleSelect)
@@ -1219,20 +1207,15 @@ export class Panel {
     row.className = 'size-row'
     row.append(bound.field.root)
 
-    const select = document.createElement('select')
-    select.className = 'size-mode'
-    for (const [value, label] of [
-      ['fixed', 'Fixed'],
-      ['hug', 'Hug'],
-      ['fill', 'Fill'],
-    ] as const) {
-      const opt = document.createElement('option')
-      opt.value = value
-      opt.textContent = label
-      select.append(opt)
-    }
-    select.addEventListener('change', () => {
-      this.onSizeModeChange(spec, select.value)
+    const select = createSelect({
+      options: [
+        { value: 'fixed', label: 'Fixed' },
+        { value: 'hug', label: 'Hug' },
+        { value: 'fill', label: 'Fill' },
+      ],
+      onChange: (value) => {
+        this.onSizeModeChange(spec, value)
+      },
     })
     row.append(select)
 
