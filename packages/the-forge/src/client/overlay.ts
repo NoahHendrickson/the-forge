@@ -248,6 +248,7 @@ button {
 
 .size-row { display: flex; gap: 4px; flex: 1 1 40%; min-width: 0; }
 .size-row .nf { flex: 1; }
+/* Data URIs can't reference custom properties, so the chevron's %239A9A9A stroke stays literal. */
 .size-mode {
   appearance: none; -webkit-appearance: none;
   background-color: var(--control);

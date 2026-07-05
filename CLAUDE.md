@@ -10,6 +10,7 @@ npm test                              # root gate: typecheck + full vitest suite
 npm run test:watch -w the-forge       # vitest watch mode
 npm run typecheck -w the-forge        # tsc --noEmit only
 npm run dev -w demo-app               # Vite demo (fixtures/demo-app); Design toggle bottom-right
+npm run storybook -w the-forge        # component catalog (overlay atoms), port 6006
 npm run dev -w next-demo              # Next demo, App Router + Turbopack (fixtures/next-demo, port 5175)
 npm run dev:webpack -w next-demo      # same fixture, forced webpack dev bundler
 npm run dev -w next-pages             # Next demo, Pages Router (fixtures/next-pages, port 5176)
@@ -62,6 +63,8 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `request.ts` | change-request builder: before/after CSS + utility deltas, markdown |
 | `verifier.ts` | post-send polling, computed-style verification, backoff when server is gone |
 | `watch.ts` | watcher-state poller (design-mode-on only) for the linked-session indicator |
+| `ui/button.ts` | `createButton` — the single place overlay buttons are born |
+| `ui/select.ts` | `createSelect` — the `.size-mode` dropdown factory |
 
 ## MCP contract
 
@@ -88,6 +91,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 - One dated plan per milestone in `docs/plans/` (contract + test-sketch style); brainstorm with the user first, then plan, then a feature branch per milestone. Merge decision always belongs to the user.
 - Tests mirror `src/` (`tests/client/panel.test.ts` covers `src/client/panel.ts`); the root `npm test` is the gate.
 - Panel/overlay CSS class names are test hooks — extend, don't rename.
+- New buttons/selects anywhere in the overlay go through `src/client/ui/` factories — never raw `document.createElement`; stories live in `packages/the-forge/stories/` and render the real controls.
 - Why-comments are load-bearing project memory. Preserve them verbatim when moving code; never trim them as "verbose".
 - `unknown` + manual checks at I/O boundaries is deliberate — no schema libraries.
 - Any plugin-written on-disk artifact (`.mcp.json`, command files, `.the-forge/`) installs at `resolveProjectRoot()` — the git root — never Vite's (or Next's) root (monorepo lesson from first real use).

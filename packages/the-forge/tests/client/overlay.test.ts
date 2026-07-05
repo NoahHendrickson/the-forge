@@ -171,8 +171,8 @@ describe('Overlay CSS design tokens (Task 1)', () => {
   it('font shorthands reference the font-family and type-scale tokens via var()', () => {
     expect(CSS).toContain('font: 500 var(--text-md) var(--font-ui)')
     expect(CSS).toContain('var(--font-mono)')
-    expect(CSS).not.toMatch(/font:\s*[0-9]+\s+1[0-2]px\s+system-ui/)
-    expect(CSS).not.toMatch(/font:\s*[0-9]+\s+1[0-2]px\s+ui-monospace/)
+    expect(CSS).not.toMatch(/font:\s*[0-9]+\s+[0-9]+(\.[0-9]+)?px\s+system-ui/)
+    expect(CSS).not.toMatch(/font:\s*[0-9]+\s+[0-9]+(\.[0-9]+)?px\s+ui-monospace/)
   })
 
   it('literals intentionally left alone by the sweep rule remain untouched', () => {
@@ -188,6 +188,7 @@ describe('Overlay CSS design tokens (Task 1)', () => {
     // Accent-alpha fills
     expect(CSS).toContain('rgba(13,153,255,0.15)')
     expect(CSS).toContain('rgba(13,153,255,0.25)')
+    expect(CSS).toContain('rgba(13,153,255,0.12)')
   })
 })
 
