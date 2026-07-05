@@ -119,8 +119,11 @@ export class PanelTokenUi {
 - `boundTokens.delete(...)` sites → `this.tokenUi.drop(spec)` (sizeMode-auto ×2,
   allowAuto ×1, gap-auto ×1 — keep the setAuto-supersedes-pill comments in place) and in the
   two onDetach handlers (their comments stay).
-- `boundTokens.clear()` sites (drafts-reset callback, `hide()`) → `this.tokenUi.clear()` —
+- `boundTokens.clear()` sites (drafts-reset callback, `show()`) → `this.tokenUi.clear()` —
   the reset why-comment stays at the call site (it explains PANEL's reset semantics).
+  [Correction from the final review: this line originally said `hide()`, and the constructor
+  rule below mentioned a `destroy()` lifecycle site — at base, the clears were in the reset
+  callback and `show()`, and no picker-destroy existed; the implementation followed the code.]
 - Constructor: `this.tokenUi = new PanelTokenUi(this.body, () => this.el)` replaces
   `new TokenPicker(this.body)`; exclusion wiring becomes
   `this.tokenUi.picker.beforeOpen = () => this.colorPicker.close()` and the colorPicker
