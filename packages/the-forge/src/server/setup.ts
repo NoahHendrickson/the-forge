@@ -82,6 +82,42 @@ const HISTORICAL_DESIGN_COMMANDS = [
 
 const GIT_WALK_MAX_LEVELS = 10
 
+/** Lines that already keep `.the-forge/` out of scanners/VCS — any one of these means we
+ * write nothing. Deliberately a small exact-match set (after trim), not a glob matcher:
+ * false negatives just append one redundant-but-harmless line; false positives would skip
+ * the load-bearing fix. */
+const GITIGNORE_COVERING_LINES = new Set(['.the-forge', '.the-forge/', '**/.the-forge/', '.the-forge/**'])
+
+/**
+ * Ensures the project root's .gitignore covers `.the-forge/`. This is load-bearing, not
+ * housekeeping: Tailwind v4's file scanner respects .gitignore, and an UNignored
+ * `.the-forge/queue.json` (whose change-request markdown is made of Tailwind class names)
+ * becomes a scan dependency — after which every Send's queue write triggers a full page
+ * reload that wipes the overlay mid-session (root cause of "panel closes on Send",
+ * reproduced 2026-07-05; see docs/specs/2026-07-05-send-lifecycle-design.md).
+ * Append-only and idempotent, same warn-and-continue I/O posture as the other install
+ * side-effects — a read-only FS must never break the dev server.
+ */
+export function ensureGitignoreEntry(root: string): void {
+  const file = path.join(root, '.gitignore')
+  let raw = ''
+  try {
+    raw = fs.readFileSync(file, 'utf8')
+  } catch {
+    raw = '' // no .gitignore yet — create one below
+  }
+  const covered = raw.split(/\r?\n/).some((line) => GITIGNORE_COVERING_LINES.has(line.trim()))
+  if (covered) return
+  const sep = raw === '' ? '' : raw.endsWith('\n') ? '' : '\n'
+  try {
+    fs.writeFileSync(file, `${raw}${sep}\n# The Forge runtime state (dev-only)\n.the-forge/\n`)
+  } catch {
+    console.warn(
+      '[the-forge] could not update .gitignore — add ".the-forge/" to it manually, or queue writes may trigger full page reloads in dev'
+    )
+  }
+}
+
 /**
  * Resolves the actual project root by walking up from Vite's config root looking for a
  * directory containing `.git`, capped at GIT_WALK_MAX_LEVELS. Falls back to the vite root
@@ -249,6 +285,7 @@ export function setupProjectConfig(
   // to compile here too, or it would silently skip its per-agent config registration.
   agent: DispatchOpts['agent'] = 'claude-code'
 ): void {
+  ensureGitignoreEntry(root)
   ensureMcpEntry(path.join(root, '.mcp.json'), mcpBinPath, '.mcp.json')
 
   // Cursor reads project MCP servers from .cursor/mcp.json (same mcpServers schema). Written

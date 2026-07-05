@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { setupProjectConfig, resolveProjectRoot, migrateLegacyForgeDir, HISTORICAL_WATCH_COMMANDS } from '../../src/server/setup'
+import { setupProjectConfig, resolveProjectRoot, migrateLegacyForgeDir, HISTORICAL_WATCH_COMMANDS, ensureGitignoreEntry } from '../../src/server/setup'
 import { Queue } from '../../src/server/queue'
 
 let root: string
@@ -483,5 +483,75 @@ describe('migrateLegacyForgeDir (BUG: forgeDir/.the-forge moves from vite root t
     expect(fs.existsSync(path.join(legacyDir, 'queue.json'))).toBe(false)
     expect(fs.existsSync(endpointFile)).toBe(true)
     expect(fs.existsSync(legacyDir)).toBe(true)
+  })
+})
+
+describe('ensureGitignoreEntry', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-gitignore-'))
+  })
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('creates .gitignore with the entry when the file does not exist', () => {
+    ensureGitignoreEntry(dir)
+    const content = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')
+    expect(content).toContain('.the-forge/')
+    expect(content).toContain('# The Forge runtime state (dev-only)')
+  })
+
+  it('appends to an existing .gitignore without touching existing content', () => {
+    fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules\ndist\n')
+    ensureGitignoreEntry(dir)
+    const content = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')
+    expect(content.startsWith('node_modules\ndist\n')).toBe(true)
+    expect(content).toContain('.the-forge/')
+  })
+
+  it('adds a separating newline when the existing file lacks a trailing one', () => {
+    fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules')
+    ensureGitignoreEntry(dir)
+    const content = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')
+    expect(content).toContain('node_modules\n')
+    expect(content).not.toContain('node_modules#')
+  })
+
+  it.each(['.the-forge', '.the-forge/', '**/.the-forge/', '.the-forge/**'])(
+    'is a no-op when an existing line already covers the dir (%s)',
+    (line) => {
+      const before = `node_modules\n${line}\n`
+      fs.writeFileSync(path.join(dir, '.gitignore'), before)
+      ensureGitignoreEntry(dir)
+      expect(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')).toBe(before)
+    }
+  )
+
+  it('recognizes a covering line surrounded by whitespace', () => {
+    const before = 'node_modules\n  .the-forge/  \n'
+    fs.writeFileSync(path.join(dir, '.gitignore'), before)
+    ensureGitignoreEntry(dir)
+    expect(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')).toBe(before)
+  })
+
+  it('is idempotent across repeated calls', () => {
+    ensureGitignoreEntry(dir)
+    const first = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')
+    ensureGitignoreEntry(dir)
+    expect(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')).toBe(first)
+  })
+
+  it('does not throw when the directory is not writable', () => {
+    // Simulate a read-only project the same way the suite tests other warn-and-continue
+    // paths: point at a path that cannot exist as a directory.
+    const file = path.join(dir, 'not-a-dir')
+    fs.writeFileSync(file, '')
+    expect(() => ensureGitignoreEntry(path.join(file, 'nested'))).not.toThrow()
+  })
+
+  it('is called by setupProjectConfig', () => {
+    setupProjectConfig(dir, '/fake/mcp.js')
+    expect(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')).toContain('.the-forge/')
   })
 })
