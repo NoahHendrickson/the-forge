@@ -219,4 +219,38 @@ describe('withForge', () => {
 
     warnSpy.mockRestore()
   })
+
+  describe('webpack watchOptions.ignored', () => {
+    const GLOB = '**/.the-forge/**'
+    async function chained(userConfig: Record<string, unknown> = {}) {
+      const fn = withForge(userConfig)
+      const cfg = await fn('phase-development-server', { defaultConfig: {} })
+      return cfg.webpack!
+    }
+
+    it('adds the glob when watchOptions is absent', async () => {
+      const webpack = await chained()
+      const out = webpack({}, {}) as { watchOptions?: { ignored?: unknown } }
+      expect(out.watchOptions?.ignored).toEqual([GLOB])
+    })
+
+    it('preserves an existing string ignore', async () => {
+      const webpack = await chained({ webpack: (c: Record<string, unknown>) => ({ ...c, watchOptions: { ignored: '**/tmp/**' } }) })
+      const out = webpack({}, {}) as { watchOptions?: { ignored?: unknown } }
+      expect(out.watchOptions?.ignored).toEqual(['**/tmp/**', GLOB])
+    })
+
+    it('appends to an existing array without duplicating', async () => {
+      const webpack = await chained({ webpack: (c: Record<string, unknown>) => ({ ...c, watchOptions: { ignored: ['**/tmp/**', GLOB] } }) })
+      const out = webpack({}, {}) as { watchOptions?: { ignored?: unknown } }
+      expect(out.watchOptions?.ignored).toEqual(['**/tmp/**', GLOB])
+    })
+
+    it('leaves a RegExp ignore untouched (globs cannot be mixed in)', async () => {
+      const re = /tmp/
+      const webpack = await chained({ webpack: (c: Record<string, unknown>) => ({ ...c, watchOptions: { ignored: re } }) })
+      const out = webpack({}, {}) as { watchOptions?: { ignored?: unknown } }
+      expect(out.watchOptions?.ignored).toBe(re)
+    })
+  })
 })
