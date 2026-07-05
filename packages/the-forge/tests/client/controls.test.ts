@@ -15,7 +15,7 @@ function make(
     onRelative: (apply: (current: number) => number) => void
     onScrubStart: () => void
     onDetach: () => void
-    onTokenKey: () => void
+    onTokenOpen: () => void
   }> = {}
 ) {
   const onInput = vi.fn()
@@ -494,30 +494,62 @@ describe('NumberField v3 — pill API', () => {
   })
 })
 
-describe('NumberField — onTokenKey (`=` opens token picker)', () => {
-  it('`=` keydown fires onTokenKey and prevents default when not pill-bound', () => {
-    const onTokenKey = vi.fn()
-    const { input } = make({ onTokenKey })
+describe('NumberField — `=` key routes to onTokenOpen (pill-gated)', () => {
+  it('`=` keydown fires onTokenOpen and prevents default when not pill-bound', () => {
+    const onTokenOpen = vi.fn()
+    const { input } = make({ onTokenOpen })
     const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
     input.dispatchEvent(ev)
-    expect(onTokenKey).toHaveBeenCalledTimes(1)
+    expect(onTokenOpen).toHaveBeenCalledTimes(1)
     expect(ev.defaultPrevented).toBe(true)
   })
 
-  it('`=` keydown while pill-bound does nothing (no onTokenKey call)', () => {
-    const onTokenKey = vi.fn()
-    const { nf, input } = make({ onTokenKey })
+  it('`=` keydown while pill-bound does nothing (pill gating is the `=` path\'s own policy)', () => {
+    const onTokenOpen = vi.fn()
+    const { nf, input } = make({ onTokenOpen })
     nf.set(10)
     nf.bindToken('p-4')
     const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
     input.dispatchEvent(ev)
-    expect(onTokenKey).not.toHaveBeenCalled()
+    expect(onTokenOpen).not.toHaveBeenCalled()
     expect(ev.defaultPrevented).toBe(false)
   })
 
-  it('`=` keydown without onTokenKey wired is a harmless no-op', () => {
+  it('`=` keydown without onTokenOpen wired is a harmless no-op', () => {
     const { input } = make()
     const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
     expect(() => input.dispatchEvent(ev)).not.toThrow()
+  })
+})
+
+describe('NumberField — onTokenOpen (`{ }` hover icon button)', () => {
+  it('no onTokenOpen → no .token-btn rendered', () => {
+    const { nf } = make()
+    expect(nf.root.querySelector('.token-btn')).toBeNull()
+  })
+
+  it('with onTokenOpen → button exists inside .nf, has the right title, and click() fires the callback once', () => {
+    const onTokenOpen = vi.fn()
+    const { nf } = make({ onTokenOpen })
+    const btn = nf.root.querySelector('.token-btn') as HTMLButtonElement
+    expect(btn).not.toBeNull()
+    expect(nf.root.classList.contains('nf')).toBe(true)
+    expect(btn.title).toBe('Use design token')
+    btn.click()
+    expect(onTokenOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it('after bindToken(), click() still fires onTokenOpen (swap-while-bound), while `=` stays pill-gated on the SAME callback', () => {
+    const onTokenOpen = vi.fn()
+    const { nf, input } = make({ onTokenOpen })
+    nf.set(10)
+    nf.bindToken('px-4')
+    const btn = nf.root.querySelector('.token-btn') as HTMLButtonElement
+    btn.click()
+    expect(onTokenOpen).toHaveBeenCalledTimes(1)
+    const ev = new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true })
+    input.dispatchEvent(ev)
+    // one callback, two triggers: the button fired it once above; the pill-gated `=` adds nothing
+    expect(onTokenOpen).toHaveBeenCalledTimes(1)
   })
 })

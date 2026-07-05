@@ -117,6 +117,20 @@ describe('ColorPicker', () => {
     expect(rowNames).toContainEqual(['white', 'black'])
   })
 
+  it('every .cp-swatch rendered in the palette has title === token name', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, initial: '#ff0000', contrastAgainst: null, onPick: vi.fn() })
+    const swatches = picker.root.querySelectorAll('.cp-swatch')
+    expect(swatches.length).toBe(TOKENS.colors.length)
+    for (const swatch of swatches) {
+      const title = swatch.getAttribute('title')
+      const matchingToken = TOKENS.colors.find((t) => t.name === title)
+      expect(matchingToken).toBeDefined()
+      expect(title).toBeTruthy()
+    }
+  })
+
   it('close() hides the popover', () => {
     const { picker } = setupPicker()
     const anchor = anchorEl()

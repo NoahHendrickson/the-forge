@@ -148,10 +148,49 @@ describe('TokenPicker', () => {
     picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
     const rows = [...picker.root.querySelectorAll('.tp-row')]
     rows[3].dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))
-    // renderList() rebuilds row DOM on every state change (mirrors ColorPicker's re-render
-    // pattern) — re-query rather than reuse the stale pre-hover node reference.
+    // hover toggles tp-row-active in place (see the node-identity regression test below) —
+    // rebuilds only happen on applyFilter/open, so re-query is only needed after filtering.
     const rowsAfter = [...picker.root.querySelectorAll('.tp-row')]
     expect(rowsAfter[3].classList.contains('tp-row-active')).toBe(true)
+  })
+
+  it('hover toggles tp-row-active IN PLACE — never rebuilds the row nodes (real-browser regression)', () => {
+    // Under a real pointer, replaceChildren() on mouseenter replaces the hovered node at the
+    // same coordinates, which makes Chromium immediately re-fire mouseenter on the replacement
+    // -> infinite render loop, starving the row's own mousedown/click. jsdom never fires real
+    // hover so this only shows up as a node-identity break in a unit test, not a timeout.
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    const listEl = picker.root.querySelector('.tp-list') as HTMLElement
+    const rowsBefore = [...listEl.children]
+
+    rowsBefore[3].dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))
+
+    const rowsAfter = [...listEl.children]
+    expect(rowsAfter[3]).toBe(rowsBefore[3])
+    expect(rowsAfter[3].classList.contains('tp-row-active')).toBe(true)
+    // Previously-hovered row identity is unaffected, and its active class is cleared.
+    rowsBefore[1].dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))
+    const rowsAfter2 = [...listEl.children]
+    expect(rowsAfter2[1]).toBe(rowsBefore[1])
+    expect(rowsAfter2[1].classList.contains('tp-row-active')).toBe(true)
+    expect(rowsAfter2[3].classList.contains('tp-row-active')).toBe(false)
+  })
+
+  it('keyboard ArrowDown moves the active row in place — never rebuilds the row nodes', () => {
+    const { picker } = setupPicker()
+    const anchor = anchorEl()
+    picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
+    const listEl = picker.root.querySelector('.tp-list') as HTMLElement
+    const rowsBefore = [...listEl.children]
+    const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+
+    search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+
+    const rowsAfter = [...listEl.children]
+    expect(rowsAfter).toEqual(rowsBefore) // same node objects, same order
+    expect(rowsAfter[0].classList.contains('tp-row-active')).toBe(true)
   })
 
   it('Escape closes the picker', () => {
@@ -283,5 +322,65 @@ describe('TokenPicker', () => {
     const { picker } = setupPicker()
     const anchor = anchorEl()
     expect(() => picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })).not.toThrow()
+  })
+
+  describe('color entries', () => {
+    const COLOR_ENTRIES: TokenEntry[] = [
+      { label: 'red-500', color: '#ef4444' },
+      { label: 'neutral-900', color: 'oklch(0.2 0 0)' },
+    ]
+
+    it('renders a swatch + label, no px span, for color entries', () => {
+      const { picker } = setupPicker()
+      const anchor = anchorEl()
+      picker.open({ anchor, entries: COLOR_ENTRIES, onApply: vi.fn() })
+      const rows = [...picker.root.querySelectorAll('.tp-row')]
+      expect(rows.length).toBe(COLOR_ENTRIES.length)
+
+      const row0 = rows[0]
+      const swatch = row0.querySelector('.tp-row-swatch') as HTMLElement
+      expect(swatch).not.toBeNull()
+      // jsdom normalizes hex to rgb() in style.background.
+      expect(swatch.style.background).toBe('rgb(239, 68, 68)')
+
+      const label = row0.querySelector('.tp-row-label') as HTMLElement
+      expect(label.textContent).toBe('red-500')
+
+      expect(row0.querySelector('.tp-row-px')).toBeNull()
+    })
+
+    it('search filters color entries by label', () => {
+      const { picker } = setupPicker()
+      const anchor = anchorEl()
+      picker.open({ anchor, entries: COLOR_ENTRIES, onApply: vi.fn() })
+      const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+      search.value = 'neutral'
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+      const rows = [...picker.root.querySelectorAll('.tp-row')]
+      expect(rows.length).toBe(1)
+      expect(rows[0].textContent).toContain('neutral-900')
+    })
+
+    it('Enter commits the keyboard-active color entry via onApply intact', () => {
+      const { picker } = setupPicker()
+      const anchor = anchorEl()
+      const onApply = vi.fn()
+      picker.open({ anchor, entries: COLOR_ENTRIES, onApply })
+      const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      expect(onApply).toHaveBeenCalledWith(COLOR_ENTRIES[0])
+    })
+
+    it('clicking a color row applies that entry via onApply intact and closes', () => {
+      const { picker } = setupPicker()
+      const anchor = anchorEl()
+      const onApply = vi.fn()
+      picker.open({ anchor, entries: COLOR_ENTRIES, onApply })
+      const rows = [...picker.root.querySelectorAll('.tp-row')]
+      ;(rows[1] as HTMLElement).click()
+      expect(onApply).toHaveBeenCalledWith(COLOR_ENTRIES[1])
+      expect(picker.root.hidden).toBe(true)
+    })
   })
 })

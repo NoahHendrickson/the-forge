@@ -7,8 +7,8 @@ import { createSelect } from './ui/select'
 import { createColorRow } from './ui/swatch'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { ColorPicker } from './colorpicker'
-import { TokenPicker, type TokenEntry } from './tokenpicker'
-import { nearestColorToken, readTokens, readTheme, parseColor as parseColorLocal, rgbToHex } from './tokens'
+import { PanelTokenUi, colorDisplay } from './panel-token-ui'
+import { readTokens, readTheme, parseColor as parseColorLocal } from './tokens'
 import {
   type RowSpec,
   type SectionSpec,
@@ -16,9 +16,9 @@ import {
   BORDER_STYLE_PROPS,
   BORDER_COLOR_PROPS,
   GAP_SPEC,
-  utilityPrefixFor,
   draftSolidIfNone,
   tokenEntriesFor,
+  colorTokenEntries,
   WEIGHTS,
   STROKE_STYLES,
   SIZE_MODES,
@@ -39,7 +39,7 @@ import {
   mainAxisProp,
 } from './panel-readers'
 
-export { tokenEntriesFor } from './panel-specs'
+export { tokenEntriesFor, colorTokenEntries } from './panel-specs'
 export { normalizeJustify, normalizeAlign, hasDirectText } from './panel-readers'
 
 interface BoundField {
@@ -131,15 +131,8 @@ export class Panel {
 
   // Single Panel-level TokenPicker instance (B5) shared by every NumberField's `=` key —
   // closed whenever the selection changes (show()/hide()), same lifecycle as colorPicker.
-  private tokenPicker: TokenPicker
-
-  // Bound token pills, keyed by the owning field's spec.props.join(',') (a stable per-field
-  // identity — see MULTI_PROP_SYNTHETIC above). B1's set()/setMixed()/setAuto() unconditionally
-  // clear a field's pill state, so a plain refresh() would silently drop every bound pill even
-  // when nothing about that field changed. This map lets refresh() re-apply bindToken() when
-  // the field's current (draft-or-computed) value still matches what was bound — cleared
-  // wholesale on selection change (show()), and per-entry when the value diverges (refresh()).
-  private boundTokens = new Map<string, { label: string; px: number }>()
+  // Owned by PanelTokenUi, which also owns the bound-pill bookkeeping (see its class docs).
+  private tokenUi: PanelTokenUi
 
   constructor(
     private drafts: DraftStore,
@@ -175,7 +168,7 @@ export class Panel {
       // Reset must clear pill bookkeeping wholesale, not just per-field on divergence — a
       // coincidentally-equal original value (e.g. the author's own inline px matches a
       // scale step) would otherwise resurrect a pill backed by no draft at all.
-      this.boundTokens.clear()
+      this.tokenUi.clear()
       this.refresh()
       this.onEdited()
     })
@@ -197,22 +190,19 @@ export class Panel {
     // the popover stops tracking its row the moment the sections scroll (see overlay.ts
     // .panel-body comment).
     this.colorPicker = new ColorPicker(this.body)
-    this.tokenPicker = new TokenPicker(this.body)
+    this.tokenUi = new PanelTokenUi(this.body, () => this.el)
     // Mutual exclusivity (final review fix #11): opening one popover must close the other —
     // two open at once would overlap/fight for the same anchor-relative position. Wired here
-    // (wrapping each instance's own open(), rather than editing every call site or having the
-    // components import each other) so ColorPicker and TokenPicker stay fully decoupled from
-    // one another; only Panel, which holds both instances, knows they're mutually exclusive.
+    // so ColorPicker and TokenPicker stay fully decoupled from one another; only Panel, which
+    // holds both instances, knows they're mutually exclusive. TokenPicker exposes a beforeOpen
+    // hook instead of having its open() wrapped — monkey-patching a generic method would erase
+    // the per-call entry typing open<E>() provides (PR #6 review).
     const colorPickerOpen = this.colorPicker.open.bind(this.colorPicker)
     this.colorPicker.open = (opts) => {
-      this.tokenPicker.close()
+      this.tokenUi.picker.close()
       colorPickerOpen(opts)
     }
-    const tokenPickerOpen = this.tokenPicker.open.bind(this.tokenPicker)
-    this.tokenPicker.open = (opts) => {
-      this.colorPicker.close()
-      tokenPickerOpen(opts)
-    }
+    this.tokenUi.picker.beforeOpen = () => this.colorPicker.close()
   }
 
   show(elOrEls: TaggedElement | TaggedElement[], data: InspectorData): void {
@@ -221,8 +211,8 @@ export class Panel {
     const el = els[0] ?? null
     this.el = el
     this.colorPicker.close()
-    this.tokenPicker.close()
-    this.boundTokens.clear()
+    this.tokenUi.picker.close()
+    this.tokenUi.clear()
     this.root.hidden = false
     this.actions.hidden = false
     this.body.hidden = false
@@ -259,7 +249,7 @@ export class Panel {
     this.el = null
     this.els = []
     this.colorPicker.close()
-    this.tokenPicker.close()
+    this.tokenUi.picker.close()
     if (this.docked) {
       // Docked empty state: root stays visible (the dock holds its space), header says
       // why the controls are gone, footer (status strip) remains usable.
@@ -346,12 +336,12 @@ export class Panel {
         const draft = this.drafts.isComparing(el) ? null : this.drafts.current(el, spec.props[0])
         if (draft === 'auto') {
           field.setAuto()
-          this.boundTokens.delete(spec.props.join(','))
+          this.tokenUi.drop(spec)
           continue
         }
         if (draft === null && !this.drafts.isComparing(el) && el.style.getPropertyValue(spec.props[0]) === 'auto') {
           field.setAuto()
-          this.boundTokens.delete(spec.props.join(','))
+          this.tokenUi.drop(spec)
           continue
         }
       }
@@ -361,7 +351,7 @@ export class Panel {
         const css = this.currentValue(el, spec.props[0], computed)
         if (css === (spec.autoCss ?? 'normal')) {
           field.setAuto()
-          this.boundTokens.delete(spec.props.join(','))
+          this.tokenUi.drop(spec)
           continue
         }
       }
@@ -373,24 +363,8 @@ export class Panel {
       else field.set(values[0])
       if (multi) continue // no token-pill bookkeeping across a multi-selection
 
-      // B5: set() above unconditionally cleared any pill (B1 contract) — re-apply it when
-      // this field has a bound token AND the just-read value still equals the bound px
-      // (same-field refresh with an unchanged draft). A DIFFERING value (user edited the
-      // field directly, or a different draft arrived) leaves the pill cleared and drops
-      // the stale entry from boundTokens so it doesn't keep getting checked forever.
-      //
-      // Compare mode is an exception to BOTH halves of that: while comparing, `values`
-      // was read from the ORIGINAL (pre-draft) computed style, not the live draft, so it
-      // diverging from bound.px is expected and must NOT be treated as "the user changed
-      // it" — skip the delete so un-compare can still re-bind. And the pill itself must
-      // stay hidden while comparing (a pristine-preview state showing a token pill would
-      // lie about what's actually drafted), so skip the bindToken call too.
-      const key = spec.props.join(',')
-      const bound = this.boundTokens.get(key)
-      if (bound && !this.drafts.isComparing(el)) {
-        if (!mixed && values[0] === bound.px) field.bindToken(bound.label)
-        else this.boundTokens.delete(key)
-      }
+      // B5 re-bind contract — see PanelTokenUi.rebind
+      this.tokenUi.rebind(spec, field, values[0], mixed, this.drafts.isComparing(el))
     }
 
     if (!multi) {
@@ -424,28 +398,20 @@ export class Panel {
     this.wrapField?.set(wrap === 'wrap' ? 'wrap' : 'nowrap')
 
     if (this.gapField) {
-      const gapKey = GAP_SPEC.props.join(',')
       if (spaceBetween) {
         // setAuto (Figma "space it out for me") supersedes any bound pill — same rule as
         // the sizeMode W/H auto-continue path above: a switch to Auto must clear the
         // bookkeeping, not just the visible pill, so a later equal-px value can't resurrect it.
         this.gapField.setAuto()
-        this.boundTokens.delete(gapKey)
+        this.tokenUi.drop(GAP_SPEC)
       } else {
         const gapCss = this.drafts.isComparing(el) ? null : this.drafts.current(el, 'gap')
         const css = gapCss ?? computed.getPropertyValue('gap')
         const value = fromPx(css)
         this.gapField.set(value)
 
-        // Same B5 re-bind contract as the generic field loop above (including the Compare
-        // exception from B5's Compare-round-trip fix): skip while comparing so the pristine
-        // preview state never shows a pill, and don't drop the entry on a Compare-induced
-        // "divergence" that isn't really a user edit.
-        const bound = this.boundTokens.get(gapKey)
-        if (bound && !this.drafts.isComparing(el)) {
-          if (value === bound.px) this.gapField.bindToken(bound.label)
-          else this.boundTokens.delete(gapKey)
-        }
+        // B5 re-bind contract — see PanelTokenUi.rebind
+        this.tokenUi.rebind(GAP_SPEC, this.gapField, value, false, this.drafts.isComparing(el))
       }
     }
 
@@ -745,44 +711,33 @@ export class Panel {
     const side = document.createElement('div')
     side.className = 'layout-side'
 
+    // Shared absolute-commit path for gap — the field's own onInput AND the token picker's
+    // apply route through it, so the two can't drift (PR #6 review: the picker's inlined
+    // commit body was byte-equivalent to onInput).
+    const commitGap = (n: number): void => {
+      if (!this.el) return
+      this.onBeforeEdit(this.el)
+      this.drafts.apply(this.el, 'gap', px(n))
+      this.refresh()
+      this.onEdited()
+    }
+
     this.gapField = new NumberField({
       label: 'Gap',
       min: 0,
       allowAuto: true,
-      onInput: (n) => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        this.drafts.apply(this.el, 'gap', px(n))
-        this.refresh()
-        this.onEdited()
-      },
+      onInput: commitGap,
       onDetach: () => {
         // Mirrors buildField's onDetach — drop the bookkeeping so a later refresh() doesn't
         // try to re-bind a pill the user explicitly detached via Backspace.
-        this.boundTokens.delete(GAP_SPEC.props.join(','))
+        this.tokenUi.drop(GAP_SPEC)
       },
-      onTokenKey: this.isMulti()
-        ? undefined
-        : () => {
-            if (!this.el || !this.gapField) return
-            const entries = tokenEntriesFor(GAP_SPEC, readTheme(), readTokens())
-            if (!entries) return
-            const field = this.gapField
-            this.tokenPicker.open({
-              anchor: field.root,
-              entries,
-              onApply: (entry) => {
-                if (!this.el) return
-                this.onBeforeEdit(this.el)
-                this.drafts.apply(this.el, 'gap', px(entry.px))
-                this.refresh()
-                this.onEdited()
-                const label = this.pillLabelFor(GAP_SPEC, entry)
-                field.bindToken(label)
-                this.boundTokens.set(GAP_SPEC.props.join(','), { label, px: entry.px })
-              },
-            })
-          },
+      onTokenOpen:
+        !this.isMulti() && tokenEntriesFor(GAP_SPEC, readTheme(), readTokens()) !== null
+          ? () => {
+              if (this.gapField) this.tokenUi.openScalePicker(GAP_SPEC, this.gapField, commitGap)
+            }
+          : undefined,
       onKeyword: (kw) => {
         if (!this.el || kw !== 'auto') return
         this.onBeforeEdit(this.el)
@@ -909,24 +864,6 @@ export class Panel {
     return wrap
   }
 
-  /** Renders a token name (exact nearestColorToken match) or a short hex fallback for display. */
-  private colorLabel(css: string): string {
-    const parsed = parseColorLocal(css)
-    if (!parsed) return css
-    // Fully-transparent always renders as the literal keyword — a nearest-token guess (which
-    // only compares r/g/b) would otherwise report some opaque color's name for a color that's
-    // actually invisible.
-    if (parsed.a === 0) return 'transparent'
-    // Token names are only claimed for fully-opaque colors — a semi-transparent value must
-    // show its own hex (with alpha) rather than borrowing an opaque token's name, even when
-    // the r/g/b channels coincide.
-    if (parsed.a === 1) {
-      const nearest = nearestColorToken(parsed, readTokens().colors)
-      if (nearest && nearest.distance === 0) return nearest.token.name
-    }
-    return rgbToHex(parsed.r, parsed.g, parsed.b, parsed.a)
-  }
-
   /** Builds a `.color-row` — swatch button + value text — wired to open the shared ColorPicker. */
   private buildColorRow(opts: {
     label: string
@@ -936,14 +873,31 @@ export class Panel {
   }): HTMLElement {
     const { row, swatch, swatchColor, valueEl } = createColorRow({ label: opts.label })
 
+    // Icon only when the theme actually offers color tokens AND we're on a single selection —
+    // mirrors the numeric fields' `onTokenOpen: !multi && ...` gate (controls.ts). Multi-select
+    // section-hiding already keeps this row out of reach, but the gate should be a true local
+    // invariant of the row itself, not something that only holds because a sibling hides it.
+    if (!this.isMulti() && colorTokenEntries(readTokens()) !== null) {
+      row.append(
+        this.tokenUi.colorTokenButton(row, (css) => {
+          if (!this.el) return
+          this.onBeforeEdit(this.el)
+          opts.onPick(css)
+          this.refresh()
+          this.onEdited()
+        })
+      )
+    }
+
     swatch.addEventListener('click', () => {
       this.colorPicker.open({
         anchor: row,
         initial: opts.getCss(),
         contrastAgainst: opts.getContrastAgainst(),
-        // `meta.token` (the exact token name, when the pick came from a palette swatch
-        // or nearest-token hint) is intentionally unused here — reserved surface for B5's
-        // token pills (showing which colors are backed by a design token) rather than dead code.
+        // `meta.token` (the exact token name, when the pick came from a palette swatch or
+        // nearest-token hint) is intentionally unused: the value chip's token pill is DERIVED
+        // from an exact-match check in colorDisplay() on every refresh, so a palette pick
+        // needs no special-casing here — it lands on token-space and pills automatically.
         onPick: (css, _meta) => {
           if (!this.el) return
           this.onBeforeEdit(this.el)
@@ -957,7 +911,9 @@ export class Panel {
     ;(row as HTMLElement & { __refresh?: () => void }).__refresh = () => {
       const css = opts.getCss()
       swatchColor.style.color = css
-      valueEl.textContent = this.colorLabel(css)
+      const display = colorDisplay(css)
+      valueEl.textContent = display.text
+      valueEl.classList.toggle('color-value-pill', display.token)
     }
     return row
   }
@@ -1104,7 +1060,7 @@ export class Panel {
     for (const group of this.groupSelectionColors()) {
       const { row, swatch, swatchColor, valueEl } = createColorRow({ className: 'sc-row' })
       swatchColor.style.color = group.css
-      valueEl.textContent = this.colorLabel(group.css)
+      valueEl.textContent = colorDisplay(group.css).text
 
       const countEl = document.createElement('span')
       countEl.className = 'sc-count'
@@ -1239,20 +1195,6 @@ export class Panel {
     this.onEdited()
   }
 
-  /**
-   * Full Tailwind utility label for a token-picker entry applied to `spec` (e.g. `px-4`,
-   * `rounded-md`, `text-sm`). Radius rows are NOT special-cased to `rounded-*` uniformly —
-   * a single-corner row (TL/TR/BR/BL, props.length === 1) must yield its own honest
-   * `rounded-tl-md`-style label via UTILITY_PREFIXES (utilityPrefixFor resolves each
-   * longhand's own prefix), while the linked R row (all 4 corners) resolves through
-   * MULTI_PROP_SYNTHETIC to the collapsed `rounded-md` form.
-   */
-  private pillLabelFor(spec: RowSpec, entry: TokenEntry): string {
-    if (spec.props.some((p) => p === 'font-size')) return `text-${entry.label}`
-    const prefix = utilityPrefixFor(spec.props) ?? spec.props[0]
-    return `${prefix}-${entry.label}`
-  }
-
   private buildField(spec: RowSpec): BoundField {
     // Shared commit path — used by the field's own onInput AND by the token picker's
     // onApply (per the brief: "call the SAME handler the field's onInput uses").
@@ -1368,25 +1310,12 @@ export class Panel {
         // Backspace on a pill: field.detach() (called by NumberField itself right after this)
         // restores the numeric display — drafts are untouched. Just drop the bookkeeping so a
         // later refresh() doesn't try to re-bind a pill the user explicitly detached.
-        this.boundTokens.delete(spec.props.join(','))
+        this.tokenUi.drop(spec)
       },
-      onTokenKey: multi
-        ? undefined
-        : () => {
-            if (!this.el) return
-            const entries = tokenEntriesFor(spec, readTheme(), readTokens())
-            if (!entries) return
-            this.tokenPicker.open({
-              anchor: field.root,
-              entries,
-              onApply: (entry) => {
-                commit(entry.px)
-                const label = this.pillLabelFor(spec, entry)
-                field.bindToken(label)
-                this.boundTokens.set(spec.props.join(','), { label, px: entry.px })
-              },
-            })
-          },
+      onTokenOpen:
+        !multi && tokenEntriesFor(spec, readTheme(), readTokens()) !== null
+          ? () => this.tokenUi.openScalePicker(spec, field, commit)
+          : undefined,
     })
     const bound: BoundField = { field, spec }
     this.fields.push(bound)

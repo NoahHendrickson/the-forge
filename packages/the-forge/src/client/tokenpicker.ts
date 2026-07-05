@@ -1,16 +1,26 @@
-export interface TokenEntry {
-  /** Suffix-free scale label — e.g. '4' (spacing), 'md' (radius), 'sm' (font-size). */
+/** Numeric scale entry (spacing/radius/text) — e.g. { label: '4', px: 16 }. */
+export interface ScaleEntry {
   label: string
   px: number
 }
 
-export interface OpenOpts {
+/** Named color token — e.g. { label: 'neutral-900', color: 'oklch(...)' }. */
+export interface ColorEntry {
+  label: string
+  color: string
+}
+
+export type TokenEntry = ScaleEntry | ColorEntry
+
+export interface OpenOpts<E extends TokenEntry = TokenEntry> {
   /** Row to align to — popover sits within the panel, top set from this element's offsetTop. */
   anchor: HTMLElement
-  /** Candidate entries for the anchored field's scale (spacing/radius/text). */
-  entries: TokenEntry[]
-  /** Fired when the user commits a row (Enter or click). */
-  onApply: (entry: TokenEntry) => void
+  /** Candidate entries for the anchored field: one numeric scale's steps, or the color palette. */
+  entries: E[]
+  /** Fired when the user commits a row (Enter or click) — typed to the entry kind the caller
+   * passed in `entries`, so scale callers read `.px` and color callers read `.color` with no
+   * union narrowing at the call site. */
+  onApply: (entry: E) => void
 }
 
 /**
@@ -20,6 +30,12 @@ export interface OpenOpts {
  */
 export class TokenPicker {
   root = document.createElement('div')
+
+  /** Invoked at the top of every open(). Panel points this at ColorPicker.close() so the two
+   * popovers stay mutually exclusive without either component importing the other — a hook
+   * rather than a Panel-side monkey-patch of open(), because reassigning a generic method
+   * would erase the per-call entry typing open() provides. */
+  beforeOpen: (() => void) | null = null
 
   private searchInput = document.createElement('input')
   private listEl = document.createElement('div')
@@ -64,9 +80,12 @@ export class TokenPicker {
     panelRoot.append(this.root)
   }
 
-  open(opts: OpenOpts): void {
+  open<E extends TokenEntry>(opts: OpenOpts<E>): void {
+    this.beforeOpen?.()
     this.entries = opts.entries
-    this.onApply = opts.onApply
+    // The cast is sound because entries and onApply travel together: commit() only ever
+    // feeds onApply entries taken from this.entries, which are E by construction.
+    this.onApply = opts.onApply as (entry: TokenEntry) => void
 
     this.root.hidden = false
     const top = (opts.anchor as unknown as { offsetTop: number }).offsetTop ?? 0
@@ -138,13 +157,23 @@ export class TokenPicker {
     } else {
       this.activeIndex = Math.min(this.filtered.length - 1, Math.max(0, this.activeIndex + delta))
     }
-    this.renderList()
+    this.updateActiveClasses()
     // Keep the keyboard-active row in view for long scale lists (e.g. the full spacing
     // scale) — jsdom elements don't implement scrollIntoView, so guard its existence.
     const activeRow = this.listEl.children[this.activeIndex] as (Element & { scrollIntoView?: (opts?: ScrollIntoViewOptions) => void }) | undefined
     if (activeRow && typeof activeRow.scrollIntoView === 'function') {
       activeRow.scrollIntoView({ block: 'nearest' })
     }
+  }
+
+  /** Toggles tp-row-active in place — hover/keyboard must NEVER rebuild the list:
+   *  replaceChildren under a live pointer re-fires mouseenter on the replacement node
+   *  (same coordinates), which re-rendered again, looping forever and starving the
+   *  row's own mousedown/click. Found by real-browser E2E; jsdom hover never sees it. */
+  private updateActiveClasses(): void {
+    Array.from(this.listEl.children).forEach((el, idx) => {
+      el.classList.toggle('tp-row-active', idx === this.activeIndex)
+    })
   }
 
   private applyActive(): void {
@@ -169,15 +198,23 @@ export class TokenPicker {
       labelEl.className = 'tp-row-label'
       labelEl.textContent = entry.label
 
-      const pxEl = document.createElement('span')
-      pxEl.className = 'tp-row-px'
-      pxEl.textContent = `${entry.px}px`
+      if ('color' in entry) {
+        const swatchEl = document.createElement('span')
+        swatchEl.className = 'tp-row-swatch'
+        swatchEl.style.background = entry.color
+        row.append(swatchEl, labelEl)
+      } else {
+        const pxEl = document.createElement('span')
+        pxEl.className = 'tp-row-px'
+        pxEl.textContent = `${entry.px}px`
 
-      row.append(labelEl, document.createTextNode(' — '), pxEl)
+        row.append(labelEl, document.createTextNode(' — '), pxEl)
+      }
 
       row.addEventListener('mouseenter', () => {
+        if (this.activeIndex === i) return
         this.activeIndex = i
-        this.renderList()
+        this.updateActiveClasses()
       })
       row.addEventListener('click', () => this.commit(entry))
 

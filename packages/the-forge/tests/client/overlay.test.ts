@@ -44,6 +44,12 @@ describe('Overlay CSS (Track A visibility correctness)', () => {
     expect(CSS).toMatch(/\.layout-side\s+\.nf\s*{\s*flex:\s*0\s+0\s+auto;?\s*}/)
   })
 
+  it('reveals the color row token-btn on keyboard focus-within, not just hover', () => {
+    // A Tabbed-to swatch button can only reveal .token-btn (display:none by default) via
+    // :focus-within — without this selector, the color-token dropdown is mouse-only.
+    expect(CSS).toContain('.color-row:focus-within .token-btn')
+  })
+
   it('[data-text-align] gets the same stacked (label-above-full-width-track) treatment as [data-align-self], fixing "Center" clipping at 280px (final review fix #7)', () => {
     // The Typography Align row shares its .type-row with the LS number field, leaving too
     // little width for the 3-option segment track — "Center" clips. [data-align-self]

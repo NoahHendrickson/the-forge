@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { Panel, normalizeJustify, normalizeAlign, hasDirectText, tokenEntriesFor } from '../../src/client/panel'
+import { Panel, normalizeJustify, normalizeAlign, hasDirectText, tokenEntriesFor, colorTokenEntries } from '../../src/client/panel'
 import { DraftStore } from '../../src/client/drafts'
 import { buildInspectorData } from '../../src/client/inspector'
 import { resetTokensCache, type Theme, type Tokens } from '../../src/client/tokens'
+import { buildChangeRequest } from '../../src/client/request'
 
 function setup(html = `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px; width: 200px;"></div>`) {
   document.body.innerHTML = html
@@ -22,6 +23,13 @@ function fieldInput(panel: Panel, label: string): HTMLInputElement {
   )
   if (!nf) throw new Error(`no field labeled ${label}`)
   return nf.querySelector('input')!
+}
+
+// Test-only access to the Panel's private tokenUi.picker (the token-picker/pill cluster now
+// lives in panel-token-ui.ts — see panel.ts's `private tokenUi: PanelTokenUi`).
+function pickerOf(panel: Panel): { root: HTMLElement; open: (opts: unknown) => void } {
+  return (panel as unknown as { tokenUi: { picker: { root: HTMLElement; open: (opts: unknown) => void } } }).tokenUi
+    .picker
 }
 
 function commit(input: HTMLInputElement, value: string): void {
@@ -820,6 +828,56 @@ describe('tokenEntriesFor', () => {
   })
 })
 
+describe('colorTokenEntries', () => {
+  it('maps tokens.colors to {label, color} entries preserving readTokens() sorted order', () => {
+    const tokens: Tokens = {
+      colors: [
+        { name: 'red-100', value: '#ffcccc' },
+        { name: 'red-500', value: '#ff0000' },
+        { name: 'blue-400', value: '#0000ff' },
+      ],
+      textScale: [],
+    }
+    const entries = colorTokenEntries(tokens)
+    expect(entries).not.toBeNull()
+    expect(entries).toEqual([
+      { label: 'red-100', color: '#ffcccc' },
+      { label: 'red-500', color: '#ff0000' },
+      { label: 'blue-400', color: '#0000ff' },
+    ])
+  })
+
+  it('filters out unparseable token value (e.g. var(--indirect))', () => {
+    const tokens: Tokens = {
+      colors: [
+        { name: 'red-500', value: '#ff0000' },
+        { name: 'indirect', value: 'var(--indirect)' },
+        { name: 'blue-500', value: '#0000ff' },
+      ],
+      textScale: [],
+    }
+    const entries = colorTokenEntries(tokens)
+    expect(entries).toEqual([
+      { label: 'red-500', color: '#ff0000' },
+      { label: 'blue-500', color: '#0000ff' },
+    ])
+  })
+
+  it('returns null when color set is empty or all colors are unparseable', () => {
+    const emptyTokens: Tokens = {
+      colors: [],
+      textScale: [],
+    }
+    expect(colorTokenEntries(emptyTokens)).toBeNull()
+
+    const unparseableTokens: Tokens = {
+      colors: [{ name: 'indirect', value: 'var(--indirect)' }],
+      textScale: [],
+    }
+    expect(colorTokenEntries(unparseableTokens)).toBeNull()
+  })
+})
+
 describe('Panel Typography section', () => {
   function textSetup(styleExtra = '') {
     return setup(
@@ -1161,6 +1219,151 @@ describe('Panel Stroke section', () => {
   })
 })
 
+describe('Panel color rows + token-btn icon (T5)', () => {
+  function fillSection(panel: Panel): HTMLElement {
+    return [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => n.textContent?.replace('⋯', '').trim() === 'Fill'
+    ) as HTMLElement
+  }
+
+  function colorRows(panel: Panel): HTMLElement[] {
+    return [...fillSection(panel).parentElement!.querySelectorAll('.color-row')].filter((row) => {
+      const title = row.closest('.panel-rows')?.previousElementSibling
+      return title === fillSection(panel) && !(row as HTMLElement).hidden
+    }) as HTMLElement[]
+  }
+
+  function strokeSection(panel: Panel): HTMLElement {
+    return [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+    ) as HTMLElement
+  }
+
+  function setupColorTokens(html?: string) {
+    // readTokens() caches at module scope — earlier tests in this file (or file order in a
+    // full-suite run) can leave a stale no-color-tokens snapshot cached, so every setup here
+    // must reset it before applying its own theme.
+    resetTokensCache()
+    document.head.insertAdjacentHTML(
+      'beforeend',
+      '<style data-test-cb-tokens>:root { --color-red-500: #ff0000; --color-blue-400: #0000ff; }</style>'
+    )
+    document.documentElement.style.setProperty('--color-red-500', '#ff0000')
+    document.documentElement.style.setProperty('--color-blue-400', '#0000ff')
+    return setup(html)
+  }
+
+  afterEach(() => {
+    document.querySelectorAll('style[data-test-cb-tokens]').forEach((s) => s.remove())
+    document.documentElement.removeAttribute('style')
+    resetTokensCache()
+  })
+
+  it('Fill row contains a .token-btn when the theme has color tokens', () => {
+    const { panel } = setupColorTokens(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 0, 0);"></div>`
+    )
+    const fillRow = colorRows(panel)[0]
+    expect(fillRow.querySelector('.token-btn')).not.toBeNull()
+  })
+
+  it('Fill row has no .token-btn when the theme defines no color tokens', () => {
+    resetTokensCache()
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 0, 0);"></div>`
+    )
+    const fillRow = colorRows(panel)[0]
+    expect(fillRow.querySelector('.token-btn')).toBeNull()
+  })
+
+  it('clicking the Fill token-btn opens the token popover listing color entries with .tp-row-swatch', () => {
+    const { panel } = setupColorTokens(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 0, 0);"></div>`
+    )
+    const fillRow = colorRows(panel)[0]
+    const btn = fillRow.querySelector('.token-btn') as HTMLButtonElement
+    const picker = pickerOf(panel)
+    btn.click()
+    expect(picker.root.hidden).toBe(false)
+    const rows = [...picker.root.querySelectorAll('.tp-row')]
+    expect(rows.length).toBeGreaterThan(0)
+    expect(picker.root.querySelectorAll('.tp-row-swatch').length).toBeGreaterThan(0)
+    expect(rows.some((r) => r.textContent?.includes('red-500'))).toBe(true)
+  })
+
+  it('picking red-500 from the Fill token-btn drafts the exact token value and shows a pilled token name', () => {
+    const { el, panel, drafts } = setupColorTokens(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 255, 255);"></div>`
+    )
+    const fillRow = colorRows(panel)[0]
+    const btn = fillRow.querySelector('.token-btn') as HTMLButtonElement
+    btn.click()
+    const picker = pickerOf(panel)
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('red-500'))!
+    ;(row as HTMLElement).click()
+
+    expect(drafts.current(el, 'background-color')).toBe('#ff0000')
+    const valueEl = fillRow.querySelector('.color-value') as HTMLElement
+    expect(valueEl.textContent).toBe('red-500')
+    expect(valueEl.classList.contains('color-value-pill')).toBe(true)
+  })
+
+  it('picking a raw color via the ColorPicker that matches no token shows a hex label with no pill (derived-state round trip)', () => {
+    const { el, panel, drafts } = setupColorTokens(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 255, 255);"></div>`
+    )
+    const fillRow = colorRows(panel)[0]
+    const swatch = fillRow.querySelector('.swatch') as HTMLElement
+    let onPick: ((css: string, meta: { token?: string }) => void) | null = null
+    ;(panel as unknown as { colorPicker: { open: (opts: any) => void } }).colorPicker.open = (opts) => {
+      onPick = opts.onPick
+    }
+    swatch.click()
+    onPick!('rgb(10, 20, 30)', {})
+
+    expect(drafts.current(el, 'background-color')).toBe('rgb(10, 20, 30)')
+    const valueEl = fillRow.querySelector('.color-value') as HTMLElement
+    expect(valueEl.textContent).toBe('#0a141e')
+    expect(valueEl.classList.contains('color-value-pill')).toBe(false)
+  })
+
+  it('Stroke Color row: picking a token drafts all four border-*-color longhands', () => {
+    const { el, panel, drafts } = setupColorTokens(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    const strokeColorRow = strokeSection(panel).nextElementSibling!.querySelector('.color-row') as HTMLElement
+    const btn = strokeColorRow.querySelector('.token-btn') as HTMLButtonElement
+    expect(btn).not.toBeNull()
+    btn.click()
+    const picker = pickerOf(panel)
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('blue-400'))!
+    ;(row as HTMLElement).click()
+
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-color`)).toBe('#0000ff')
+    }
+  })
+
+  it('request end-to-end pin: after a token pick, the built change request after-utility is the token form with no arbitrary bracket', () => {
+    // suggestUtility() gates every utility suggestion (including colors) on
+    // theme.spacingBasePx !== null as its Tailwind-detection heuristic — a `--spacing` custom
+    // property must be present for readTheme() to report a Tailwind project.
+    document.documentElement.style.setProperty('--spacing', '4px')
+    const { panel, drafts } = setupColorTokens(
+      `<button data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 255, 255);">Hi</button>`
+    )
+    const fillRow = colorRows(panel)[0]
+    const btn = fillRow.querySelector('.token-btn') as HTMLButtonElement
+    btn.click()
+    const picker = pickerOf(panel)
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('red-500'))!
+    ;(row as HTMLElement).click()
+
+    const req = buildChangeRequest(drafts)
+    const change = req.elements[0].changes.find((c) => c.property === 'background-color')!
+    expect(change.afterUtility).toBe('bg-red-500')
+    expect(change.afterUtility).not.toMatch(/\[.*\]/)
+  })
+})
+
 describe('Panel + TokenPicker (`=` token picker, B5)', () => {
   function setupTailwind(html?: string) {
     document.documentElement.style.setProperty('--spacing', '4px')
@@ -1193,7 +1396,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
   it('`=` on a spacing field (PX) opens the token picker with the spacing scale entries', () => {
     const { panel } = setupTailwind()
     const input = pxField(panel, 'PX').querySelector('input') as HTMLInputElement
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     pressEquals(input)
     expect(picker.root.hidden).toBe(false)
     const rows = [...picker.root.querySelectorAll('.tp-row')]
@@ -1203,7 +1406,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
   it('`=` on the Opacity field (no scale) does nothing — tokenEntriesFor is null', () => {
     const { panel } = setupTailwind()
     const input = pxField(panel, 'O').querySelector('input') as HTMLInputElement
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     pressEquals(input)
     expect(picker.root.hidden).toBe(true)
   })
@@ -1213,7 +1416,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const field = pxField(panel, 'PX')
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
 
@@ -1229,7 +1432,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const field = pxField(panel, 'R')
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('md'))!
     ;(row as HTMLElement).click()
 
@@ -1253,7 +1456,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const { el, panel, drafts } = setupTailwind(`<div data-dc-source="src/Card.tsx:4:7" id="t">Some text</div>`)
     const input = fieldInput(panel, 'S')
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('sm'))!
     ;(row as HTMLElement).click()
 
@@ -1266,7 +1469,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const field = pxField(panel, 'PX')
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
     expect(drafts.current(el, 'padding-left')).toBe('16px')
@@ -1283,7 +1486,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const field = pxField(panel, 'PX')
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
     expect(input.value).toBe('px-4')
@@ -1302,7 +1505,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const field = pxField(panel, 'PX')
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
     expect(input.value).toBe('px-4')
@@ -1323,7 +1526,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const field = pxField(panel, 'W')
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
     expect(input.value).toBe('w-4')
@@ -1343,7 +1546,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const field = pxField(panel, 'PX')
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
     expect(input.value).toBe('px-4')
@@ -1363,7 +1566,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const { panel } = setupTailwind()
     const input = pxField(panel, 'PX').querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     expect(picker.root.hidden).toBe(false)
 
     const el2 = document.createElement('div')
@@ -1378,7 +1581,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const { panel } = setupTailwind()
     const input = pxField(panel, 'PX').querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     expect(picker.root.hidden).toBe(false)
     panel.hide()
     expect(picker.root.hidden).toBe(true)
@@ -1394,7 +1597,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const field = pxField(panel, 'TL')
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('md'))!
     ;(row as HTMLElement).click()
 
@@ -1411,7 +1614,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const field = pxField(panel, 'R')
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('md'))!
     ;(row as HTMLElement).click()
     expect(input.value).toBe('rounded-md')
@@ -1419,14 +1622,14 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
 
   it('radiusScale {} (non-Tailwind project) makes `=` on a radius field a no-op', () => {
     // Fix for B5 minor #5: tokenEntriesFor must return null (not []) for an empty scale so
-    // buildField's onTokenKey guard (`if (!entries) return`) actually fires.
+    // openScaleTokenPicker's entries guard (`if (!entries) return`) actually fires.
     document.documentElement.style.removeProperty('--radius-sm')
     document.documentElement.style.removeProperty('--radius-md')
     document.documentElement.style.removeProperty('--radius-lg')
     resetTokensCache()
     const { panel } = setup()
     const input = pxField(panel, 'R').querySelector('input') as HTMLInputElement
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     pressEquals(input)
     expect(picker.root.hidden).toBe(true)
   })
@@ -1436,7 +1639,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const field = pxField(panel, 'PX')
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
     expect(input.value).toBe('px-4')
@@ -1463,7 +1666,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const field = pxField(panel, 'PX')
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
     expect(input.value).toBe('px-4')
@@ -1507,7 +1710,7 @@ describe('Panel Gap field + TokenPicker (B5 important #1)', () => {
   it('`=` on the Gap field opens the token picker with the spacing scale entries', () => {
     const { panel } = setupTailwindFlex()
     const input = gapInput(panel)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     pressEquals(input)
     expect(picker.root.hidden).toBe(false)
     const rows = [...picker.root.querySelectorAll('.tp-row')]
@@ -1518,7 +1721,7 @@ describe('Panel Gap field + TokenPicker (B5 important #1)', () => {
     const { el, panel, drafts } = setupTailwindFlex()
     const input = gapInput(panel)
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
 
@@ -1531,7 +1734,7 @@ describe('Panel Gap field + TokenPicker (B5 important #1)', () => {
     const { panel } = setupTailwindFlex()
     const input = gapInput(panel)
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
     expect(input.value).toBe('gap-4')
@@ -1544,7 +1747,7 @@ describe('Panel Gap field + TokenPicker (B5 important #1)', () => {
     const { el, panel, drafts } = setupTailwindFlex()
     const input = gapInput(panel)
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
     expect(input.value).toBe('gap-4')
@@ -1558,7 +1761,7 @@ describe('Panel Gap field + TokenPicker (B5 important #1)', () => {
     const { el, panel, drafts } = setupTailwindFlex()
     const input = gapInput(panel)
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
     expect(input.value).toBe('gap-4')
@@ -1579,7 +1782,7 @@ describe('Panel Gap field + TokenPicker (B5 important #1)', () => {
     const { el, panel, drafts } = setupTailwindFlex()
     const input = gapInput(panel)
     pressEquals(input)
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
     ;(row as HTMLElement).click()
     expect(drafts.current(el, 'gap')).toBe('16px')
@@ -1588,6 +1791,157 @@ describe('Panel Gap field + TokenPicker (B5 important #1)', () => {
     expect(input.readOnly).toBe(false)
     expect(input.value).toBe('16')
     expect(drafts.current(el, 'gap')).toBe('16px')
+  })
+})
+
+describe('Panel + token-btn icon (T4)', () => {
+  function setupTailwind(html?: string) {
+    document.documentElement.style.setProperty('--spacing', '4px')
+    document.documentElement.style.setProperty('--radius-sm', '4px')
+    document.documentElement.style.setProperty('--radius-md', '6px')
+    document.documentElement.style.setProperty('--radius-lg', '8px')
+    return setup(html)
+  }
+
+  function setupTailwindFlex(styleExtra = '') {
+    document.documentElement.style.setProperty('--spacing', '4px')
+    document.documentElement.style.setProperty('--radius-sm', '4px')
+    document.documentElement.style.setProperty('--radius-md', '6px')
+    document.documentElement.style.setProperty('--radius-lg', '8px')
+    return setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="display: flex; width: 200px; height: 100px; ${styleExtra}"></div>`
+    )
+  }
+
+  afterEach(() => {
+    document.documentElement.removeAttribute('style')
+    document.head.innerHTML = ''
+    resetTokensCache()
+  })
+
+  function pxField(panel: Panel, label: string): HTMLElement {
+    const nf = [...panel.root.querySelectorAll('.nf')].find(
+      (n) => n.querySelector('.nf-label')!.textContent === label
+    )
+    if (!nf) throw new Error(`no field labeled ${label}`)
+    return nf as HTMLElement
+  }
+
+  it('PX field root contains a .token-btn; Opacity (O) and Stroke width (W) do not', () => {
+    const { panel } = setupTailwind()
+    expect(pxField(panel, 'PX').querySelector('.token-btn')).not.toBeNull()
+    expect(pxField(panel, 'O').querySelector('.token-btn')).toBeNull()
+    // Two fields share the label 'W' (Size's Width and Stroke's border-width) — scope to
+    // the Stroke section so this asserts the border-width field, not Size's Width (which
+    // DOES get an icon, being on the spacing scale).
+    const strokeRows = panel.root.querySelector('.stroke-rows') as HTMLElement
+    const strokeWidth = [...strokeRows.querySelectorAll('.nf')].find(
+      (n) => n.querySelector('.nf-label')!.textContent === 'W'
+    )!
+    expect(strokeWidth.querySelector('.token-btn')).toBeNull()
+  })
+
+  it('clicking PX\'s .token-btn opens the token popover with spacing entries', () => {
+    const { panel } = setupTailwind()
+    const field = pxField(panel, 'PX')
+    const btn = field.querySelector('.token-btn') as HTMLButtonElement
+    const picker = pickerOf(panel)
+    btn.click()
+    expect(picker.root.hidden).toBe(false)
+    const rows = [...picker.root.querySelectorAll('.tp-row')]
+    expect(rows.some((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))).toBe(true)
+  })
+
+  it('picking an entry via the icon applies the draft and binds a pill (same end state as `=`)', () => {
+    const { el, panel, drafts } = setupTailwind()
+    const field = pxField(panel, 'PX')
+    const btn = field.querySelector('.token-btn') as HTMLButtonElement
+    const input = field.querySelector('input') as HTMLInputElement
+    btn.click()
+    const picker = pickerOf(panel)
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+
+    expect(drafts.current(el, 'padding-left')).toBe('16px')
+    expect(drafts.current(el, 'padding-right')).toBe('16px')
+    expect(input.readOnly).toBe(true)
+    expect(input.value).toBe('px-4')
+    expect(field.classList.contains('nf-pill')).toBe(true)
+
+    panel.refresh()
+    expect(input.value).toBe('px-4')
+  })
+
+  it('with a pill already bound, clicking the icon re-opens the picker and swaps the pill on a new pick', () => {
+    const { el, panel, drafts } = setupTailwind()
+    const field = pxField(panel, 'PX')
+    const btn = field.querySelector('.token-btn') as HTMLButtonElement
+    const input = field.querySelector('input') as HTMLInputElement
+    const picker = pickerOf(panel)
+
+    btn.click()
+    const row4 = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row4 as HTMLElement).click()
+    expect(input.value).toBe('px-4')
+
+    // Icon click fires even while pill-bound (unlike the `=` key, which is gated off once bound).
+    btn.click()
+    expect(picker.root.hidden).toBe(false)
+    const row8 = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('8') && r.textContent?.includes('32px'))
+    expect(row8).toBeDefined()
+    ;(row8 as HTMLElement).click()
+
+    expect(drafts.current(el, 'padding-left')).toBe('32px')
+    expect(input.value).toBe('px-8')
+    expect(field.classList.contains('nf-pill')).toBe(true)
+  })
+
+  it('multi-select: no .token-btn rendered on any field', () => {
+    // Theme must define BOTH numeric and color tokens so this assertion holds for the real
+    // reason (every token-backed row's own multi gate), not merely because the Fill/Stroke
+    // sections happen to be hidden in multi-select (see buildColorRow's `!this.isMulti()` gate).
+    resetTokensCache()
+    document.documentElement.style.setProperty('--spacing', '4px')
+    document.documentElement.style.setProperty('--color-red-500', '#ff0000')
+    document.documentElement.style.setProperty('--color-blue-400', '#0000ff')
+    document.head.insertAdjacentHTML(
+      'beforeend',
+      '<style data-test-cb-tokens>:root { --color-red-500: #ff0000; --color-blue-400: #0000ff; }</style>'
+    )
+    document.body.innerHTML = `
+      <div data-dc-source="src/A.tsx:1:1" id="a" style="padding: 10px; width: 100px; background-color: rgb(255, 0, 0);"></div>
+      <div data-dc-source="src/B.tsx:2:2" id="b" style="padding: 20px; width: 100px; background-color: rgb(0, 0, 255);"></div>
+    `
+    const a = document.getElementById('a')! as HTMLElement
+    const b = document.getElementById('b')! as HTMLElement
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show([a, b], buildInspectorData(a))
+
+    expect(panel.root.querySelector('.token-btn')).toBeNull()
+
+    document.querySelectorAll('style[data-test-cb-tokens]').forEach((s) => s.remove())
+    document.documentElement.removeAttribute('style')
+    resetTokensCache()
+  })
+
+  it('gap field (flex element) has a .token-btn with the same open/apply flow', () => {
+    const { el, panel, drafts } = setupTailwindFlex()
+    const gapField = (panel as unknown as { gapField: { root: HTMLElement } }).gapField
+    const btn = gapField.root.querySelector('.token-btn') as HTMLButtonElement
+    const input = gapField.root.querySelector('input') as HTMLInputElement
+    expect(btn).not.toBeNull()
+    const picker = pickerOf(panel)
+
+    btn.click()
+    expect(picker.root.hidden).toBe(false)
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('4') && r.textContent?.includes('16px'))!
+    ;(row as HTMLElement).click()
+
+    expect(drafts.current(el, 'gap')).toBe('16px')
+    expect(input.readOnly).toBe(true)
+    expect(input.value).toBe('gap-4')
   })
 })
 
@@ -1628,7 +1982,7 @@ describe('Panel + ColorPicker lifecycle', () => {
 
       const input = fieldInput(panel, 'PX')
       input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
-      const tokenPicker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+      const tokenPicker = pickerOf(panel)
       expect(tokenPicker.root.hidden).toBe(false)
       expect(colorPicker.root.hidden).toBe(true)
     } finally {
@@ -1643,7 +1997,7 @@ describe('Panel + ColorPicker lifecycle', () => {
       const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px;"></div>`)
       const input = fieldInput(panel, 'PX')
       input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
-      const tokenPicker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+      const tokenPicker = pickerOf(panel)
       expect(tokenPicker.root.hidden).toBe(false)
 
       const swatch = panel.root.querySelector('.color-row .swatch') as HTMLElement
@@ -1686,7 +2040,7 @@ describe('Panel multi-select: `=` token picker is gated off (final review fix #6
   it('`=` on a regular field (PX) in multi-select does not open the token picker', () => {
     const { panel } = multiSetupTailwind()
     const input = fieldInput(panel, 'PX')
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
     expect(picker.root.hidden).toBe(true)
   })
@@ -1697,18 +2051,18 @@ describe('Panel multi-select: `=` token picker is gated off (final review fix #6
     const input = fieldInput(panel, 'PX')
     input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
     expect(field.classList.contains('nf-pill')).toBe(false)
-    const boundTokens = (panel as unknown as { boundTokens: Map<string, unknown> }).boundTokens
+    const boundTokens = (panel as unknown as { tokenUi: { bound: Map<string, unknown> } }).tokenUi.bound
     expect(boundTokens.size).toBe(0)
   })
 
   it('`=` on the Gap field in multi-select does not open the token picker', () => {
     // Gap only renders inside the Layout section, which is single-select only (B6) — so
     // build a single-then-multi scenario isn't representative; instead verify directly that
-    // gapField's onTokenKey is gated the same way by checking multi-select hides Layout
+    // gapField's `=` path is gated the same way by checking multi-select hides Layout
     // entirely (already covered elsewhere) AND that show()-ing multi never wires an active
-    // gap onTokenKey that could fire. Exercised via the private gapField reference.
+    // gap onTokenOpen that could fire. Exercised via the private gapField reference.
     const { panel } = multiSetupTailwind('display: flex; gap: 8px;', 'display: flex; gap: 16px;')
-    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const picker = pickerOf(panel)
     const gapField = (panel as unknown as { gapField: { root: HTMLElement } | null }).gapField
     // Layout (and therefore Gap) is hidden entirely in multi-select — but defensively confirm
     // that even if reached, `=` cannot open the picker.
@@ -2155,6 +2509,33 @@ describe('Docked mode structure (docked-panel spec)', () => {
     const body = panel.root.querySelector('.panel-body') as HTMLElement
     expect(body.querySelector('.color-popover')).not.toBeNull()
     expect(body.querySelector('.token-popover')).not.toBeNull()
+  })
+
+  it('opening one popover closes the other (mutual exclusion, both directions)', () => {
+    // Two popovers open at once would overlap/fight for the same anchor-relative position.
+    // ColorPicker's open() is wrapped by Panel; TokenPicker instead exposes a beforeOpen
+    // hook (its open() is generic, so wrapping would erase the per-call entry typing) —
+    // this pins BOTH mechanisms so a future rewiring of either can't silently drop one.
+    const panel = freshPanel()
+    const body = panel.root.querySelector('.panel-body') as HTMLElement
+    const inner = panel as unknown as {
+      colorPicker: { open: (opts: unknown) => void }
+    }
+    const tokenPicker = pickerOf(panel)
+    const tokenRoot = body.querySelector('.token-popover') as HTMLElement
+    const colorRoot = body.querySelector('.color-popover') as HTMLElement
+    const anchor = document.createElement('div')
+    body.append(anchor)
+
+    tokenPicker.open({ anchor, entries: [{ label: '4', px: 16 }], onApply: () => {} })
+    expect(tokenRoot.hidden).toBe(false)
+    inner.colorPicker.open({ anchor, initial: '#ff0000', contrastAgainst: null, onPick: () => {} })
+    expect(colorRoot.hidden).toBe(false)
+    expect(tokenRoot.hidden).toBe(true) // color open closed token
+
+    tokenPicker.open({ anchor, entries: [{ label: '4', px: 16 }], onApply: () => {} })
+    expect(tokenRoot.hidden).toBe(false)
+    expect(colorRoot.hidden).toBe(true) // token open (beforeOpen hook) closed color
   })
 
   it('popovers survive buildBody() on show() — regression for the body-rebuild wipeout', () => {

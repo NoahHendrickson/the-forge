@@ -196,11 +196,25 @@ button {
   width: 100%; min-width: 24px; flex: 1;
   border: none; outline: none; font: 400 var(--text-sm) var(--font-ui); color: var(--text-primary); background: transparent;
 }
+/* The one "this value is a design token" pill treatment — shared by numeric inputs and the
+ * color rows' value chip (.color-value-pill, toggled by colorDisplay()'s exact-match check)
+ * so the token look can't drift between field kinds. Input-specific layout stays below. */
+.nf-pill input, .color-value-pill {
+  background: rgba(13,153,255,0.15); color: var(--accent-soft); border-radius: 4px; padding: 1px 5px;
+}
 .nf-pill input {
-  background: rgba(13,153,255,0.15); color: var(--accent-soft); border-radius: 4px;
-  padding: 1px 5px; width: auto; flex: 0 1 auto; font-size: 10.5px;
+  width: auto; flex: 0 1 auto; font-size: 10.5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+.token-btn {
+  display: none; flex: none; width: 16px; height: 16px; padding: 0;
+  align-items: center; justify-content: center;
+  background: transparent; border: none; color: var(--text-muted); cursor: pointer;
+}
+.token-btn:hover { color: var(--text-primary); }
+.token-btn svg { width: 11px; height: 11px; display: block; }
+.nf:hover .token-btn, .nf:focus-within .token-btn, .color-row:hover .token-btn, .color-row:focus-within .token-btn { display: flex; }
 
 .seg-field { display: flex; align-items: center; gap: 4px; }
 .seg-field-label { flex: none; width: 40px; color: var(--text-muted); font-size: 11px; }
@@ -297,6 +311,7 @@ button {
  */
 .swatch-color { position: absolute; inset: 0; background-color: currentColor; }
 .color-value { color: var(--text-muted); font-size: 10.5px; }
+/* .color-value-pill shares the .nf-pill input token-pill declaration block above. */
 .sc-row { justify-content: space-between; }
 .sc-count { color: var(--text-muted); font-size: 10.5px; margin-left: auto; }
 .stroke-style { flex: 1 1 40%; }
@@ -364,6 +379,14 @@ button {
 }
 .tp-row:hover, .tp-row-active { background: rgba(255,255,255,0.08); }
 .tp-row-px { color: var(--text-muted); font-size: 10.5px; margin-left: auto; }
+.tp-row-swatch {
+  width: 12px; height: 12px; border-radius: 3px; flex: none;
+  border: 1px solid var(--border-strong);
+}
+/* .tp-row is flex + justify-content:space-between (label left, px right). A color row has
+ * only swatch + label — space-between would fling the label to the right edge, so pull it
+ * back left by absorbing the slack. Extend-only: .tp-row's own declarations are untouched. */
+.tp-row-swatch + .tp-row-label { margin-right: auto; }
 `
 
 export class Overlay {
