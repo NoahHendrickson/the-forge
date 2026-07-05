@@ -65,6 +65,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `watch.ts` | watcher-state poller (design-mode-on only) for the linked-session indicator |
 | `ui/button.ts` | `createButton` — the single place overlay buttons are born |
 | `ui/select.ts` | `createSelect` — the `.size-mode` dropdown factory |
+| `ui/swatch.ts` | `createColorRow` — the `.color-row` swatch/value markup (shared by panel + story) |
 
 ## MCP contract
 
