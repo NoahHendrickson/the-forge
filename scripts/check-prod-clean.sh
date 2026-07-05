@@ -50,4 +50,37 @@ if [ "$UNPACKED_KB" -gt "$MAX_UNPACKED_KB" ]; then
 fi
 echo "PASS: package size ${UNPACKED_KB}KB (budget ${MAX_UNPACKED_KB}KB)"
 
+# Tarball-content gate: the published package must be dist/ plus the handful of files npm
+# auto-includes (package.json always; README.md/LICENSE once they exist at the package
+# root) — never source, tests, or config leaking into what users install. Allowlist check
+# happens here (not in vitest) because it needs the real npm-pack file list, which only
+# exists after a build.
+BAD_PATHS=$(printf '%s' "$PACK_JSON" | node -e '
+let s = "";
+process.stdin.on("data", d => s += d).on("end", () => {
+  const files = JSON.parse(s)[0].files.map(f => f.path);
+  const bad = files.filter(p => !(p === "package.json" || p === "README.md" || p === "LICENSE" || p.startsWith("dist/")));
+  console.log(bad.join("\n"));
+});
+')
+if [ -n "$BAD_PATHS" ]; then
+  echo "FAIL: the-forge tarball contains files outside the dist/package.json/README.md/LICENSE allowlist:" >&2
+  echo "$BAD_PATHS" >&2
+  exit 1
+fi
+echo "PASS: tarball contents match the dist/package.json/README.md/LICENSE allowlist"
+
+HAS_CLI=$(printf '%s' "$PACK_JSON" | node -e '
+let s = "";
+process.stdin.on("data", d => s += d).on("end", () => {
+  const files = JSON.parse(s)[0].files.map(f => f.path);
+  console.log(files.includes("dist/cli.js") ? "yes" : "no");
+});
+')
+if [ "$HAS_CLI" != "yes" ]; then
+  echo "FAIL: the-forge tarball is missing dist/cli.js" >&2
+  exit 1
+fi
+echo "PASS: tarball includes dist/cli.js"
+
 echo "PASS: production build is clean"
