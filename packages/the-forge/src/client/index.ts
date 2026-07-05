@@ -5,12 +5,14 @@ import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { Dock } from './dock'
 import { buildChangeRequestWithElements, renderMarkdown, type ChangeRequest, type ElementChange } from './request'
-import { SentRegistry } from './sent'
+import { LifecycleSession, type SentSeed } from './lifecycle'
 import { Verifier } from './verifier'
 import { snapshotRects, diffRects } from './ripple'
-import { resetTokensCache } from './tokens'
+import { resetTokensCache, readTheme } from './tokens'
+import { ChangeList } from './changelist'
 import { type AgentName } from './agent'
 import { WatchStatus, sentLabelFor, watchIndicatorFor, type Rung } from './watch'
+import { saveLifecycle, loadLifecycle, sourceIndex, locateBySource, type PersistedLifecycle } from './lifecycle-store'
 
 /** Rapid edits (e.g. dragging a number field) within this window reuse the first snapshot. */
 const RIPPLE_DEBOUNCE_MS = 300
@@ -34,8 +36,16 @@ export class DesignMode {
   active = false
   /** Ordered set of currently selected elements — VisBug-style multi-select (B6). */
   selection: TaggedElement[] = []
-  sent = new SentRegistry()
+  /** Single owner of sent-state — verifier consumption, ChangeList rows, persistence
+   * projection — replacing the old SentRegistry + sentSeeds + ChangeList.sentRows trio. */
+  session = new LifecycleSession()
   onSendComplete?: () => void
+
+  /** Back-compat alias: `.sent` used to be a separate SentRegistry; the session implements
+   * that same SentStore surface directly now. */
+  get sent() {
+    return this.session
+  }
 
   private moveRaf = 0
   private reflowRaf = 0
@@ -46,6 +56,13 @@ export class DesignMode {
   private dock: Dock
   private verifier: Verifier
   private verifierSummary = ''
+  private changeList: ChangeList
+  /** Seeds with a re-queue POST currently in flight (R2 F-A). The failed row deliberately
+   * survives until the POST resolves (final-review F5) so the Re-send button stays clickable
+   * during the round-trip — but that means a double-click before the first POST settles would
+   * otherwise fire a second identical /queue POST. isDuplicate() can't catch this: the failed
+   * record is already resolved, outside the sent-but-unverified duplicate window. */
+  private resendsInFlight = new Set<SentSeed>()
   /** Watcher-state poller — runs ONLY while design mode is on (started/stopped in
    * setActive), so watch mode adds zero idle overhead to the page. */
   private watch = new WatchStatus(() => this.refreshStatus())
@@ -66,6 +83,28 @@ export class DesignMode {
   private lastEditAt = 0
   private rippleQuietTimer: ReturnType<typeof setTimeout> | null = null
 
+  /** Drafts/selection from a restored session whose elements haven't rendered yet — boot()
+   * runs before the framework mounts, so restoreLifecycle retries these on a short timer
+   * until the DOM catches up (bounded), and persist() keeps them in storage meanwhile so
+   * another reload mid-window doesn't lose them. */
+  private pendingRestore: { drafts: PersistedLifecycle['drafts']; selection: PersistedLifecycle['selection'] } | null = null
+  private restoreTimer: ReturnType<typeof setTimeout> | null = null
+  /** R2 F-C: debounces syncDrafts()+persist() off drafts.onChange, which otherwise fires on
+   * EVERY scrub tick — querySelectorAll + JSON.stringify + a synchronous sessionStorage.setItem
+   * + replaceChildren per drag frame, against the codebase's own "React never re-renders while
+   * scrubbing" discipline (see RIPPLE_DEBOUNCE_MS's burst pattern above). Shares the same
+   * "quiet window" concept and constant as the ripple debounce, just a separate timer instance
+   * since the two debounce unrelated things (layout-ripple measurement vs. draft persistence). */
+  private draftSyncTimer: ReturnType<typeof setTimeout> | null = null
+  /** Elements added to the selection BY the restore drain (R2 F-B) — tracks which members of
+   * the current selection are "restore-owned" so a later-arriving restore element can still
+   * extend the selection (boot located element A, retry later locates B — both are restore
+   * additions and should end up co-selected). The moment the user makes their OWN selection
+   * (select/toggleSelection/deselect via setSelection), that selection no longer matches this
+   * set, and any still-pending restore selection item is dropped as resolved-obsolete instead
+   * of stomping what the user just chose. */
+  private restoredSelection = new WeakSet<TaggedElement>()
+
   constructor(
     private overlay: Overlay,
     panel?: Panel,
@@ -81,7 +120,7 @@ export class DesignMode {
         (el) => this.handleBeforeEdit(el)
       )
     this.dock = dock ?? new Dock(overlay.host, this.panel, overlay.status, overlay.toggle)
-    this.verifier = new Verifier(this.sent, this.drafts, (summary) => {
+    this.verifier = new Verifier(this.session, this.drafts, (summary) => {
       this.verifierSummary = summary
       this.refreshStatus()
       // a commit/mismatch may change the computed style of the element the panel is
@@ -89,9 +128,26 @@ export class DesignMode {
       this.panel.refresh()
       this.remeasure()
     })
+    this.changeList = new ChangeList(this.drafts, this.session, {
+      onHover: (el) => (el ? this.overlay.showOutline(el.getBoundingClientRect()) : this.overlay.hideOutline()),
+      onSelect: (el) => this.select(el),
+      onResend: (seed) => this.resend(seed),
+    })
+    this.panel.changesSlot.appendChild(this.changeList.root)
+    this.verifier.subscribe((e) => {
+      // applyStage returns false for poll re-emissions of an unchanged stage (the verifier
+      // ticks every ~2s while a request is pending) — persisting on every tick regardless would
+      // defeat "storage writes only on state changes" (final-review F4). Only a real stage
+      // transition (sent -> applying, applying -> done, etc.) warrants a sessionStorage write.
+      if (this.session.applyStage(e)) this.persist()
+    })
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
     overlay.sendButton.addEventListener('click', () => {
       if (overlay.sendButton.disabled) return // re-entrancy guard: a POST is already in flight
+      // R2 F-C: prepareSend reads the DraftStore directly (always current), so this flush isn't
+      // needed for the request itself — it's needed so persist()/the Changes list are coherent
+      // with what's about to be sent, rather than lagging behind by up to 300ms.
+      this.flushDraftSync()
       const originalLabel = 'Send to agent'
       const prepared = this.prepareSend()
       if (prepared === 'no-changes' || prepared === 'already-sent') {
@@ -117,27 +173,9 @@ export class DesignMode {
         this.onSendComplete?.()
       }
       const onSendOk = (id: string): void => {
-        const mapping = pairs.map(([el, change]) => ({
-          el,
-          dcSource: el.dataset.dcSource ?? null,
-          draftProps: [...(this.drafts.entries().get(el)?.keys() ?? [])],
-          changes: change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
-        }))
-        this.sent.add(id, mapping)
-        this.verifier.start()
-        fetch('/__the-forge/dispatch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
-          body: JSON.stringify({}),
-        })
-          .then((res) => {
-            if (!res.ok) return onDispatchSettled(null)
-            res
-              .json()
-              .then((body: { rung: Rung }) => onDispatchSettled(body.rung))
-              .catch(() => onDispatchSettled(null))
-          })
-          .catch(() => onDispatchSettled(null))
+        const seeds = this.pairsToSeeds(pairs)
+        this.registerQueuedSend(id, seeds)
+        this.postDispatch(onDispatchSettled)
       }
       overlay.sendButton.disabled = true
       // nesting is deliberate: the send test counts microtask ticks — re-check it before flattening to async/await
@@ -180,7 +218,28 @@ export class DesignMode {
       this.panel.refresh()
       this.remeasure()
     })
-    this.drafts.onChange = () => this.refreshStatus()
+    this.drafts.onChange = () => {
+      // refreshStatus() is a cheap label update — stays immediate. syncDrafts()+persist() are
+      // debounced (R2 F-C): a scrub/drag burst calls onChange once per tick, and each of those
+      // is a querySelectorAll+JSON.stringify+sessionStorage.setItem+replaceChildren — the same
+      // "quiet window" debounce the layout-ripple logic already uses for the same reason.
+      this.refreshStatus()
+      if (this.draftSyncTimer) clearTimeout(this.draftSyncTimer)
+      this.draftSyncTimer = setTimeout(() => this.flushDraftSync(), RIPPLE_DEBOUNCE_MS)
+    }
+  }
+
+  /** Cancels the pending debounced draft-sync timer (if any) and runs syncDrafts()+persist()
+   * immediately (R2 F-C). Called from setActive(false) teardown and at the top of Send's click
+   * handler so a deactivate or a send always sees the Changes list and sessionStorage reflect
+   * the current drafts, not a stale pre-debounce snapshot. */
+  private flushDraftSync(): void {
+    if (this.draftSyncTimer) {
+      clearTimeout(this.draftSyncTimer)
+      this.draftSyncTimer = null
+    }
+    this.changeList.syncDrafts()
+    this.persist()
   }
 
   get panelRoot(): HTMLElement {
@@ -203,10 +262,90 @@ export class DesignMode {
     | 'no-changes'
     | 'already-sent' {
     const { request, elements } = buildChangeRequestWithElements(this.drafts)
-    const pairs = [...elements.entries()].filter(([el, change]) => !this.sent.isDuplicate(el, change.changes))
+    const pairs = [...elements.entries()].filter(([el, change]) => !this.session.isDuplicate(el, change.changes))
     request.elements = pairs.map(([, change]) => change)
     if (request.elements.length === 0) return elements.size > 0 ? 'already-sent' : 'no-changes'
     return { request, pairs }
+  }
+
+  /** Single construction point for element/change pairs -> SentSeed[] (used to be built twice:
+   * once for SentRegistry, once for ChangeList). */
+  private pairsToSeeds(pairs: Array<[TaggedElement, ElementChange]>): SentSeed[] {
+    return pairs.map(([el, change]) => {
+      const dcSource = el.dataset.dcSource ?? null
+      return {
+        el,
+        dcSource,
+        index: dcSource ? sourceIndex(el, dcSource) : 0,
+        draftProps: [...(this.drafts.entries().get(el)?.keys() ?? [])],
+        change,
+      }
+    })
+  }
+
+  /** Registers a freshly-queued send under its server-assigned id — the single path shared by
+   * Send's onSendOk and resend()'s re-queue success handler. */
+  private registerQueuedSend(id: string, seeds: SentSeed[]): void {
+    this.session.register(id, seeds)
+    this.verifier.start()
+    this.persist()
+  }
+
+  /** Fire-and-forget dispatch POST shared by Send and resend() — a failure here must never
+   * undo the send, only downgrade to the manual rung. */
+  private postDispatch(onSettled: (rung: Rung | null) => void): void {
+    fetch('/__the-forge/dispatch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+      body: JSON.stringify({}),
+    })
+      .then((res) => {
+        if (!res.ok) return onSettled(null)
+        res
+          .json()
+          .then((body: { rung: Rung }) => onSettled(body.rung))
+          .catch(() => onSettled(null))
+      })
+      .catch(() => onSettled(null))
+  }
+
+  /** Re-queues one failed element-change as a fresh request. Safe and unfiltered by design:
+   * a failed apply changed no source, and failed items have already left the
+   * sent-but-unverified set the duplicate filter checks. Reuses the queue → dispatch path
+   * of Send; a dispatch failure degrades to manual copy exactly like Send does. */
+  private resend(seed: SentSeed): void {
+    if (this.resendsInFlight.has(seed)) return // re-entrancy guard: this seed's re-queue POST is already in flight
+    this.resendsInFlight.add(seed)
+    const request: ChangeRequest = {
+      createdAt: new Date().toISOString(),
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      tailwind: readTheme().spacingBasePx !== null,
+      elements: [seed.change],
+    }
+    const md = renderMarkdown(request)
+    fetch('/__the-forge/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+      body: JSON.stringify({ request, markdown: md }),
+    })
+      .then((res) => (res.ok ? (res.json() as Promise<{ id: string }>) : Promise.reject(new Error('queue failed'))))
+      .then((body) => {
+        // Remove the OLD failed row only once the re-queue actually succeeded (final-review
+        // F5) — a failed POST below (see .catch) leaves the failed row and its note in place
+        // instead of vanishing on click with nothing to show for it.
+        this.session.removeSeed(seed)
+        this.registerQueuedSend(body.id, [seed])
+        // Lift the guard only after removeSeed/registerQueuedSend so the new in-flight record
+        // (under the fresh id) exists before this seed is eligible for another resend click.
+        this.resendsInFlight.delete(seed)
+        this.postDispatch(() => {
+          /* request is safely queued — manual rung, same as Send */
+        })
+      })
+      .catch(() => {
+        this.resendsInFlight.delete(seed)
+        this.flashButton(this.overlay.sendButton, 'Send failed', 'Send to agent')
+      })
   }
 
   /** First selection member (or null) — kept for single-selection call sites/tests. */
@@ -231,9 +370,10 @@ export class DesignMode {
       document.addEventListener('keydown', this.onKey, true)
       document.addEventListener('scroll', this.onReflow, { capture: true, passive: true })
       window.addEventListener('resize', this.onReflow, { passive: true })
-      if (this.sent.size() > 0) this.verifier.start()
+      if (this.session.size() > 0) this.verifier.start()
       this.watch.start()
       this.refreshStatus()
+      this.persist()
     } else {
       document.removeEventListener('mousemove', this.onMove, true)
       document.removeEventListener('click', this.onClick, true)
@@ -249,12 +389,118 @@ export class DesignMode {
       this.clearRippleState()
       this.lastMove = null
       this.selection = []
+      // A session the user turned off must not keep restoring in the background.
+      if (this.restoreTimer) clearTimeout(this.restoreTimer)
+      this.restoreTimer = null
+      this.pendingRestore = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
       this.dock.exit()
       this.verifier.stop()
       this.watch.stop()
+      // A deactivate mid-debounce-window must not leave sessionStorage/the Changes list stale —
+      // flush before clear() (R2 F-C), which only visually hides rows without touching state.
+      this.flushDraftSync()
+      // Visual-only: sent entries survive deactivate — the verifier keeps polling them and
+      // setActive(true) below re-arms it whenever entries remain.
+      this.changeList.clear()
+      this.persist()
     }
+  }
+
+  /** Rebuilds the session from a persisted lifecycle after a full page reload: re-activates
+   * design mode, re-applies draft previews, re-registers in-flight requests (placeholder
+   * elements stay detached so the verifier's locate() re-resolves them by dcSource on every
+   * poll — self-healing when the DOM catches up), re-arms the verifier, and re-selects. The
+   * boot pass IS the first drain (R2 F-B) — not a special case with its own policy — so a
+   * partial restore here and a partial restore on a later retry tick behave identically. */
+  restoreLifecycle(saved: PersistedLifecycle): void {
+    if (!saved.designModeOn) return
+    this.setActive(true)
+    this.session.restoreSent(saved.sent, locateBySource)
+    if (this.session.size() > 0) this.verifier.start()
+    this.pendingRestore = { drafts: saved.drafts, selection: saved.selection }
+    const { done } = this.drainPendingRestore()
+    if (!done) this.scheduleRestoreRetry()
+    this.persist()
+  }
+
+  /** Single per-item drain used by BOTH the boot pass (restoreLifecycle) and every retry tick
+   * (R2 F-B — previously these ran two divergent policies: the boot pass applied partial
+   * drafts but queued the ENTIRE selection as unresolved, while the retry pass only ever
+   * touched selection when `this.selection.length === 0` — dead once boot had selected
+   * anything — and required ALL-or-nothing, so a partial restore left `pending.selection`
+   * undrainable and the retry timer spun all 40 attempts as a zombie).
+   *
+   * Policy per item:
+   * - drafts: apply located items, keep unresolved ones pending (unchanged from before).
+   * - selection: per-item. A located item is removed from pending and its element is ADDED to
+   *   the selection — but only while the CURRENT selection is still "restore-owned" (empty, or
+   *   every currently-selected element is in `restoredSelection`). If the user has since made
+   *   their own selection, the pending item is dropped as resolved-obsolete instead of stomping
+   *   it — a user's own selection is never overwritten by a late-appearing restore element.
+   *
+   * Returns `{ done: true }` once nothing remains pending, so the caller (boot pass or retry
+   * tick) knows whether to schedule another attempt. */
+  private drainPendingRestore(): { done: boolean } {
+    const pending = this.pendingRestore
+    if (!pending) return { done: true }
+
+    const remainingDrafts: PersistedLifecycle['drafts'] = []
+    for (const d of pending.drafts) {
+      const el = locateBySource(d.dcSource, d.index)
+      if (!el) {
+        remainingDrafts.push(d)
+        continue
+      }
+      for (const [prop, value] of d.props) this.drafts.apply(el, prop, value)
+    }
+    pending.drafts = remainingDrafts
+
+    const restoreOwnsSelection = this.selection.length === 0 || this.selection.every((el) => this.restoredSelection.has(el))
+    const remainingSelection: PersistedLifecycle['selection'] = []
+    if (restoreOwnsSelection) {
+      const additions: TaggedElement[] = []
+      for (const sel of pending.selection) {
+        const el = locateBySource(sel.dcSource, sel.index)
+        if (el) additions.push(el)
+        else remainingSelection.push(sel)
+      }
+      if (additions.length > 0) {
+        for (const el of additions) this.restoredSelection.add(el)
+        this.setSelection([...this.selection, ...additions])
+      }
+    } // else: the user's own selection is in place — every pending selection item is dropped as
+    // resolved-obsolete (remainingSelection stays empty) rather than fighting the user for it.
+    pending.selection = remainingSelection
+
+    const done = pending.drafts.length === 0 && pending.selection.length === 0
+    if (done) this.pendingRestore = null
+    return { done }
+  }
+
+  /** Retries locating drafts/selection left unresolved by restoreLifecycle — boot() runs
+   * before the framework mounts, so the first pass often finds nothing. Ticks every 300ms
+   * for up to 40 attempts (~12s bounded window) rather than forever, so an app that never
+   * renders the tagged element (e.g. it was deleted by the agent) doesn't leak a timer. Stops
+   * as soon as drainPendingRestore reports done, so a partial restore that fully resolves (or
+   * resolves-obsolete) on some retry tick never spins out the remaining attempts. */
+  private scheduleRestoreRetry(attempt = 0): void {
+    if (this.restoreTimer) clearTimeout(this.restoreTimer)
+    this.restoreTimer = setTimeout(() => {
+      this.restoreTimer = null
+      if (!this.pendingRestore) return
+      const { done } = this.drainPendingRestore()
+      if (!done && attempt + 1 < 40) {
+        this.scheduleRestoreRetry(attempt + 1)
+        return
+      }
+      // Either fully drained, or attempts are exhausted — give up either way: a bounded window
+      // that never renders the tagged element (e.g. it was deleted by the agent) must not leave
+      // a zombie pendingRestore that keeps getting merged into every future persist() forever.
+      this.pendingRestore = null
+      this.persist()
+    }, 300)
   }
 
   private refreshStatus(): void {
@@ -266,6 +512,50 @@ export class DesignMode {
       this.verifierSummary || undefined,
       watchIndicatorFor(this.watch.current(), agent)
     )
+  }
+
+  /** Serializes the full lifecycle to sessionStorage. Called only from state-change hooks
+   * while the tool is in use — an ordinary page load with design mode off never writes.
+   * Elements are addressed as (dcSource, index-among-matches) so list items sharing one
+   * source location survive a reload individually (lifecycle-store.ts). */
+  private persist(): void {
+    const drafts: PersistedLifecycle['drafts'] = []
+    const liveKeys = new Set<string>()
+    for (const [el, props] of this.drafts.entries()) {
+      const dcSource = (el as TaggedElement).dataset?.dcSource
+      if (!dcSource) continue // untagged elements can't be re-located — preview-only, not persisted
+      const index = sourceIndex(el as TaggedElement, dcSource)
+      liveKeys.add(`${dcSource}#${index}`)
+      drafts.push({
+        dcSource,
+        index,
+        props: [...props.entries()].map(([p, d]) => [p, d.value] as [string, string]),
+      })
+    }
+    // Merge in still-unresolved restore work so a reload mid-retry-window doesn't lose it —
+    // the live DraftStore only has what's actually been located and applied so far.
+    if (this.pendingRestore) {
+      for (const d of this.pendingRestore.drafts) {
+        if (!liveKeys.has(`${d.dcSource}#${d.index}`)) drafts.push(d)
+      }
+    }
+    // resolved (taken by the verifier) entries are already gone from the session's map, so
+    // toPersistedSent() only ever sees what's still live.
+    const sent = this.session.toPersistedSent()
+    const selection =
+      this.selection.length === 0 && this.pendingRestore && this.pendingRestore.selection.length > 0
+        ? this.pendingRestore.selection
+        : this.selection.flatMap((el) => {
+            const dcSource = el.dataset?.dcSource
+            return dcSource ? [{ dcSource, index: sourceIndex(el, dcSource) }] : []
+          })
+    saveLifecycle({
+      v: 1,
+      designModeOn: this.active,
+      selection,
+      drafts,
+      sent,
+    })
   }
 
   /** Replaces the selection with just `el` (plain click / programmatic single-select). */
@@ -300,6 +590,7 @@ export class DesignMode {
       this.overlay.showSelectOutlines(next.map((el) => el.getBoundingClientRect()))
       this.panel.show(next, buildInspectorData(next[0]))
     }
+    this.persist()
   }
 
   /** Clears all layout-ripple debounce state, including the pending quiet-window timer. */
@@ -433,6 +724,23 @@ function boot(): void {
   const secret = window.__THE_FORGE__?.secret
   const agent = window.__THE_FORGE__?.agent
   window.__THE_FORGE__ = { mode, secret, agent }
+  // One synchronous sessionStorage read per page load — the only work done when design
+  // mode was off (zero idle overhead). A stored active session survives full reloads:
+  // some frameworks legitimately hard-reload (non-HMR-able edits), and losing every
+  // draft/sent state to that was half of the original "panel closes on Send" trust bug.
+  const saved = loadLifecycle()
+  // R1: loadLifecycle now validates and drops invalid items per-entry (selection/drafts/sent),
+  // so a corrupt individual item can no longer reach restoreLifecycle at all — this try/catch
+  // is defense-in-depth, validation lives at the boundary (loadLifecycle itself). Kept anyway:
+  // setActive(true) runs first inside restoreLifecycle, so ANY unforeseen throw mid-restore
+  // would otherwise leave capture-phase listeners attached to a half-restored session.
+  if (saved?.designModeOn) {
+    try {
+      mode.restoreLifecycle(saved)
+    } catch {
+      mode.setActive(false)
+    }
+  }
 }
 
 if (typeof document !== 'undefined' && !import.meta.vitest) {

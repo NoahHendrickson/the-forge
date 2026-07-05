@@ -387,6 +387,49 @@ button {
  * only swatch + label — space-between would fling the label to the right edge, so pull it
  * back left by absorbing the slack. Extend-only: .tp-row's own declarations are untouched. */
 .tp-row-swatch + .tp-row-label { margin-right: auto; }
+
+/* Changes lifecycle list (send-lifecycle spec) — chips reuse the design tokens above:
+ * applying/mismatch share the ripple amber, done the watch-live green. */
+.changes-section {
+  flex: none; display: flex; flex-direction: column; max-height: 180px;
+  border-top: 1px solid var(--separator);
+}
+.changes-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px 4px; font: 600 var(--text-sm) var(--font-ui); color: var(--text-title);
+}
+.changes-list { overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+.changes-list::-webkit-scrollbar { width: 8px; }
+.changes-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+.change-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 4px 6px; border-radius: 6px; font: 400 var(--text-sm) var(--font-ui); color: var(--text-secondary);
+  cursor: default;
+}
+.change-row:hover { background: var(--control); }
+.change-row.row-gone { opacity: 0.5; }
+.chip {
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  font: 500 var(--text-xs) var(--font-ui); border-radius: 999px; padding: 1px 7px;
+}
+.chip::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.chip-draft { color: var(--text-faint); border: 1px dashed rgba(255,255,255,0.25); }
+.chip-sent { color: var(--text-faint); background: rgba(255,255,255,0.08); }
+.chip-applying { color: var(--ripple); background: rgba(226,149,74,0.12); }
+@keyframes forge-chip-pulse { 50% { opacity: 0.4; } }
+.chip-applying::before { animation: forge-chip-pulse 1.2s ease-in-out infinite; }
+.chip-done { color: var(--positive); background: rgba(98,192,115,0.12); }
+.chip-mismatch { color: var(--ripple); background: rgba(226,149,74,0.12); }
+.chip-unverified { color: var(--text-faint); background: rgba(255,255,255,0.08); }
+.chip-failed { color: #F87171; background: rgba(248,113,113,0.12); }
+.change-el { flex: none; color: var(--text-primary); }
+.change-summary {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-muted);
+}
+.change-note { flex-basis: 100%; color: #F87171; font-size: 10.5px; padding: 0 6px 2px 22px; white-space: normal; }
+.change-note-mismatch { color: var(--ripple); }
+.change-actions { display: flex; gap: 4px; flex-basis: 100%; padding: 0 6px 2px 22px; }
 `
 
 export class Overlay {

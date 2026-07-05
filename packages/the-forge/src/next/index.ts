@@ -30,6 +30,7 @@ export type NextRewrites =
 
 export interface WebpackConfig {
   module?: { rules?: unknown[] }
+  watchOptions?: { ignored?: unknown; [key: string]: unknown }
   [key: string]: unknown
 }
 
@@ -94,6 +95,20 @@ function chainWebpack(
       enforce: 'pre',
       use: [loaderRule],
     })
+    // Same reload defense as the Vite plugin's config() hook: `.the-forge/` runtime writes
+    // must never enter webpack's watcher. Append-only across the shapes watchOptions.ignored
+    // legally takes; a RegExp is left untouched — webpack accepts globs OR a RegExp, never a
+    // mix, and rewriting the user's RegExp would silently change what THEY ignore. (Turbopack
+    // has no equivalent knob; the install-time .gitignore entry covers it there.)
+    const FORGE_IGNORE_GLOB = '**/.the-forge/**'
+    const ignored = out.watchOptions?.ignored
+    if (ignored === undefined) {
+      out.watchOptions = { ...out.watchOptions, ignored: [FORGE_IGNORE_GLOB] }
+    } else if (typeof ignored === 'string') {
+      out.watchOptions = { ...out.watchOptions, ignored: [ignored, FORGE_IGNORE_GLOB] }
+    } else if (Array.isArray(ignored) && !ignored.includes(FORGE_IGNORE_GLOB)) {
+      ignored.push(FORGE_IGNORE_GLOB)
+    }
     return out
   }
 }

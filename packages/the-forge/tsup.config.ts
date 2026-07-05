@@ -23,6 +23,15 @@ export default defineConfig([
     format: ['esm'],
     platform: 'browser',
     define: { 'import.meta.vitest': 'undefined' },
+    // Whitespace/comment-only minification — NOT identifier mangling: in-browser stack
+    // traces from user bug reports must keep naming real functions, but the served dev
+    // bundle has no business carrying source comments and indentation (the why-comments
+    // live in src/, which is what people actually read). Sole purpose is the 250KB
+    // package budget (check-prod-clean.sh); flipping to full `minify: true` would save
+    // more but costs debuggability — don't, without revisiting that trade-off.
+    esbuildOptions(options) {
+      options.minifyWhitespace = true
+    },
   },
   {
     entry: { mcp: 'src/mcp/index.ts' },

@@ -1,13 +1,47 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { Verifier, verifyEntry, PAUSE_AFTER_FAILURES, MAX_POLL_MS } from '../../src/client/verifier'
-import { SentRegistry, type SentEntry } from '../../src/client/sent'
+import { Verifier, verifyEntry, PAUSE_AFTER_FAILURES, MAX_POLL_MS, type StageEvent } from '../../src/client/verifier'
+import type { SentEntry } from '../../src/client/sent'
+import { LifecycleSession, type SentSeed } from '../../src/client/lifecycle'
+import type { ElementChange } from '../../src/client/request'
 import { DraftStore } from '../../src/client/drafts'
 
 function el(): HTMLElement {
   const d = document.createElement('div')
   document.body.appendChild(d)
   return d
+}
+
+/** Thin adapter over LifecycleSession so this suite's many `.add(id, elements)` call sites
+ * (built against the deleted SentRegistry's raw SentEntry['elements'] shape) keep working
+ * verbatim — the verifier itself now depends only on the structural SentStore interface, which
+ * LifecycleSession implements directly. Synthesizes a minimal ElementChange per element since
+ * SentSeed carries a full ElementChange where the old raw shape only carried `changes`. */
+class SentRegistry extends LifecycleSession {
+  add(id: string, elements: SentEntry['elements']): void {
+    const seeds: SentSeed[] = elements.map((e) => ({
+      el: e.el,
+      dcSource: e.dcSource,
+      index: e.index ?? 0,
+      draftProps: e.draftProps,
+      change: {
+        tag: e.el.tagName?.toLowerCase() ?? 'div',
+        source: e.dcSource ? { file: e.dcSource.split(':')[0], line: Number(e.dcSource.split(':')[1]), col: Number(e.dcSource.split(':')[2]) } : null,
+        className: '',
+        text: '',
+        selector: e.el.tagName?.toLowerCase() ?? 'div',
+        changes: e.changes.map((c) => ({
+          property: c.property,
+          beforeCss: '',
+          afterCss: c.afterCss,
+          beforeUtility: null,
+          afterUtility: null,
+          tokenExact: false,
+        })),
+      } satisfies ElementChange,
+    }))
+    this.register(id, seeds)
+  }
 }
 
 beforeEach(() => {
@@ -104,6 +138,34 @@ describe('verifyEntry', () => {
     styleRule('t5b', 'padding-top', '24px')
     document.body.appendChild(replacement)
 
+    const result = verifyEntry(entry, document)
+    expect(result.verified).toBe(1)
+    expect(result.missing).toBe(0)
+  })
+
+  // R1: verifier.locate() is now a thin delegate to lifecycle-store's canonical resolveElement
+  // — proves it honors elements[].index (default 0 for legacy callers) rather than always
+  // taking the first DOM match for a shared dcSource.
+  it('re-locates a disconnected element to the SECOND list instance when elements[].index is 1', () => {
+    const placeholder = document.createElement('li')
+    placeholder.dataset.dcSource = 'src/List.tsx:4:4' // never appended — disconnected
+    document.body.innerHTML = `
+      <li data-dc-source="src/List.tsx:4:4" id="first"></li>
+      <li data-dc-source="src/List.tsx:4:4" id="second"></li>`
+    document.getElementById('second')!.id = 'second'
+    styleRule('second', 'padding-top', '24px')
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [
+        {
+          el: placeholder,
+          dcSource: 'src/List.tsx:4:4',
+          index: 1,
+          draftProps: ['padding-top'],
+          changes: [{ property: 'padding-top', afterCss: '24px' }],
+        },
+      ],
+    }
     const result = verifyEntry(entry, document)
     expect(result.verified).toBe(1)
     expect(result.missing).toBe(0)
@@ -761,5 +823,205 @@ describe('Verifier polling lifecycle', () => {
     // and stays saturated at the ceiling thereafter
     await vi.advanceTimersByTimeAsync(MAX_POLL_MS)
     expect(fetchMock).toHaveBeenCalledTimes(10)
+  })
+})
+
+// Regression test for the resolve-in-place bug: Verifier.handleApplied calls
+// this.sent.take(id) FIRST, then synchronously emits the terminal 'done' StageEvent for the
+// same id in the same call. Pre-fix, LifecycleSession.take() deleted the record outright, so
+// this emitted event found nothing (applyStage returned false) and any UI subscribed to
+// records() would lose the row entirely instead of rendering its terminal chip.
+describe('Verifier + LifecycleSession integration: take-then-emit lands on a real session', () => {
+  it('a status: applied poll leaves the record in records() with stage done', async () => {
+    const session = new LifecycleSession()
+    const drafts = new DraftStore()
+    const onUpdate = vi.fn()
+    const btn = el()
+    btn.id = 'integration-btn'
+    styleRule('integration-btn', 'padding-top', '24px')
+    drafts.apply(btn, 'padding-top', '24px')
+    session.register('q1', [
+      {
+        el: btn as never,
+        dcSource: null,
+        index: 0,
+        draftProps: ['padding-top'],
+        change: {
+          tag: 'div',
+          source: null,
+          className: '',
+          text: '',
+          selector: 'div',
+          changes: [{ property: 'padding-top', beforeCss: '', afterCss: '24px', beforeUtility: null, afterUtility: null, tokenExact: false }],
+        },
+      },
+    ])
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(session, drafts, onUpdate)
+    // Production wiring (index.ts): the verifier only EMITS stage events — something downstream
+    // must call session.applyStage(e) to actually flip the record's stage. Mirrored here so this
+    // test proves the real take()-then-emit sequence lands, not an artifact of skipping the wire.
+    verifier.subscribe((e) => session.applyStage(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    // in-flight views agree the item resolved
+    expect(session.pendingIds()).toEqual([])
+    expect(session.size()).toBe(0)
+    // but the UI-facing record is still there, terminal, ready to render its chip
+    const records = session.records()
+    expect(records).toHaveLength(1)
+    expect(records[0].stage).toBe('done')
+  })
+
+  it('a status: failed poll leaves the record in records() with stage failed + note', async () => {
+    const session = new LifecycleSession()
+    const drafts = new DraftStore()
+    const onUpdate = vi.fn()
+    const btn = el()
+    session.register('q1', [
+      {
+        el: btn as never,
+        dcSource: null,
+        index: 0,
+        draftProps: ['padding-top'],
+        change: {
+          tag: 'div',
+          source: null,
+          className: '',
+          text: '',
+          selector: 'div',
+          changes: [{ property: 'padding-top', beforeCss: '', afterCss: '24px', beforeUtility: null, afterUtility: null, tokenExact: false }],
+        },
+      },
+    ])
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'failed', note: 'could not apply' }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(session, drafts, onUpdate)
+    verifier.subscribe((e) => session.applyStage(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(session.pendingIds()).toEqual([])
+    const records = session.records()
+    expect(records).toHaveLength(1)
+    expect(records[0].stage).toBe('failed')
+    expect(records[0].note).toBe('could not apply')
+  })
+})
+
+describe('stage events', () => {
+  function twoElEntry(sent: SentRegistry): { a: HTMLElement; b: HTMLElement } {
+    const a = el()
+    a.id = 'ev-a'
+    const b = el()
+    b.id = 'ev-b'
+    sent.add('q1', [
+      { el: a, dcSource: 'a.tsx:1:1', draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] },
+      { el: b, dcSource: 'b.tsx:2:2', draftProps: ['margin-top'], changes: [{ property: 'margin-top', afterCss: '8px' }] },
+    ])
+    return { a, b }
+  }
+
+  it('emits sent/applying per element from the poll', async () => {
+    const sent = new SentRegistry()
+    twoElEntry(sent)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'claimed', note: null }] }),
+    }))
+    const verifier = new Verifier(sent, new DraftStore(), vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(events).toEqual([
+      { requestId: 'q1', elIndex: 0, dcSource: 'a.tsx:1:1', stage: 'applying' },
+      { requestId: 'q1', elIndex: 1, dcSource: 'b.tsx:2:2', stage: 'applying' },
+    ])
+    verifier.stop()
+  })
+
+  it('emits pending items as sent, not applying', async () => {
+    const sent = new SentRegistry()
+    twoElEntry(sent)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'pending', note: null }] }),
+    }))
+    const verifier = new Verifier(sent, new DraftStore(), vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(events.map((e) => e.stage)).toEqual(['sent', 'sent'])
+    verifier.stop()
+  })
+
+  it('emits done and mismatch per element on applied', async () => {
+    const sent = new SentRegistry()
+    const { a } = twoElEntry(sent)
+    styleRule('ev-a', 'padding-top', '24px') // a verifies; b (no rule) mismatches
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    }))
+    const drafts = new DraftStore()
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+    const byIndex = new Map(events.map((e) => [e.elIndex, e]))
+    expect(byIndex.get(0)?.stage).toBe('done')
+    expect(byIndex.get(1)?.stage).toBe('mismatch')
+    expect(byIndex.get(1)?.mismatches).toEqual([{ property: 'margin-top', expected: '8px', actual: '' }])
+    expect(a.isConnected).toBe(true)
+    verifier.stop()
+  })
+
+  it('emits unverified for an element that cannot be located', async () => {
+    const sent = new SentRegistry()
+    const gone = document.createElement('div') // never attached, no matching dcSource in DOM
+    sent.add('q1', [{ el: gone, dcSource: 'gone.tsx:9:9', draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }])
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    }))
+    const verifier = new Verifier(sent, new DraftStore(), vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(events).toEqual([{ requestId: 'q1', elIndex: 0, dcSource: 'gone.tsx:9:9', stage: 'unverified' }])
+    verifier.stop()
+  })
+
+  it('emits failed with the cleaned note for every element', async () => {
+    const sent = new SentRegistry()
+    twoElEntry(sent)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'failed', note: '  needs   confirmation: shared\ncomponent  ' }] }),
+    }))
+    const verifier = new Verifier(sent, new DraftStore(), vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(events.map((e) => e.stage)).toEqual(['failed', 'failed'])
+    expect(events[0].note).toBe('needs confirmation: shared component')
+    verifier.stop()
   })
 })

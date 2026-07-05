@@ -36,6 +36,16 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
     apply: 'serve',
     enforce: 'pre',
 
+    config() {
+      // Belt-and-braces with the install-time .gitignore entry (server/setup.ts): even in a
+      // project with no .gitignore (or a scanner that ignores it), `.the-forge/` runtime
+      // writes (queue.json on every Send) must never enter the dev watcher — an unignored
+      // queue write full-reloads the page in Tailwind-v4 projects and wipes the overlay.
+      // Returned as a partial config: Vite merges plugin config additively (mergeConfig
+      // concatenates arrays), so user-supplied `server.watch.ignored` entries survive.
+      return { server: { watch: { ignored: ['**/.the-forge/**'] } } }
+    },
+
     configResolved(config) {
       root = config.root
     },

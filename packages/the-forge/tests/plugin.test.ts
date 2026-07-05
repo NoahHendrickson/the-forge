@@ -278,4 +278,17 @@ describe('theForge plugin', () => {
       expect(code!.startsWith(`globalThis.__THE_FORGE__ = ${JSON.stringify({ secret, agent: 'claude-code' })};\n`)).toBe(true)
     })
   })
+
+  describe('config hook', () => {
+    it('excludes .the-forge/ from the dev watcher', () => {
+      const plugin = theForge()
+      const hook = plugin.config
+      const result = (typeof hook === 'function' ? hook : hook!.handler).call(
+        {} as never,
+        {},
+        { command: 'serve', mode: 'development' }
+      )
+      expect(result).toEqual({ server: { watch: { ignored: ['**/.the-forge/**'] } } })
+    })
+  })
 })
