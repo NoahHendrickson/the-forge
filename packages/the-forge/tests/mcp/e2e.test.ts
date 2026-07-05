@@ -32,7 +32,14 @@ function request<T = unknown>(id: number, method: string, params?: unknown): Pro
 }
 
 beforeAll(() => {
-  execSync('npm run build', { cwd: PACKAGE_DIR, stdio: 'pipe' })
+  // Build only when the artifact is missing. An unconditional build here was the root cause
+  // of the suite's long-standing "dist-boundary flake": tsup's clean step deletes dist/ while
+  // a PARALLEL test file's child process is importing from it (tests/next/design-mode.test.ts
+  // spawns node against dist/design-mode.js). With every builder guarded, a suite run that
+  // starts with dist/ present performs zero mid-run rebuilds.
+  if (!fs.existsSync(MCP_BIN)) {
+    execSync('npm run build', { cwd: PACKAGE_DIR, stdio: 'pipe' })
+  }
 }, 120_000)
 
 beforeAll(async () => {
