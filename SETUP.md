@@ -4,25 +4,29 @@ The Forge is a dev-only plugin that adds a Figma-style design mode to any Vite +
 
 This guide has three parts:
 
-1. [The 30-second version](#the-30-second-version) — hand the setup to your agent.
-2. [Agent setup instructions](#agent-setup-instructions) — the exact steps an AI agent (or a human) follows to install it.
+1. [The 30-second version](#the-30-second-version) — run one command.
+2. [Agent setup instructions](#agent-setup-instructions) — what `npx the-forge init` does, and the manual/fallback steps for anything it can't handle automatically.
 3. [How to use it](#how-to-use-it) — what to do once it's installed.
 
 ---
 
 ## The 30-second version
 
-Open your AI coding agent **in the project you want to use The Forge in** and paste this:
+In the project you want to use The Forge in:
 
-> Set up The Forge in this repo. Follow the "Agent setup instructions" in https://raw.githubusercontent.com/NoahHendrickson/the-forge/main/SETUP.md exactly, then tell me what to do next.
+```bash
+npx the-forge init
+```
 
-That's it. The rest of this document is what the agent (or you, manually) will do.
+It detects Vite or Next.js, adds `the-forge` as a dev dependency with whichever package manager your lockfile implies, wires it into your config, and mounts `<ForgeDesignMode />` — printing `[done]`, `[skip]`, or `[manual]` for each step. It's conservative: anything it doesn't recognize (an unusual config shape, say) it leaves untouched and prints the exact manual snippet for instead. It never runs git commands, and running it again is safe (steps it already did print `[skip]`).
+
+If a step prints `[manual]`, follow the [agent setup instructions](#agent-setup-instructions) below for that step — or hand this whole file to your AI coding agent and ask it to finish the job.
 
 ---
 
 ## Agent setup instructions
 
-You are setting up The Forge in the repository you are currently working in (the "host project"). Follow these steps in order. If a prerequisite check fails, stop and report it instead of improvising.
+These are the manual/fallback steps behind `npx the-forge init` — what to do if a step printed `[manual]`, or if you're setting up by hand. If you're an AI agent asked to set up The Forge in a repo: run `npx the-forge init` first, then follow whichever steps below its output flagged `[manual]`. Follow these steps in order. If a prerequisite check fails, stop and report it instead of improvising.
 
 ### 0. Check prerequisites
 
@@ -37,35 +41,19 @@ Nice to have, not required: **Tailwind CSS v4**. With it, change requests are wr
 
 If the project is neither Vite nor Next.js, stop here and tell your human The Forge doesn't apply to this project.
 
-### 1. Clone and build The Forge
-
-The package is not on npm yet — you install it from a local checkout. Clone it **next to** the host project (not inside it):
-
-```bash
-git clone https://github.com/NoahHendrickson/the-forge.git ../the-forge
-cd ../the-forge
-npm install
-npm run build
-cd -
-```
-
-If `../the-forge` already exists, `git pull && npm install && npm run build` in it instead.
-
-The build must produce `packages/the-forge/dist/` containing at least `index.js`, `vite.js`, `next.js`, `design-mode.js`, `client.js`, and `mcp.js`. Verify those files exist before continuing.
-
-### 2. Install it in the host project
+### 1. Install The Forge
 
 From the host project root:
 
 ```bash
-npm install -D file:../the-forge/packages/the-forge --install-links
+npm install -D the-forge
 ```
 
-Adjust the relative path if you cloned somewhere else. The `--install-links` flag makes npm **copy** the package into `node_modules` instead of symlinking it — required because Turbopack (Next's default dev bundler since Next 15) cannot resolve `exports` subpaths like `the-forge/design-mode` through a symlink to a directory outside the project tree (`experimental.externalDir` and `turbopack.resolveAlias` don't fix it). Vite and webpack tolerate the symlink, but use the flag everywhere for one consistent install; it becomes unnecessary once the package is on npm.
+(or the equivalent for your package manager: `pnpm add -D the-forge`, `yarn add -D the-forge`, `bun add -D the-forge`.) `npx the-forge init` does this step for you, using whichever package manager your lockfile implies.
 
-One trade-off of copying: rebuilding the `the-forge` checkout no longer updates the host project automatically — re-run the install command above after every rebuild.
+Not on npm yet in your environment? Install from a local checkout instead: clone `https://github.com/NoahHendrickson/the-forge.git` next to the host project, `npm install && npm run build` in it, then `npm install -D file:../the-forge/packages/the-forge --install-links` in the host project (the `--install-links` flag copies the package instead of symlinking it — required for Turbopack to resolve `exports` subpaths like `the-forge/design-mode` from a directory outside the project tree). This is a fallback path; prefer the npm install above once the package is published.
 
-### 3. Wire it into the framework config
+### 2. Wire it into the framework config
 
 Do whichever of these matches the host project.
 
@@ -149,7 +137,7 @@ export default function App({ Component, pageProps }: AppProps) {
 
 `<ForgeDesignMode />` renders nothing outside development, so it's safe to leave mounted.
 
-### 4. Gitignore the runtime state
+### 3. Gitignore the runtime state
 
 Add this line to the host project's `.gitignore` (create the file if needed):
 
@@ -159,9 +147,9 @@ Add this line to the host project's `.gitignore` (create the file if needed):
 
 `.the-forge/` is per-machine runtime state (queue + endpoint files) written at the git root — it should never be committed.
 
-Also note: on first dev-server start the plugin writes a `the-forge` entry into `.mcp.json` and two command files into `.claude/commands/` (see step 5). The `.mcp.json` entry contains an **absolute path** to `dist/mcp.js` on this machine. If the project doesn't already commit `.mcp.json`, gitignore it too; if the team does commit it, that's fine — the plugin rewrites the entry with the correct local path on each machine's next dev-server start.
+Also note: on first dev-server start the plugin writes a `the-forge` entry into `.mcp.json` and two command files into `.claude/commands/` (see step 4). The `.mcp.json` entry contains an **absolute path** to `dist/mcp.js` on this machine. If the project doesn't already commit `.mcp.json`, gitignore it too; if the team does commit it, that's fine — the plugin rewrites the entry with the correct local path on each machine's next dev-server start.
 
-### 5. Start the dev server once and verify
+### 4. Start the dev server once and verify
 
 Start the dev server the way the project normally does (`npm run dev`, `npx vite`, or `npx next dev`). On startup the plugin auto-installs, at the **git root**:
 
@@ -172,7 +160,7 @@ Start the dev server the way the project normally does (`npm run dev`, `npx vite
 
 Verify all of the above exist, then open the app in a browser and confirm a **Design** toggle appears in the bottom-right corner. You can leave the dev server running or stop it — setup is done either way.
 
-### 6. Tell your human what to do
+### 5. Tell your human what to do
 
 Report back with something like this (adapt paths/commands to the project):
 
@@ -207,5 +195,6 @@ The daily loop, once installed:
 - **Panel shows the watcher went idle** — type `/forge-watch` again in Claude Code; watchers deliberately stop after 20 idle minutes so a forgotten session never runs overnight.
 - **No Design toggle** — it only exists under `vite dev` (or Next's dev phase). Production builds contain zero trace of The Forge by design.
 - **On Next.js, `/__the-forge/*` requests 404** — something in the project is overwriting `rewrites()` instead of composing with it, so The Forge's proxy rule never reaches Next. Check that `withForge(...)` wraps the config that actually gets exported from `next.config.ts` (not an earlier, unwrapped version of it), and that nothing downstream re-defines `rewrites` after `withForge` has already set it.
-- **On Next.js (Turbopack), every route 500s with `Module not found: Can't resolve 'the-forge/design-mode'`** — the package was installed as a symlink (a plain `file:` install without `--install-links`), and Turbopack can't resolve `exports` subpaths through an out-of-tree symlink. Reinstall with the flag: `npm install -D file:../the-forge/packages/the-forge --install-links`, then restart the dev server. (`next dev --webpack` also works as a stopgap, but fix the install.)
-- **Updating The Forge** — `git pull && npm install && npm run build` in the `the-forge` checkout, then **re-run the install command (with `--install-links`) in the host project** — the copy in `node_modules` doesn't track the checkout — and restart the dev server.
+- **On Next.js (Turbopack), every route 500s with `Module not found: Can't resolve 'the-forge/design-mode'`** — this only happens with the local-checkout fallback install (step 1): the package was linked as a symlink (a plain `file:` install without `--install-links`), and Turbopack can't resolve `exports` subpaths through an out-of-tree symlink. Reinstall with the flag: `npm install -D file:../the-forge/packages/the-forge --install-links`, then restart the dev server. (`next dev --webpack` also works as a stopgap, but fix the install.) A normal `npm install -D the-forge` from npm doesn't hit this.
+- **Updating The Forge** — from npm: `npm update the-forge` (or your package manager's equivalent), then restart the dev server. From a local-checkout fallback install: `git pull && npm install && npm run build` in the `the-forge` checkout, then **re-run the install command (with `--install-links`) in the host project** — the copy in `node_modules` doesn't track the checkout — and restart the dev server.
+- **On Windows, `npx the-forge init` prints `[manual]` for the install step** — spawning the package manager can fail silently on some Windows shells; run the printed install command yourself, then re-run `npx the-forge init` to continue with the rest of the steps.

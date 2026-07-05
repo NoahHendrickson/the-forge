@@ -73,4 +73,10 @@ export default defineConfig([
     dts: false,
     footer: { js: 'module.exports = module.exports.default;' },
   },
+  {
+    entry: { cli: 'src/cli/index.ts' },
+    format: ['esm'],
+    platform: 'node',
+    banner: { js: '#!/usr/bin/env node' },
+  },
 ])

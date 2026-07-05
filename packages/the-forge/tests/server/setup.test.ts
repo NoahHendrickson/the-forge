@@ -3,7 +3,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { setupProjectConfig, resolveProjectRoot, migrateLegacyForgeDir, HISTORICAL_WATCH_COMMANDS, ensureGitignoreEntry } from '../../src/server/setup'
+import {
+  setupProjectConfig,
+  resolveProjectRoot,
+  migrateLegacyForgeDir,
+  HISTORICAL_WATCH_COMMANDS,
+  ensureGitignoreEntry,
+  ensureDevtoolsUuid,
+} from '../../src/server/setup'
 import { Queue } from '../../src/server/queue'
 
 let root: string
@@ -553,5 +560,65 @@ describe('ensureGitignoreEntry', () => {
   it('is called by setupProjectConfig', () => {
     setupProjectConfig(dir, '/fake/mcp.js')
     expect(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')).toContain('.the-forge/')
+  })
+})
+
+describe('ensureDevtoolsUuid (Chrome DevTools Automatic Workspace Folders — task A5)', () => {
+  let forgeDir: string
+
+  beforeEach(() => {
+    forgeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-devtools-uuid-'))
+  })
+
+  it('returns a UUID-shaped string on first call', () => {
+    const uuid = ensureDevtoolsUuid(forgeDir)
+    expect(uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+  })
+
+  it('persists the uuid to <forgeDir>/devtools-uuid', () => {
+    const uuid = ensureDevtoolsUuid(forgeDir)
+    const onDisk = fs.readFileSync(path.join(forgeDir, 'devtools-uuid'), 'utf8').trim()
+    expect(onDisk).toBe(uuid)
+  })
+
+  it('a second call in the same process returns the identical value (stable, not regenerated)', () => {
+    const first = ensureDevtoolsUuid(forgeDir)
+    const second = ensureDevtoolsUuid(forgeDir)
+    expect(second).toBe(first)
+  })
+
+  it('survives a fresh read from disk (new call reads the persisted file rather than regenerating) — this is what lets DevTools re-associate the folder across dev-server restarts', () => {
+    const first = ensureDevtoolsUuid(forgeDir)
+    // Simulate a brand-new process/dev-server restart: nothing in memory, only the file on disk.
+    const second = ensureDevtoolsUuid(forgeDir)
+    expect(second).toBe(first)
+    const onDiskAfter = fs.readFileSync(path.join(forgeDir, 'devtools-uuid'), 'utf8').trim()
+    expect(onDiskAfter).toBe(first)
+  })
+
+  it('trims stray whitespace/newlines from a pre-existing valid UUID file', () => {
+    fs.mkdirSync(forgeDir, { recursive: true })
+    const validUuid = '0f8fad5b-d9cb-469f-a165-70867728950e'
+    fs.writeFileSync(path.join(forgeDir, 'devtools-uuid'), `  ${validUuid}  \n`)
+    expect(ensureDevtoolsUuid(forgeDir)).toBe(validUuid)
+  })
+
+  it('creates forgeDir if it does not yet exist', () => {
+    const freshDir = path.join(forgeDir, 'nested', '.the-forge')
+    expect(fs.existsSync(freshDir)).toBe(false)
+    const uuid = ensureDevtoolsUuid(freshDir)
+    expect(fs.existsSync(path.join(freshDir, 'devtools-uuid'))).toBe(true)
+    expect(uuid).toBeTruthy()
+  })
+
+  it('self-heals corrupt content by re-minting a valid UUID and rewriting the file', () => {
+    fs.mkdirSync(forgeDir, { recursive: true })
+    const corruptContent = 'not-a-uuid junk'
+    fs.writeFileSync(path.join(forgeDir, 'devtools-uuid'), corruptContent)
+    const result = ensureDevtoolsUuid(forgeDir)
+    expect(result).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+    expect(result).not.toBe(corruptContent)
+    const onDisk = fs.readFileSync(path.join(forgeDir, 'devtools-uuid'), 'utf8').trim()
+    expect(onDisk).toBe(result)
   })
 })

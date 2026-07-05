@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { Queue } from './queue'
 import type { DispatchOpts } from './dispatch'
 
@@ -135,6 +136,33 @@ export function resolveProjectRoot(viteRoot: string): string {
     dir = parent
   }
   return viteRoot
+}
+
+/**
+ * Returns a stable per-project UUID used as the `workspace.uuid` in the served
+ * com.chrome.devtools.json well-known file (Chrome DevTools' Automatic Workspace Folders
+ * feature — task A5). Stability across dev-server restarts is the entire point: DevTools
+ * keys its remembered folder association on this value, so regenerating it on every restart
+ * would make DevTools re-prompt/re-associate every time `next dev`/`vite` restarts instead of
+ * silently recognizing the same project. Reads `<forgeDir>/devtools-uuid` if present (trimmed
+ * of any trailing newline a text editor or echo might add), else mints one with
+ * `randomUUID()` and persists it for next time.
+ */
+export function ensureDevtoolsUuid(forgeDir: string): string {
+  const uuidFile = path.join(forgeDir, 'devtools-uuid')
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  try {
+    const existing = fs.readFileSync(uuidFile, 'utf8').trim()
+    // Validate the format: corrupt content (partial write, garbage, manual edit) must self-heal.
+    // Only trust content matching the canonical UUID shape; anything else falls through to re-minting.
+    if (existing && uuidRegex.test(existing)) return existing
+  } catch {
+    // no file yet — fall through and mint one
+  }
+  const uuid = randomUUID()
+  fs.mkdirSync(forgeDir, { recursive: true })
+  fs.writeFileSync(uuidFile, uuid, { mode: 0o644 })
+  return uuid
 }
 
 /** Removes a legacy `.claude/commands/design.md` at `root` IF its content byte-matches one of

@@ -17,7 +17,9 @@ vi.mock('../../src/server/dispatch', async () => {
   return { ...actual, dispatch: dispatchSpy }
 })
 
-const { createForgeMiddleware, writeEndpointFile, removeEndpointFile } = await import('../../src/server/endpoints')
+const { createForgeMiddleware, writeEndpointFile, removeEndpointFile, DEVTOOLS_JSON_PATH } = await import(
+  '../../src/server/endpoints'
+)
 
 function fakeReq(method: string, url: string, body?: unknown, headers: Record<string, string> = {}) {
   const req = new EventEmitter() as EventEmitter & { method: string; url: string; headers: Record<string, string> }
@@ -809,5 +811,115 @@ describe('removeEndpointFile', () => {
 
   it('ignores errors when the directory does not exist', () => {
     expect(() => removeEndpointFile(path.join(dir, 'nonexistent'))).not.toThrow()
+  })
+})
+
+describe('GET /.well-known/appspecific/com.chrome.devtools.json (Chrome DevTools Automatic Workspace Folders — task A5)', () => {
+  it('exports the exact well-known path constant', () => {
+    expect(DEVTOOLS_JSON_PATH).toBe('/.well-known/appspecific/com.chrome.devtools.json')
+  })
+
+  it('200s with workspace root + a stable uuid when dispatchConfig.cwd is configured', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-devtools-cwd-'))
+    const mwWithCwd = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false, cwd })
+    const res = fakeRes()
+    await run(mwWithCwd, fakeReq('GET', DEVTOOLS_JSON_PATH, undefined, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(200)
+    const body = JSON.parse(res.body)
+    expect(body.workspace.root).toBe(cwd)
+    expect(body.workspace.uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+  })
+
+  it('the uuid is stable across repeated requests (same middleware instance)', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-devtools-cwd-'))
+    const mwWithCwd = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false, cwd })
+    const res1 = fakeRes()
+    await run(mwWithCwd, fakeReq('GET', DEVTOOLS_JSON_PATH, undefined, { host: 'localhost:5173' }), res1)
+    const res2 = fakeRes()
+    await run(mwWithCwd, fakeReq('GET', DEVTOOLS_JSON_PATH, undefined, { host: 'localhost:5173' }), res2)
+    expect(JSON.parse(res1.body).workspace.uuid).toBe(JSON.parse(res2.body).workspace.uuid)
+  })
+
+  it('strips a query string before matching the well-known path', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-devtools-cwd-'))
+    const mwWithCwd = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false, cwd })
+    const res = fakeRes()
+    await run(mwWithCwd, fakeReq('GET', `${DEVTOOLS_JSON_PATH}?foo=bar`, undefined, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body).workspace.root).toBe(cwd)
+  })
+
+  it('falls through to next() unchanged when dispatchConfig.cwd is absent (legacy tests/callers)', async () => {
+    // Default `mw` from beforeEach is constructed with the default dispatchConfig (no cwd).
+    let nexted = false
+    const res = fakeRes()
+    await new Promise<void>((resolve) => {
+      mw(fakeReq('GET', DEVTOOLS_JSON_PATH, undefined, { host: 'localhost:5173' }) as never, res as never, () => {
+        nexted = true
+        resolve()
+      })
+    })
+    expect(nexted).toBe(true)
+    expect(res.statusCode).toBe(0) // never written to — next() was called, not send()
+  })
+
+  it('403s a disallowed Host header even with cwd configured — the response leaks an absolute filesystem path', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-devtools-cwd-'))
+    const mwWithCwd = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false, cwd })
+    const res = fakeRes()
+    await run(mwWithCwd, fakeReq('GET', DEVTOOLS_JSON_PATH, undefined, { host: 'evil.com:5173' }), res)
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('allows Host: 127.0.0.1 and localhost equally (same DNS-rebinding gate as the rest of the middleware)', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-devtools-cwd-'))
+    const mwWithCwd = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false, cwd })
+    const res = fakeRes()
+    await run(mwWithCwd, fakeReq('GET', DEVTOOLS_JSON_PATH, undefined, { host: '127.0.0.1:5173' }), res)
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('does not require the X-Forge-Secret header — Chrome DevTools cannot send custom headers on this request', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-devtools-cwd-'))
+    const SECRET = 'devtools-secret'
+    const securedWithCwd = createForgeMiddleware(queue, [], SECRET, { agent: 'claude-code', channelsFlag: false, cwd })
+    const res = fakeRes()
+    await run(securedWithCwd, fakeReq('GET', DEVTOOLS_JSON_PATH, undefined, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('403s when X-Forwarded-Host is a disallowed host even though Host is loopback (Next proxy rewrites Host)', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-devtools-cwd-'))
+    const mwWithCwd = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false, cwd })
+    const res = fakeRes()
+    await run(
+      mwWithCwd,
+      fakeReq('GET', DEVTOOLS_JSON_PATH, undefined, { host: '127.0.0.1:4568', 'x-forwarded-host': 'evil.com:3000' }),
+      res
+    )
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('200s when X-Forwarded-Host is an allowed host (the proxied Next path)', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-devtools-cwd-'))
+    const mwWithCwd = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false, cwd })
+    const res = fakeRes()
+    await run(
+      mwWithCwd,
+      fakeReq('GET', DEVTOOLS_JSON_PATH, undefined, { host: '127.0.0.1:4568', 'x-forwarded-host': 'localhost:5175' }),
+      res
+    )
+    expect(res.statusCode).toBe(200)
+  })
+
+  // Non-GET: 405, matching the convention this middleware already uses for every other route
+  // it owns (e.g. POST /pull, /mark, /wait all 405 on the wrong method) — consistent behavior
+  // rather than inventing a bespoke fall-through just for this one route.
+  it('405s a non-GET method rather than falling through to next()', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-devtools-cwd-'))
+    const mwWithCwd = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false, cwd })
+    const res = fakeRes()
+    await run(mwWithCwd, fakeReq('POST', DEVTOOLS_JSON_PATH, undefined, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(405)
   })
 })

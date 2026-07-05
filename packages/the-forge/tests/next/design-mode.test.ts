@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll, vi, afterEach } from 'vitest'
-import { execSync, execFileSync } from 'node:child_process'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -28,14 +28,10 @@ describe('ForgeDesignMode (component)', () => {
 })
 
 describe('ForgeDesignMode boundary: dist/design-mode.js is node-free (spec load-bearing guarantee)', () => {
-  beforeAll(() => {
-    // Mirrors tests/plugin-load.test.ts's build-if-needed pattern (see tests/plugin-load.test.ts):
-    // build once if the artifact is missing, so this file can run standalone, but don't force a
-    // rebuild on every run — the root `npm test` gate already builds via CI habit.
-    if (!fs.existsSync(DIST_FILE)) {
-      execSync('npm run build', { cwd: PACKAGE_DIR, stdio: 'pipe' })
-    }
-  }, 120_000)
+  // dist/ is guaranteed fresh by tests/global-setup.ts (built once before any worker
+  // spawns) — standalone runs of this file included. The old build-if-missing check here
+  // was a check-then-read race: it saw an existing dist, skipped building, then read while
+  // plugin-load's worker was mid-`rm -rf dist` (the ~40%-of-runs root-gate flake).
 
   it('contains no node: specifier and no require() of a Node builtin', () => {
     const code = fs.readFileSync(DIST_FILE, 'utf8')
