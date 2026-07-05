@@ -293,6 +293,55 @@ describe('Verifier polling lifecycle', () => {
     expect(lastSummary).toContain('failed')
   })
 
+  it("surfaces the agent's failure note in the summary — the note field's only user-facing surface", async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const onUpdate = vi.fn()
+    const btn = el()
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [{ id: 'q1', status: 'failed', note: 'needs confirmation: shared Button component' }],
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, onUpdate)
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const lastSummary = onUpdate.mock.calls.at(-1)![0] as string
+    expect(lastSummary).toContain('failed ✗ — needs confirmation: shared Button component')
+  })
+
+  it('collapses whitespace and bounds the length of a failure note headed for the one-line summary', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const onUpdate = vi.fn()
+    const btn = el()
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: ['padding-top'], changes: [{ property: 'padding-top', afterCss: '24px' }] }]))
+
+    const longNote = 'line one\nline two   with   gaps ' + 'x'.repeat(300)
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'failed', note: longNote }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, onUpdate)
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const lastSummary = onUpdate.mock.calls.at(-1)![0] as string
+    expect(lastSummary).toContain('line one line two with gaps')
+    expect(lastSummary).not.toContain('\n')
+    // note portion is bounded at 120 chars
+    const notePart = lastSummary.split('failed ✗ — ')[1]
+    expect(notePart.length).toBeLessThanOrEqual(120)
+  })
+
   it('missing elements are reported as applied (unverified), not mismatches', async () => {
     const sent = new SentRegistry()
     const drafts = new DraftStore()

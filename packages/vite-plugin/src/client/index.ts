@@ -90,6 +90,18 @@ export class DesignMode {
       if (overlay.sendButton.disabled) return // re-entrancy guard: a POST is already in flight
       const originalLabel = 'Send to agent'
       const { request, elements } = buildChangeRequestWithElements(this.drafts)
+      // Double-Send guard: drop elements whose exact change set is already in flight (sent,
+      // not yet verified). Re-queueing an identical request would instruct the agent to redo
+      // utility renames whose "before" class the first apply already removed. Elements edited
+      // to NEW values since the send pass through — that's a genuinely new request.
+      const pairs = [...elements.entries()].filter(([el, change]) => !this.sent.isDuplicate(el, change.changes))
+      request.elements = pairs.map(([, change]) => change)
+      if (request.elements.length === 0) {
+        // Nothing actionable: every draft is either a no-op (scrubbed back to its original —
+        // buildChangeRequest already dropped it) or an identical request already in flight.
+        this.flashButton(overlay.sendButton, this.sent.size() > 0 ? 'Already sent' : 'No changes', originalLabel)
+        return
+      }
       const md = renderMarkdown(request)
       const onSendFailed = (): void => {
         overlay.sendButton.disabled = false
@@ -108,7 +120,7 @@ export class DesignMode {
         this.onSendComplete?.()
       }
       const onSendOk = (id: string): void => {
-        const mapping = [...elements.entries()].map(([el, change]) => ({
+        const mapping = pairs.map(([el, change]) => ({
           el,
           dcSource: el.dataset.dcSource ?? null,
           draftProps: [...(this.drafts.entries().get(el)?.keys() ?? [])],

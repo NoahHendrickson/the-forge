@@ -170,7 +170,19 @@ export class WatcherHub {
         settled: false,
         token,
         timer: setTimeout(() => {
-          if (this.parked === waiter) this.parked = null
+          if (this.parked === waiter) {
+            this.parked = null
+            // Stamp the heartbeat at hold END, not just at wait entry: the watcher was
+            // verifiably connected for this whole hold (a dropped socket cancels this timer
+            // via cancel(); preemption clears it via settle()), so the agent gets the full
+            // freshMs to process the empty result and re-arm — not freshMs minus the hold.
+            // Before this stamp the real re-arm margin was WATCHER_FRESH_MS - WAIT_HOLD_MS
+            // (~15s), which a slow turn (big context, thinking) blows routinely; a Send in
+            // that gap took the keystroke ladder and typed /forge-design into the very
+            // session that was watching. lastActivity is deliberately NOT touched — empty
+            // holds are the idle ticking the auto-stop exists to bound.
+            this.lastSeen = this.now()
+          }
           this.settle(waiter, { stop: false, items: [] })
         }, this.holdMs),
       }

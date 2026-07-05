@@ -58,4 +58,55 @@ describe('SentRegistry', () => {
     const entry = registry.take('q2')!
     expect(entry.elements[0].dcSource).toBeNull()
   })
+
+  describe('isDuplicate (double-Send guard)', () => {
+    const CHANGES = [{ property: 'padding-top', afterCss: '24px' }]
+
+    function addInFlight(registry: SentRegistry, element: HTMLElement, changes = CHANGES): void {
+      registry.add('q1', [{ el: element, dcSource: null, draftProps: ['padding-top'], changes }])
+    }
+
+    it('true for the same element with an identical change set', () => {
+      const registry = new SentRegistry()
+      const btn = el()
+      addInFlight(registry, btn)
+      expect(registry.isDuplicate(btn, [{ property: 'padding-top', afterCss: '24px' }])).toBe(true)
+    })
+
+    it('false once the entry has been taken (verified/failed) — a re-send is legitimate again', () => {
+      const registry = new SentRegistry()
+      const btn = el()
+      addInFlight(registry, btn)
+      registry.take('q1')
+      expect(registry.isDuplicate(btn, CHANGES)).toBe(false)
+    })
+
+    it('false when the element was re-edited to a different value — that is a new request', () => {
+      const registry = new SentRegistry()
+      const btn = el()
+      addInFlight(registry, btn)
+      expect(registry.isDuplicate(btn, [{ property: 'padding-top', afterCss: '32px' }])).toBe(false)
+    })
+
+    it('false when the new change set has extra or fewer properties', () => {
+      const registry = new SentRegistry()
+      const btn = el()
+      addInFlight(registry, btn)
+      expect(
+        registry.isDuplicate(btn, [
+          { property: 'padding-top', afterCss: '24px' },
+          { property: 'padding-bottom', afterCss: '24px' },
+        ])
+      ).toBe(false)
+      expect(registry.isDuplicate(btn, [])).toBe(false)
+    })
+
+    it('false for a different element with the same change set', () => {
+      const registry = new SentRegistry()
+      const btn = el()
+      const other = el()
+      addInFlight(registry, btn)
+      expect(registry.isDuplicate(other, CHANGES)).toBe(false)
+    })
+  })
 })

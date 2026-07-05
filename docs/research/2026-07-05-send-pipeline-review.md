@@ -1,5 +1,16 @@
 # Send-pipeline review: how an edit reaches the agent
 
+> **Status (2026-07-05): all findings implemented** in the commit that updates this note.
+> 1: no-op changes/elements dropped in `buildChangeRequestWithElements`, send skipped when
+> nothing survives. 2: failure note surfaces in the verifier summary (whitespace-collapsed,
+> 120-char bound). 3: `SentRegistry.isDuplicate` guard at the Send click. 4: footer +
+> both command texts now say mark `failed` with `needs confirmation: <why>`. 5: `lastSeen`
+> re-stamped at hold expiry — full 35s re-arm window. 6: `.cursor/mcp.json` written for
+> `agent: 'cursor'` + mark_applied trailer on the deeplink markdown. 7: dead client id
+> removed (queue id is the one identity; reminder keeps the full id — prefix matching in
+> `mark` wasn't worth the ambiguity handling). 8: blob commented as deliberate. 9: bin
+> discovery walks up (10 levels, nearest live endpoint) — git-root gotcha removed.
+
 Review pass, 2026-07-05, over the full delivery path: Send click → `buildChangeRequest` /
 `renderMarkdown` (client/request.ts) → `POST /queue` (server/endpoints.ts → queue.ts) →
 `WatcherHub.notify` / dispatch ladder (watchers.ts, dispatch.ts) → MCP bin

@@ -369,6 +369,62 @@ describe('POST /__the-forge/dispatch', () => {
     expect(receivedOpts.markdown).toBe('newest markdown')
   })
 
+  describe('cursor deeplink loop-closure trailer', () => {
+    it('appends the mark_applied instruction (with the pending item id) for the cursor agent', async () => {
+      const added = queue.add({}, '# md body')
+      let receivedOpts: { markdown?: string } = {}
+      const mwCursor = createForgeMiddleware(queue, [], undefined, {
+        agent: 'cursor',
+        channelsFlag: false,
+        dispatchFn: async (opts) => {
+          receivedOpts = opts
+          return { rung: 'deeplink', detail: 'x' }
+        },
+      })
+      const res = fakeRes()
+      await run(mwCursor, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(receivedOpts.markdown).toContain('# md body')
+      expect(receivedOpts.markdown).toContain('mark_applied')
+      expect(receivedOpts.markdown).toContain(added.id)
+    })
+
+    it('does not append the trailer for claude-code (the MCP tool result carries the reminder there)', async () => {
+      queue.add({}, '# md body')
+      let receivedOpts: { markdown?: string } = {}
+      const mwClaude = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code',
+        channelsFlag: false,
+        dispatchFn: async (opts) => {
+          receivedOpts = opts
+          return { rung: 'manual', detail: 'x' }
+        },
+      })
+      const res = fakeRes()
+      await run(mwClaude, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(receivedOpts.markdown).toBe('# md body')
+    })
+
+    it('does not append the trailer to a caller-posted markdown override (no queue item to mark)', async () => {
+      let receivedOpts: { markdown?: string } = {}
+      const mwCursor = createForgeMiddleware(queue, [], undefined, {
+        agent: 'cursor',
+        channelsFlag: false,
+        dispatchFn: async (opts) => {
+          receivedOpts = opts
+          return { rung: 'deeplink', detail: 'x' }
+        },
+      })
+      const res = fakeRes()
+      await run(
+        mwCursor,
+        fakeReq('POST', '/__the-forge/dispatch', { markdown: '# override' }, { host: 'localhost:5173' }),
+        res
+      )
+      expect(receivedOpts.markdown).toBe('# override')
+    })
+  })
+
   it('defaults the agent from plugin config but allows body.agent to override it', async () => {
     queue.add({}, 'pending markdown')
     let receivedOpts: { agent?: string } = {}

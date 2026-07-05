@@ -230,10 +230,20 @@ export function createForgeMiddleware(
           if (!pending && markdown === undefined) {
             return send(res, 200, { rung: 'manual', detail: 'nothing pending' })
           }
+          const resolvedAgent = agent ?? dispatchConfig.agent
+          let dispatchMarkdown = markdown ?? pending?.markdown ?? ''
+          // Cursor's deeplink is the one rung that carries the request content itself, and it
+          // bypasses pull_design_edits — so without this trailer the queue item stays pending
+          // forever and the browser verifier can never flip drafts to Implemented. The item id
+          // is the ONLY dynamic value spliced in, mirroring renderItems' reminder format in
+          // mcp/protocol.ts (server-generated UUID, never user content).
+          if (resolvedAgent === 'cursor' && markdown === undefined && pending) {
+            dispatchMarkdown += `\n\nWhen done, call the \`mark_applied\` tool from the \`the-forge\` MCP server with ids: ${pending.id} and status "applied" (or "failed" with a one-line note).`
+          }
           const opts: DispatchOpts = {
-            agent: agent ?? dispatchConfig.agent,
+            agent: resolvedAgent,
             channelsFlag: dispatchConfig.channelsFlag,
-            markdown: markdown ?? pending?.markdown ?? '',
+            markdown: dispatchMarkdown,
             ...(dispatchConfig.cwd !== undefined ? { cwd: dispatchConfig.cwd } : {}),
           }
           const run = dispatchConfig.dispatchFn ?? realDispatch

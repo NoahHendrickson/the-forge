@@ -72,7 +72,7 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       server.httpServer?.once('close', () => removeEndpointFile(forgeDir))
       process.once('exit', () => removeEndpointFile(forgeDir))
       const dir = path.dirname(fileURLToPath(import.meta.url))
-      setupProjectConfig(resolvedRoot, path.join(dir, 'mcp.js'), root)
+      setupProjectConfig(resolvedRoot, path.join(dir, 'mcp.js'), root, agent)
     },
 
     transform(code, id) {

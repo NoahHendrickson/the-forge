@@ -30,6 +30,22 @@ export class SentRegistry {
     return entry
   }
 
+  /** True when an in-flight entry already carries this element with an IDENTICAL change set
+   * (same properties → same after values). Guards the double-Send case: re-queueing an
+   * identical request tells the agent to redo utility renames whose "before" class the first
+   * apply already removed. Identical-only on purpose — an element re-edited to DIFFERENT
+   * values is a genuinely new request and must go through. */
+  isDuplicate(el: TaggedElement, changes: Array<{ property: string; afterCss: string }>): boolean {
+    for (const entry of this.entries.values()) {
+      for (const sent of entry.elements) {
+        if (sent.el !== el || sent.changes.length !== changes.length) continue
+        const sentAfter = new Map(sent.changes.map((c) => [c.property, c.afterCss]))
+        if (changes.every((c) => sentAfter.get(c.property) === c.afterCss)) return true
+      }
+    }
+    return false
+  }
+
   size(): number {
     return this.entries.size
   }

@@ -21,7 +21,6 @@ export interface ElementChange {
 }
 
 export interface ChangeRequest {
-  id: string
   createdAt: string
   viewport: { width: number; height: number }
   tailwind: boolean
@@ -203,6 +202,11 @@ export function buildChangeRequestWithElements(
     const className = typeof el.className === 'string' ? el.className : [...el.classList].join(' ')
     const changes: ChangeItem[] = []
     for (const [property, v] of collapse(raw)) {
+      // A draft scrubbed back to its original value survives in the DraftStore (apply() keeps
+      // it), so it reaches here as a genuine no-op. Dropping it HERE — not just its markdown
+      // bullet — keeps empty sections out of the agent's request and lets the caller skip the
+      // send entirely when nothing actually changed.
+      if (v.beforeCss === v.afterCss) continue
       const suggestion = suggestUtility(property, v.afterCss, theme, tokens)
       changes.push({
         property,
@@ -213,6 +217,7 @@ export function buildChangeRequestWithElements(
         tokenExact: suggestion?.tokenExact ?? false,
       })
     }
+    if (changes.length === 0) continue // every drafted property was a no-op — nothing to request
 
     const elementChange: ElementChange = {
       tag: el.tagName.toLowerCase(),
@@ -226,8 +231,9 @@ export function buildChangeRequestWithElements(
     elements.set(el, elementChange)
   }
 
+  // No client-side id: the queue item's server-generated id (Queue.add) is the request's one
+  // identity everywhere — markdown reminders, mark_applied, /status, the SentRegistry.
   const request: ChangeRequest = {
-    id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
     viewport: { width: window.innerWidth, height: window.innerHeight },
     tailwind: theme.spacingBasePx !== null,
@@ -270,7 +276,11 @@ export function renderMarkdown(req: ChangeRequest): string {
     lines.push('')
   })
 
-  lines.push('Scope: apply to this call site only. If a change would modify a shared component rendered elsewhere, pause and confirm first.')
+  // "skip and report", never "pause": an unresolved (claimed-but-unmarked) item goes stale
+  // after CLAIM_TIMEOUT_MS and gets re-delivered on a later watch cycle — a paused agent would
+  // be re-asked the same question every few minutes. The command texts (server/setup.ts) spell
+  // out the MCP mechanics: mark_applied status "failed", note "needs confirmation: <why>".
+  lines.push('Scope: apply to this call site only. If a change would modify a shared component rendered elsewhere, skip it and report it back as needing confirmation — do not pause waiting for an answer.')
   lines.push('After applying, verify each computed value matches the "after" value.')
   return lines.join('\n')
 }

@@ -98,6 +98,10 @@ interface Counters {
   mismatch: number
   unverified: number
   failed: number
+  /** The most recent mark_applied failure note — the agent's one-line reason travels the whole
+   * pipeline (mark → queue → /status) and this is the only surface the user actually sees, so
+   * dropping it here would waste the field entirely. Latest-wins keeps the line bounded. */
+  lastFailedNote: string | null
 }
 
 /**
@@ -123,12 +127,14 @@ function renderSummary(
   if (counters.implemented) parts.push(`${counters.implemented} implemented ✓`)
   if (counters.mismatch) parts.push(`${counters.mismatch} mismatch ⚠`)
   if (counters.unverified) parts.push(`${counters.unverified} applied (unverified)`)
-  if (counters.failed) parts.push(`${counters.failed} failed ✗`)
+  if (counters.failed) {
+    parts.push(`${counters.failed} failed ✗${counters.lastFailedNote ? ` — ${counters.lastFailedNote}` : ''}`)
+  }
   return parts.join(' · ')
 }
 
 export class Verifier {
-  private counters: Counters = { implemented: 0, mismatch: 0, unverified: 0, failed: 0 }
+  private counters: Counters = { implemented: 0, mismatch: 0, unverified: 0, failed: 0, lastFailedNote: null }
   private timer: ReturnType<typeof setTimeout> | null = null
   private consecutiveFailures = 0
   private delayMs = POLL_MS
@@ -197,7 +203,7 @@ export class Verifier {
         const statusById = new Map(body.items.map((item) => [item.id, item.status]))
         for (const item of body.items) {
           if (item.status === 'applied') this.handleApplied(item.id)
-          else if (item.status === 'failed') this.handleFailed(item.id)
+          else if (item.status === 'failed') this.handleFailed(item.id, item.note)
         }
         // Manual rung: nothing applies until the user types /forge-design, so any sent item the server
         // still reports (or simply hasn't reported back yet, i.e. missing from the response) as
@@ -252,9 +258,14 @@ export class Verifier {
     }
   }
 
-  private handleFailed(id: string): void {
+  private handleFailed(id: string, note?: string | null): void {
     const entry = this.sent.take(id)
     if (!entry) return
     this.counters.failed += 1
+    if (note) {
+      // Agent-authored free text headed for the status line: collapse whitespace and bound the
+      // length so a long note can't blow up the single-line summary.
+      this.counters.lastFailedNote = note.replace(/\s+/g, ' ').trim().slice(0, 120) || null
+    }
   }
 }

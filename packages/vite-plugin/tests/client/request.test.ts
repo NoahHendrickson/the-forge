@@ -53,12 +53,14 @@ describe('buildChangeRequest', () => {
   it('collapses four equal border widths into a single border-width line', () => {
     const el = makeButton()
     const store = new DraftStore()
+    // 4px, not 2px: jsdom's UA stylesheet gives <button> a 2px default border-width, and a
+    // draft equal to the computed original is a no-op that build now (correctly) drops.
     for (const side of ['top', 'right', 'bottom', 'left']) {
-      store.apply(el, `border-${side}-width`, '2px')
+      store.apply(el, `border-${side}-width`, '4px')
     }
     const req = buildChangeRequest(store, TW)
     expect(req.elements[0].changes).toEqual([
-      expect.objectContaining({ property: 'border-width', afterCss: '2px', afterUtility: 'border-2' }),
+      expect.objectContaining({ property: 'border-width', afterCss: '4px', afterUtility: 'border-4' }),
     ])
   })
 
@@ -89,7 +91,9 @@ describe('buildChangeRequest', () => {
   it('keeps unequal border-width longhands separate', () => {
     const el = makeButton()
     const store = new DraftStore()
-    store.apply(el, 'border-top-width', '2px')
+    // 6px/4px, not 2px/…: 2px is jsdom's UA default border-width for <button>, which would
+    // make that side's draft a no-op that build now (correctly) drops.
+    store.apply(el, 'border-top-width', '6px')
     store.apply(el, 'border-bottom-width', '4px')
     const req = buildChangeRequest(store, TW)
     const props = req.elements[0].changes.map((c) => c.property).sort()
@@ -146,6 +150,25 @@ describe('buildChangeRequest', () => {
     expect(el.style.getPropertyValue('transition')).toBe('')
   })
 
+  it('drops an element entirely when every drafted property is a no-op (scrubbed back to original)', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    store.apply(el, 'padding-top', '24px')
+    store.apply(el, 'padding-top', '10px') // scrubbed back to the original value — draft survives in the store
+    const req = buildChangeRequest(store, TW)
+    expect(req.elements).toHaveLength(0) // nothing actionable — no empty section reaches the agent
+  })
+
+  it('keeps the element but drops only the no-op change when other changes are real', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    store.apply(el, 'padding-top', '10px') // no-op: equals the original computed value
+    store.apply(el, 'padding-bottom', '24px') // real change
+    const req = buildChangeRequest(store, TW)
+    expect(req.elements).toHaveLength(1)
+    expect(req.elements[0].changes.map((c) => c.property)).toEqual(['padding-bottom'])
+  })
+
   it('skips elements detached from the document (e.g. replaced by HMR)', () => {
     const el = makeButton()
     const store = new DraftStore()
@@ -155,23 +178,14 @@ describe('buildChangeRequest', () => {
     expect(req.elements).toHaveLength(0)
   })
 
-  it('requests carry id, createdAt, and per-element selector', () => {
+  it('requests carry createdAt and per-element selector (no client-side id — the queue item id is the one identity)', () => {
     const el = makeButton()
     const store = new DraftStore()
     store.apply(el, 'padding-top', '24px')
     const req = buildChangeRequest(store, TW)
-    expect(req.id).toMatch(/^[0-9a-f-]{36}$/)
+    expect('id' in req).toBe(false)
     expect(new Date(req.createdAt).getTime()).toBeGreaterThan(0)
     expect(req.elements[0].selector).toContain('button')
-  })
-
-  it('each build produces a distinct id', () => {
-    const el = makeButton()
-    const store = new DraftStore()
-    store.apply(el, 'padding-top', '24px')
-    const req1 = buildChangeRequest(store, TW)
-    const req2 = buildChangeRequest(store, TW)
-    expect(req1.id).not.toBe(req2.id)
   })
 })
 
