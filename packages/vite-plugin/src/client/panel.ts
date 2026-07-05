@@ -61,6 +61,10 @@ export class Panel {
   private headSrc = document.createElement('div')
   private actions = document.createElement('div')
   private body = document.createElement('div')
+  /** The per-selection rebuild target inside `body`. Sections live HERE, the popover
+   * singletons live directly in `body` — so buildBody() can wipe sectionsRoot freely
+   * without any "remember to re-seed the pickers" invariant (PR #2 review). */
+  private sectionsRoot = document.createElement('div')
   private emptyEl = document.createElement('div')
   /** Dock currently active (NOT the persisted preference — Dock owns that). */
   private docked = false
@@ -172,6 +176,8 @@ export class Panel {
     })
     this.actions.append(this.compareButton, this.resetButton)
     this.body.className = 'panel-body'
+    this.sectionsRoot.className = 'panel-sections'
+    this.body.append(this.sectionsRoot)
     this.emptyEl.className = 'panel-empty'
     this.emptyEl.textContent = 'Click an element to edit'
     this.emptyEl.hidden = true
@@ -560,12 +566,11 @@ export class Panel {
     // previous selection's baselines.
     this.scrubbingField = null
     this.scrubBaselines = null
-    // colorPicker.root/tokenPicker.root are constructor-created singletons appended into
-    // this.body exactly once (see the constructor's why-comment on scrolled-coordinate-space
-    // tracking) — replaceChildren() would otherwise wipe them along with the rebuilt sections
-    // on every selection change, leaving popovers permanently detached from the document
-    // after the very first show(). Re-seed the body with them so they survive the rebuild.
-    this.body.replaceChildren(this.colorPicker.root, this.tokenPicker.root)
+    // Only sectionsRoot is wiped — the popover singletons are siblings of it directly in
+    // `body` (same scrolled coordinate space, see the constructor's why-comment) and are
+    // structurally untouchable by rebuilds. An earlier version cleared `body` itself and
+    // had to remember to re-seed the pickers; the wrapper deletes that invariant.
+    this.sectionsRoot.replaceChildren()
     this.fields = []
     this.sectionEls = []
     this.directionField = null
@@ -594,7 +599,7 @@ export class Panel {
       const title = document.createElement('div')
       title.className = 'panel-section'
       title.textContent = section.title
-      this.body.append(title)
+      this.sectionsRoot.append(title)
       // Every body element belonging to this section (title + rowWrap + custom body +
       // expandWrap, whichever apply) collects here so refresh() can hide them all together —
       // see the sectionEls field comment (final review finding E2).
@@ -602,7 +607,7 @@ export class Panel {
 
       if (section.custom === 'layout') {
         const layoutBody = this.buildLayoutSection()
-        this.body.append(layoutBody)
+        this.sectionsRoot.append(layoutBody)
         sectionBodyEls.push(layoutBody)
         this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
@@ -610,7 +615,7 @@ export class Panel {
 
       if (section.custom === 'typography') {
         const typographyBody = this.buildTypographySection(multi)
-        this.body.append(typographyBody)
+        this.sectionsRoot.append(typographyBody)
         sectionBodyEls.push(typographyBody)
         this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
@@ -618,7 +623,7 @@ export class Panel {
 
       if (section.custom === 'fill') {
         const fillBody = this.buildFillSection()
-        this.body.append(fillBody)
+        this.sectionsRoot.append(fillBody)
         sectionBodyEls.push(fillBody)
         this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
@@ -631,11 +636,11 @@ export class Panel {
         // (BT/BR/BB/BL) as the next body child after it, same shape as every other
         // expandable section.
         rowWrap = this.buildStrokeSection()
-        this.body.append(rowWrap)
+        this.sectionsRoot.append(rowWrap)
       } else {
         rowWrap = document.createElement('div')
         rowWrap.className = 'panel-rows'
-        this.body.append(rowWrap)
+        this.sectionsRoot.append(rowWrap)
         for (const row of section.rows) rowWrap.append(this.buildRow(row))
       }
       sectionBodyEls.push(rowWrap)
@@ -658,7 +663,7 @@ export class Panel {
         })
         title.append(btn)
         for (const row of section.expandRows) expandWrap.append(this.buildRow(row))
-        this.body.append(expandWrap)
+        this.sectionsRoot.append(expandWrap)
         sectionBodyEls.push(expandWrap)
       }
 
@@ -670,7 +675,7 @@ export class Panel {
       // isn't created at all in single-select — keeps the pre-existing single-el section
       // list assertion (Layout..Appearance, no 9th entry) untouched.
       if (section.title === 'Stroke' && multi) {
-        this.body.append(this.buildSelectionColorsSection())
+        this.sectionsRoot.append(this.buildSelectionColorsSection())
       }
     }
   }
@@ -1086,7 +1091,7 @@ export class Panel {
     title.className = 'panel-section'
     title.textContent = 'Selection colors'
     this.selectionColorsTitle = title
-    this.body.append(title)
+    this.sectionsRoot.append(title)
 
     const rows = document.createElement('div')
     rows.className = 'panel-rows sc-rows'
