@@ -1,12 +1,10 @@
-import { execSync } from 'node:child_process'
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { theForge, CLIENT_ID } from '../src/vite'
 
 describe('client bundle serving (integration)', () => {
-  beforeAll(() => {
-    execSync('npm run build', { cwd: new URL('..', import.meta.url).pathname, stdio: 'pipe' })
-  }, 120_000)
-
+  // dist/ is guaranteed fresh by tests/global-setup.ts (built once before any worker
+  // spawns). Never build from a test file — the build's `rm -rf dist` races every
+  // parallel worker that reads dist/ artifacts.
   it('load(CLIENT_ID) returns the built client bundle', () => {
     const plugin = theForge()
     const code = (plugin.load as (id: string) => string | null)(CLIENT_ID)

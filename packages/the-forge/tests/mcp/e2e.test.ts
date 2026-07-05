@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { execSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import http, { type Server } from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -31,9 +31,9 @@ function request<T = unknown>(id: number, method: string, params?: unknown): Pro
   })
 }
 
-beforeAll(() => {
-  execSync('npm run build', { cwd: PACKAGE_DIR, stdio: 'pipe' })
-}, 120_000)
+// dist/mcp.js is guaranteed fresh by tests/global-setup.ts (built once before any worker
+// spawns). Never build from a test file — the build's `rm -rf dist` races every parallel
+// worker that reads dist/ artifacts; this beforeAll was one of THREE builders doing so.
 
 beforeAll(async () => {
   stubServer = http.createServer((req, res) => {
