@@ -19,22 +19,34 @@ export interface NumberFieldOpts {
   onScrubStart?: () => void
   /** Fires when Backspace/Delete is pressed while the field is pill-bound (see bindToken()). */
   onDetach?: () => void
-  /** Fires on `=` keydown when the field is NOT pill-bound (preventDefault'd) — opens the token picker. */
-  onTokenKey?: () => void
-  /** When set, the field renders a hover-revealed `{ }` token button (`.token-btn`) after the
-   * input. Fired on click — UNLIKE onTokenKey, NOT gated on pill state: clicking the icon on a
-   * pill-bound field reopens the picker to swap tokens. Callers wire this only when the field
-   * actually has token entries (spec: no entries → no icon, never a dead button). */
+  /** The single "open the token picker" callback, reachable two ways: the hover-revealed
+   * `{ }` button (rendered only when this opt is set — no entries means callers leave it
+   * unset, so there's never a dead button) fires it unconditionally, including while
+   * pill-bound (swap tokens); the `=` key fires it only when NOT pill-bound. That gating
+   * difference is NumberField's own policy, not the caller's — callers wire ONE callback. */
   onTokenOpen?: () => void
 }
 
 // Two stroked brace paths in a 12x12 box; `stroke="currentColor"` so panel CSS themes it via
 // `color`, no fill so it stays a thin outline glyph at the icon's small render size.
-export const TOKEN_ICON_SVG =
+const TOKEN_ICON_SVG =
   '<svg viewBox="0 0 12 12" aria-hidden="true">' +
   '<path d="M4.6 1.5C3.2 1.5 3.7 3.1 3.3 4.5 3.1 5.4 2.4 5.7 1.8 6c.6.3 1.3.6 1.5 1.5.4 1.4-.1 3 1.3 3" fill="none" stroke="currentColor" stroke-linecap="round"/>' +
   '<path d="M7.4 1.5c1.4 0 .9 1.6 1.3 3 .2.9.9 1.2 1.5 1.5-.6.3-1.3.6-1.5 1.5-.4 1.4.1 3-1.3 3" fill="none" stroke="currentColor" stroke-linecap="round"/>' +
   '</svg>'
+
+/** Builds the shared `{ }` token button (class `token-btn`, hover-revealed by panel CSS).
+ * Single source for the glyph/title/click wiring — used by NumberField and the panel's
+ * color rows, so the affordance can't drift between field kinds. */
+export function createTokenButton(onOpen: () => void): HTMLButtonElement {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'token-btn'
+  btn.innerHTML = TOKEN_ICON_SVG
+  btn.title = 'Use design token'
+  btn.addEventListener('click', onOpen)
+  return btn
+}
 
 /**
  * Tiny recursive-descent evaluator for `+ - * / ( )` over decimal numbers. No eval/Function.
@@ -195,18 +207,10 @@ export class NumberField {
     this.root.append(this.labelEl, this.input)
 
     // Callers only wire onTokenOpen when the field has token entries to offer — no entries
-    // means no button, never a dead one. Deliberately NOT pill-gated (unlike onTokenKey):
+    // means no button, never a dead one. Deliberately NOT pill-gated (unlike the `=` key):
     // clicking the icon on an already-bound field reopens the picker to swap tokens.
     if (opts.onTokenOpen) {
-      const tokenBtn = document.createElement('button')
-      tokenBtn.type = 'button'
-      tokenBtn.className = 'token-btn'
-      tokenBtn.innerHTML = TOKEN_ICON_SVG
-      tokenBtn.title = 'Use design token'
-      tokenBtn.addEventListener('click', () => {
-        this.opts.onTokenOpen?.()
-      })
-      this.root.append(tokenBtn)
+      this.root.append(createTokenButton(() => this.opts.onTokenOpen?.()))
     }
 
     this.input.addEventListener('change', () => {
@@ -228,7 +232,7 @@ export class NumberField {
       }
       if (e.key === '=' && !this.pillBound) {
         e.preventDefault()
-        this.opts.onTokenKey?.()
+        this.opts.onTokenOpen?.()
         return
       }
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return

@@ -1,10 +1,10 @@
 import type { TaggedElement } from './source'
 import type { InspectorData } from './inspector'
 import { DraftStore } from './drafts'
-import { NumberField, TOKEN_ICON_SVG } from './controls'
+import { NumberField, createTokenButton } from './controls'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { ColorPicker } from './colorpicker'
-import { TokenPicker, type TokenEntry } from './tokenpicker'
+import { TokenPicker, type ScaleEntry } from './tokenpicker'
 import { nearestColorToken, readTokens, readTheme, parseColor as parseColorLocal, rgbToHex } from './tokens'
 import {
   type RowSpec,
@@ -196,19 +196,16 @@ export class Panel {
     this.tokenPicker = new TokenPicker(this.body)
     // Mutual exclusivity (final review fix #11): opening one popover must close the other —
     // two open at once would overlap/fight for the same anchor-relative position. Wired here
-    // (wrapping each instance's own open(), rather than editing every call site or having the
-    // components import each other) so ColorPicker and TokenPicker stay fully decoupled from
-    // one another; only Panel, which holds both instances, knows they're mutually exclusive.
+    // so ColorPicker and TokenPicker stay fully decoupled from one another; only Panel, which
+    // holds both instances, knows they're mutually exclusive. TokenPicker exposes a beforeOpen
+    // hook instead of having its open() wrapped — monkey-patching a generic method would erase
+    // the per-call entry typing open<E>() provides (PR #6 review).
     const colorPickerOpen = this.colorPicker.open.bind(this.colorPicker)
     this.colorPicker.open = (opts) => {
       this.tokenPicker.close()
       colorPickerOpen(opts)
     }
-    const tokenPickerOpen = this.tokenPicker.open.bind(this.tokenPicker)
-    this.tokenPicker.open = (opts) => {
-      this.colorPicker.close()
-      tokenPickerOpen(opts)
-    }
+    this.tokenPicker.beforeOpen = () => this.colorPicker.close()
   }
 
   show(elOrEls: TaggedElement | TaggedElement[], data: InspectorData): void {
@@ -743,51 +740,32 @@ export class Panel {
     const side = document.createElement('div')
     side.className = 'layout-side'
 
-    const openGapTokenPicker = (): void => {
-      if (!this.el || !this.gapField) return
-      const entries = tokenEntriesFor(GAP_SPEC, readTheme(), readTokens())
-      if (!entries) return
-      const field = this.gapField
-      this.tokenPicker.open({
-        anchor: field.root,
-        entries,
-        onApply: (entry) => {
-          // Gap's token picker only ever offers spacing-scale entries (tokenEntriesFor
-          // above) — this guard is a pure type-narrowing satisfier for TokenEntry's
-          // color-entry branch (T2), never actually reachable here.
-          if ('color' in entry) return
-          if (!this.el) return
-          this.onBeforeEdit(this.el)
-          this.drafts.apply(this.el, 'gap', px(entry.px))
-          this.refresh()
-          this.onEdited()
-          const label = this.pillLabelFor(GAP_SPEC, entry)
-          field.bindToken(label)
-          this.boundTokens.set(GAP_SPEC.props.join(','), { label, px: entry.px })
-        },
-      })
+    // Shared absolute-commit path for gap — the field's own onInput AND the token picker's
+    // apply route through it, so the two can't drift (PR #6 review: the picker's inlined
+    // commit body was byte-equivalent to onInput).
+    const commitGap = (n: number): void => {
+      if (!this.el) return
+      this.onBeforeEdit(this.el)
+      this.drafts.apply(this.el, 'gap', px(n))
+      this.refresh()
+      this.onEdited()
     }
 
     this.gapField = new NumberField({
       label: 'Gap',
       min: 0,
       allowAuto: true,
-      onInput: (n) => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        this.drafts.apply(this.el, 'gap', px(n))
-        this.refresh()
-        this.onEdited()
-      },
+      onInput: commitGap,
       onDetach: () => {
         // Mirrors buildField's onDetach — drop the bookkeeping so a later refresh() doesn't
         // try to re-bind a pill the user explicitly detached via Backspace.
         this.boundTokens.delete(GAP_SPEC.props.join(','))
       },
-      onTokenKey: this.isMulti() ? undefined : openGapTokenPicker,
       onTokenOpen:
         !this.isMulti() && tokenEntriesFor(GAP_SPEC, readTheme(), readTokens()) !== null
-          ? openGapTokenPicker
+          ? () => {
+              if (this.gapField) this.openScaleTokenPicker(GAP_SPEC, this.gapField, commitGap)
+            }
           : undefined,
       onKeyword: (kw) => {
         if (!this.el || kw !== 'auto') return
@@ -923,33 +901,26 @@ export class Panel {
     return wrap
   }
 
-  /** Returns the exact-match token name for a fully-opaque color, or null (no claim made for
-   * transparent/semi-transparent values, or when no token matches exactly). */
-  private colorTokenName(css: string): string | null {
+  /** One-parse, one-palette-scan reader for a color value's display state: the chip text
+   * (exact token name, `transparent`, or short hex) plus whether it IS an exact token.
+   * refresh() runs this per color row per tick — every scrub mousemove — so the parse and
+   * the nearestColorToken scan must happen once, not once per question (PR #6 review:
+   * the previous colorLabel/colorTokenName split parsed 3× and scanned 2× per refresh). */
+  private colorDisplay(css: string): { text: string; token: boolean } {
     const parsed = parseColorLocal(css)
-    if (!parsed) return null
+    if (!parsed) return { text: css, token: false }
     // Fully-transparent always renders as the literal keyword — a nearest-token guess (which
     // only compares r/g/b) would otherwise report some opaque color's name for a color that's
     // actually invisible.
-    if (parsed.a === 0) return null
+    if (parsed.a === 0) return { text: 'transparent', token: false }
     // Token names are only claimed for fully-opaque colors — a semi-transparent value must
     // show its own hex (with alpha) rather than borrowing an opaque token's name, even when
     // the r/g/b channels coincide.
     if (parsed.a === 1) {
       const nearest = nearestColorToken(parsed, readTokens().colors)
-      if (nearest && nearest.distance === 0) return nearest.token.name
+      if (nearest && nearest.distance === 0) return { text: nearest.token.name, token: true }
     }
-    return null
-  }
-
-  /** Renders a token name (exact nearestColorToken match) or a short hex fallback for display. */
-  private colorLabel(css: string): string {
-    const parsed = parseColorLocal(css)
-    if (!parsed) return css
-    if (parsed.a === 0) return 'transparent'
-    const tokenName = this.colorTokenName(css)
-    if (tokenName !== null) return tokenName
-    return rgbToHex(parsed.r, parsed.g, parsed.b, parsed.a)
+    return { text: rgbToHex(parsed.r, parsed.g, parsed.b, parsed.a), token: false }
   }
 
   /** Builds a `.color-row` — swatch button + value text — wired to open the shared ColorPicker. */
@@ -988,28 +959,23 @@ export class Panel {
     // section-hiding already keeps this row out of reach, but the gate should be a true local
     // invariant of the row itself, not something that only holds because a sibling hides it.
     if (!this.isMulti() && colorTokenEntries(readTokens()) !== null) {
-      const tokenBtn = document.createElement('button')
-      tokenBtn.type = 'button'
-      tokenBtn.className = 'token-btn'
-      tokenBtn.innerHTML = TOKEN_ICON_SVG
-      tokenBtn.title = 'Use design token'
-      tokenBtn.addEventListener('click', () => {
-        const entries = colorTokenEntries(readTokens())
-        if (!entries || !this.el) return
-        this.tokenPicker.open({
-          anchor: row,
-          entries,
-          onApply: (entry) => {
-            if (!('color' in entry)) return
-            if (!this.el) return
-            this.onBeforeEdit(this.el)
-            opts.onPick(entry.color) // exact token value ⇒ request.ts emits bg-neutral-900 etc.
-            this.refresh()
-            this.onEdited()
-          },
+      row.append(
+        createTokenButton(() => {
+          const entries = colorTokenEntries(readTokens())
+          if (!entries || !this.el) return
+          this.tokenPicker.open({
+            anchor: row,
+            entries,
+            onApply: (entry) => {
+              if (!this.el) return
+              this.onBeforeEdit(this.el)
+              opts.onPick(entry.color) // exact token value ⇒ request.ts emits bg-neutral-900 etc.
+              this.refresh()
+              this.onEdited()
+            },
+          })
         })
-      })
-      row.append(tokenBtn)
+      )
     }
 
     swatch.addEventListener('click', () => {
@@ -1017,9 +983,10 @@ export class Panel {
         anchor: row,
         initial: opts.getCss(),
         contrastAgainst: opts.getContrastAgainst(),
-        // `meta.token` (the exact token name, when the pick came from a palette swatch
-        // or nearest-token hint) is intentionally unused here — reserved surface for B5's
-        // token pills (showing which colors are backed by a design token) rather than dead code.
+        // `meta.token` (the exact token name, when the pick came from a palette swatch or
+        // nearest-token hint) is intentionally unused: the value chip's token pill is DERIVED
+        // from an exact-match check in colorDisplay() on every refresh, so a palette pick
+        // needs no special-casing here — it lands on token-space and pills automatically.
         onPick: (css, _meta) => {
           if (!this.el) return
           this.onBeforeEdit(this.el)
@@ -1033,8 +1000,9 @@ export class Panel {
     ;(row as HTMLElement & { __refresh?: () => void }).__refresh = () => {
       const css = opts.getCss()
       swatchColor.style.color = css
-      valueEl.textContent = this.colorLabel(css)
-      valueEl.classList.toggle('color-value-pill', this.colorTokenName(css) !== null)
+      const display = this.colorDisplay(css)
+      valueEl.textContent = display.text
+      valueEl.classList.toggle('color-value-pill', display.token)
     }
     return row
   }
@@ -1202,7 +1170,7 @@ export class Panel {
 
       const valueEl = document.createElement('span')
       valueEl.className = 'color-value'
-      valueEl.textContent = this.colorLabel(group.css)
+      valueEl.textContent = this.colorDisplay(group.css).text
       row.append(valueEl)
 
       const countEl = document.createElement('span')
@@ -1355,10 +1323,33 @@ export class Panel {
    * longhand's own prefix), while the linked R row (all 4 corners) resolves through
    * MULTI_PROP_SYNTHETIC to the collapsed `rounded-md` form.
    */
-  private pillLabelFor(spec: RowSpec, entry: TokenEntry): string {
+  private pillLabelFor(spec: RowSpec, entry: ScaleEntry): string {
     if (spec.props.some((p) => p === 'font-size')) return `text-${entry.label}`
     const prefix = utilityPrefixFor(spec.props) ?? spec.props[0]
     return `${prefix}-${entry.label}`
+  }
+
+  /**
+   * The one open-the-picker path for every numeric (scale-backed) field — gap and buildField
+   * both wire their onTokenOpen here so the entries lookup, pill bind, and boundTokens
+   * bookkeeping exist once (PR #6 review: previously three near-copies). `commitPx` is the
+   * field's own absolute-commit path (identical to its onInput), applied before the pill
+   * binds so refresh() sees the drafted value and the B5 re-bind contract holds.
+   */
+  private openScaleTokenPicker(spec: RowSpec, field: NumberField, commitPx: (px: number) => void): void {
+    if (!this.el) return
+    const entries = tokenEntriesFor(spec, readTheme(), readTokens())
+    if (!entries) return
+    this.tokenPicker.open({
+      anchor: field.root,
+      entries,
+      onApply: (entry) => {
+        commitPx(entry.px)
+        const label = this.pillLabelFor(spec, entry)
+        field.bindToken(label)
+        this.boundTokens.set(spec.props.join(','), { label, px: entry.px })
+      },
+    })
   }
 
   private buildField(spec: RowSpec): BoundField {
@@ -1430,26 +1421,6 @@ export class Panel {
     // lifetime of this field (buildBody() rebuilds fields fresh on every selection change).
     const multi = this.isMulti()
 
-    const openTokenPicker = (): void => {
-      if (!this.el) return
-      const entries = tokenEntriesFor(spec, readTheme(), readTokens())
-      if (!entries) return
-      this.tokenPicker.open({
-        anchor: field.root,
-        entries,
-        onApply: (entry) => {
-          // buildField's token picker only ever offers spacing/radius/text-scale entries
-          // (tokenEntriesFor above) — this guard is a pure type-narrowing satisfier for
-          // TokenEntry's color-entry branch (T2), never actually reachable here.
-          if ('color' in entry) return
-          commit(entry.px)
-          const label = this.pillLabelFor(spec, entry)
-          field.bindToken(label)
-          this.boundTokens.set(spec.props.join(','), { label, px: entry.px })
-        },
-      })
-    }
-
     const field = new NumberField({
       label: spec.label,
       min: spec.min,
@@ -1498,9 +1469,10 @@ export class Panel {
         // later refresh() doesn't try to re-bind a pill the user explicitly detached.
         this.boundTokens.delete(spec.props.join(','))
       },
-      onTokenKey: multi ? undefined : openTokenPicker,
       onTokenOpen:
-        !multi && tokenEntriesFor(spec, readTheme(), readTokens()) !== null ? openTokenPicker : undefined,
+        !multi && tokenEntriesFor(spec, readTheme(), readTokens()) !== null
+          ? () => this.openScaleTokenPicker(spec, field, commit)
+          : undefined,
     })
     const bound: BoundField = { field, spec }
     this.fields.push(bound)

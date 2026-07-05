@@ -1,7 +1,7 @@
 import type { TaggedElement } from './source'
 import { DraftStore } from './drafts'
 import { UTILITY_PREFIXES, parseColor, type Theme, type Tokens } from './tokens'
-import type { TokenEntry } from './tokenpicker'
+import type { ColorEntry, ScaleEntry } from './tokenpicker'
 import { hasDirectText } from './panel-readers'
 
 export interface RowSpec {
@@ -65,7 +65,7 @@ const SPACING_SCALE = [
 // joined prop list (order matches each RowSpec's own `props` array above). Stroke's W field
 // (BORDER_WIDTH_PROPS) has no entry here — border-width isn't part of Tailwind's linear spacing
 // scale (see tokens.ts's own separate BORDER_WIDTH_SCALE) and tokenEntriesFor returns null for
-// it, so buildField's onTokenKey never opens the picker for that field and pillLabelFor is
+// it, so buildField never wires onTokenOpen for that field (no icon, `=` inert) and pillLabelFor is
 // never reached for it either.
 const MULTI_PROP_SYNTHETIC: Record<string, string> = {
   [['padding-left', 'padding-right'].join(',')]: 'padding-inline',
@@ -90,7 +90,7 @@ const RADIUS_PROP_SET = new Set(RADIUS)
  * radius props through theme.radiusScale; font-size through the text scale; everything else
  * (e.g. opacity) has no token picker and returns null.
  */
-export function tokenEntriesFor(spec: { props: string[] }, theme: Theme, tokens: Tokens): TokenEntry[] | null {
+export function tokenEntriesFor(spec: { props: string[] }, theme: Theme, tokens: Tokens): ScaleEntry[] | null {
   if (spec.props.some((p) => p === 'font-size')) {
     const entries = tokens.textScale.map((t) => ({ label: t.name, px: t.px }))
     return entries.length === 0 ? null : entries
@@ -111,7 +111,7 @@ export function tokenEntriesFor(spec: { props: string[] }, theme: Theme, tokens:
 
 /** Named color-token entries for the color rows' `{ }` icon — null when the theme defines
  * no (parseable) color tokens, which suppresses the icon entirely (spec: no empty dropdowns). */
-export function colorTokenEntries(tokens: Tokens): TokenEntry[] | null {
+export function colorTokenEntries(tokens: Tokens): ColorEntry[] | null {
   const entries = tokens.colors
     .filter((t) => parseColor(t.value) !== null)
     .map((t) => ({ label: t.name, color: t.value }))

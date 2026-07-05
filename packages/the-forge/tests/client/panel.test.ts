@@ -1615,7 +1615,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
 
   it('radiusScale {} (non-Tailwind project) makes `=` on a radius field a no-op', () => {
     // Fix for B5 minor #5: tokenEntriesFor must return null (not []) for an empty scale so
-    // buildField's onTokenKey guard (`if (!entries) return`) actually fires.
+    // openScaleTokenPicker's entries guard (`if (!entries) return`) actually fires.
     document.documentElement.style.removeProperty('--radius-sm')
     document.documentElement.style.removeProperty('--radius-md')
     document.documentElement.style.removeProperty('--radius-lg')
@@ -1877,7 +1877,7 @@ describe('Panel + token-btn icon (T4)', () => {
     ;(row4 as HTMLElement).click()
     expect(input.value).toBe('px-4')
 
-    // Icon click fires even while pill-bound (unlike onTokenKey, which is gated off once bound).
+    // Icon click fires even while pill-bound (unlike the `=` key, which is gated off once bound).
     btn.click()
     expect(picker.root.hidden).toBe(false)
     const row8 = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('8') && r.textContent?.includes('32px'))
@@ -2051,9 +2051,9 @@ describe('Panel multi-select: `=` token picker is gated off (final review fix #6
   it('`=` on the Gap field in multi-select does not open the token picker', () => {
     // Gap only renders inside the Layout section, which is single-select only (B6) — so
     // build a single-then-multi scenario isn't representative; instead verify directly that
-    // gapField's onTokenKey is gated the same way by checking multi-select hides Layout
+    // gapField's `=` path is gated the same way by checking multi-select hides Layout
     // entirely (already covered elsewhere) AND that show()-ing multi never wires an active
-    // gap onTokenKey that could fire. Exercised via the private gapField reference.
+    // gap onTokenOpen that could fire. Exercised via the private gapField reference.
     const { panel } = multiSetupTailwind('display: flex; gap: 8px;', 'display: flex; gap: 16px;')
     const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
     const gapField = (panel as unknown as { gapField: { root: HTMLElement } | null }).gapField
@@ -2502,6 +2502,33 @@ describe('Docked mode structure (docked-panel spec)', () => {
     const body = panel.root.querySelector('.panel-body') as HTMLElement
     expect(body.querySelector('.color-popover')).not.toBeNull()
     expect(body.querySelector('.token-popover')).not.toBeNull()
+  })
+
+  it('opening one popover closes the other (mutual exclusion, both directions)', () => {
+    // Two popovers open at once would overlap/fight for the same anchor-relative position.
+    // ColorPicker's open() is wrapped by Panel; TokenPicker instead exposes a beforeOpen
+    // hook (its open() is generic, so wrapping would erase the per-call entry typing) —
+    // this pins BOTH mechanisms so a future rewiring of either can't silently drop one.
+    const panel = freshPanel()
+    const body = panel.root.querySelector('.panel-body') as HTMLElement
+    const inner = panel as unknown as {
+      tokenPicker: { open: (opts: unknown) => void }
+      colorPicker: { open: (opts: unknown) => void }
+    }
+    const tokenRoot = body.querySelector('.token-popover') as HTMLElement
+    const colorRoot = body.querySelector('.color-popover') as HTMLElement
+    const anchor = document.createElement('div')
+    body.append(anchor)
+
+    inner.tokenPicker.open({ anchor, entries: [{ label: '4', px: 16 }], onApply: () => {} })
+    expect(tokenRoot.hidden).toBe(false)
+    inner.colorPicker.open({ anchor, initial: '#ff0000', contrastAgainst: null, onPick: () => {} })
+    expect(colorRoot.hidden).toBe(false)
+    expect(tokenRoot.hidden).toBe(true) // color open closed token
+
+    inner.tokenPicker.open({ anchor, entries: [{ label: '4', px: 16 }], onApply: () => {} })
+    expect(tokenRoot.hidden).toBe(false)
+    expect(colorRoot.hidden).toBe(true) // token open (beforeOpen hook) closed color
   })
 
   it('popovers survive buildBody() on show() — regression for the body-rebuild wipeout', () => {

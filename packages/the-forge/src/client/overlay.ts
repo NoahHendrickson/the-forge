@@ -157,9 +157,14 @@ button {
   width: 100%; min-width: 24px; flex: 1;
   border: none; outline: none; font: 400 11px system-ui, sans-serif; color: #F5F5F5; background: transparent;
 }
+/* The one "this value is a design token" pill treatment — shared by numeric inputs and the
+ * color rows' value chip (.color-value-pill, toggled by colorDisplay()'s exact-match check)
+ * so the token look can't drift between field kinds. Input-specific layout stays below. */
+.nf-pill input, .color-value-pill {
+  background: rgba(13,153,255,0.15); color: #7CC4FF; border-radius: 4px; padding: 1px 5px;
+}
 .nf-pill input {
-  background: rgba(13,153,255,0.15); color: #7CC4FF; border-radius: 4px;
-  padding: 1px 5px; width: auto; flex: 0 1 auto; font-size: 10.5px;
+  width: auto; flex: 0 1 auto; font-size: 10.5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
@@ -266,10 +271,7 @@ button {
  */
 .swatch-color { position: absolute; inset: 0; background-color: currentColor; }
 .color-value { color: #9A9A9A; font-size: 10.5px; }
-.color-value-pill {
-  background: rgba(13,153,255,0.15); color: #7CC4FF;
-  border-radius: 4px; padding: 1px 5px;
-}
+/* .color-value-pill shares the .nf-pill input token-pill declaration block above. */
 .sc-row { justify-content: space-between; }
 .sc-count { color: #9A9A9A; font-size: 10.5px; margin-left: auto; }
 .stroke-style { flex: 1 1 40%; }
