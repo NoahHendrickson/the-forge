@@ -72,6 +72,13 @@ export class DesignMode {
   private lastEditAt = 0
   private rippleQuietTimer: ReturnType<typeof setTimeout> | null = null
 
+  /** Drafts/selection from a restored session whose elements haven't rendered yet — boot()
+   * runs before the framework mounts, so restoreLifecycle retries these on a short timer
+   * until the DOM catches up (bounded), and persist() keeps them in storage meanwhile so
+   * another reload mid-window doesn't lose them. */
+  private pendingRestore: { drafts: PersistedLifecycle['drafts']; selection: PersistedLifecycle['selection'] } | null = null
+  private restoreTimer: ReturnType<typeof setTimeout> | null = null
+
   constructor(
     private overlay: Overlay,
     panel?: Panel,
@@ -320,6 +327,10 @@ export class DesignMode {
       this.clearRippleState()
       this.lastMove = null
       this.selection = []
+      // A session the user turned off must not keep restoring in the background.
+      if (this.restoreTimer) clearTimeout(this.restoreTimer)
+      this.restoreTimer = null
+      this.pendingRestore = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
       this.dock.exit()
@@ -338,9 +349,13 @@ export class DesignMode {
   restoreLifecycle(saved: PersistedLifecycle): void {
     if (!saved.designModeOn) return
     this.setActive(true)
+    const unresolvedDrafts: PersistedLifecycle['drafts'] = []
     for (const d of saved.drafts) {
       const el = locateBySource(d.dcSource, d.index)
-      if (!el) continue
+      if (!el) {
+        unresolvedDrafts.push(d)
+        continue
+      }
       for (const [prop, value] of d.props) this.drafts.apply(el, prop, value)
     }
     for (const s of saved.sent) {
@@ -358,11 +373,55 @@ export class DesignMode {
       this.changeList.addSent(s.id, seeds)
     }
     if (this.sent.size() > 0) this.verifier.start()
-    const selected = saved.selection
-      .map((sel) => locateBySource(sel.dcSource, sel.index))
-      .filter((el): el is TaggedElement => el !== null)
-    if (selected.length > 0) this.setSelection(selected)
+    const locatedSelection = saved.selection
+      .map((sel) => ({ sel, el: locateBySource(sel.dcSource, sel.index) }))
+      .filter((pair): pair is { sel: (typeof saved.selection)[number]; el: TaggedElement } => pair.el !== null)
+    const unresolvedSelection = locatedSelection.length === saved.selection.length ? [] : saved.selection
+    if (locatedSelection.length > 0) this.setSelection(locatedSelection.map((pair) => pair.el))
+    if (unresolvedDrafts.length > 0 || unresolvedSelection.length > 0) {
+      this.pendingRestore = { drafts: unresolvedDrafts, selection: unresolvedSelection }
+      this.scheduleRestoreRetry()
+    }
     this.persist()
+  }
+
+  /** Retries locating drafts/selection left unresolved by restoreLifecycle — boot() runs
+   * before the framework mounts, so the first pass often finds nothing. Ticks every 300ms
+   * for up to 40 attempts (~12s bounded window) rather than forever, so an app that never
+   * renders the tagged element (e.g. it was deleted by the agent) doesn't leak a timer. */
+  private scheduleRestoreRetry(attempt = 0): void {
+    if (this.restoreTimer) clearTimeout(this.restoreTimer)
+    this.restoreTimer = setTimeout(() => {
+      this.restoreTimer = null
+      const pending = this.pendingRestore
+      if (!pending) return
+      const remainingDrafts: PersistedLifecycle['drafts'] = []
+      for (const d of pending.drafts) {
+        const el = locateBySource(d.dcSource, d.index)
+        if (!el) {
+          remainingDrafts.push(d)
+          continue
+        }
+        for (const [prop, value] of d.props) this.drafts.apply(el, prop, value)
+      }
+      pending.drafts = remainingDrafts
+      if (this.selection.length === 0 && pending.selection.length > 0) {
+        const located = pending.selection
+          .map((sel) => locateBySource(sel.dcSource, sel.index))
+          .filter((el): el is TaggedElement => el !== null)
+        if (located.length === pending.selection.length) {
+          this.setSelection(located)
+          pending.selection = []
+        }
+      }
+      const attemptsLeft = attempt + 1 < 40
+      if ((pending.drafts.length > 0 || pending.selection.length > 0) && attemptsLeft) {
+        this.scheduleRestoreRetry(attempt + 1)
+        return
+      }
+      this.pendingRestore = null
+      this.persist()
+    }, 300)
   }
 
   private refreshStatus(): void {
@@ -382,14 +441,24 @@ export class DesignMode {
    * source location survive a reload individually (lifecycle-store.ts). */
   private persist(): void {
     const drafts: PersistedLifecycle['drafts'] = []
+    const liveKeys = new Set<string>()
     for (const [el, props] of this.drafts.entries()) {
       const dcSource = (el as TaggedElement).dataset?.dcSource
       if (!dcSource) continue // untagged elements can't be re-located — preview-only, not persisted
+      const index = sourceIndex(el as TaggedElement, dcSource)
+      liveKeys.add(`${dcSource}#${index}`)
       drafts.push({
         dcSource,
-        index: sourceIndex(el as TaggedElement, dcSource),
+        index,
         props: [...props.entries()].map(([p, d]) => [p, d.value] as [string, string]),
       })
+    }
+    // Merge in still-unresolved restore work so a reload mid-retry-window doesn't lose it —
+    // the live DraftStore only has what's actually been located and applied so far.
+    if (this.pendingRestore) {
+      for (const d of this.pendingRestore.drafts) {
+        if (!liveKeys.has(`${d.dcSource}#${d.index}`)) drafts.push(d)
+      }
     }
     const sent: PersistedLifecycle['sent'] = []
     for (const [id, seeds] of this.sentSeeds) {
@@ -406,13 +475,17 @@ export class DesignMode {
         })),
       })
     }
+    const selection =
+      this.selection.length === 0 && this.pendingRestore && this.pendingRestore.selection.length > 0
+        ? this.pendingRestore.selection
+        : this.selection.flatMap((el) => {
+            const dcSource = el.dataset?.dcSource
+            return dcSource ? [{ dcSource, index: sourceIndex(el, dcSource) }] : []
+          })
     saveLifecycle({
       v: 1,
       designModeOn: this.active,
-      selection: this.selection.flatMap((el) => {
-        const dcSource = el.dataset?.dcSource
-        return dcSource ? [{ dcSource, index: sourceIndex(el, dcSource) }] : []
-      }),
+      selection,
       drafts,
       sent,
     })

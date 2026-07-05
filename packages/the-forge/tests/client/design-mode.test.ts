@@ -1751,3 +1751,99 @@ describe('lifecycle persistence', () => {
     expect(mode.active).toBe(false)
   })
 })
+
+// Critical E2E finding: boot() runs restoreLifecycle() before the framework has rendered the
+// app, so locateBySource() finds nothing at that instant. These tests reproduce that race by
+// calling restoreLifecycle() against an EMPTY document, then appending the element afterward.
+describe('lifecycle restore races the framework mount', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const savedState = {
+    v: 1 as const,
+    designModeOn: true,
+    selection: [{ dcSource: 'src/App.tsx:3:3', index: 0 }],
+    drafts: [{ dcSource: 'src/App.tsx:3:3', index: 0, props: [['padding-top', '24px']] as [string, string][] }],
+    sent: [],
+  }
+
+  it('restore retries until the framework renders', () => {
+    // DOM is empty at restore time — mirrors boot() racing the app mount.
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    mode.restoreLifecycle(savedState)
+    expect(mode.active).toBe(true)
+    expect(mode.selection).toHaveLength(0) // nothing to locate yet
+
+    // Framework "mounts" the element.
+    const target = document.createElement('div')
+    target.setAttribute('data-dc-source', 'src/App.tsx:3:3')
+    document.body.appendChild(target)
+
+    vi.advanceTimersByTime(600)
+
+    expect(target.style.getPropertyValue('padding-top')).toBe('24px')
+    expect(mode.selection).toHaveLength(1)
+    expect(mode.selection[0]).toBe(target as never)
+    expect(loadLifecycle()?.drafts).toEqual([{ dcSource: 'src/App.tsx:3:3', index: 0, props: [['padding-top', '24px']] }])
+  })
+
+  it('storage stays lossless during the retry window', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    mode.restoreLifecycle(savedState)
+
+    // Before the element ever appears, storage must still carry the pending draft — persist()
+    // must not have clobbered it down to [] just because the live DraftStore is empty.
+    expect(loadLifecycle()?.drafts).toEqual([{ dcSource: 'src/App.tsx:3:3', index: 0, props: [['padding-top', '24px']] }])
+    expect(loadLifecycle()?.selection).toEqual([{ dcSource: 'src/App.tsx:3:3', index: 0 }])
+  })
+
+  it('deactivation cancels the retry', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    mode.restoreLifecycle(savedState)
+
+    mode.setActive(false)
+
+    const target = document.createElement('div')
+    target.setAttribute('data-dc-source', 'src/App.tsx:3:3')
+    document.body.appendChild(target)
+
+    vi.advanceTimersByTime(15000) // well past the ~12s bounded window
+
+    expect(target.style.getPropertyValue('padding-top')).toBe('')
+  })
+
+  it('retry gives up after the bounded window', () => {
+    // DOM never gets the element — the whole point of the bound.
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    expect(() => {
+      mode.restoreLifecycle(savedState)
+      vi.advanceTimersByTime(13000)
+    }).not.toThrow()
+
+    // A subsequent persist (e.g. a later selection change) must no longer carry the entry —
+    // pendingRestore was drained once attempts were exhausted.
+    mode.deselect()
+    expect(loadLifecycle()?.drafts).toEqual([])
+  })
+})
