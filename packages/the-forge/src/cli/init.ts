@@ -29,7 +29,9 @@ export interface InitIO {
 // asserts these stay in sync with SETUP.md; keep them verbatim, don't
 // reformat/retype them even for consistency with this file's own style.
 
-const VITE_MANUAL_SNIPPET = `import { defineConfig } from 'vite'
+// Exported (export-only change, no behavior change) so tests/cli/init.test.ts can assert
+// these stay byte-identical to SETUP.md's own code blocks (the sync test — task A6).
+export const VITE_MANUAL_SNIPPET = `import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { theForge } from 'the-forge/vite'
 
@@ -37,13 +39,13 @@ export default defineConfig({
   plugins: [theForge(), react()],
 })`
 
-const NEXT_MANUAL_SNIPPET = `import { withForge } from 'the-forge/next'
+export const NEXT_MANUAL_SNIPPET = `import { withForge } from 'the-forge/next'
 
 export default withForge({
   // ...the project's existing next.config fields
 })`
 
-const NEXT_APP_ROUTER_MANUAL_SNIPPET = `// app/layout.tsx
+export const NEXT_APP_ROUTER_MANUAL_SNIPPET = `// app/layout.tsx
 import type { ReactNode } from 'react'
 import { ForgeDesignMode } from 'the-forge/design-mode'
 
@@ -58,7 +60,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   )
 }`
 
-const NEXT_PAGES_ROUTER_MANUAL_SNIPPET = `// pages/_app.tsx
+export const NEXT_PAGES_ROUTER_MANUAL_SNIPPET = `// pages/_app.tsx
 import type { AppProps } from 'next/app'
 import { ForgeDesignMode } from 'the-forge/design-mode'
 

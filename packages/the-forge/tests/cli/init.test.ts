@@ -3,6 +3,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { init, type InitIO } from '../../src/cli/init'
+import {
+  VITE_MANUAL_SNIPPET,
+  NEXT_MANUAL_SNIPPET,
+  NEXT_APP_ROUTER_MANUAL_SNIPPET,
+  NEXT_PAGES_ROUTER_MANUAL_SNIPPET,
+} from '../../src/cli/init'
 
 let dir: string
 let lines: string[]
@@ -219,6 +225,35 @@ describe('init — malformed package.json', () => {
     expect(out.toLowerCase()).toContain('could not be parsed')
     expect(out).toContain('npm install -D the-forge')
     expect(out).toContain('[done]') // config edit still ran
+  })
+})
+
+// Sync check between the CLI's manual-fallback snippets and SETUP.md's own code blocks
+// (task A6): SETUP.md is the single source, and init.ts's constants are byte-identical
+// copies used for the [manual] fallback output. This only proves anything inside the git
+// checkout — a published tarball never ships SETUP.md, so skip cleanly there rather than
+// failing on a file that's expected to be absent.
+const repoRoot = path.resolve(__dirname, '../../../..')
+const setupMdPath = path.join(repoRoot, 'SETUP.md')
+const hasSetupMd = fs.existsSync(setupMdPath)
+
+describe.skipIf(!hasSetupMd)('init — manual snippets stay in sync with SETUP.md', () => {
+  const setupMd = hasSetupMd ? fs.readFileSync(setupMdPath, 'utf8') : ''
+
+  it('SETUP.md contains the Vite manual snippet verbatim', () => {
+    expect(setupMd).toContain(VITE_MANUAL_SNIPPET)
+  })
+
+  it('SETUP.md contains the Next config manual snippet verbatim', () => {
+    expect(setupMd).toContain(NEXT_MANUAL_SNIPPET)
+  })
+
+  it('SETUP.md contains the Next App Router mount snippet verbatim', () => {
+    expect(setupMd).toContain(NEXT_APP_ROUTER_MANUAL_SNIPPET)
+  })
+
+  it('SETUP.md contains the Next Pages Router mount snippet verbatim', () => {
+    expect(setupMd).toContain(NEXT_PAGES_ROUTER_MANUAL_SNIPPET)
   })
 })
 
