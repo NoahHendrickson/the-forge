@@ -4,6 +4,7 @@ import { DraftStore } from './drafts'
 import { NumberField } from './controls'
 import { createButton } from './ui/button'
 import { createSelect } from './ui/select'
+import { createColorRow } from './ui/swatch'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { ColorPicker } from './colorpicker'
 import { TokenPicker, type TokenEntry } from './tokenpicker'
@@ -931,29 +932,7 @@ export class Panel {
     getContrastAgainst: () => string | null
     onPick: (css: string) => void
   }): HTMLElement {
-    const row = document.createElement('div')
-    row.className = 'color-row'
-
-    const labelEl = document.createElement('span')
-    labelEl.className = 'nf-label'
-    labelEl.textContent = opts.label
-    row.append(labelEl)
-
-    const swatch = document.createElement('button')
-    swatch.type = 'button'
-    swatch.className = 'swatch'
-    row.append(swatch)
-
-    // Color lives on a child element stacked on top of the parent's checkerboard —
-    // see the `.swatch`/`.swatch-color` comment in overlay.ts for why (background-color
-    // on the parent itself would paint beneath the checkerboard background-image layers).
-    const swatchColor = document.createElement('span')
-    swatchColor.className = 'swatch-color'
-    swatch.append(swatchColor)
-
-    const valueEl = document.createElement('span')
-    valueEl.className = 'color-value'
-    row.append(valueEl)
+    const { row, swatch, swatchColor, valueEl } = createColorRow({ label: opts.label })
 
     swatch.addEventListener('click', () => {
       this.colorPicker.open({
@@ -1126,22 +1105,9 @@ export class Panel {
     const rows = this.selectionColorsRows
     rows.replaceChildren()
     for (const group of this.groupSelectionColors()) {
-      const row = document.createElement('div')
-      row.className = 'color-row sc-row'
-
-      const swatch = document.createElement('button')
-      swatch.type = 'button'
-      swatch.className = 'swatch'
-      const swatchColor = document.createElement('span')
-      swatchColor.className = 'swatch-color'
+      const { row, swatch, swatchColor, valueEl } = createColorRow({ className: 'sc-row' })
       swatchColor.style.color = group.css
-      swatch.append(swatchColor)
-      row.append(swatch)
-
-      const valueEl = document.createElement('span')
-      valueEl.className = 'color-value'
       valueEl.textContent = this.colorLabel(group.css)
-      row.append(valueEl)
 
       const countEl = document.createElement('span')
       countEl.className = 'sc-count'

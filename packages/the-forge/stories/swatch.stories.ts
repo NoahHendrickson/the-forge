@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/html-vite'
 import { ColorPicker } from '../src/client/colorpicker'
+import { createColorRow } from '../src/client/ui/swatch'
 import { mountInShadow } from './mount'
 
 const meta: Meta = {
@@ -9,31 +10,11 @@ export default meta
 
 type Story = StoryObj
 
-/** Builds a `.color-row` exactly as Panel.buildColorRow does (swatch button + value text). */
+/** Renders the real product `.color-row` (ui/swatch.ts) — the same builder panel.ts uses. */
 function buildColorRow(label: string, css: string): HTMLElement {
-  const row = document.createElement('div')
-  row.className = 'color-row'
-
-  const labelEl = document.createElement('span')
-  labelEl.className = 'nf-label'
-  labelEl.textContent = label
-  row.append(labelEl)
-
-  const swatch = document.createElement('button')
-  swatch.type = 'button'
-  swatch.className = 'swatch'
-  row.append(swatch)
-
-  const swatchColor = document.createElement('span')
-  swatchColor.className = 'swatch-color'
+  const { row, swatchColor, valueEl } = createColorRow({ label })
   swatchColor.style.color = css
-  swatch.append(swatchColor)
-
-  const valueEl = document.createElement('span')
-  valueEl.className = 'color-value'
   valueEl.textContent = css
-  row.append(valueEl)
-
   return row
 }
 

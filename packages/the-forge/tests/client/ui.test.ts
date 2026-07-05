@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createButton } from '../../src/client/ui/button'
 import { createSelect } from '../../src/client/ui/select'
+import { createColorRow } from '../../src/client/ui/swatch'
 
 beforeEach(() => {
   document.body.innerHTML = ''
@@ -107,5 +108,42 @@ describe('createSelect', () => {
     s.value = 'b'
     s.dispatchEvent(new Event('change'))
     expect(onChange).toHaveBeenCalledWith('b')
+  })
+})
+
+describe('createColorRow', () => {
+  it('builds the .color-row markup: label, checkerboard swatch button, value span', () => {
+    const { row, swatch, swatchColor, valueEl } = createColorRow({ label: 'Fill' })
+    expect(row.className).toBe('color-row')
+    const label = row.querySelector('.nf-label')
+    expect(label?.textContent).toBe('Fill')
+    expect(swatch.tagName).toBe('BUTTON')
+    expect(swatch.type).toBe('button')
+    expect(swatch.className).toBe('swatch')
+    expect(swatchColor.className).toBe('swatch-color')
+    expect(swatchColor.parentElement).toBe(swatch)
+    expect(valueEl.className).toBe('color-value')
+    expect([...row.children]).toEqual([label, swatch, valueEl])
+  })
+
+  it('label-less row with additive class matches the selection-colors shape', () => {
+    const { row, swatch, valueEl } = createColorRow({ className: 'sc-row' })
+    expect(row.className).toBe('color-row sc-row')
+    expect(row.querySelector('.nf-label')).toBeNull()
+    expect([...row.children]).toEqual([swatch, valueEl])
+  })
+
+  it('with no opts produces the bare labeled-less .color-row', () => {
+    const { row } = createColorRow()
+    expect(row.className).toBe('color-row')
+    expect(row.children.length).toBe(2)
+  })
+
+  it('parts are live references — setting color/text reaches the DOM', () => {
+    const { row, swatchColor, valueEl } = createColorRow({ label: 'Stroke' })
+    swatchColor.style.color = 'rgb(13, 153, 255)'
+    valueEl.textContent = '#0D99FF'
+    expect((row.querySelector('.swatch-color') as HTMLElement).style.color).toBe('rgb(13, 153, 255)')
+    expect(row.querySelector('.color-value')?.textContent).toBe('#0D99FF')
   })
 })
