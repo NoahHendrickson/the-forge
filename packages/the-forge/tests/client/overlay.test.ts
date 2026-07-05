@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { Overlay, CSS } from '../../src/client/overlay'
+import { Overlay, CSS, TOKENS } from '../../src/client/overlay'
 
 beforeEach(() => {
   document.body.innerHTML = ''
@@ -77,6 +77,62 @@ describe('Overlay CSS (Track A visibility correctness)', () => {
     expect(CSS).toMatch(/\.src-dir\s*{[^}]*text-overflow:\s*ellipsis/s)
     expect(CSS).toMatch(/\.src-tail\s*{[^}]*flex:\s*none/s)
   })
+})
+
+describe('Overlay CSS design tokens (Task 1)', () => {
+  const count = (s: string) => CSS.split(s).length - 1
+
+  it('declares the second :host rule directly after the :host { all: initial } reset', () => {
+    // Separate rule (not folded into `all: initial`) keeps reset and tokens visually
+    // distinct — `all` does not reset custom properties anyway.
+    expect(CSS).toMatch(/:host\s*{\s*all:\s*initial;?\s*}\s*:host\s*{/)
+  })
+
+  it('declares every TOKENS entry exactly once in the generated :host block', () => {
+    for (const [name, value] of Object.entries(TOKENS)) {
+      expect(CSS).toContain(`--${name}: ${value}`)
+      expect(count(`--${name}: ${value}`)).toBe(1) // declared exactly once
+    }
+  })
+
+
+  it('the ripple token unifies the lowercase #e2954a case variant', () => {
+    expect(count('e2954a')).toBe(0)
+    expect(count('#E2954A')).toBe(1) // declaration only, inside --ripple
+  })
+
+  it('every tokenized color appears only in its :host declaration — no leftover literal uses', () => {
+    // Ratchet: for every color-valued token, the raw literal may appear exactly once
+    // (its generated declaration); every other use must be var(--name). Non-color tokens
+    // (font stacks, px sizes) collide with unrelated CSS text, so the ratchet is colors-only.
+    for (const value of Object.values(TOKENS)) {
+      if (!/^#|^rgba?\(/.test(value)) continue
+      expect(count(value)).toBe(1)
+    }
+  })
+
+
+  it('the ripple why-comment ("must stay distinct from selection accent") is preserved verbatim', () => {
+    expect(CSS).toContain('must stay distinct from selection accent')
+  })
+
+  it('the palette comment block documents token names, not raw values', () => {
+    const commentBlock = CSS.slice(CSS.indexOf('/*'), CSS.indexOf('*/') + 2)
+    expect(commentBlock).toContain('--surface')
+    expect(commentBlock).toContain('--accent')
+    expect(commentBlock).toContain('--ripple')
+    // Should no longer repeat the raw hex/rgba values as the primary documentation content
+    expect(commentBlock).not.toContain('#2C2C2C')
+    expect(commentBlock).not.toContain('rgba(255,255,255,0.06)')
+  })
+
+  it('font shorthands reference the font-family and type-scale tokens via var()', () => {
+    expect(CSS).toContain('font: 500 var(--text-md) var(--font-ui)')
+    expect(CSS).toContain('var(--font-mono)')
+    expect(CSS).not.toMatch(/font:\s*[0-9]+\s+[0-9]+(\.[0-9]+)?px\s+system-ui/)
+    expect(CSS).not.toMatch(/font:\s*[0-9]+\s+[0-9]+(\.[0-9]+)?px\s+ui-monospace/)
+  })
+
 })
 
 describe('Overlay (M2 additions)', () => {

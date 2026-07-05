@@ -141,6 +141,21 @@ const WEIGHTS: Array<[value: string, label: string]> = [
   ['900', 'Black'],
 ]
 
+// Canonical option tables for the panel's selects — panel.ts and the Storybook select
+// stories both import these, so the catalog can't drift from the shipped dropdowns.
+const STROKE_STYLES: Array<[value: string, label: string]> = [
+  ['none', 'None'],
+  ['solid', 'Solid'],
+  ['dashed', 'Dashed'],
+  ['dotted', 'Dotted'],
+]
+
+const SIZE_MODES: Array<[value: string, label: string]> = [
+  ['fixed', 'Fixed'],
+  ['hug', 'Hug'],
+  ['fill', 'Fill'],
+]
+
 // Section ORDER is fixed forever: Layout -> Size -> Padding -> Margin -> Typography -> Fill -> Stroke -> Appearance.
 const SECTIONS: SectionSpec[] = [
   {
@@ -248,5 +263,7 @@ export {
   styleForWidthProp,
   draftSolidIfNone,
   WEIGHTS,
+  STROKE_STYLES,
+  SIZE_MODES,
   SECTIONS,
 }

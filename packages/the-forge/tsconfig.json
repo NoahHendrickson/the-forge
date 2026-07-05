@@ -9,5 +9,5 @@
     "noEmit": true,
     "types": ["node", "vitest/importMeta"]
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests", "stories", ".storybook"]
 }
