@@ -143,16 +143,21 @@ export class DesignMode {
         this.onSendComplete?.()
       }
       const onSendOk = (id: string): void => {
-        const mapping = pairs.map(([el, change]) => ({
-          el,
-          dcSource: el.dataset.dcSource ?? null,
-          draftProps: [...(this.drafts.entries().get(el)?.keys() ?? [])],
-          changes: change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
-        }))
+        const mapping = pairs.map(([el, change]) => {
+          const dcSource = el.dataset.dcSource ?? null
+          return {
+            el,
+            dcSource,
+            index: dcSource ? sourceIndex(el, dcSource) : 0,
+            draftProps: [...(this.drafts.entries().get(el)?.keys() ?? [])],
+            changes: change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
+          }
+        })
         this.sent.add(id, mapping)
-        const seeds: SentSeed[] = pairs.map(([el, change]) => ({
+        const seeds: SentSeed[] = pairs.map(([el, change], i) => ({
           el,
-          dcSource: el.dataset.dcSource ?? null,
+          dcSource: mapping[i].dcSource,
+          index: mapping[i].index,
           draftProps: [...(this.drafts.entries().get(el)?.keys() ?? [])],
           change,
         }))
@@ -271,6 +276,7 @@ export class DesignMode {
           {
             el: seed.el,
             dcSource: seed.dcSource,
+            index: seed.index,
             draftProps: seed.draftProps,
             changes: seed.change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
           },
@@ -371,12 +377,19 @@ export class DesignMode {
       const seeds: SentSeed[] = s.elements.map((pe) => ({
         el: (pe.dcSource && locateBySource(pe.dcSource, pe.index)) || (document.createElement(pe.tag) as TaggedElement),
         dcSource: pe.dcSource,
+        index: pe.index,
         draftProps: pe.draftProps,
         change: pe.change,
       }))
       this.sent.add(
         s.id,
-        seeds.map((seed, i) => ({ el: seed.el, dcSource: seed.dcSource, draftProps: seed.draftProps, changes: s.elements[i].changes }))
+        seeds.map((seed, i) => ({
+          el: seed.el,
+          dcSource: seed.dcSource,
+          index: seed.index,
+          draftProps: seed.draftProps,
+          changes: s.elements[i].changes,
+        }))
       )
       this.sentSeeds.set(s.id, seeds)
       this.changeList.addSent(s.id, seeds)
@@ -476,7 +489,12 @@ export class DesignMode {
         id,
         elements: seeds.map((seed) => ({
           dcSource: seed.dcSource,
-          index: seed.dcSource ? sourceIndex(seed.el, seed.dcSource) : 0,
+          // Read the seed's OWN index rather than recomputing via sourceIndex(seed.el, ...): for
+          // a still-detached placeholder seed, sourceIndex(el, dcSource) can never find `el`
+          // among the live DOM matches (it's not there) and always degrades to 0, silently
+          // losing which list instance this entry actually refers to on every persist() while
+          // detached. Seeds carry their index from send/restore time — trust it instead.
+          index: seed.index,
           tag: seed.change.tag,
           draftProps: seed.draftProps,
           changes: seed.change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
@@ -671,12 +689,11 @@ function boot(): void {
   // some frameworks legitimately hard-reload (non-HMR-able edits), and losing every
   // draft/sent state to that was half of the original "panel closes on Send" trust bug.
   const saved = loadLifecycle()
-  // loadLifecycle only validates TOP-LEVEL shape (v/designModeOn/array-ness of
-  // selection/drafts/sent) — it does not descend into each `sent` array element. A corrupt
-  // element (e.g. `{}`) reaches restoreLifecycle and throws mid-restore (e.g. destructuring
-  // `s.elements`), which — since setActive(true) runs first inside restoreLifecycle — would
-  // leave capture-phase listeners attached to a half-restored session. Catch and start clean,
-  // same posture as loadLifecycle's own shape-violation fallback (final-review F3).
+  // R1: loadLifecycle now validates and drops invalid items per-entry (selection/drafts/sent),
+  // so a corrupt individual item can no longer reach restoreLifecycle at all — this try/catch
+  // is defense-in-depth, validation lives at the boundary (loadLifecycle itself). Kept anyway:
+  // setActive(true) runs first inside restoreLifecycle, so ANY unforeseen throw mid-restore
+  // would otherwise leave capture-phase listeners attached to a half-restored session.
   if (saved?.designModeOn) {
     try {
       mode.restoreLifecycle(saved)

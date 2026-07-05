@@ -25,8 +25,8 @@ function elementChange(overrides: Partial<ElementChange> = {}): ElementChange {
   }
 }
 
-function seed(el: HTMLElement, change = elementChange()): SentSeed {
-  return { el: el as never, dcSource: el.getAttribute('data-dc-source'), draftProps: ['padding-top'], change }
+function seed(el: HTMLElement, change = elementChange(), index = 0): SentSeed {
+  return { el: el as never, dcSource: el.getAttribute('data-dc-source'), index, draftProps: ['padding-top'], change }
 }
 
 const noop = { onHover: vi.fn(), onSelect: vi.fn(), onResend: vi.fn() }
@@ -258,6 +258,7 @@ describe('interactions', () => {
     const placeholderSeed: SentSeed = {
       el: placeholder,
       dcSource,
+      index: 0,
       draftProps: ['padding-top'],
       change: elementChange({ source: { file: 'src/App.tsx', line: 9, col: 1 } }),
     }
@@ -275,6 +276,30 @@ describe('interactions', () => {
     expect(placeholderSeed.el).toBe(real) // healed in place — shared by inFlightProps/persist too
   })
 
+  // R1: seeds now carry their own instance index (no more index-0 trade-off) — healing must
+  // attach the SECOND list instance, not always the first match, when the seed says index: 1.
+  it('a placeholder seed heals to the SECOND list instance when its seed carries index: 1', () => {
+    const dcSource = 'src/List.tsx:4:4'
+    const placeholder = document.createElement('li') as unknown as never // detached
+    const list = new ChangeList(new DraftStore(), noop)
+    const placeholderSeed: SentSeed = {
+      el: placeholder,
+      dcSource,
+      index: 1,
+      draftProps: ['padding-top'],
+      change: elementChange({ tag: 'li', source: { file: 'src/List.tsx', line: 4, col: 4 } }),
+    }
+    list.addSent('q1', [placeholderSeed])
+
+    // Two live instances share dcSource — the SECOND (DOM order) is the one this seed refers to.
+    document.body.innerHTML = `
+      <li data-dc-source="${dcSource}" id="first"></li>
+      <li data-dc-source="${dcSource}" id="second"></li>`
+    list.syncDrafts()
+
+    expect((placeholderSeed.el as unknown as HTMLElement).id).toBe('second')
+  })
+
   it('healing a placeholder seed excludes the draft row for the same now-located element (no duplicate)', () => {
     const dcSource = 'src/App.tsx:9:1'
     const placeholder = document.createElement('h1') as unknown as never
@@ -283,6 +308,7 @@ describe('interactions', () => {
     const placeholderSeed: SentSeed = {
       el: placeholder,
       dcSource,
+      index: 0,
       draftProps: ['padding-top'],
       change: elementChange({ source: { file: 'src/App.tsx', line: 9, col: 1 } }),
     }

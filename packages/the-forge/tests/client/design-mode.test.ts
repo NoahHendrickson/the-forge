@@ -1702,6 +1702,47 @@ describe('lifecycle persistence', () => {
     expect(loadLifecycle()?.designModeOn).toBe(false)
   })
 
+  // R1: seeds now carry their own instance index end-to-end (send -> persist -> restore),
+  // fixing the index-degradation bug where persist() recomputed sourceIndex(seed.el, ...) —
+  // which always resolves to 0 once a placeholder is detached, silently losing which of several
+  // DOM instances sharing one dcSource a request actually targeted.
+  it('persist -> restore preserves the sent element index for the SECOND of two list instances', async () => {
+    document.body.innerHTML = `
+      <li data-dc-source="src/List.tsx:4:4" id="first"></li>
+      <li data-dc-source="src/List.tsx:4:4" id="second"></li>`
+    const second = document.getElementById('second')!
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    mode.setActive(true)
+    ;(mode as never as { drafts: DraftStore }).drafts.apply(second as never, 'padding-top', '24px')
+    overlay.sendButton.click()
+    for (let i = 0; i < 6; i++) await Promise.resolve() // flush /queue + /dispatch
+
+    const persisted = loadLifecycle()
+    expect(persisted?.sent).toHaveLength(1)
+    expect(persisted!.sent[0].elements[0].index).toBe(1) // the SECOND instance, not degraded to 0
+
+    // Simulate a full reload: fresh DesignMode restoring from the same persisted lifecycle.
+    const overlay2 = new Overlay()
+    overlay2.mount()
+    const mode2 = new DesignMode(overlay2)
+    liveModes.push(mode2)
+    overlay2.attachPanel(mode2.panelRoot)
+    mode2.restoreLifecycle(persisted!)
+
+    const reRoundTripped = loadLifecycle()
+    expect(reRoundTripped!.sent[0].elements[0].index).toBe(1) // survives a second persist() too
+  })
+
   it('restoreLifecycle re-activates, re-applies drafts, re-arms the verifier, and re-selects', () => {
     document.body.innerHTML = `<div data-dc-source="src/App.tsx:3:3" id="target"></div>`
     const target = document.getElementById('target')!
@@ -1959,7 +2000,7 @@ describe('resend persistence (final-review F1)', () => {
 describe('boot restore guard against corrupt storage (final-review F3)', () => {
   beforeEach(() => sessionStorage.clear())
 
-  it('does not throw when a persisted sent entry is shallow-valid but corrupt', () => {
+  it('drops a shallow-valid-but-corrupt sent entry at the boundary and restores the rest cleanly', () => {
     sessionStorage.setItem(
       'the-forge:lifecycle',
       JSON.stringify({ v: 1, designModeOn: true, selection: [], drafts: [], sent: [{}] })
@@ -1970,10 +2011,12 @@ describe('boot restore guard against corrupt storage (final-review F3)', () => {
     liveModes.push(mode)
     overlay.attachPanel(mode.panelRoot)
     const saved = loadLifecycle()
-    // Mirrors boot()'s actual guarded restore call (index.ts): loadLifecycle only validates
-    // top-level shape, so a corrupt array element (missing `elements`, `id`, …) reaches
-    // restoreLifecycle and throws mid-restore — boot() wraps the call in try/catch and starts
-    // clean (setActive(false)) rather than leaving capture-phase listeners half-attached.
+    // R1: loadLifecycle now validates and drops invalid items PER ENTRY — a corrupt array
+    // element (missing `id`/`elements`, here `{}`) is dropped by loadLifecycle itself and never
+    // reaches restoreLifecycle at all, so saved.sent is simply []. boot()'s try/catch around
+    // restoreLifecycle is defense-in-depth only now (see index.ts boot()), not load-bearing —
+    // this mirrors that guarded call, but the guard is no longer what saves the session.
+    expect(saved?.sent).toEqual([])
     expect(() => {
       if (saved?.designModeOn) {
         try {
@@ -1983,7 +2026,9 @@ describe('boot restore guard against corrupt storage (final-review F3)', () => {
         }
       }
     }).not.toThrow()
-    // Degrades to "start clean" rather than a half-restored, listener-leaking session.
-    expect(mode.active).toBe(false)
+    // A clean restore (nothing corrupt survived to restoreLifecycle) leaves the session ACTIVE —
+    // no more degrading a good session to "start clean" just because storage carried one
+    // now-safely-dropped bad item alongside it.
+    expect(mode.active).toBe(true)
   })
 })

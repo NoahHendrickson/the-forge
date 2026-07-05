@@ -109,6 +109,34 @@ describe('verifyEntry', () => {
     expect(result.missing).toBe(0)
   })
 
+  // R1: verifier.locate() is now a thin delegate to lifecycle-store's canonical resolveElement
+  // — proves it honors elements[].index (default 0 for legacy callers) rather than always
+  // taking the first DOM match for a shared dcSource.
+  it('re-locates a disconnected element to the SECOND list instance when elements[].index is 1', () => {
+    const placeholder = document.createElement('li')
+    placeholder.dataset.dcSource = 'src/List.tsx:4:4' // never appended — disconnected
+    document.body.innerHTML = `
+      <li data-dc-source="src/List.tsx:4:4" id="first"></li>
+      <li data-dc-source="src/List.tsx:4:4" id="second"></li>`
+    document.getElementById('second')!.id = 'second'
+    styleRule('second', 'padding-top', '24px')
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [
+        {
+          el: placeholder,
+          dcSource: 'src/List.tsx:4:4',
+          index: 1,
+          draftProps: ['padding-top'],
+          changes: [{ property: 'padding-top', afterCss: '24px' }],
+        },
+      ],
+    }
+    const result = verifyEntry(entry, document)
+    expect(result.verified).toBe(1)
+    expect(result.missing).toBe(0)
+  })
+
   it('counts as missing when neither the live ref nor a dc-source match is found', () => {
     const d = el()
     d.dataset.dcSource = 'src/App.tsx:9:9'

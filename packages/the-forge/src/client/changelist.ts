@@ -3,11 +3,15 @@ import type { StageEvent, LifecycleStage } from './verifier'
 import type { ElementChange, ChangeItem } from './request'
 import type { TaggedElement } from './source'
 import { parseSourceAttr } from './source'
-import { locateBySource } from './lifecycle-store'
+import { resolveElement } from './lifecycle-store'
 
 export interface SentSeed {
   el: TaggedElement
   dcSource: string | null
+  /** Position among matches for `dcSource` at send time — carried through to healPlaceholders()
+   * (via resolveElement) so a restored/detached seed heals to the SAME list instance it was
+   * originally sent for, not just whichever instance happens to match first. */
+  index: number
   draftProps: string[]
   change: ElementChange
 }
@@ -145,9 +149,9 @@ export class ChangeList {
     for (const row of this.sentRows.values()) {
       if (row.seed.el.isConnected) continue
       if (!row.seed.dcSource) continue
-      // Index 0: the seed doesn't carry its original per-instance list index, so first-match
-      // is the best we can do — mirrors the verifier's own locate() fallback for list elements.
-      const located = locateBySource(row.seed.dcSource, 0)
+      // Seeds carry their own instance index (R1) — resolveElement re-finds the SAME list
+      // instance this seed was originally sent for, mirroring the verifier's own locate().
+      const located = resolveElement(row.seed.el, row.seed.dcSource, row.seed.index)
       if (located) row.seed.el = located
     }
   }

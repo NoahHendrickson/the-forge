@@ -4,6 +4,7 @@ import type { DraftStore } from './drafts'
 import type { TaggedElement } from './source'
 import { AGENT_DISPLAY_NAME, currentAgent } from './agent'
 import { queuedLineFor, type WatcherState } from './watch'
+import { resolveElement } from './lifecycle-store'
 
 const POLL_MS = 2000
 /** After this many consecutive failed polls the verifier surfaces "paused" and starts backing off. */
@@ -38,10 +39,13 @@ export interface StageEvent {
   mismatches?: Array<{ property: string; expected: string; actual: string }>
 }
 
-function locate(el: TaggedElement, dcSource: string | null, doc: Document): TaggedElement | null {
-  if (el.isConnected) return el
-  if (!dcSource) return null
-  return doc.querySelector<TaggedElement>(`[data-dc-source="${dcSource}"]`)
+/** Thin delegate to lifecycle-store's canonical resolveElement — that module owns the one
+ * connected-el-wins / index-then-first-match precedence rule now; this function used to
+ * hand-roll a raw first-match querySelector here, which silently ignored which list instance an
+ * entry actually referred to. `index` defaults to 0 for legacy callers/tests whose elements[]
+ * entries predate the per-element index field — the same first-match behavior as before. */
+function locate(el: TaggedElement, dcSource: string | null, doc: Document, index = 0): TaggedElement | null {
+  return resolveElement(el, dcSource, index, doc)
 }
 
 /** Per-element verification outcome, used to decide whether that element's drafts can be committed. */
@@ -58,7 +62,7 @@ interface ElementVerification {
 
 function verifyElements(entry: SentEntry, doc: Document = document): ElementVerification[] {
   return entry.elements.map((el) => {
-    const target = locate(el.el, el.dcSource, doc)
+    const target = locate(el.el, el.dcSource, doc, el.index ?? 0)
     if (!target) return { el: el.el, draftProps: el.draftProps, verified: 0, mismatched: [], missing: el.changes.length }
 
     // Neutralize the draft's inline styles before measuring — inline styles win the
