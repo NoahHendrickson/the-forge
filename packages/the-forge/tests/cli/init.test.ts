@@ -187,6 +187,41 @@ describe('init — failed install', () => {
   })
 })
 
+describe('init — malformed package.json', () => {
+  it('does not throw, prints the manual install line plus a parse note, and still edits the config', async () => {
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      `{\n  "name": "x",\n  "devDependencies": {},\n}\n` // trailing comma — invalid JSON
+    )
+    fs.writeFileSync(
+      path.join(dir, 'vite.config.ts'),
+      `import { defineConfig } from 'vite'\n\nexport default defineConfig({\n  plugins: [],\n})\n`
+    )
+
+    let code: number | undefined
+    let thrown: unknown
+    try {
+      code = await init(makeIO())
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(thrown).toBeUndefined()
+    expect(code).toBe(0)
+
+    const config = fs.readFileSync(path.join(dir, 'vite.config.ts'), 'utf8')
+    expect(config).toContain(`import { theForge } from 'the-forge/vite'`)
+
+    expect(runCalls).toEqual([])
+
+    const out = lines.join('\n')
+    expect(out).toContain('[manual]')
+    expect(out.toLowerCase()).toContain('could not be parsed')
+    expect(out).toContain('npm install -D the-forge')
+    expect(out).toContain('[done]') // config edit still ran
+  })
+})
+
 describe('init — dependency skip', () => {
   it('skips the install step when the-forge is already a dependency', async () => {
     writeJSON(path.join(dir, 'package.json'), {

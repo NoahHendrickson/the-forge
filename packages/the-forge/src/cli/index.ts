@@ -47,4 +47,14 @@ async function main(argv: string[]): Promise<number> {
   return 2
 }
 
-main(process.argv).then((code) => process.exit(code))
+// Belt-and-suspenders: init()'s own steps are conservative-fallback by design,
+// but any truly unexpected error (e.g. a bug, an fs edge case not accounted
+// for) must never surface as a raw stack trace to the user — one line to
+// stderr and a non-zero exit instead.
+main(process.argv)
+  .then((code) => process.exit(code))
+  .catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`the-forge: unexpected error — ${message}`)
+    process.exit(1)
+  })

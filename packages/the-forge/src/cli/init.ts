@@ -76,10 +76,21 @@ const FOOTER = `Next steps:
   - Click the Design toggle in the bottom-right corner of the running app.
   - In an agent session at this project's root, type /forge-watch to stay linked.`
 
-function isDependencyDeclared(cwd: string): boolean {
+// Sentinel: package.json exists but couldn't be parsed as JSON (e.g. trailing
+// comma). Distinct from `false` (parsed fine, dependency just isn't there) so
+// the install step can fall back to manual guidance instead of silently
+// treating a malformed file as "not installed".
+const PARSE_FAILED = Symbol('package.json parse failed')
+
+function isDependencyDeclared(cwd: string): boolean | typeof PARSE_FAILED {
   const pkgPath = path.join(cwd, 'package.json')
   const raw = fs.readFileSync(pkgPath, 'utf8')
-  const pkg: unknown = JSON.parse(raw)
+  let pkg: unknown
+  try {
+    pkg = JSON.parse(raw)
+  } catch {
+    return PARSE_FAILED
+  }
   if (typeof pkg !== 'object' || pkg === null) return false
   const depTables = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']
   for (const table of depTables) {
@@ -95,21 +106,32 @@ function printManual(io: InitIO, label: string, snippet: string): void {
 }
 
 async function runInstallStep(io: InitIO): Promise<void> {
-  if (isDependencyDeclared(io.cwd)) {
+  const declared = isDependencyDeclared(io.cwd)
+  const { cmd, args } = installCommand(detectPM(io.cwd))
+  const manualInstallSnippet = `  ${cmd} ${args.join(' ')}\n  # or: npm install -D the-forge`
+
+  if (declared === PARSE_FAILED) {
+    // Conservative fallback: an unparseable package.json means we can't tell
+    // whether the-forge is already declared, so we can't safely run an
+    // install for it either — same manual-install guidance as a failed
+    // install, plus a note on why. Config-edit steps are still worth doing,
+    // so this does not exit non-zero.
+    printManual(io, 'dependency install skipped — package.json could not be parsed — run this yourself:', manualInstallSnippet)
+    return
+  }
+
+  if (declared) {
     io.log('[skip] dependency — the-forge already in package.json')
     return
   }
 
-  const { cmd, args } = installCommand(detectPM(io.cwd))
   const exitCode = await io.run(cmd, args)
   if (exitCode === 0) {
     io.log('[done] dependency — installed the-forge')
     return
   }
 
-  io.log(`[manual] dependency install failed (exit ${exitCode}) — run this yourself:`)
-  io.log(`  ${cmd} ${args.join(' ')}`)
-  io.log('  # or: npm install -D the-forge')
+  printManual(io, `dependency install failed (exit ${exitCode}) — run this yourself:`, manualInstallSnippet)
 }
 
 function runViteConfigStep(io: InitIO, configPath: string): void {
@@ -120,8 +142,7 @@ function runViteConfigStep(io: InitIO, configPath: string): void {
     return
   }
   if (result.kind === 'fallback') {
-    io.log(`[manual] vite.config could not be edited automatically (${result.reason}) — add this yourself:`)
-    io.log(VITE_MANUAL_SNIPPET)
+    printManual(io, `vite.config could not be edited automatically (${result.reason}) — add this yourself:`, VITE_MANUAL_SNIPPET)
     return
   }
   fs.writeFileSync(configPath, result.code)
@@ -136,8 +157,7 @@ function runNextConfigStep(io: InitIO, configPath: string): void {
     return
   }
   if (result.kind === 'fallback') {
-    io.log(`[manual] next.config could not be edited automatically (${result.reason}) — add this yourself:`)
-    io.log(NEXT_MANUAL_SNIPPET)
+    printManual(io, `next.config could not be edited automatically (${result.reason}) — add this yourself:`, NEXT_MANUAL_SNIPPET)
     return
   }
   fs.writeFileSync(configPath, result.code)
@@ -146,9 +166,11 @@ function runNextConfigStep(io: InitIO, configPath: string): void {
 
 function runMountStep(io: InitIO, layout: { router: 'app' | 'pages'; path: string } | null): void {
   if (!layout) {
-    io.log('[manual] no root layout / _app found — mount ForgeDesignMode yourself:')
-    io.log(NEXT_APP_ROUTER_MANUAL_SNIPPET)
-    io.log(NEXT_PAGES_ROUTER_MANUAL_SNIPPET)
+    printManual(
+      io,
+      'no root layout / _app found — mount ForgeDesignMode yourself:',
+      `${NEXT_APP_ROUTER_MANUAL_SNIPPET}\n${NEXT_PAGES_ROUTER_MANUAL_SNIPPET}`
+    )
     return
   }
 
@@ -160,8 +182,7 @@ function runMountStep(io: InitIO, layout: { router: 'app' | 'pages'; path: strin
   }
   if (result.kind === 'fallback') {
     const snippet = layout.router === 'app' ? NEXT_APP_ROUTER_MANUAL_SNIPPET : NEXT_PAGES_ROUTER_MANUAL_SNIPPET
-    io.log(`[manual] ${path.basename(layout.path)} could not be edited automatically (${result.reason}) — add this yourself:`)
-    io.log(snippet)
+    printManual(io, `${path.basename(layout.path)} could not be edited automatically (${result.reason}) — add this yourself:`, snippet)
     return
   }
   fs.writeFileSync(layout.path, result.code)
