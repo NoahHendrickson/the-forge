@@ -266,6 +266,10 @@ button {
  */
 .swatch-color { position: absolute; inset: 0; background-color: currentColor; }
 .color-value { color: #9A9A9A; font-size: 10.5px; }
+.color-value-pill {
+  background: rgba(13,153,255,0.15); color: #7CC4FF;
+  border-radius: 4px; padding: 1px 5px;
+}
 .sc-row { justify-content: space-between; }
 .sc-count { color: #9A9A9A; font-size: 10.5px; margin-left: auto; }
 .stroke-style { flex: 1 1 40%; }

@@ -1,7 +1,7 @@
 import type { TaggedElement } from './source'
 import type { InspectorData } from './inspector'
 import { DraftStore } from './drafts'
-import { NumberField } from './controls'
+import { NumberField, TOKEN_ICON_SVG } from './controls'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { ColorPicker } from './colorpicker'
 import { TokenPicker, type TokenEntry } from './tokenpicker'
@@ -923,14 +923,15 @@ export class Panel {
     return wrap
   }
 
-  /** Renders a token name (exact nearestColorToken match) or a short hex fallback for display. */
-  private colorLabel(css: string): string {
+  /** Returns the exact-match token name for a fully-opaque color, or null (no claim made for
+   * transparent/semi-transparent values, or when no token matches exactly). */
+  private colorTokenName(css: string): string | null {
     const parsed = parseColorLocal(css)
-    if (!parsed) return css
+    if (!parsed) return null
     // Fully-transparent always renders as the literal keyword — a nearest-token guess (which
     // only compares r/g/b) would otherwise report some opaque color's name for a color that's
     // actually invisible.
-    if (parsed.a === 0) return 'transparent'
+    if (parsed.a === 0) return null
     // Token names are only claimed for fully-opaque colors — a semi-transparent value must
     // show its own hex (with alpha) rather than borrowing an opaque token's name, even when
     // the r/g/b channels coincide.
@@ -938,6 +939,16 @@ export class Panel {
       const nearest = nearestColorToken(parsed, readTokens().colors)
       if (nearest && nearest.distance === 0) return nearest.token.name
     }
+    return null
+  }
+
+  /** Renders a token name (exact nearestColorToken match) or a short hex fallback for display. */
+  private colorLabel(css: string): string {
+    const parsed = parseColorLocal(css)
+    if (!parsed) return css
+    if (parsed.a === 0) return 'transparent'
+    const tokenName = this.colorTokenName(css)
+    if (tokenName !== null) return tokenName
     return rgbToHex(parsed.r, parsed.g, parsed.b, parsed.a)
   }
 
@@ -972,6 +983,33 @@ export class Panel {
     valueEl.className = 'color-value'
     row.append(valueEl)
 
+    // Icon only when the theme actually offers color tokens — no empty dropdowns (mirrors
+    // the numeric fields' onTokenOpen gating in controls.ts).
+    if (colorTokenEntries(readTokens()) !== null) {
+      const tokenBtn = document.createElement('button')
+      tokenBtn.type = 'button'
+      tokenBtn.className = 'token-btn'
+      tokenBtn.innerHTML = TOKEN_ICON_SVG
+      tokenBtn.title = 'Use design token'
+      tokenBtn.addEventListener('click', () => {
+        const entries = colorTokenEntries(readTokens())
+        if (!entries || !this.el) return
+        this.tokenPicker.open({
+          anchor: row,
+          entries,
+          onApply: (entry) => {
+            if (!('color' in entry)) return
+            if (!this.el) return
+            this.onBeforeEdit(this.el)
+            opts.onPick(entry.color) // exact token value ⇒ request.ts emits bg-neutral-900 etc.
+            this.refresh()
+            this.onEdited()
+          },
+        })
+      })
+      row.append(tokenBtn)
+    }
+
     swatch.addEventListener('click', () => {
       this.colorPicker.open({
         anchor: row,
@@ -994,6 +1032,7 @@ export class Panel {
       const css = opts.getCss()
       swatchColor.style.color = css
       valueEl.textContent = this.colorLabel(css)
+      valueEl.classList.toggle('color-value-pill', this.colorTokenName(css) !== null)
     }
     return row
   }

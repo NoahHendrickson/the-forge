@@ -4,6 +4,7 @@ import { Panel, normalizeJustify, normalizeAlign, hasDirectText, tokenEntriesFor
 import { DraftStore } from '../../src/client/drafts'
 import { buildInspectorData } from '../../src/client/inspector'
 import { resetTokensCache, type Theme, type Tokens } from '../../src/client/tokens'
+import { buildChangeRequest } from '../../src/client/request'
 
 function setup(html = `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px; width: 200px;"></div>`) {
   document.body.innerHTML = html
@@ -1208,6 +1209,151 @@ describe('Panel Stroke section', () => {
     for (const side of ['top', 'right', 'bottom', 'left']) {
       expect(drafts.current(el, `border-${side}-color`)).toBe('rgb(1, 2, 3)')
     }
+  })
+})
+
+describe('Panel color rows + token-btn icon (T5)', () => {
+  function fillSection(panel: Panel): HTMLElement {
+    return [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => n.textContent?.replace('⋯', '').trim() === 'Fill'
+    ) as HTMLElement
+  }
+
+  function colorRows(panel: Panel): HTMLElement[] {
+    return [...fillSection(panel).parentElement!.querySelectorAll('.color-row')].filter((row) => {
+      const title = row.closest('.panel-rows')?.previousElementSibling
+      return title === fillSection(panel) && !(row as HTMLElement).hidden
+    }) as HTMLElement[]
+  }
+
+  function strokeSection(panel: Panel): HTMLElement {
+    return [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+    ) as HTMLElement
+  }
+
+  function setupColorTokens(html?: string) {
+    // readTokens() caches at module scope — earlier tests in this file (or file order in a
+    // full-suite run) can leave a stale no-color-tokens snapshot cached, so every setup here
+    // must reset it before applying its own theme.
+    resetTokensCache()
+    document.head.insertAdjacentHTML(
+      'beforeend',
+      '<style data-test-cb-tokens>:root { --color-red-500: #ff0000; --color-blue-400: #0000ff; }</style>'
+    )
+    document.documentElement.style.setProperty('--color-red-500', '#ff0000')
+    document.documentElement.style.setProperty('--color-blue-400', '#0000ff')
+    return setup(html)
+  }
+
+  afterEach(() => {
+    document.querySelectorAll('style[data-test-cb-tokens]').forEach((s) => s.remove())
+    document.documentElement.removeAttribute('style')
+    resetTokensCache()
+  })
+
+  it('Fill row contains a .token-btn when the theme has color tokens', () => {
+    const { panel } = setupColorTokens(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 0, 0);"></div>`
+    )
+    const fillRow = colorRows(panel)[0]
+    expect(fillRow.querySelector('.token-btn')).not.toBeNull()
+  })
+
+  it('Fill row has no .token-btn when the theme defines no color tokens', () => {
+    resetTokensCache()
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 0, 0);"></div>`
+    )
+    const fillRow = colorRows(panel)[0]
+    expect(fillRow.querySelector('.token-btn')).toBeNull()
+  })
+
+  it('clicking the Fill token-btn opens the token popover listing color entries with .tp-row-swatch', () => {
+    const { panel } = setupColorTokens(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 0, 0);"></div>`
+    )
+    const fillRow = colorRows(panel)[0]
+    const btn = fillRow.querySelector('.token-btn') as HTMLButtonElement
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    btn.click()
+    expect(picker.root.hidden).toBe(false)
+    const rows = [...picker.root.querySelectorAll('.tp-row')]
+    expect(rows.length).toBeGreaterThan(0)
+    expect(picker.root.querySelectorAll('.tp-row-swatch').length).toBeGreaterThan(0)
+    expect(rows.some((r) => r.textContent?.includes('red-500'))).toBe(true)
+  })
+
+  it('picking red-500 from the Fill token-btn drafts the exact token value and shows a pilled token name', () => {
+    const { el, panel, drafts } = setupColorTokens(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 255, 255);"></div>`
+    )
+    const fillRow = colorRows(panel)[0]
+    const btn = fillRow.querySelector('.token-btn') as HTMLButtonElement
+    btn.click()
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('red-500'))!
+    ;(row as HTMLElement).click()
+
+    expect(drafts.current(el, 'background-color')).toBe('#ff0000')
+    const valueEl = fillRow.querySelector('.color-value') as HTMLElement
+    expect(valueEl.textContent).toBe('red-500')
+    expect(valueEl.classList.contains('color-value-pill')).toBe(true)
+  })
+
+  it('picking a raw color via the ColorPicker that matches no token shows a hex label with no pill (derived-state round trip)', () => {
+    const { el, panel, drafts } = setupColorTokens(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 255, 255);"></div>`
+    )
+    const fillRow = colorRows(panel)[0]
+    const swatch = fillRow.querySelector('.swatch') as HTMLElement
+    let onPick: ((css: string, meta: { token?: string }) => void) | null = null
+    ;(panel as unknown as { colorPicker: { open: (opts: any) => void } }).colorPicker.open = (opts) => {
+      onPick = opts.onPick
+    }
+    swatch.click()
+    onPick!('rgb(10, 20, 30)', {})
+
+    expect(drafts.current(el, 'background-color')).toBe('rgb(10, 20, 30)')
+    const valueEl = fillRow.querySelector('.color-value') as HTMLElement
+    expect(valueEl.textContent).toBe('#0a141e')
+    expect(valueEl.classList.contains('color-value-pill')).toBe(false)
+  })
+
+  it('Stroke Color row: picking a token drafts all four border-*-color longhands', () => {
+    const { el, panel, drafts } = setupColorTokens(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    const strokeColorRow = strokeSection(panel).nextElementSibling!.querySelector('.color-row') as HTMLElement
+    const btn = strokeColorRow.querySelector('.token-btn') as HTMLButtonElement
+    expect(btn).not.toBeNull()
+    btn.click()
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('blue-400'))!
+    ;(row as HTMLElement).click()
+
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-color`)).toBe('#0000ff')
+    }
+  })
+
+  it('request end-to-end pin: after a token pick, the built change request after-utility is the token form with no arbitrary bracket', () => {
+    // suggestUtility() gates every utility suggestion (including colors) on
+    // theme.spacingBasePx !== null as its Tailwind-detection heuristic — a `--spacing` custom
+    // property must be present for readTheme() to report a Tailwind project.
+    document.documentElement.style.setProperty('--spacing', '4px')
+    const { panel, drafts } = setupColorTokens(
+      `<button data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 255, 255);">Hi</button>`
+    )
+    const fillRow = colorRows(panel)[0]
+    const btn = fillRow.querySelector('.token-btn') as HTMLButtonElement
+    btn.click()
+    const picker = (panel as unknown as { tokenPicker: { root: HTMLElement } }).tokenPicker
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('red-500'))!
+    ;(row as HTMLElement).click()
+
+    const req = buildChangeRequest(drafts)
+    const change = req.elements[0].changes.find((c) => c.property === 'background-color')!
+    expect(change.afterUtility).toBe('bg-red-500')
+    expect(change.afterUtility).not.toMatch(/\[.*\]/)
   })
 })
 
