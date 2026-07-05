@@ -5,7 +5,6 @@
 # part of `npm test`; run before merging, like check-prod-clean.sh.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-REPO_ROOT="$(pwd)"
 
 VITE_PORT=5199
 NEXT_PORT=5198
@@ -22,10 +21,51 @@ done
 TMP_DIR="$(mktemp -d)"
 SERVER_PID=""
 
+# Vite's dev server is single-process, and killing Next's `next-server`
+# listener makes the parent `next dev` CLI self-terminate too (undocumented
+# behavior we rely on for cleanup) — so exactly one LISTEN pid per port is
+# the only toolchain shape this script has ever seen. If lsof ever reports
+# more than one, that assumption is broken and picking one with `head -n1`
+# would silently leave the other running — fail loudly instead.
+assert_single_pid() {
+  local port="$1"
+  local pids="$2"
+  local count
+  count="$(echo "$pids" | grep -c . || true)"
+  if [ "$count" -gt 1 ]; then
+    echo "FAIL: port $port has multiple listeners (pids: $(echo "$pids" | tr '\n' ' ')) — investigate, this script assumes exactly one" >&2
+    exit 1
+  fi
+}
+
+# SERVER_PID comes from `lsof -t`, not `$!`, so it is never a child of this
+# shell — `wait` on it fails instantly and tells us nothing about whether the
+# process actually exited. Poll instead: wait up to 10 x 0.5s for the PID to
+# disappear (`kill -0` failing) before treating the kill as done.
+wait_for_death() {
+  local pid="$1"
+  local port="$2"
+  for _ in $(seq 1 10); do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    if [ -n "$port" ] && [ -z "$(lsof -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)" ]; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
 cleanup() {
   if [ -n "$SERVER_PID" ]; then
     kill "$SERVER_PID" >/dev/null 2>&1 || true
-    wait "$SERVER_PID" 2>/dev/null || true
+    if ! wait_for_death "$SERVER_PID" ""; then
+      echo "WARN: server pid $SERVER_PID still alive after cleanup poll — leaving it, exiting anyway" >&2
+    fi
   fi
   rm -rf "$TMP_DIR"
 }
@@ -144,7 +184,9 @@ echo "--- Vite: booting dev server on :$VITE_PORT ---"
 (cd "$VITE_APP" && nohup npx vite --port "$VITE_PORT" >"$TMP_DIR/vite-dev.log" 2>&1 &)
 # Grab the PID of the actual vite process (nohup'd in a subshell, so re-find it).
 for i in $(seq 1 30); do
-  SERVER_PID="$(lsof -iTCP:"$VITE_PORT" -sTCP:LISTEN -t 2>/dev/null | head -n1 || true)"
+  VITE_LISTEN_PIDS="$(lsof -iTCP:"$VITE_PORT" -sTCP:LISTEN -t 2>/dev/null || true)"
+  assert_single_pid "$VITE_PORT" "$VITE_LISTEN_PIDS"
+  SERVER_PID="$(echo "$VITE_LISTEN_PIDS" | head -n1)"
   if [ -n "$SERVER_PID" ] && curl -s -o /dev/null "http://localhost:$VITE_PORT/"; then
     break
   fi
@@ -163,7 +205,10 @@ fi
 echo "PASS: Vite dev server tags JSX with data-dc-source"
 
 kill "$SERVER_PID" >/dev/null 2>&1 || true
-wait "$SERVER_PID" 2>/dev/null || true
+if ! wait_for_death "$SERVER_PID" "$VITE_PORT"; then
+  echo "FAIL: Vite dev server (pid $SERVER_PID) still alive 5s after kill" >&2
+  exit 1
+fi
 SERVER_PID=""
 
 # --- Step 5: re-run init, assert idempotency -------------------------------
@@ -271,7 +316,9 @@ echo "PASS: Next init wired withForge() into next.config.ts and mounted ForgeDes
 echo "--- Next: booting dev server on :$NEXT_PORT (this is the slow half) ---"
 (cd "$NEXT_APP" && nohup npx next dev --port "$NEXT_PORT" >"$TMP_DIR/next-dev.log" 2>&1 &)
 for i in $(seq 1 90); do
-  SERVER_PID="$(lsof -iTCP:"$NEXT_PORT" -sTCP:LISTEN -t 2>/dev/null | head -n1 || true)"
+  NEXT_LISTEN_PIDS="$(lsof -iTCP:"$NEXT_PORT" -sTCP:LISTEN -t 2>/dev/null || true)"
+  assert_single_pid "$NEXT_PORT" "$NEXT_LISTEN_PIDS"
+  SERVER_PID="$(echo "$NEXT_LISTEN_PIDS" | head -n1)"
   if [ -n "$SERVER_PID" ] && curl -s -o /dev/null "http://localhost:$NEXT_PORT/"; then
     break
   fi
@@ -290,7 +337,10 @@ fi
 echo "PASS: Next dev server tags JSX with data-dc-source"
 
 kill "$SERVER_PID" >/dev/null 2>&1 || true
-wait "$SERVER_PID" 2>/dev/null || true
+if ! wait_for_death "$SERVER_PID" "$NEXT_PORT"; then
+  echo "FAIL: Next dev server (pid $SERVER_PID) still alive 5s after kill" >&2
+  exit 1
+fi
 SERVER_PID=""
 
 # --- Re-run init, assert idempotency ---------------------------------------
