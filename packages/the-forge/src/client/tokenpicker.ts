@@ -1,8 +1,7 @@
-export interface TokenEntry {
-  /** Suffix-free scale label — e.g. '4' (spacing), 'md' (radius), 'sm' (font-size). */
-  label: string
-  px: number
-}
+/** Numeric scale entry (spacing/radius/text) — unchanged shape — OR a named color token. */
+export type TokenEntry =
+  | { label: string; px: number } // e.g. { label: '4', px: 16 }
+  | { label: string; color: string } // e.g. { label: 'neutral-900', color: 'oklch(...)' }
 
 export interface OpenOpts {
   /** Row to align to — popover sits within the panel, top set from this element's offsetTop. */
@@ -169,11 +168,18 @@ export class TokenPicker {
       labelEl.className = 'tp-row-label'
       labelEl.textContent = entry.label
 
-      const pxEl = document.createElement('span')
-      pxEl.className = 'tp-row-px'
-      pxEl.textContent = `${entry.px}px`
+      if ('color' in entry) {
+        const swatchEl = document.createElement('span')
+        swatchEl.className = 'tp-row-swatch'
+        swatchEl.style.background = entry.color
+        row.append(swatchEl, labelEl)
+      } else {
+        const pxEl = document.createElement('span')
+        pxEl.className = 'tp-row-px'
+        pxEl.textContent = `${entry.px}px`
 
-      row.append(labelEl, document.createTextNode(' — '), pxEl)
+        row.append(labelEl, document.createTextNode(' — '), pxEl)
+      }
 
       row.addEventListener('mouseenter', () => {
         this.activeIndex = i

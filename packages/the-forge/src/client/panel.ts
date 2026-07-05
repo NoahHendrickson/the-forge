@@ -769,6 +769,10 @@ export class Panel {
               anchor: field.root,
               entries,
               onApply: (entry) => {
+                // Gap's token picker only ever offers spacing-scale entries (tokenEntriesFor
+                // above) — this guard is a pure type-narrowing satisfier for TokenEntry's
+                // color-entry branch (T2), never actually reachable here.
+                if ('color' in entry) return
                 if (!this.el) return
                 this.onBeforeEdit(this.el)
                 this.drafts.apply(this.el, 'gap', px(entry.px))
@@ -1438,6 +1442,10 @@ export class Panel {
               anchor: field.root,
               entries,
               onApply: (entry) => {
+                // buildField's token picker only ever offers spacing/radius/text-scale entries
+                // (tokenEntriesFor above) — this guard is a pure type-narrowing satisfier for
+                // TokenEntry's color-entry branch (T2), never actually reachable here.
+                if ('color' in entry) return
                 commit(entry.px)
                 const label = this.pillLabelFor(spec, entry)
                 field.bindToken(label)

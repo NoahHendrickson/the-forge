@@ -324,6 +324,14 @@ button {
 }
 .tp-row:hover, .tp-row-active { background: rgba(255,255,255,0.08); }
 .tp-row-px { color: #9A9A9A; font-size: 10.5px; margin-left: auto; }
+.tp-row-swatch {
+  width: 12px; height: 12px; border-radius: 3px; flex: none;
+  border: 1px solid rgba(255,255,255,0.15);
+}
+/* .tp-row is flex + justify-content:space-between (label left, px right). A color row has
+ * only swatch + label — space-between would fling the label to the right edge, so pull it
+ * back left by absorbing the slack. Extend-only: .tp-row's own declarations are untouched. */
+.tp-row-swatch + .tp-row-label { margin-right: auto; }
 `
 
 export class Overlay {

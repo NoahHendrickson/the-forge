@@ -284,4 +284,64 @@ describe('TokenPicker', () => {
     const anchor = anchorEl()
     expect(() => picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })).not.toThrow()
   })
+
+  describe('color entries', () => {
+    const COLOR_ENTRIES: TokenEntry[] = [
+      { label: 'red-500', color: '#ef4444' },
+      { label: 'neutral-900', color: 'oklch(0.2 0 0)' },
+    ]
+
+    it('renders a swatch + label, no px span, for color entries', () => {
+      const { picker } = setupPicker()
+      const anchor = anchorEl()
+      picker.open({ anchor, entries: COLOR_ENTRIES, onApply: vi.fn() })
+      const rows = [...picker.root.querySelectorAll('.tp-row')]
+      expect(rows.length).toBe(COLOR_ENTRIES.length)
+
+      const row0 = rows[0]
+      const swatch = row0.querySelector('.tp-row-swatch') as HTMLElement
+      expect(swatch).not.toBeNull()
+      // jsdom normalizes hex to rgb() in style.background.
+      expect(swatch.style.background).toBe('rgb(239, 68, 68)')
+
+      const label = row0.querySelector('.tp-row-label') as HTMLElement
+      expect(label.textContent).toBe('red-500')
+
+      expect(row0.querySelector('.tp-row-px')).toBeNull()
+    })
+
+    it('search filters color entries by label', () => {
+      const { picker } = setupPicker()
+      const anchor = anchorEl()
+      picker.open({ anchor, entries: COLOR_ENTRIES, onApply: vi.fn() })
+      const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+      search.value = 'neutral'
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+      const rows = [...picker.root.querySelectorAll('.tp-row')]
+      expect(rows.length).toBe(1)
+      expect(rows[0].textContent).toContain('neutral-900')
+    })
+
+    it('Enter commits the keyboard-active color entry via onApply intact', () => {
+      const { picker } = setupPicker()
+      const anchor = anchorEl()
+      const onApply = vi.fn()
+      picker.open({ anchor, entries: COLOR_ENTRIES, onApply })
+      const search = picker.root.querySelector('.tp-search') as HTMLInputElement
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      expect(onApply).toHaveBeenCalledWith(COLOR_ENTRIES[0])
+    })
+
+    it('clicking a color row applies that entry via onApply intact and closes', () => {
+      const { picker } = setupPicker()
+      const anchor = anchorEl()
+      const onApply = vi.fn()
+      picker.open({ anchor, entries: COLOR_ENTRIES, onApply })
+      const rows = [...picker.root.querySelectorAll('.tp-row')]
+      ;(rows[1] as HTMLElement).click()
+      expect(onApply).toHaveBeenCalledWith(COLOR_ENTRIES[1])
+      expect(picker.root.hidden).toBe(true)
+    })
+  })
 })
