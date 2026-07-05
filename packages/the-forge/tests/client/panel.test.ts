@@ -1890,10 +1890,20 @@ describe('Panel + token-btn icon (T4)', () => {
   })
 
   it('multi-select: no .token-btn rendered on any field', () => {
+    // Theme must define BOTH numeric and color tokens so this assertion holds for the real
+    // reason (every token-backed row's own multi gate), not merely because the Fill/Stroke
+    // sections happen to be hidden in multi-select (see buildColorRow's `!this.isMulti()` gate).
+    resetTokensCache()
     document.documentElement.style.setProperty('--spacing', '4px')
+    document.documentElement.style.setProperty('--color-red-500', '#ff0000')
+    document.documentElement.style.setProperty('--color-blue-400', '#0000ff')
+    document.head.insertAdjacentHTML(
+      'beforeend',
+      '<style data-test-cb-tokens>:root { --color-red-500: #ff0000; --color-blue-400: #0000ff; }</style>'
+    )
     document.body.innerHTML = `
-      <div data-dc-source="src/A.tsx:1:1" id="a" style="padding: 10px; width: 100px;"></div>
-      <div data-dc-source="src/B.tsx:2:2" id="b" style="padding: 20px; width: 100px;"></div>
+      <div data-dc-source="src/A.tsx:1:1" id="a" style="padding: 10px; width: 100px; background-color: rgb(255, 0, 0);"></div>
+      <div data-dc-source="src/B.tsx:2:2" id="b" style="padding: 20px; width: 100px; background-color: rgb(0, 0, 255);"></div>
     `
     const a = document.getElementById('a')! as HTMLElement
     const b = document.getElementById('b')! as HTMLElement
@@ -1904,6 +1914,7 @@ describe('Panel + token-btn icon (T4)', () => {
 
     expect(panel.root.querySelector('.token-btn')).toBeNull()
 
+    document.querySelectorAll('style[data-test-cb-tokens]').forEach((s) => s.remove())
     document.documentElement.removeAttribute('style')
     resetTokensCache()
   })

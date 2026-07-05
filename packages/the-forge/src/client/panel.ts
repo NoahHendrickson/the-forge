@@ -983,9 +983,11 @@ export class Panel {
     valueEl.className = 'color-value'
     row.append(valueEl)
 
-    // Icon only when the theme actually offers color tokens — no empty dropdowns (mirrors
-    // the numeric fields' onTokenOpen gating in controls.ts).
-    if (colorTokenEntries(readTokens()) !== null) {
+    // Icon only when the theme actually offers color tokens AND we're on a single selection —
+    // mirrors the numeric fields' `onTokenOpen: !multi && ...` gate (controls.ts). Multi-select
+    // section-hiding already keeps this row out of reach, but the gate should be a true local
+    // invariant of the row itself, not something that only holds because a sibling hides it.
+    if (!this.isMulti() && colorTokenEntries(readTokens()) !== null) {
       const tokenBtn = document.createElement('button')
       tokenBtn.type = 'button'
       tokenBtn.className = 'token-btn'

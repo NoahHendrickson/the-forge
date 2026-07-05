@@ -148,8 +148,8 @@ describe('TokenPicker', () => {
     picker.open({ anchor, entries: ENTRIES, onApply: vi.fn() })
     const rows = [...picker.root.querySelectorAll('.tp-row')]
     rows[3].dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))
-    // renderList() rebuilds row DOM on every state change (mirrors ColorPicker's re-render
-    // pattern) — re-query rather than reuse the stale pre-hover node reference.
+    // hover toggles tp-row-active in place (see the node-identity regression test below) —
+    // rebuilds only happen on applyFilter/open, so re-query is only needed after filtering.
     const rowsAfter = [...picker.root.querySelectorAll('.tp-row')]
     expect(rowsAfter[3].classList.contains('tp-row-active')).toBe(true)
   })
