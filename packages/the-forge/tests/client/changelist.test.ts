@@ -160,3 +160,82 @@ describe('sent rows and stages', () => {
     expect(list.root.querySelectorAll('.change-row')).toHaveLength(0)
   })
 })
+
+describe('interactions', () => {
+  it('hover reports the element, mouseleave reports null', () => {
+    const onHover = vi.fn()
+    const list = new ChangeList(new DraftStore(), { ...noop, onHover })
+    const el = tagged()
+    list.addSent('q1', [seed(el)])
+    const row = list.root.querySelector('.change-row')!
+    row.dispatchEvent(new MouseEvent('mouseenter'))
+    expect(onHover).toHaveBeenLastCalledWith(el)
+    row.dispatchEvent(new MouseEvent('mouseleave'))
+    expect(onHover).toHaveBeenLastCalledWith(null)
+  })
+
+  it('click selects a connected element', () => {
+    const onSelect = vi.fn()
+    const list = new ChangeList(new DraftStore(), { ...noop, onSelect })
+    const el = tagged()
+    list.addSent('q1', [seed(el)])
+    list.root.querySelector('.change-row')!.dispatchEvent(new MouseEvent('click'))
+    expect(onSelect).toHaveBeenCalledWith(el)
+  })
+
+  it('a disconnected element greys the row and never selects', () => {
+    const onSelect = vi.fn()
+    const onHover = vi.fn()
+    const list = new ChangeList(new DraftStore(), { ...noop, onSelect, onHover })
+    const el = tagged()
+    const s = seed(el)
+    el.remove()
+    list.addSent('q1', [s])
+    const row = list.root.querySelector('.change-row')!
+    expect(row.className).toContain('row-gone')
+    row.dispatchEvent(new MouseEvent('click'))
+    expect(onSelect).not.toHaveBeenCalled()
+    row.dispatchEvent(new MouseEvent('mouseenter'))
+    expect(onHover).toHaveBeenLastCalledWith(null)
+  })
+
+  it('Dismiss removes a failed row', () => {
+    const list = new ChangeList(new DraftStore(), noop)
+    list.addSent('q1', [seed(tagged())])
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'failed', note: 'nope' })
+    ;(list.root.querySelector('.change-dismiss') as HTMLElement).click()
+    expect(list.root.hidden).toBe(true)
+  })
+
+  it('Re-send removes the row and forwards the seed', () => {
+    const onResend = vi.fn()
+    const list = new ChangeList(new DraftStore(), { ...noop, onResend })
+    const el = tagged()
+    const s = seed(el)
+    list.addSent('q1', [s])
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'failed' })
+    ;(list.root.querySelector('.change-resend') as HTMLElement).click()
+    expect(onResend).toHaveBeenCalledWith(s)
+    expect(list.root.hidden).toBe(true)
+  })
+
+  it('Clear done removes done and unverified rows, keeps failed and mismatch', () => {
+    const list = new ChangeList(new DraftStore(), noop)
+    list.addSent('q1', [seed(tagged('a.tsx:1:1')), seed(tagged('b.tsx:2:2')), seed(tagged('c.tsx:3:3')), seed(tagged('d.tsx:4:4'))])
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'done' })
+    list.applyStage({ requestId: 'q1', elIndex: 1, dcSource: null, stage: 'unverified' })
+    list.applyStage({ requestId: 'q1', elIndex: 2, dcSource: null, stage: 'failed' })
+    list.applyStage({ requestId: 'q1', elIndex: 3, dcSource: null, stage: 'mismatch' })
+    ;(list.root.querySelector('.changes-clear') as HTMLElement).click()
+    const stages = [...list.root.querySelectorAll('.change-row')].map((r) => (r as HTMLElement).dataset.stage)
+    expect(stages.sort()).toEqual(['failed', 'mismatch'])
+  })
+
+  it('the Clear done button is hidden while nothing is clearable', () => {
+    const list = new ChangeList(new DraftStore(), noop)
+    list.addSent('q1', [seed(tagged())])
+    expect((list.root.querySelector('.changes-clear') as HTMLElement).hidden).toBe(true)
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'done' })
+    expect((list.root.querySelector('.changes-clear') as HTMLElement).hidden).toBe(false)
+  })
+})

@@ -55,7 +55,6 @@ export class ChangeList {
   private clearButton = document.createElement('button')
   private list = document.createElement('div')
   private sentRows = new Map<string, SentRow>() // key: `${requestId}:${elIndex}`
-  private dismissed = new Set<string>()
   /** Set by clear() (design-mode off) and cleared by the next syncDrafts() — suppresses the
    * draft-row render loop so a clear() while the DraftStore still holds stale drafts (the
    * DraftStore is owned/cleared by the caller, not this class) doesn't resurrect rows. */
@@ -108,7 +107,6 @@ export class ChangeList {
 
   clear(): void {
     this.sentRows.clear()
-    this.dismissed.clear()
     this.suppressDrafts = true
     this.render()
   }
