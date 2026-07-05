@@ -2,6 +2,7 @@ node_modules/
 dist/
 .next/
 .the-forge/
+storybook-static/
 fixtures/demo-app/.mcp.json
 fixtures/demo-app/.claude/
 fixtures/next-demo/.mcp.json
