@@ -18,7 +18,7 @@ export const IDLE_STOP_MS = 20 * 60_000
 export type WatcherState = 'live' | 'asleep' | 'none'
 
 export type WaitResponse =
-  | { stop: true; reason: 'idle' | 'replaced' }
+  | { stop: true; reason: 'idle' | 'replaced' | 'unlinked' }
   | { stop: false; items: QueueItem[] }
 
 export interface WatcherHubOpts {
@@ -77,6 +77,11 @@ export class WatcherHub {
   /** The token most recently told `{stop, 'replaced'}` — its retries are absorbed while
    * the winning watcher is live, so a disobedient replaced loop can't ping-pong the slot. */
   private replacedToken: string | null = null
+  /** Last token seen at wait entry — who to deny when unlink() finds nothing parked. */
+  private lastToken: string | null = null
+  /** One-shot: the token whose next wait gets {stop,'unlinked'} because unlink() had no
+   * parked response to deliver the stop through (between cycles / mid-apply). */
+  private unlinkedToken: string | null = null
   /** True between a wait cycle's start and a stop/disconnect — distinct from "parked"
    * because between cycles (hold expired, agent re-invoking the tool) nothing is parked
    * but the watcher is still very much live. */
@@ -105,6 +110,15 @@ export class WatcherHub {
    */
   wait(token?: string): { promise: Promise<WaitResponse>; cancel: () => void } {
     const nowMs = this.now()
+
+    // One-shot unlink denial: the browser unlinked while this loop was between cycles or
+    // mid-apply, so no response could carry the stop — this wait IS that response. Consumed
+    // immediately: the wait after this one is by definition the user deliberately re-running
+    // /forge-watch, which must re-arm normally.
+    if (token !== undefined && token === this.unlinkedToken) {
+      this.unlinkedToken = null
+      return { promise: Promise.resolve({ stop: true, reason: 'unlinked' }), cancel: () => {} }
+    }
 
     // Mechanical no-ping-pong: a token that was already told 'replaced' gets absorbed
     // with the same stop for as long as the winner is live — BEFORE any state mutation,
@@ -136,6 +150,7 @@ export class WatcherHub {
       this.lastActivity = nowMs
     }
     this.lastSeen = nowMs
+    if (token !== undefined) this.lastToken = token
 
     // Preempt an existing waiter BEFORE the idle check — the preempted session must be
     // told to stop regardless of what this new wait resolves to. Remember the loser's
@@ -216,6 +231,31 @@ export class WatcherHub {
     this.parked = null
     this.lastActivity = this.now()
     this.settle(waiter, { stop: false, items })
+  }
+
+  /** Browser-initiated stop (POST /__the-forge/unwatch — the strip's ✕). Ends a live loop,
+   * dismisses an asleep one, and resets the hub to 'none' so every polling browser converges
+   * on the not-linked indicator. Never touches the queue: claimed items finish applying and
+   * mark normally; pending items deliver to whoever links next. */
+  unlink(): void {
+    if (this.parked) {
+      // Parked: the loop hears this stop directly through its in-flight /wait — same trust
+      // model as the idle stop, so no token denial (one would bounce a legitimate later
+      // /forge-watch re-run from this same session exactly once — worse than trusting it).
+      const waiter = this.parked
+      this.parked = null
+      this.settle(waiter, { stop: true, reason: 'unlinked' })
+    } else if (this.watching && this.lastToken !== null) {
+      // Live but not parked (between cycles / mid-apply): nothing can carry the stop, so
+      // deny that token's NEXT wait instead — without this, flipping `watching` off would
+      // make its next /wait read as a legitimate /forge-watch re-arm and silently re-link.
+      // A tokenless legacy bin can't be denied and re-arms on its next wait (accepted —
+      // same advisory-only degradation as replacedToken's tokenless fallback).
+      this.unlinkedToken = this.lastToken
+    }
+    this.watching = false
+    this.everWatched = false
+    this.replacedToken = null
   }
 
   state(): WatcherState {

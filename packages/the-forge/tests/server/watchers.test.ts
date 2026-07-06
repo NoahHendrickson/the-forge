@@ -288,6 +288,59 @@ describe('WatcherHub', () => {
   })
 })
 
+describe('unlink (browser ✕ — 2026-07-05 watcher-unlink spec)', () => {
+  it('settles a parked waiter with {stop, unlinked} and resets state to none', async () => {
+    const { hub } = makeHub()
+    const { promise } = hub.wait('tok-a')
+    hub.unlink()
+    await expect(promise).resolves.toEqual({ stop: true, reason: 'unlinked' })
+    expect(hub.state()).toBe('none')
+  })
+
+  it('a parked-unlinked token re-arms cleanly on its next wait (trusted like the idle stop)', async () => {
+    const { hub } = makeHub()
+    const first = hub.wait('tok-a')
+    hub.unlink()
+    await first.promise
+    const second = hub.wait('tok-a') // deliberate /forge-watch re-run
+    expect(hub.state()).toBe('live')
+    second.cancel()
+  })
+
+  it('denies the NEXT wait of a live-but-not-parked watcher once, then re-arms (mid-apply / between cycles)', async () => {
+    const { hub, setApplying } = makeHub()
+    const first = hub.wait('tok-a')
+    await first.promise // hold expires (holdMs 30) — between cycles now
+    setApplying(true)
+    expect(hub.state()).toBe('live') // mid-apply liveness
+    hub.unlink()
+    expect(hub.state()).toBe('none')
+    await expect(hub.wait('tok-a').promise).resolves.toEqual({ stop: true, reason: 'unlinked' }) // one-shot denial
+    const rearm = hub.wait('tok-a') // wait after the denial is a deliberate re-run
+    expect(hub.state()).toBe('live')
+    rearm.cancel()
+  })
+
+  it('dismisses an asleep watcher back to none without denying its next wait', async () => {
+    const { hub, advance } = makeHub()
+    const first = hub.wait('tok-a')
+    first.cancel() // bin vanished — watching flips off
+    advance(6_000) // past freshMs (5s)
+    expect(hub.state()).toBe('asleep')
+    hub.unlink()
+    expect(hub.state()).toBe('none')
+    const rearm = hub.wait('tok-a')
+    expect(hub.state()).toBe('live') // no one-shot stop for a dismissed-asleep token
+    rearm.cancel()
+  })
+
+  it('is a no-op when nothing ever watched', () => {
+    const { hub } = makeHub()
+    hub.unlink()
+    expect(hub.state()).toBe('none')
+  })
+})
+
 // Type-level guard: WaitResponse's discriminant is `stop`, and the client/bin both rely on it.
 const _stopShape: WaitResponse = { stop: true, reason: 'idle' }
 const _itemsShape: WaitResponse = { stop: false, items: [] }
