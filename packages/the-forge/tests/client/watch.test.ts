@@ -151,13 +151,17 @@ describe('sentLabelFor watcher copy', () => {
     )
   })
 
-  it('manual rung with no watcher keeps the pre-watch-mode copy verbatim', () => {
-    expect(sentLabelFor('manual', 'claude-code')).toBe('Sent — type /forge-design in Claude Code')
-    expect(sentLabelFor('manual', 'claude-code', 'none')).toBe('Sent — type /forge-design in Claude Code')
+  it('manual rung with no watcher steers to /forge-watch (link CTA)', () => {
+    expect(sentLabelFor('manual', 'claude-code')).toBe('Sent — queued. Type /forge-watch in Claude Code to link & apply')
+    expect(sentLabelFor('manual', 'claude-code', 'none')).toBe(
+      'Sent — queued. Type /forge-watch in Claude Code to link & apply'
+    )
   })
 
   it('unrecognized rungs still default to the manual family (allowlist regression)', () => {
-    expect(sentLabelFor('totally-new-rung' as never, 'claude-code')).toBe('Sent — type /forge-design in Claude Code')
+    expect(sentLabelFor('totally-new-rung' as never, 'claude-code')).toBe(
+      'Sent — queued. Type /forge-watch in Claude Code to link & apply'
+    )
     expect(sentLabelFor('totally-new-rung' as never, 'claude-code', 'asleep')).toBe(
       'Sent — watcher asleep, type /forge-watch in Claude Code to apply'
     )
@@ -175,23 +179,32 @@ describe('queuedLineFor (verifier pending prefix — same matrix, same module)',
     expect(queuedLineFor(1, 'Claude Code', 'asleep')).toBe(
       '1 queued — watcher asleep, type /forge-watch in Claude Code to wake it'
     )
-    expect(queuedLineFor(1, 'Claude Code', 'none')).toBe('1 queued — type /forge-design in Claude Code')
+    expect(queuedLineFor(1, 'Claude Code', 'none')).toBe('1 queued — type /forge-watch in Claude Code to link & apply')
   })
 })
 
 describe('watchIndicatorFor', () => {
-  it('live: linked pill with the live accent', () => {
-    expect(watchIndicatorFor('live', 'claude-code')).toEqual({ text: '● Linked to Claude Code', live: true })
-  })
-
-  it('asleep: the wake instruction, not live-accented', () => {
-    expect(watchIndicatorFor('asleep', 'claude-code')).toEqual({
-      text: 'Watcher asleep — type /forge-watch in Claude Code to wake it',
-      live: false,
+  it('live: linked pill with the live accent, unlinkable', () => {
+    expect(watchIndicatorFor('live', 'claude-code')).toEqual({
+      text: '● Linked to Claude Code',
+      live: true,
+      unlinkable: true,
     })
   })
 
-  it('none: renders nothing — terminal-only users see zero change', () => {
-    expect(watchIndicatorFor('none', 'claude-code')).toBeUndefined()
+  it('asleep: the wake instruction, not live-accented, dismissable', () => {
+    expect(watchIndicatorFor('asleep', 'claude-code')).toEqual({
+      text: 'Watcher asleep — type /forge-watch in Claude Code to wake it',
+      live: false,
+      unlinkable: true,
+    })
+  })
+
+  it('none: the upfront not-linked hint (decision reversal — see 2026-07-05 spec), nothing to unlink', () => {
+    expect(watchIndicatorFor('none', 'claude-code')).toEqual({
+      text: '○ Not linked — type /forge-watch in Claude Code to link',
+      live: false,
+      unlinkable: false,
+    })
   })
 })

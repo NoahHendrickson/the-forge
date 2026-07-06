@@ -275,7 +275,10 @@ describe('DesignMode selection (M2)', () => {
     expect(drafts.isComparingAll()).toBe(true)
     overlay.resetAllButton.click()
     expect(drafts.elementCount()).toBe(0)
-    expect(status.hidden).toBe(true)
+    // The watch indicator now always renders when design mode is on (even in 'none'
+    // state — the "○ Not linked" hint is deliberate per the 2026-07-05 spec), so the
+    // status strip stays visible when watchers are polled, not just when there are drafts.
+    expect(status.hidden).toBe(false)
   })
 
   it('scroll re-measures the selection even when a hover frame is queued', () => {
@@ -695,7 +698,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       drafts.apply(btn, 'padding-top', '24px')
       overlay.sendButton.click()
       await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — type /forge-design in Claude Code')
+      expect(overlay.sendButton.textContent).toBe('Sent — queued. Type /forge-watch in Claude Code to link & apply')
     })
 
     it('surfaces the configured agent name for rung manual (cursor)', async () => {
@@ -707,7 +710,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       drafts.apply(btn, 'padding-top', '24px')
       overlay.sendButton.click()
       await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — type /forge-design in Cursor')
+      expect(overlay.sendButton.textContent).toBe('Sent — queued. Type /forge-watch in Cursor to link & apply')
       delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
     })
 
@@ -720,7 +723,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       drafts.apply(btn, 'padding-top', '24px')
       overlay.sendButton.click()
       await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — type /forge-design in Codex')
+      expect(overlay.sendButton.textContent).toBe('Sent — queued. Type /forge-watch in Codex to link & apply')
       delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
     })
 
@@ -736,7 +739,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       drafts.apply(btn, 'padding-top', '24px')
       overlay.sendButton.click()
       await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — type /forge-design in Claude Code')
+      expect(overlay.sendButton.textContent).toBe('Sent — queued. Type /forge-watch in Claude Code to link & apply')
     })
 
     it('still registers the send as successful (pending id tracked) even if /dispatch POST fails', async () => {
@@ -754,7 +757,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       await flushSend()
       expect(mode.sent.pendingIds()).toEqual(['q1'])
       // Falls back to a manual-style label since dispatch itself couldn't be reached.
-      expect(overlay.sendButton.textContent).toBe('Sent — type /forge-design in Claude Code')
+      expect(overlay.sendButton.textContent).toBe('Sent — queued. Type /forge-watch in Claude Code to link & apply')
     })
 
     it('re-enables the send button only after both /queue and /dispatch settle', async () => {
@@ -2320,5 +2323,31 @@ describe('boot restore guard against corrupt storage (final-review F3)', () => {
     // no more degrading a good session to "start clean" just because storage carried one
     // now-safely-dropped bad item alongside it.
     expect(mode.active).toBe(true)
+  })
+})
+
+describe('watcher unlink wiring', () => {
+  it('✕ POSTs /unwatch with the secret header, then re-polls watcher state immediately', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    ;(globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__ = { secret: 's3cret', agent: 'claude-code' }
+    try {
+      const { overlay, mode } = fullSetup()
+      mode.setActive(true) // watch poller only runs while design mode is on
+      overlay.unlinkButton.click()
+      await new Promise((r) => setTimeout(r, 5)) // fetch .then chain + the re-poll's 0ms timer
+      expect(fetchMock).toHaveBeenCalledWith('/__the-forge/unwatch', {
+        method: 'POST',
+        headers: { 'X-Forge-Secret': 's3cret' },
+      })
+      // Re-poll: at least one status probe AFTER the unwatch call (setActive fired the first).
+      const calls = fetchMock.mock.calls.map((c) => c[0])
+      const unwatchIndex = calls.indexOf('/__the-forge/unwatch')
+      expect(calls.slice(unwatchIndex + 1)).toContain('/__the-forge/status?ids=')
+    } finally {
+      delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
+    }
   })
 })

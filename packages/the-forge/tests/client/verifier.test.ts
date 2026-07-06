@@ -510,7 +510,7 @@ describe('Verifier polling lifecycle', () => {
 
       expect(sent.size()).toBe(1) // still pending — not taken
       const lastSummary = onUpdate.mock.calls.at(-1)![0] as string
-      expect(lastSummary).toBe('1 queued — type /forge-design in Claude Code')
+      expect(lastSummary).toBe('1 queued — type /forge-watch in Claude Code to link & apply')
     })
 
     it('does NOT render "applying…" for a pending item even though sent.size() > 0', async () => {
@@ -547,7 +547,7 @@ describe('Verifier polling lifecycle', () => {
       const verifier = new Verifier(sent, drafts, onUpdate)
       verifier.start()
       await vi.advanceTimersByTimeAsync(2000)
-      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-design in Cursor')
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-watch in Cursor to link & apply')
 
       fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ items: [{ id: 'q1', status: 'claimed', note: null }] }) })
       await vi.advanceTimersByTimeAsync(2000)
@@ -570,7 +570,7 @@ describe('Verifier polling lifecycle', () => {
       verifier.start()
       await vi.advanceTimersByTimeAsync(2000)
 
-      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-design in Claude Code')
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-watch in Claude Code to link & apply')
     })
 
     it('maps codex agent to the "Codex" display name in the instruction', async () => {
@@ -590,7 +590,7 @@ describe('Verifier polling lifecycle', () => {
       verifier.start()
       await vi.advanceTimersByTimeAsync(2000)
 
-      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-design in Codex')
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-watch in Codex to link & apply')
     })
   })
 
@@ -623,14 +623,14 @@ describe('Verifier polling lifecycle', () => {
       expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — watcher asleep, type /forge-watch in Claude Code to wake it')
     })
 
-    it('no watcher field (older server) or unrecognized value: pre-watch-mode copy verbatim', async () => {
+    it('no watcher field (older server) or unrecognized value: falls back to the not-linked /forge-watch copy', async () => {
       const onUpdate = pendingVerifier(undefined)
       await vi.advanceTimersByTimeAsync(2000)
-      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-design in Claude Code')
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-watch in Claude Code to link & apply')
 
       const onUpdate2 = pendingVerifier('something-new')
       await vi.advanceTimersByTimeAsync(2000)
-      expect(onUpdate2.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-design in Claude Code')
+      expect(onUpdate2.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-watch in Claude Code to link & apply')
     })
   })
 

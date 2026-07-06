@@ -155,6 +155,13 @@ describe('handleMessage', () => {
       expect(text).toContain('Do not call wait_for_design_edits until then')
     })
 
+    it('stop/unlinked tells the agent the user unlinked from the panel', async () => {
+      const text = await waitCallText(backend({ wait: async () => ({ kind: 'stop', reason: 'unlinked' }) }))
+      expect(text).toBe(
+        'Watching stopped — the user unlinked this session from the design panel. Run /forge-watch to re-link if asked. Do not call wait_for_design_edits again unless the user asks.'
+      )
+    })
+
     it('unreachable: exactly one retry then stop', async () => {
       const text = await waitCallText(backend({ wait: async () => ({ kind: 'unreachable' }) }))
       expect(text).toContain('call wait_for_design_edits once more')

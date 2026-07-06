@@ -923,3 +923,37 @@ describe('GET /.well-known/appspecific/com.chrome.devtools.json (Chrome DevTools
     expect(res.statusCode).toBe(405)
   })
 })
+
+describe('POST /__the-forge/unwatch', () => {
+  it('rejects GET with 405', async () => {
+    const res = fakeRes()
+    await run(mw, fakeReq('GET', '/__the-forge/unwatch', undefined, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(405)
+  })
+
+  it('requires the secret when one is configured', async () => {
+    const secured = createForgeMiddleware(queue, [], 'test-secret')
+    const res = fakeRes()
+    await run(secured, fakeReq('POST', '/__the-forge/unwatch', {}, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('unlinks a parked watcher: its /wait resolves {stop, unlinked} and /status reports none', async () => {
+    const hub = new WatcherHub({ claim: () => queue.pull() })
+    const SECRET = 'test-secret'
+    const mwWithHub = createForgeMiddleware(queue, [], SECRET, { agent: 'claude-code', channelsFlag: false }, hub)
+    const { promise } = hub.wait('tok-e2e')
+    const res = fakeRes()
+    await run(
+      mwWithHub,
+      fakeReq('POST', '/__the-forge/unwatch', {}, { host: 'localhost:5173', 'x-forge-secret': SECRET }),
+      res
+    )
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({ watcher: 'none' })
+    await expect(promise).resolves.toEqual({ stop: true, reason: 'unlinked' })
+    const statusRes = fakeRes()
+    await run(mwWithHub, fakeReq('GET', '/__the-forge/status?ids=', undefined, { host: 'localhost:5173' }), statusRes)
+    expect(JSON.parse(statusRes.body).watcher).toBe('none')
+  })
+})

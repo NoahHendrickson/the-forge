@@ -18,6 +18,11 @@ export const CopyForAgent: Story = {
   render: () => mountInShadow(createButton({ label: 'Copy for agent' }), 'status'),
 }
 
+// #status strip watch-unlink ✕ — stops the linked /forge-watch session (overlay.ts).
+export const WatchUnlink: Story = {
+  render: () => mountInShadow(createButton({ label: '✕', title: 'Unlink watcher session', className: 'watch-unlink' }), 'status'),
+}
+
 // #panel action buttons — Compare / Reset (panel.ts).
 export const Compare: Story = {
   render: () => mountInShadow(createButton({ label: 'Compare' }), 'panel'),

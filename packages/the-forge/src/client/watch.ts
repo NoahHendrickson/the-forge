@@ -4,8 +4,9 @@ import { AGENT_DISPLAY_NAME, type AgentName } from './agent'
  * 'live' — a session is parked on (or freshly cycling) the /wait long-poll;
  * 'asleep' — a session watched at some point but has stopped (idle auto-stop, replaced,
  * or disconnected) and needs the user to type /forge-watch again;
- * 'none' — nothing ever watched this dev server; terminal-only users live here and must
- * see zero UI change. */
+ * 'none' — nothing ever watched this dev server; terminal-only users live here, and (since
+ * the 2026-07-05 watcher-unlink spec's decision reversal, see watchIndicatorFor) they see
+ * the upfront "not linked" hint rather than zero UI change. */
 export type WatcherState = 'live' | 'asleep' | 'none'
 
 /** Dispatch rungs as they arrive over the network from /dispatch (untyped JSON — see the
@@ -20,8 +21,11 @@ export const WATCH_POLL_MS = 5_000
 // verifier's queued prefix (queuedLineFor) all encode the same rules: a live
 // watcher means delivery (never an instruction to type), an asleep watcher
 // means wake it with /forge-watch (the queued items deliver on wake — nothing
-// is lost), and no watcher means the pre-watch-mode /forge-design copy
-// verbatim. Keep all three here so the matrix can't drift across modules.
+// is lost), and no watcher means the upfront "not linked" hint steering to
+// /forge-watch (the 2026-07-05 watcher-unlink spec deliberately REVERSED the
+// original "none renders nothing" rule — the user wants link state visible
+// before Send, and /forge-watch as the one advertised flow). Keep all three
+// here so the matrix can't drift across modules.
 // ---------------------------------------------------------------------------
 
 /** Maps a dispatch rung to the Send button's flash label. Request content never appears
@@ -42,23 +46,37 @@ export function sentLabelFor(rung: Rung, agent: AgentName, watcherState: Watcher
   // either way: the request is safely queued, and /forge-watch delivers everything
   // pending on wake.
   if (watcherState !== 'none') return `Sent — watcher asleep, type /forge-watch in ${AGENT_DISPLAY_NAME[agent]} to apply`
-  return `Sent — type /forge-design in ${AGENT_DISPLAY_NAME[agent]}`
+  return `Sent — queued. Type /forge-watch in ${AGENT_DISPLAY_NAME[agent]} to link & apply`
 }
 
-/** The persistent watch indicator's strip content per watcher state — 'none' renders
- * nothing (terminal-only users must see zero change from watch mode existing). */
-export function watchIndicatorFor(state: WatcherState, agent: AgentName): { text: string; live: boolean } | undefined {
-  if (state === 'live') return { text: `● Linked to ${AGENT_DISPLAY_NAME[agent]}`, live: true }
+export interface WatchIndicator {
+  text: string
+  live: boolean
+  /** Whether the strip offers the unlink ✕ — live and asleep watchers can be
+   * unlinked/dismissed; 'none' has nothing to unlink. */
+  unlinkable: boolean
+}
+
+/** The persistent watch indicator's strip content per watcher state. Always returns an
+ * indicator: 'none' renders the upfront not-linked hint (see the matrix comment above for
+ * the recorded decision reversal), which also keeps the strip visible whenever design mode
+ * is on. */
+export function watchIndicatorFor(state: WatcherState, agent: AgentName): WatchIndicator {
+  if (state === 'live') return { text: `● Linked to ${AGENT_DISPLAY_NAME[agent]}`, live: true, unlinkable: true }
   if (state === 'asleep')
-    return { text: `Watcher asleep — type /forge-watch in ${AGENT_DISPLAY_NAME[agent]} to wake it`, live: false }
-  return undefined
+    return {
+      text: `Watcher asleep — type /forge-watch in ${AGENT_DISPLAY_NAME[agent]} to wake it`,
+      live: false,
+      unlinkable: true,
+    }
+  return { text: `○ Not linked — type /forge-watch in ${AGENT_DISPLAY_NAME[agent]} to link`, live: false, unlinkable: false }
 }
 
 /** The verifier's sent-status prefix for still-pending (unclaimed) items. */
 export function queuedLineFor(count: number, agentDisplayName: string, state: WatcherState): string {
   if (state === 'live') return `${count} queued — delivering to your ${agentDisplayName} session…`
   if (state === 'asleep') return `${count} queued — watcher asleep, type /forge-watch in ${agentDisplayName} to wake it`
-  return `${count} queued — type /forge-design in ${agentDisplayName}`
+  return `${count} queued — type /forge-watch in ${agentDisplayName} to link & apply`
 }
 
 /**
@@ -98,9 +116,21 @@ export class WatchStatus {
     this.timer = null
     // Forget the last observed state: a design-mode re-entry must never flash a cached
     // "● Linked" from the previous session before the first probe answers — 'none'
-    // renders nothing until the server says otherwise. No onChange fire: design mode is
+    // renders the not-linked hint (2026-07-05 watcher-unlink spec), a conservative default until the server says otherwise. No onChange fire: design mode is
     // off, so there is no indicator to update (refreshStatus no-ops while inactive).
     this.state = 'none'
+  }
+
+  /** Applies a state a mutating endpoint already told us authoritatively in its response
+   * body (currently only POST /__the-forge/unwatch), instead of waiting out the next
+   * scheduled poll. Bundles stop()+start() (so the poll loop re-arms exactly as a fresh
+   * start() would) with an explicit onChange fire — stop() alone clears state silently —
+   * so the caller stays a thin one-liner instead of reaching into start()/stop() itself. */
+  applyServerState(state: WatcherState): void {
+    this.stop()
+    this.state = state
+    this.onChange(state)
+    this.start()
   }
 
   private poll(gen: number): void {

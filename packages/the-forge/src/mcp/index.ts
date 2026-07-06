@@ -106,7 +106,8 @@ function makeBackend(): ForgeBackend {
       if (data.stop === true) {
         // Unknown reason values (a newer server?) degrade to 'idle' — its text is the safe
         // one: watching paused, /forge-watch to resume.
-        return { kind: 'stop', reason: data.reason === 'replaced' ? 'replaced' : 'idle' }
+        const reason = data.reason === 'replaced' || data.reason === 'unlinked' ? data.reason : 'idle'
+        return { kind: 'stop', reason }
       }
       const items = Array.isArray(data.items) ? data.items : []
       if (items.length > 0) return { kind: 'items', items }
