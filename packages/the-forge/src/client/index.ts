@@ -4,8 +4,17 @@ import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { Dock } from './dock'
-import { buildChangeRequestWithElements, renderMarkdown, type ChangeRequest, type ElementChange } from './request'
+import {
+  buildChangeRequestWithElements,
+  renderMarkdown,
+  buildPromptRequest,
+  renderPromptMarkdown,
+  type ChangeRequest,
+  type ElementChange,
+  type PromptRequest,
+} from './request'
 import { LifecycleSession, type SentSeed } from './lifecycle'
+import { PromptBox } from './prompt'
 import { Verifier } from './verifier'
 import { snapshotRects, diffRects } from './ripple'
 import { resetTokensCache, readTheme } from './tokens'
@@ -57,6 +66,7 @@ export class DesignMode {
   private verifier: Verifier
   private verifierSummary = ''
   private changeList: ChangeList
+  private promptBox = new PromptBox()
   /** Seeds with a re-queue POST currently in flight (R2 F-A). The failed row deliberately
    * survives until the POST resolves (final-review F5) so the Re-send button stays clickable
    * during the round-trip — but that means a double-click before the first POST settles would
@@ -134,6 +144,12 @@ export class DesignMode {
       onResend: (seed) => this.resend(seed),
     })
     this.panel.changesSlot.appendChild(this.changeList.root)
+    overlay.mountPromptBox(this.promptBox.root)
+    this.promptBox.onSend = (text) => this.sendPrompt(text)
+    this.panel.promptButton.addEventListener('click', () => {
+      if (this.promptBox.isOpen()) this.promptBox.close()
+      else if (this.selected) this.promptBox.open(this.selected) // multi-select anchors to the first
+    })
     this.verifier.subscribe((e) => {
       // applyStage returns false for poll re-emissions of an unchanged stage (the verifier
       // ticks every ~2s while a request is pending) — persisting on every tick regardless would
@@ -309,6 +325,39 @@ export class DesignMode {
       .catch(() => onSettled(null))
   }
 
+  /** Queues a free-form prompt for the current selection. Independent of draft sends by spec:
+   * reads the selection, never the DraftStore (draftProps: []), and skips isDuplicate — every
+   * typed prompt is intentional. Re-entrancy comes from setBusy: trySend() no-ops while the
+   * queue POST is in flight. On success the box closes (text's job is done — the Changes-list
+   * row takes over); on failure it stays open with the text intact so the user can retry. */
+  private sendPrompt(text: string): void {
+    const { request, pairs } = buildPromptRequest(this.selection, text)
+    if (pairs.length === 0) return
+    const md = renderPromptMarkdown(request)
+    this.promptBox.setBusy(true)
+    fetch('/__the-forge/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+      body: JSON.stringify({ request, markdown: md }),
+    })
+      .then((res) => (res.ok ? (res.json() as Promise<{ id: string }>) : Promise.reject(new Error('queue failed'))))
+      .then((body) => {
+        const seeds: SentSeed[] = pairs.map(([el, change]) => {
+          const dcSource = el.dataset.dcSource ?? null
+          return { el, dcSource, index: dcSource ? sourceIndex(el, dcSource) : 0, draftProps: [], change, prompt: text }
+        })
+        this.promptBox.close()
+        this.registerQueuedSend(body.id, seeds)
+        this.postDispatch(() => {
+          /* request is safely queued — manual rung, same as Send */
+        })
+      })
+      .catch(() => {
+        this.promptBox.setBusy(false)
+        this.flashButton(this.promptBox.sendButton, 'Send failed', 'Send')
+      })
+  }
+
   /** Re-queues one failed element-change as a fresh request. Safe and unfiltered by design:
    * a failed apply changed no source, and failed items have already left the
    * sent-but-unverified set the duplicate filter checks. Reuses the queue → dispatch path
@@ -316,13 +365,28 @@ export class DesignMode {
   private resend(seed: SentSeed): void {
     if (this.resendsInFlight.has(seed)) return // re-entrancy guard: this seed's re-queue POST is already in flight
     this.resendsInFlight.add(seed)
-    const request: ChangeRequest = {
-      createdAt: new Date().toISOString(),
-      viewport: { width: window.innerWidth, height: window.innerHeight },
-      tailwind: readTheme().spacingBasePx !== null,
-      elements: [seed.change],
+    // A failed PROMPT seed re-queues as a fresh prompt request, not a ChangeRequest — its
+    // change.changes is empty, so renderMarkdown would produce a bullet-less no-op request.
+    let request: ChangeRequest | PromptRequest
+    let md: string
+    if (seed.prompt !== undefined) {
+      request = {
+        kind: 'prompt',
+        createdAt: new Date().toISOString(),
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        prompt: seed.prompt,
+        elements: [seed.change],
+      }
+      md = renderPromptMarkdown(request)
+    } else {
+      request = {
+        createdAt: new Date().toISOString(),
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        tailwind: readTheme().spacingBasePx !== null,
+        elements: [seed.change],
+      }
+      md = renderMarkdown(request)
     }
-    const md = renderMarkdown(request)
     fetch('/__the-forge/queue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
@@ -395,6 +459,7 @@ export class DesignMode {
       this.pendingRestore = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
+      this.promptBox.close()
       this.dock.exit()
       this.verifier.stop()
       this.watch.stop()
@@ -575,6 +640,7 @@ export class DesignMode {
   }
 
   private setSelection(next: TaggedElement[]): void {
+    this.promptBox.close() // any selection change — including deselect — closes and discards
     this.selection = next
     this.clearRippleState()
     if (next.length === 0) {
