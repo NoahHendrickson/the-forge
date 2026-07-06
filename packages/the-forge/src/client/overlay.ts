@@ -223,8 +223,11 @@ button {
   width: auto; flex: 0 1 auto; font-size: 10.5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-
-.token-btn {
+` +
+// Whisper label for context (e.g. applied Hug/Fill size mode) — dim, right-aligned, non-interactive.
+`.nf-whisper { color: var(--text-muted); font-size: 10px; flex: none; padding-right: 4px; pointer-events: none; }
+` +
+`.token-btn {
   display: none; flex: none; width: 16px; height: 16px; padding: 0;
   align-items: center; justify-content: center;
   background: transparent; border: none; color: var(--text-muted); cursor: pointer;
