@@ -17,6 +17,8 @@ export interface PersistedSentElement {
   draftProps: string[]
   changes: SentChange[]
   change: ElementChange
+  /** Free-form prompt text for kind:'prompt' sends — see SentSeed.prompt in lifecycle.ts. */
+  prompt?: string
 }
 
 export interface PersistedLifecycle {
@@ -111,6 +113,7 @@ function isValidSentElement(v: unknown): v is PersistedSentElement {
   if (!Array.isArray(v.draftProps) || !v.draftProps.every((p) => typeof p === 'string')) return false
   if (!Array.isArray(v.changes) || !v.changes.every(isValidSentChange)) return false
   if (!isValidElementChange(v.change)) return false
+  if (v.prompt !== undefined && typeof v.prompt !== 'string') return false
   return true
 }
 

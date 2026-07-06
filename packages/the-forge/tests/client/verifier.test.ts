@@ -991,6 +991,23 @@ describe('stage events', () => {
     verifier.stop()
   })
 
+  it('flips an entry with zero changes straight to done on applied (prompt sends)', async () => {
+    const sent = new SentRegistry()
+    const target = el() // stays connected — locate() finds it, so missing stays 0
+    sent.add('q1', [{ el: target, dcSource: 'a.tsx:1:1', draftProps: [], changes: [] }])
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    }))
+    const verifier = new Verifier(sent, new DraftStore(), vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(events).toEqual([{ requestId: 'q1', elIndex: 0, dcSource: 'a.tsx:1:1', stage: 'done' }])
+    verifier.stop()
+  })
+
   it('emits unverified for an element that cannot be located', async () => {
     const sent = new SentRegistry()
     const gone = document.createElement('div') // never attached, no matching dcSource in DOM
