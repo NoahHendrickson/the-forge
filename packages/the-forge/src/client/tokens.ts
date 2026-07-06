@@ -333,6 +333,13 @@ export const UTILITY_PREFIXES: Record<string, string> = {
   'margin-inline': 'mx',
   width: 'w',
   height: 'h',
+  // M-D min/max sizing — Tailwind v4 sizes these off the same numeric spacing scale as w/h.
+  // Named container widths (max-w-md …) are deliberately out of the picker's first pass
+  // (spec M-D); nearest-token resolves numerically.
+  'min-width': 'min-w',
+  'max-width': 'max-w',
+  'min-height': 'min-h',
+  'max-height': 'max-h',
   'border-radius': 'rounded',
   'border-top-left-radius': 'rounded-tl',
   'border-top-right-radius': 'rounded-tr',
@@ -462,9 +469,16 @@ export function suggestUtility(
   const prefix = UTILITY_PREFIXES[prop]
   if (!prefix || theme.spacingBasePx === null) return null
 
-  if ((prop === 'width' || prop === 'height') && css === 'auto') {
-    return { utility: `${prefix}-auto`, tokenExact: true }
+  // Keyword drafts (Hug's auto, min/max clearing) map to real static utilities, not px math —
+  // without this, the numeric path below would emit `${prefix}-[NaNpx]` (E2E-caught in M-D).
+  // width/height's 'auto' is Hug mode; min-width/min-height's CSS initial value is 'auto' and
+  // max-width/max-height's is 'none' (both real static Tailwind utilities: min-w-auto,
+  // max-w-none, ...) — Number.parseFloat('auto'/'none') would otherwise fall through to NaN.
+  const CLEAR_KEYWORDS: Record<string, string[]> = {
+    auto: ['width', 'height', 'min-width', 'min-height'],
+    none: ['max-width', 'max-height'],
   }
+  if (CLEAR_KEYWORDS[css]?.includes(prop)) return { utility: `${prefix}-${css}`, tokenExact: true }
 
   if (prop === 'opacity') {
     const pct = Number.parseFloat(css) * 100

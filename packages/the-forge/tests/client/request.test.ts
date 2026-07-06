@@ -298,6 +298,42 @@ describe('buildChangeRequest — keyword allowlist (B0)', () => {
   })
 })
 
+describe('buildChangeRequest — min/max sizing (M-D)', () => {
+  it('min-width drafts emit min-w-* utilities', () => {
+    document.body.innerHTML = `<div data-dc-source="src/Box.tsx:1:1" id="box" style="min-width: 4px;">hi</div>`
+    const el = document.getElementById('box')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(el, 'min-width', '16px')
+    const req = buildChangeRequest(store, TW)
+    const c = req.elements[0].changes.find((x) => x.property === 'min-width')!
+    expect(c.afterUtility).toBe('min-w-4')
+    const md = renderMarkdown(req)
+    expect(md).toContain('min-w-4')
+  })
+
+  it('clearing keywords pass through verbatim: max-* none, min-* auto', () => {
+    document.body.innerHTML = `
+      <div data-dc-source="src/Box.tsx:1:1" id="box" style="max-width: 200px; min-width: 4px;">hi</div>`
+    const el = document.getElementById('box')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(el, 'max-width', 'none')
+    store.apply(el, 'min-width', 'auto')
+    const req = buildChangeRequest(store, TW)
+    const md = renderMarkdown(req)
+    const maxC = req.elements[0].changes.find((x) => x.property === 'max-width')!
+    const minC = req.elements[0].changes.find((x) => x.property === 'min-width')!
+    expect(maxC.afterCss).toBe('none')
+    expect(minC.afterCss).toBe('auto')
+    // the utility suggestion must be the real static Tailwind class, not a NaN arbitrary
+    // value (Number.parseFloat('none'/'auto') falls through to `${prefix}-[NaNpx]` unless
+    // suggestUtility special-cases these keywords the same way it does w-auto/h-auto).
+    expect(maxC.afterUtility).toBe('max-w-none')
+    expect(minC.afterUtility).toBe('min-w-auto')
+    expect(md).toContain('none')
+    expect(md).toContain('auto')
+  })
+})
+
 describe('cssPath', () => {
   it('uses the id when present', () => {
     document.body.innerHTML = `<div><button id="save-btn">Save</button></div>`

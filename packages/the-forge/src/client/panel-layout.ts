@@ -14,7 +14,7 @@ import { createButton } from './ui/button'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { PanelTokenUi } from './panel-token-ui'
 import { type RowSpec, GAP_SPEC } from './panel-specs'
-import { fromPx, isFlex, normalizeJustify, normalizeAlign, mainAxisProp } from './panel-readers'
+import { fromPx, isFlex, normalizeJustify, normalizeAlign, mainAxisProp, minMaxRowVisible } from './panel-readers'
 
 // The container-side flex props the panel can draft — the set 'remove auto layout' must
 // clean up alongside display (child props like align-self/flex-grow belong to the CHILD's
@@ -23,6 +23,12 @@ export const FLEX_CONTAINER_PROPS = ['flex-direction', 'gap', 'justify-content',
 
 interface BoundSizeMode {
   select: HTMLSelectElement
+  spec: RowSpec
+  field: NumberField
+}
+
+interface BoundMinMaxRow {
+  rowEl: HTMLElement
   spec: RowSpec
   field: NumberField
 }
@@ -60,6 +66,13 @@ export class LayoutSection {
   private alignSelfWrap: HTMLElement | null = null
   private flexChildControlsWrap: HTMLElement | null = null
   private sizeModes: BoundSizeMode[] = []
+
+  // M-D min/max sizing: rows registered per-selection (same lifecycle as sizeModes) plus the
+  // opened-set latch — a row a user explicitly opened via "Add min…"/"Add max…" stays visible
+  // even before any draft/computed value would disclose it on its own (opened-set ∪ live-draft
+  // ∪ non-default-computed, see refreshMinMax). Keyed by CSS prop ('min-width', 'max-height', …).
+  private minMaxRows: BoundMinMaxRow[] = []
+  private openedMinMax = new Set<string>()
 
   constructor(private deps: LayoutSectionDeps) {}
 
@@ -248,6 +261,27 @@ export class LayoutSection {
     this.sizeModes.push(sm)
   }
 
+  /** Registers a min/max disclosure row bound to a NumberField — called by panel.ts's
+   * buildBody layout branch right after each size row (W/H). Mirrors registerSizeMode's
+   * per-selection registry lifecycle (populated in buildBody, cleared in teardown). */
+  registerMinMaxRow(reg: BoundMinMaxRow): void {
+    this.minMaxRows.push(reg)
+  }
+
+  /** "Add min…"/"Add max…" action-item handler (buildRow's select onChange, NOT a size
+   * mode — SIZE_MODES itself stays a pure mode table). Opening a row mutates no drafts, so
+   * this deliberately isn't withEdit-framed: just latch the prop into openedMinMax, refresh
+   * (which both discloses the row AND — via updateSizeMode inside refreshFlexChild — resets
+   * the select's value back to the real Fixed/Hug/Fill mode, since 'add-min'/'add-max' were
+   * never real modes), then focus the newly-revealed input. */
+  openMinMax(sizeSpec: RowSpec, kind: 'min' | 'max'): void {
+    const prop = `${kind}-${sizeSpec.props[0]}`
+    this.openedMinMax.add(prop)
+    this.deps.refresh()
+    const reg = this.minMaxRows.find((r) => r.spec.props[0] === prop)
+    reg?.field.root.querySelector('input')?.focus()
+  }
+
   /**
    * Today's refreshLayoutSection + refreshFlexChild, fused: add/remove visibility, direction/
    * wrap/baseline state, matrix set, flex-child visibility.
@@ -263,11 +297,29 @@ export class LayoutSection {
       // Flex-child align/size-modes are single-only — DOM stays (stable order) but hidden.
       if (this.flexChildControlsWrap) this.flexChildControlsWrap.hidden = true
       for (const sm of this.sizeModes) sm.select.hidden = true
+      // Min/max disclosure rows are single-select-only, same rule as the cluster/flex-child
+      // strip above — ambiguous across N elements, so all hidden regardless of opened state.
+      for (const mm of this.minMaxRows) mm.rowEl.hidden = true
       return
     }
 
     this.refreshLayoutSection(el, computed)
     this.refreshFlexChild(el, computed)
+    this.refreshMinMax(el, computed)
+  }
+
+  /**
+   * Disclosure predicate (single-select only) — delegates to the canonical minMaxRowVisible
+   * (panel-readers.ts) so the rule lives in one place alongside marginSectionVisible's sibling
+   * jsdom-default conventions.
+   */
+  private refreshMinMax(el: TaggedElement, computed: CSSStyleDeclaration): void {
+    for (const mm of this.minMaxRows) {
+      const prop = mm.spec.props[0]
+      const draft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, prop)
+      const visible = minMaxRowVisible(prop, computed.getPropertyValue(prop), draft !== null, this.openedMinMax.has(prop))
+      mm.rowEl.hidden = !visible
+    }
   }
 
   private refreshLayoutSection(el: TaggedElement, computed: CSSStyleDeclaration): void {
@@ -450,5 +502,7 @@ export class LayoutSection {
     this.alignSelfWrap = null
     this.flexChildControlsWrap = null
     this.sizeModes = []
+    this.minMaxRows = []
+    this.openedMinMax.clear()
   }
 }
