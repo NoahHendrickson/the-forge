@@ -26,6 +26,7 @@ import {
   SIZE_MODES,
   SIZE_ROWS,
   PADDING_ROWS,
+  MIN_MAX_ROWS,
   SECTIONS,
 } from './panel-specs'
 import {
@@ -499,7 +500,22 @@ export class Panel {
         // contract — see panel.test.ts's composition test).
         const rowWrap = document.createElement('div')
         rowWrap.className = 'panel-rows layout-section'
-        for (const row of SIZE_ROWS) rowWrap.append(this.buildRow(row))
+        for (const [i, row] of SIZE_ROWS.entries()) {
+          rowWrap.append(this.buildRow(row))
+          // W gets min/max-width (indices 0,1), H gets min/max-height (2,3) — disclosure rows,
+          // hidden until LayoutSection.refresh discloses them (opened / drafted / non-default).
+          for (const mm of MIN_MAX_ROWS.slice(i * 2, i * 2 + 2)) {
+            const mmBound = this.buildField(mm)
+            const mmRow = document.createElement('div')
+            mmRow.className = 'panel-rows'
+            mmRow.setAttribute('data-minmax-row', '')
+            mmRow.setAttribute('data-props-row', mm.props.join(' '))
+            mmRow.hidden = true
+            mmRow.append(mmBound.field.root)
+            rowWrap.append(mmRow)
+            this.layoutSection.registerMinMaxRow({ rowEl: mmRow, spec: mm, field: mmBound.field })
+          }
+        }
         rowWrap.append(this.layoutSection.buildFlexChildControls())
         // buildBodyInto appends the add-button + controls wrap directly onto rowWrap, so the
         // section body stays a single flat .panel-rows (CSS contract) with no carrier to drain.
@@ -963,8 +979,18 @@ export class Panel {
     row.append(bound.field.root)
 
     const select = createSelect({
-      options: SIZE_MODES.map(([value, label]) => ({ value, label })),
+      options: [
+        ...SIZE_MODES.map(([value, label]) => ({ value, label })),
+        // Figma UI3 keeps min/max in the sizing dropdown — action items, not modes. SIZE_MODES
+        // itself stays a pure mode table (stories import it as the canonical catalog).
+        { value: 'add-min', label: 'Add min…' },
+        { value: 'add-max', label: 'Add max…' },
+      ],
       onChange: (value) => {
+        if (value === 'add-min' || value === 'add-max') {
+          this.layoutSection.openMinMax(spec, value === 'add-min' ? 'min' : 'max')
+          return // refresh() inside openMinMax re-syncs the select to the real mode
+        }
         this.layoutSection.onSizeModeChange(spec, value)
       },
     })

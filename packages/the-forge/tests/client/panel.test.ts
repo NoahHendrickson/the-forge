@@ -21,6 +21,10 @@ function setup(html = `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padd
 const P = {
   W: 'width',
   H: 'height',
+  MIN_W: 'min-width',
+  MAX_W: 'max-width',
+  MIN_H: 'min-height',
+  MAX_H: 'max-height',
   PX: 'padding-left padding-right',
   PY: 'padding-top padding-bottom',
   PT: 'padding-top',
@@ -292,15 +296,31 @@ describe('Panel', () => {
     const kinds = [...body.children].map((c) =>
       c.classList.contains('size-row')
         ? 'size'
-        : c.classList.contains('flex-child-controls')
-          ? 'flex-child'
-          : c.classList.contains('layout-controls') || c.hasAttribute('data-add-layout')
-            ? 'cluster'
-            : (c as HTMLElement).dataset.props?.startsWith('padding')
-              ? 'padding'
-              : c.className
+        : c.hasAttribute('data-minmax-row')
+          ? (c as HTMLElement).dataset.propsRow?.startsWith('min')
+            ? 'minmax-min'
+            : 'minmax-max'
+          : c.classList.contains('flex-child-controls')
+            ? 'flex-child'
+            : c.classList.contains('layout-controls') || c.hasAttribute('data-add-layout')
+              ? 'cluster'
+              : (c as HTMLElement).dataset.props?.startsWith('padding')
+                ? 'padding'
+                : c.className
     )
-    expect(kinds).toEqual(['size', 'size', 'flex-child', 'cluster', 'cluster', 'padding', 'padding'])
+    expect(kinds).toEqual([
+      'size',
+      'minmax-min',
+      'minmax-max',
+      'size',
+      'minmax-min',
+      'minmax-max',
+      'flex-child',
+      'cluster',
+      'cluster',
+      'padding',
+      'padding',
+    ])
   })
 
   it('layout controls compose a layout-grid with a matrix-tile and a layout-side column', () => {
@@ -810,6 +830,77 @@ describe('Panel', () => {
     expect(panel.promptButton.hidden).toBe(false)
   })
 
+})
+
+describe('min/max sizing disclosure (M-D)', () => {
+  // data-minmax-row is the disclosure hook: located either directly (data-props-row) or by
+  // walking up from the field's own data-props attr (fieldInput already resolves that).
+  const minMaxRow = (panel: Panel, props: string) =>
+    (panel.root.querySelector(`[data-minmax-row][data-props-row="${props}"]`) ??
+      fieldInput(panel, props).closest('[data-minmax-row]')) as HTMLElement
+
+  it('rows exist in the Layout body but are hidden for default-valued elements', () => {
+    const { panel } = setup()
+    expect(fieldInput(panel, P.MIN_W)).toBeTruthy() // row markup exists
+    expect(minMaxRow(panel, P.MIN_W).hidden).toBe(true)
+  })
+
+  it('a non-default computed min-width discloses its row on selection', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px; width: 200px; min-width: 120px;"></div>`
+    )
+    expect(minMaxRow(panel, P.MIN_W).hidden).toBe(false)
+    expect(minMaxRow(panel, P.MAX_W).hidden).toBe(true) // independent per row
+  })
+
+  it('Add min… on the W select opens the min-width row and resets the select to the real mode', () => {
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px; height: 50px;"></div>
+    </div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const panel = new Panel(drafts, onEdited)
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+
+    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
+    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'add-min'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+
+    expect(minMaxRow(panel, P.MIN_W).hidden).toBe(false)
+    expect(['fixed', 'hug', 'fill']).toContain(select.value)
+  })
+
+  it('typing auto clears: drafts the initial keyword and the row stays while the draft lives', () => {
+    const { el, panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px; width: 200px; max-width: 200px;"></div>`
+    )
+    expect(minMaxRow(panel, P.MAX_W).hidden).toBe(false)
+    commit(fieldInput(panel, P.MAX_W), 'auto')
+    expect(el.style.getPropertyValue('max-width')).toBe('none')
+    expect(minMaxRow(panel, P.MAX_W).hidden).toBe(false) // draft latch
+  })
+
+  it('multi-select hides all min/max rows', () => {
+    document.body.innerHTML = `
+      <div data-dc-source="src/A.tsx:1:1" id="a" style="width: 100px; min-width: 120px;"></div>
+      <div data-dc-source="src/B.tsx:2:2" id="b" style="width: 100px;"></div>
+    `
+    const a = document.getElementById('a')! as HTMLElement
+    const b = document.getElementById('b')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const panel = new Panel(drafts, onEdited)
+    document.body.appendChild(panel.root)
+    panel.show([a, b], buildInspectorData(a))
+
+    expect(minMaxRow(panel, P.MIN_W).hidden).toBe(true)
+    expect(minMaxRow(panel, P.MAX_W).hidden).toBe(true)
+    expect(minMaxRow(panel, P.MIN_H).hidden).toBe(true)
+    expect(minMaxRow(panel, P.MAX_H).hidden).toBe(true)
+  })
 })
 
 describe('Panel expand-state persistence (B1 nit)', () => {
