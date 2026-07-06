@@ -320,14 +320,14 @@ export class Panel {
       }
       if (spec.title === 'Fill' || spec.title === 'Stroke') {
         // Replaced by Selection colors in multi-mode — title AND body hide together.
-        this.setSectionHidden(spec, sectionEls, multi || (spec.visible ? !spec.visible(el) : false))
+        this.setSectionHidden(spec, sectionEls, multi || (spec.visible ? !spec.visible(el, this.drafts) : false))
         continue
       }
       if (multi) {
         // visible when applicable to ANY element in the selection (hasDirectText any, flex any…).
-        this.setSectionHidden(spec, sectionEls, spec.visible ? !this.els.some((e) => spec.visible!(e)) : false)
+        this.setSectionHidden(spec, sectionEls, spec.visible ? !this.els.some((e) => spec.visible!(e, this.drafts)) : false)
       } else {
-        this.setSectionHidden(spec, sectionEls, spec.visible ? !spec.visible(el) : false)
+        this.setSectionHidden(spec, sectionEls, spec.visible ? !spec.visible(el, this.drafts) : false)
       }
     }
     if (this.selectionColorsTitle) this.selectionColorsTitle.hidden = !multi

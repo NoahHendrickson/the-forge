@@ -2246,6 +2246,53 @@ describe('Panel multi-select (B6)', () => {
   })
 })
 
+describe('Margin section disclosure', () => {
+  function marginSection(panel: Panel): HTMLElement {
+    return [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => n.textContent?.replace('⋯', '').trim() === 'Margin'
+    ) as HTMLElement
+  }
+
+  it('is hidden for a margin-less element', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px; width: 200px;"></div>`)
+    const title = marginSection(panel)
+    const body = title.nextElementSibling as HTMLElement
+    expect(title.hidden).toBe(true)
+    expect(body.hidden).toBe(true)
+  })
+
+  it('is shown when the element has margins', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="margin-top: 12px;"></div>`)
+    const title = marginSection(panel)
+    const body = title.nextElementSibling as HTMLElement
+    expect(title.hidden).toBe(false)
+    expect(body.hidden).toBe(false)
+  })
+
+  it('stays shown while a margin draft exists after editing to 0', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="margin-top: 12px; margin-bottom: 12px;"></div>`)
+    const title = marginSection(panel)
+    expect(title.hidden).toBe(false)
+    commit(fieldInput(panel, P.MY), '0')
+    expect(title.hidden).toBe(false)
+  })
+
+  it('multi-select: shown when ANY selected element has margins', () => {
+    document.body.innerHTML = `
+      <div data-dc-source="src/A.tsx:1:1" id="a" style="margin-top: 12px;"></div>
+      <div data-dc-source="src/B.tsx:2:2" id="b"></div>
+    `
+    const a = document.getElementById('a')! as HTMLElement
+    const b = document.getElementById('b')! as HTMLElement
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show([a, b], buildInspectorData(a))
+    const title = marginSection(panel)
+    expect(title.hidden).toBe(false)
+  })
+})
+
 describe('Panel multi-select Typography (B6)', () => {
   function multiSetup(styleA: string, styleB: string) {
     document.body.innerHTML = `

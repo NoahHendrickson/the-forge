@@ -56,6 +56,26 @@ export function hasDirectText(el: Element): boolean {
   return [...el.childNodes].some((n) => n.nodeType === 3 && (n.textContent ?? '').trim() !== '')
 }
 
+const MARGIN_PROPS = ['margin-top', 'margin-right', 'margin-bottom', 'margin-left']
+
+/**
+ * Margin-section disclosure (spec 2026-07-05, decision 2): designers don't set margins, so
+ * the section renders only when the element actually carries some — any computed margin that
+ * isn't zero (negative and `auto` margins count), OR any live margin draft. The draft clause
+ * is the mid-edit latch: scrubbing a margin to 0 keeps the draft (and thus the section) alive
+ * under the pointer; it only disappears once the element genuinely has no margin and no
+ * pending edit. jsdom reports '' for an unset margin — treat as zero (same quirk handling as
+ * draftSolidIfNone's border-style read).
+ */
+export function marginSectionVisible(el: TaggedElement, drafts?: DraftStore): boolean {
+  const computed = getComputedStyle(el)
+  return MARGIN_PROPS.some((p) => {
+    if (drafts && drafts.current(el, p) !== null) return true
+    const v = computed.getPropertyValue(p)
+    return v !== '' && v !== '0px'
+  })
+}
+
 /** Snaps a computed font-weight keyword/number to one of the 9 named-weight values. */
 function snapWeight(css: string): string {
   if (css === 'normal') return '400'

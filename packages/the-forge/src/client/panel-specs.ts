@@ -2,7 +2,7 @@ import type { TaggedElement } from './source'
 import { DraftStore } from './drafts'
 import { UTILITY_PREFIXES, parseColor, type Theme, type Tokens } from './tokens'
 import type { ColorEntry, ScaleEntry } from './tokenpicker'
-import { hasDirectText } from './panel-readers'
+import { hasDirectText, marginSectionVisible } from './panel-readers'
 
 export interface RowSpec {
   label: string
@@ -33,7 +33,7 @@ export interface SectionSpec {
   expandKey?: string
   expandRows?: RowSpec[]
   /** Section renders always (stable DOM order) but is hidden via the `hidden` attribute when this returns false. */
-  visible?: (el: TaggedElement) => boolean
+  visible?: (el: TaggedElement, drafts?: DraftStore) => boolean
   /** Custom section body — used by Layout, which isn't a plain row-field grid. */
   custom?: 'layout' | 'typography' | 'fill' | 'stroke'
   /** Tooltip (title attr) on the section title — used where the section name itself needs explaining (Margin). */
@@ -223,6 +223,8 @@ const SECTIONS: SectionSpec[] = [
       { label: 'B', props: ['margin-bottom'] },
       { label: 'L', props: ['margin-left'] },
     ],
+    visible: marginSectionVisible,
+    hint: 'Space this element adds around itself (CSS margin) — shown only when the element actually has margins',
   },
   {
     title: 'Typography',
