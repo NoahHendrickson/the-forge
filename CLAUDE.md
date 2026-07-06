@@ -64,6 +64,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `panel-specs.ts` | RowSpec/SectionSpec types, SECTIONS definition, token-scale helpers (`tokenEntriesFor`) |
 | `panel-readers.ts` | pure computed-style readers/normalizers (`isFlex`, `normalizeJustify`, font helpers) |
 | `panel-token-ui.ts` | PanelTokenUi — the token affordance cluster: shared TokenPicker instance, scale-field open path, pill boundTokens bookkeeping (B5/Compare rules), color-row token button; plus pillLabelFor/colorDisplay helpers |
+| `panel-layout.ts` | `LayoutSection` — the auto-layout cluster (add/remove policy + `FLEX_CONTAINER_PROPS`, direction+wrap, gap, matrix, baseline, flex-child controls); covered by the panel suites, no own test file |
 | `controls.ts` | `NumberField` — scrubbing numeric input with math expressions and `auto` |
 | `layout-controls.ts` | `SegmentField` + 9-dot `AlignMatrix` |
 | `colorpicker.ts` | popover color picker (SV area, hex, contrast ratio) |
