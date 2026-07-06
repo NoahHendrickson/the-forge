@@ -145,4 +145,29 @@ function mainAxisProp(direction: string): 'width' | 'height' {
   return direction === 'column' ? 'height' : 'width'
 }
 
+/**
+ * A fill "exists" only when it paints: alpha 0 (and jsdom's '' for an unset background)
+ * reads as empty — the same rule colorDisplay uses to claim the `transparent` keyword.
+ */
+export function fillIsEmpty(css: string): boolean {
+  const parsed = parseColorLocal(css)
+  return !parsed || parsed.a === 0
+}
+
+/**
+ * A stroke "exists" only when some side paints: style ≠ none AND width > 0 — the same
+ * never-rendered predicate groupSelectionColors applies to border-top-color, but checked
+ * on ALL four sides so a lone border-bottom divider still counts as a stroke. `read` is
+ * draft-aware at the call site (Panel passes currentValue), keeping this a pure function.
+ * jsdom reports '' for unset style/width — same "no visible border" reading as none/0.
+ */
+export function strokeIsEmpty(read: (prop: string) => string): boolean {
+  return ['top', 'right', 'bottom', 'left'].every((side) => {
+    const style = read(`border-${side}-style`)
+    if (style === 'none' || style === '') return true
+    const width = Number.parseFloat(read(`border-${side}-width`))
+    return !Number.isFinite(width) || width === 0
+  })
+}
+
 export { px, fromPx, effectiveBackground, isFlex, snapWeight, firstFamily, cssFamilyValue, documentFontFamilies, mainAxisProp }
