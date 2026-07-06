@@ -24,6 +24,8 @@ import {
   WEIGHTS,
   STROKE_STYLES,
   SIZE_MODES,
+  SIZE_ROWS,
+  PADDING_ROWS,
   SECTIONS,
 } from './panel-specs'
 import {
@@ -325,12 +327,12 @@ export class Panel {
     const multi = this.isMulti()
 
     for (const { spec, els: sectionEls } of this.sectionEls) {
-      if (spec.title === 'Layout') {
-        // Decision (B6): Layout is single-element only — matrix/direction across N
-        // elements is ambiguous, so the whole section (not just its controls) hides.
-        this.setSectionHidden(spec, sectionEls, multi)
-        continue
-      }
+      // Decision (B6, re-scoped M-C): the auto-layout cluster (matrix/direction) across N
+      // elements is ambiguous, so LayoutSection.refresh (below) hides just the cluster/add/
+      // remove widgets in multi — but the section itself (W/H + padding rows) stays visible,
+      // since those rows keep the same relative-delta multi behavior as every other row.
+      // Layout has no `visible` predicate, so it falls through to the generic path and is
+      // always shown here.
       if (spec.title === 'Fill' || spec.title === 'Stroke') {
         // Replaced by Selection colors in multi-mode — title AND body hide together.
         this.setSectionHidden(spec, sectionEls, multi || (spec.visible ? !spec.visible(el, this.drafts) : false))
@@ -489,11 +491,28 @@ export class Panel {
       const sectionBodyEls: HTMLElement[] = [title]
 
       if (section.custom === 'layout') {
+        // Remove ('−') comes first in the title, then the padding '⋯' expand (added by the
+        // generic expandRows block below) — button order in the title matches the M-B glyph-
+        // strip test convention ('Layout−⋯').
         title.append(this.layoutSection.buildRemoveButton())
 
-        const layoutBody = this.layoutSection.buildBody()
-        this.sectionsRoot.append(layoutBody)
-        sectionBodyEls.push(layoutBody)
+        // Unified UI3-style Layout body (spec M-C): W/H rows -> flex-child strip -> auto-
+        // layout cluster -> padding rows, one fixed order, flex or not (the ORDER is the
+        // contract — see panel.test.ts's composition test).
+        const rowWrap = document.createElement('div')
+        rowWrap.className = 'panel-rows layout-section'
+        for (const row of SIZE_ROWS) rowWrap.append(this.buildRow(row))
+        rowWrap.append(this.layoutSection.buildFlexChildControls())
+        const clusterBody = this.layoutSection.buildBody()
+        // buildBody returns the add-button + controls wrap inside one element today — append
+        // its children in place so the section body stays a single flat .panel-rows (CSS contract).
+        while (clusterBody.firstChild) rowWrap.append(clusterBody.firstChild)
+        for (const row of PADDING_ROWS) rowWrap.append(this.buildRow(row))
+
+        this.sectionsRoot.append(rowWrap)
+        sectionBodyEls.push(rowWrap)
+        this.appendExpandRows(section, title, sectionBodyEls)
+
         this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
       }
@@ -529,27 +548,7 @@ export class Panel {
         for (const row of section.rows) rowWrap.append(this.buildRow(row))
       }
       sectionBodyEls.push(rowWrap)
-
-      if (section.title === 'Size') {
-        rowWrap.append(this.layoutSection.buildFlexChildControls())
-      }
-
-      if (section.expandRows && section.expandKey) {
-        const expandKey = section.expandKey
-        const expandWrap = document.createElement('div')
-        expandWrap.className = 'panel-rows'
-        expandWrap.hidden = !(this.expandState.get(expandKey) ?? false)
-        const btn = createButton({ label: '⋯' })
-        btn.setAttribute('data-expand', expandKey)
-        btn.addEventListener('click', () => {
-          expandWrap.hidden = !expandWrap.hidden
-          this.expandState.set(expandKey, !expandWrap.hidden)
-        })
-        title.append(btn)
-        for (const row of section.expandRows) expandWrap.append(this.buildRow(row))
-        this.sectionsRoot.append(expandWrap)
-        sectionBodyEls.push(expandWrap)
-      }
+      this.appendExpandRows(section, title, sectionBodyEls)
 
       this.sectionEls.push({ spec: section, els: sectionBodyEls })
 
@@ -562,6 +561,30 @@ export class Panel {
         this.sectionsRoot.append(this.buildSelectionColorsSection())
       }
     }
+  }
+
+  /**
+   * The `⋯`-expandable sub-rows shared by every section with `expandRows`/`expandKey`
+   * (Layout's padding T/R/B/L, Stroke's border-width T/R/B/L, Appearance's radius corners) —
+   * appends the toggle button to the section's title row and the collapsible row wrap right
+   * after `rowWrap` in `sectionsRoot`, same shape regardless of which section owns it.
+   */
+  private appendExpandRows(section: SectionSpec, title: HTMLElement, sectionBodyEls: HTMLElement[]): void {
+    if (!section.expandRows || !section.expandKey) return
+    const expandKey = section.expandKey
+    const expandWrap = document.createElement('div')
+    expandWrap.className = 'panel-rows'
+    expandWrap.hidden = !(this.expandState.get(expandKey) ?? false)
+    const btn = createButton({ label: '⋯' })
+    btn.setAttribute('data-expand', expandKey)
+    btn.addEventListener('click', () => {
+      expandWrap.hidden = !expandWrap.hidden
+      this.expandState.set(expandKey, !expandWrap.hidden)
+    })
+    title.append(btn)
+    for (const row of section.expandRows) expandWrap.append(this.buildRow(row))
+    this.sectionsRoot.append(expandWrap)
+    sectionBodyEls.push(expandWrap)
   }
 
   /**

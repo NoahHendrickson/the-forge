@@ -34,3 +34,11 @@ Two research passes: Figma's Design panel (post-UI3) and dev-world panels (Curso
 
 - **Layout-ripple indicator**: when a draft reflows non-selected elements (flex stretch etc.), show fading secondary outlines on affected elements — distinguishes layout ripple from mis-targeting (born from the first real user session).
 - **Verified-implemented state**: computed-style verification with inline-neutralized measurement (shipped in M4).
+
+## Amendment (2026-07-06) — unified Layout section
+
+M-C (spec 2026-07-05, user-ratified) merges Layout + Size + Padding into one Figma-UI3-style
+"Layout" section: W/H rows → flex-child strip → auto-layout cluster → padding rows, one fixed
+order, flex or not. Section order re-ratified, fixed forever: Layout → Margin (conditional) →
+Typography → Fill → Stroke → Appearance. The stable-order principle (contextual content, never
+contextual position) is unchanged — this is a one-time re-ratification, not a relaxation.

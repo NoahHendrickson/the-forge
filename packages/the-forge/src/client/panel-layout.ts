@@ -267,6 +267,12 @@ export class LayoutSection {
    */
   refresh(el: TaggedElement, computed: CSSStyleDeclaration, multi: boolean): void {
     if (multi) {
+      // Cluster + add/remove are single-select-only (B6, re-scoped M-C): matrix/direction
+      // across N elements is ambiguous. DOM stays (stable order) but hidden — the Layout
+      // SECTION itself (W/H + padding rows, owned by panel.ts) stays visible in multi.
+      if (this.addLayoutBtn) this.addLayoutBtn.hidden = true
+      if (this.removeLayoutBtn) this.removeLayoutBtn.hidden = true
+      if (this.layoutControlsWrap) this.layoutControlsWrap.hidden = true
       // Flex-child align/size-modes are single-only — DOM stays (stable order) but hidden.
       if (this.flexChildControlsWrap) this.flexChildControlsWrap.hidden = true
       for (const sm of this.sizeModes) sm.select.hidden = true
