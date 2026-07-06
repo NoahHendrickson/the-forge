@@ -339,6 +339,24 @@ describe('unlink (browser ✕ — 2026-07-05 watcher-unlink spec)', () => {
     hub.unlink()
     expect(hub.state()).toBe('none')
   })
+
+  it('a between-cycles unlinked-token denial from an earlier session does not leak into a later, unrelated unlink', async () => {
+    // Thermo-nuclear review finding: unlink() cleared replacedToken unconditionally but
+    // never unlinkedToken, so an unconsumed between-cycles denial for one token could
+    // survive across a completely unrelated later unlink() and wrongly deny that token's
+    // next deliberate re-arm.
+    const { hub } = makeHub()
+    const first = hub.wait('tok-a')
+    await first.promise // hold expires — tok-a is now between cycles (watching, not parked)
+    hub.unlink() // tok-a has nothing parked — owed a one-shot 'unlinked' denial, not yet delivered
+
+    const second = hub.wait('tok-b') // a fresh, unrelated session parks
+    hub.unlink() // parked branch — must not leave tok-a's stale denial in place
+
+    const rearm = await hub.wait('tok-a').promise // tok-a's deliberate re-arm
+    expect(rearm).toEqual({ stop: false, items: [] })
+    second.cancel()
+  })
 })
 
 // Type-level guard: WaitResponse's discriminant is `stop`, and the client/bin both rely on it.

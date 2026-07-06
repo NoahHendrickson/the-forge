@@ -623,7 +623,7 @@ describe('Verifier polling lifecycle', () => {
       expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — watcher asleep, type /forge-watch in Claude Code to wake it')
     })
 
-    it('no watcher field (older server) or unrecognized value: pre-watch-mode copy verbatim', async () => {
+    it('no watcher field (older server) or unrecognized value: falls back to the not-linked /forge-watch copy', async () => {
       const onUpdate = pendingVerifier(undefined)
       await vi.advanceTimersByTimeAsync(2000)
       expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-watch in Claude Code to link & apply')

@@ -214,14 +214,14 @@ export class DesignMode {
       // (or dismiss the asleep hint) server-side. Fire-and-forget with a same-shape catch —
       // a failed unlink leaves the indicator as-is and the next 5s poll re-syncs anyway.
       void fetch('/__the-forge/unwatch', { method: 'POST', headers: forgeSecretHeaders() })
-        .then((res) => {
-          if (!res.ok || !this.active) return
-          // Immediate re-poll instead of waiting out WATCH_POLL_MS: stop() resets the cached
-          // state to 'none' and start() probes on a 0ms tick, so the strip flips to
-          // "Not linked" right away and the server confirms within the same tick.
-          this.watch.stop()
-          this.watch.start()
-          this.refreshStatus()
+        .then((res) => (res.ok ? (res.json() as Promise<{ watcher?: unknown }>) : null))
+        .then((body) => {
+          if (body === null || !this.active) return
+          // Apply the state the endpoint already told us authoritatively instead of
+          // waiting out WATCH_POLL_MS — same unrecognized-value guard as WatchStatus's own
+          // poll handler, since this body arrives over the network as untyped JSON too.
+          const state = body.watcher
+          if (state === 'live' || state === 'asleep' || state === 'none') this.watch.applyServerState(state)
         })
         .catch(() => {})
     })

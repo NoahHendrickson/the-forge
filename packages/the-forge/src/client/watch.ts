@@ -4,8 +4,9 @@ import { AGENT_DISPLAY_NAME, type AgentName } from './agent'
  * 'live' — a session is parked on (or freshly cycling) the /wait long-poll;
  * 'asleep' — a session watched at some point but has stopped (idle auto-stop, replaced,
  * or disconnected) and needs the user to type /forge-watch again;
- * 'none' — nothing ever watched this dev server; terminal-only users live here and must
- * see zero UI change. */
+ * 'none' — nothing ever watched this dev server; terminal-only users live here, and (since
+ * the 2026-07-05 watcher-unlink spec's decision reversal, see watchIndicatorFor) they see
+ * the upfront "not linked" hint rather than zero UI change. */
 export type WatcherState = 'live' | 'asleep' | 'none'
 
 /** Dispatch rungs as they arrive over the network from /dispatch (untyped JSON — see the
@@ -118,6 +119,18 @@ export class WatchStatus {
     // renders the not-linked hint (2026-07-05 watcher-unlink spec), a conservative default until the server says otherwise. No onChange fire: design mode is
     // off, so there is no indicator to update (refreshStatus no-ops while inactive).
     this.state = 'none'
+  }
+
+  /** Applies a state a mutating endpoint already told us authoritatively in its response
+   * body (currently only POST /__the-forge/unwatch), instead of waiting out the next
+   * scheduled poll. Bundles stop()+start() (so the poll loop re-arms exactly as a fresh
+   * start() would) with an explicit onChange fire — stop() alone clears state silently —
+   * so the caller stays a thin one-liner instead of reaching into start()/stop() itself. */
+  applyServerState(state: WatcherState): void {
+    this.stop()
+    this.state = state
+    this.onChange(state)
+    this.start()
   }
 
   private poll(gen: number): void {
