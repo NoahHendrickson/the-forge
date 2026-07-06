@@ -286,10 +286,15 @@ button {
 .layout-side { flex: 1; display: flex; flex-direction: column; gap: 6px; }
 .layout-side .nf { flex: 0 0 auto; }
 
+// Column, not row: the tile holds the 64px matrix AND the Baseline toggle. As a centered
+// 88px flex ROW the pair overflowed both edges (centered overflow), pushing the matrix's
+// left dot column outside the tile — user-reported, browser-verified. Height is content-
+// driven (matrix + baseline + gap) with the width still pinned at 88px.
 .matrix-tile {
-  width: 88px; height: 88px; background: rgba(255,255,255,0.05);
+  width: 88px; background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.08); border-radius: 8px;
-  display: flex; align-items: center; justify-content: center; flex: none;
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 0;
+  align-items: center; justify-content: center; flex: none;
 }
 .align-matrix {
   display: grid; grid-template-columns: repeat(3, 20px); grid-template-rows: repeat(3, 20px); gap: 2px;
