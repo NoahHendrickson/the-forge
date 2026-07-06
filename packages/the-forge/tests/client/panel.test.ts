@@ -503,6 +503,7 @@ describe('Panel', () => {
       expect(btn.classList.contains('seg-active')).toBe(true)
       expect(btn.getAttribute('aria-pressed')).toBe('true')
       expect(panel.root.querySelector('.am-dot.am-active')).toBeNull()
+      expect(btn.classList.contains('baseline-toggle')).toBe(true)
     })
 
     it('clicking active toggle releases baseline (targeted discard of the session draft)', () => {

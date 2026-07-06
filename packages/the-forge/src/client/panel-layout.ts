@@ -183,7 +183,7 @@ export class LayoutSection {
     // (stylesheet reality returns); if baseline came from the app's own CSS there is no
     // draft to discard, so OFF drafts flex-start (the normalize default) instead.
     const baselineBtn = createButton({ label: 'Baseline' })
-    baselineBtn.classList.add('seg')
+    baselineBtn.classList.add('seg', 'baseline-toggle')
     baselineBtn.setAttribute('data-align-baseline', '')
     baselineBtn.title = 'align-items: baseline → items-baseline'
     baselineBtn.addEventListener('click', () => {
