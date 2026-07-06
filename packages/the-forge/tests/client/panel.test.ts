@@ -1679,6 +1679,89 @@ describe('Panel Stroke section', () => {
       expect(drafts.current(el, `border-${side}-color`)).toBe('rgb(1, 2, 3)')
     }
   })
+
+  it('no painting border → stroke rows and ⋯ hidden, + shown', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    expect((panel.root.querySelector('[data-add-stroke]') as HTMLElement).hidden).toBe(false)
+    expect((panel.root.querySelector('[data-remove-stroke]') as HTMLElement).hidden).toBe(true)
+    // the .stroke-rows wrap is the title's immediate body sibling
+    expect((strokeSection(panel).nextElementSibling as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-expand="stroke"]') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('width set but style none still reads empty', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-top-width: 3px;"></div>`
+    )
+    expect((panel.root.querySelector('[data-add-stroke]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('a lone border-bottom counts as a stroke (four-side predicate)', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-bottom-style: solid; border-bottom-width: 1px;"></div>`
+    )
+    expect((panel.root.querySelector('[data-add-stroke]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-remove-stroke]') as HTMLElement).hidden).toBe(false)
+    expect((strokeSection(panel).nextElementSibling as HTMLElement).hidden).toBe(false)
+  })
+
+  it('+ drafts a 1px solid border on all four sides and flips to populated', () => {
+    const { el, panel, drafts } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    ;(panel.root.querySelector('[data-add-stroke]') as HTMLElement).click()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-width`)).toBe('1px')
+      expect(drafts.current(el, `border-${side}-style`)).toBe('solid')
+    }
+    expect((panel.root.querySelector('[data-remove-stroke]') as HTMLElement).hidden).toBe(false)
+    expect((strokeSection(panel).nextElementSibling as HTMLElement).hidden).toBe(false)
+    expect((panel.root.querySelector('[data-expand="stroke"]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('− after + is a pure undo: all border drafts discarded, back to empty', () => {
+    const { el, panel, drafts } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    ;(panel.root.querySelector('[data-add-stroke]') as HTMLElement).click()
+    ;(panel.root.querySelector('[data-remove-stroke]') as HTMLElement).click()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-width`)).toBe(null)
+      expect(drafts.current(el, `border-${side}-style`)).toBe(null)
+    }
+    expect((panel.root.querySelector('[data-add-stroke]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('− on a stylesheet-real border drafts border-style: none on all sides', () => {
+    const { el, panel, drafts } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-style: solid; border-width: 2px;"></div>`
+    )
+    ;(panel.root.querySelector('[data-remove-stroke]') as HTMLElement).click()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-style`)).toBe('none')
+    }
+    expect((panel.root.querySelector('[data-add-stroke]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('− on a real border with a session width tweak still drafts removal and discards the tweak (style anchor untouched)', () => {
+    const { el, panel, drafts } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-style: solid; border-width: 2px;"></div>`
+    )
+    commit(strokeWidthField(panel), '5') // widths drafted; style stays stylesheet-real (all sides already solid)
+    ;(panel.root.querySelector('[data-remove-stroke]') as HTMLElement).click()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-style`)).toBe('none')
+      expect(drafts.current(el, `border-${side}-width`)).toBe(null) // tweak discarded, not kept
+    }
+  })
+
+  it('the ⋯ open state survives a remove/add round-trip', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-style: solid; border-width: 2px;"></div>`
+    )
+    const expandBtn = panel.root.querySelector('[data-expand="stroke"]') as HTMLElement
+    expandBtn.click() // open BT/BR/BB/BL
+    ;(panel.root.querySelector('[data-remove-stroke]') as HTMLElement).click()
+    ;(panel.root.querySelector('[data-add-stroke]') as HTMLElement).click()
+    const expandWrap = expandBtn.closest('.panel-section')!.nextElementSibling!.nextElementSibling as HTMLElement
+    expect(expandWrap.hidden).toBe(false) // restored from expandState, not reset
+  })
 })
 
 describe('Panel color rows + token-btn icon (T5)', () => {
