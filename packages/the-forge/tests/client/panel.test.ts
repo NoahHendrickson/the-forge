@@ -291,18 +291,42 @@ describe('Panel', () => {
     expect(side).toBeTruthy()
     // matrix-tile wraps the align-matrix
     expect(tile.querySelector('.align-matrix')).toBeTruthy()
-    // layout-side contains Gap (a .nf) then Wrap (a .seg-field), in that order
+    // layout-side contains only Gap (a .nf) — Wrap moved to the Direction row (Task 2)
     const gapField = side.querySelector('.nf')
-    const wrapField = [...side.querySelectorAll('.seg-field')].find(
-      (n) => n.querySelector('.seg-field-label')?.textContent === 'Wrap'
-    )
     expect(gapField).toBeTruthy()
-    expect(wrapField).toBeTruthy()
     // Direction segment field renders as a full row OUTSIDE the grid (before it)
     const directionField = [...controlsWrap.querySelectorAll('.seg-field')].find(
       (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
     )!
     expect(grid.contains(directionField)).toBe(false)
+  })
+
+  it('direction row is icon pair + wrap toggle; layout-side holds only Gap', () => {
+    const { panel } = flexSetup()
+    const dirField = [...panel.root.querySelectorAll('.seg-field')].find(
+      (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
+    ) as HTMLElement
+    const segs = [...dirField.querySelectorAll('.seg-track .seg')] as HTMLElement[]
+    expect(segs.map((b) => b.textContent)).toEqual(['→', '↓'])
+    expect(segs.map((b) => b.getAttribute('aria-label'))).toEqual(['Horizontal', 'Vertical'])
+    const wrapBtn = dirField.querySelector('[data-wrap-toggle]') as HTMLElement
+    expect(wrapBtn).toBeTruthy()
+    expect(wrapBtn.getAttribute('aria-label')).toBe('Wrap')
+    const side = panel.root.querySelector('.layout-side') as HTMLElement
+    expect(side.querySelector('.seg-field')).toBeNull() // old Wrap segment gone
+    expect(side.querySelector('.nf')).toBeTruthy() // Gap stays
+  })
+
+  it('wrap toggle drafts flex-wrap and reflects state', () => {
+    const { el, panel } = flexSetup()
+    const wrapBtn = panel.root.querySelector('[data-wrap-toggle]') as HTMLButtonElement
+    wrapBtn.click()
+    expect(el.style.getPropertyValue('flex-wrap')).toBe('wrap')
+    expect(wrapBtn.classList.contains('seg-active')).toBe(true)
+    expect(wrapBtn.getAttribute('aria-pressed')).toBe('true')
+    wrapBtn.click()
+    expect(el.style.getPropertyValue('flex-wrap')).toBe('nowrap')
+    expect(wrapBtn.classList.contains('seg-active')).toBe(false)
   })
 
   it('non-flex element shows only the add-auto-layout button in Layout section', () => {
@@ -333,7 +357,7 @@ describe('Panel', () => {
       (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
     )!
     const buttons = [...seg.querySelectorAll('.seg')] as HTMLElement[]
-    const column = buttons.find((b) => b.textContent === 'Vertical')!
+    const column = buttons.find((b) => b.getAttribute('aria-label') === 'Vertical')!
     column.click()
     expect(drafts.current(el, 'flex-direction')).toBe('column')
   })
@@ -422,7 +446,9 @@ describe('Panel', () => {
     const seg = [...panel.root.querySelectorAll('.seg-field')].find(
       (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
     )!
-    const columnBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Vertical') as HTMLElement
+    const columnBtn = [...seg.querySelectorAll('.seg')].find(
+      (b) => b.getAttribute('aria-label') === 'Vertical'
+    ) as HTMLElement
     columnBtn.click()
     // after direction change, the matrix should have re-rendered with column mapping;
     // the physical dot that emitted (flex-end, flex-start) in row mode now emits
@@ -431,16 +457,6 @@ describe('Panel', () => {
       (d) => (d as HTMLElement).dataset.j === 'flex-start' && (d as HTMLElement).dataset.a === 'flex-end'
     ) as HTMLElement
     expect(dotAfter).toBeTruthy()
-  })
-
-  it('wrap segment field drafts flex-wrap', () => {
-    const { el, panel, drafts } = flexSetup()
-    const seg = [...panel.root.querySelectorAll('.seg-field')].find(
-      (n) => n.querySelector('.seg-field-label')?.textContent === 'Wrap'
-    )!
-    const wrapBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Wrap') as HTMLElement
-    wrapBtn.click()
-    expect(drafts.current(el, 'flex-wrap')).toBe('wrap')
   })
 
   it('flex-child controls are hidden when parent is not flex', () => {

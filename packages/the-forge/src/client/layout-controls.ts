@@ -1,6 +1,6 @@
 export interface SegmentFieldOpts {
   label: string
-  options: Array<{ value: string; label: string; title?: string }>
+  options: Array<{ value: string; label: string; title?: string; ariaLabel?: string }>
   onInput: (value: string) => void
 }
 
@@ -31,6 +31,7 @@ export class SegmentField {
       // .seg hard-clips overflow (overflow: hidden; nowrap) — the title is the escape hatch
       // for any label that still doesn't fit at the current panel width.
       button.title = option.title ?? option.label
+      if (option.ariaLabel) button.setAttribute('aria-label', option.ariaLabel)
       button.addEventListener('click', () => {
         this.setActiveValue(option.value)
         this.opts.onInput(option.value)

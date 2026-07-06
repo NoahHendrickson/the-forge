@@ -96,7 +96,7 @@ export class Panel {
   private directionField: SegmentField | null = null
   private gapField: NumberField | null = null
   private alignMatrix: AlignMatrix | null = null
-  private wrapField: SegmentField | null = null
+  private wrapToggle: HTMLButtonElement | null = null
   private addLayoutBtn: HTMLElement | null = null
   private layoutControlsWrap: HTMLElement | null = null
 
@@ -400,7 +400,9 @@ export class Panel {
     const spaceBetween = justify === 'space-between'
 
     this.directionField?.set(direction)
-    this.wrapField?.set(wrap === 'wrap' ? 'wrap' : 'nowrap')
+    const wrapping = wrap === 'wrap'
+    this.wrapToggle?.classList.toggle('seg-active', wrapping)
+    this.wrapToggle?.setAttribute('aria-pressed', String(wrapping))
 
     if (this.gapField) {
       if (spaceBetween) {
@@ -552,7 +554,7 @@ export class Panel {
     this.directionField = null
     this.gapField = null
     this.alignMatrix = null
-    this.wrapField = null
+    this.wrapToggle = null
     this.addLayoutBtn = null
     this.layoutControlsWrap = null
     this.alignSelfField = null
@@ -679,8 +681,8 @@ export class Panel {
     this.directionField = new SegmentField({
       label: 'Direction',
       options: [
-        { value: 'row', label: 'Horizontal', title: 'flex-direction: row → flex-row' },
-        { value: 'column', label: 'Vertical', title: 'flex-direction: column → flex-col' },
+        { value: 'row', label: '→', ariaLabel: 'Horizontal', title: 'flex-direction: row → flex-row' },
+        { value: 'column', label: '↓', ariaLabel: 'Vertical', title: 'flex-direction: column → flex-col' },
       ],
       onInput: (value) => {
         if (!this.el) return
@@ -694,6 +696,24 @@ export class Panel {
     // overlay.ts) — the "Direction" label overflows the shared 40px label column.
     this.directionField.root.setAttribute('data-flex-direction', '')
     controls.append(this.directionField.root)
+
+    // Wrap lives on the Direction row (Figma UI3 grouping) as an independent toggle —
+    // it is NOT part of the exclusive direction segment, so it's a sibling of the track.
+    const wrapBtn = createButton({ label: '↩' })
+    wrapBtn.classList.add('seg', 'wrap-toggle')
+    wrapBtn.setAttribute('data-wrap-toggle', '')
+    wrapBtn.setAttribute('aria-label', 'Wrap')
+    wrapBtn.title = 'flex-wrap: wrap → flex-wrap'
+    wrapBtn.addEventListener('click', () => {
+      if (!this.el) return
+      this.onBeforeEdit(this.el)
+      const current = this.currentValue(this.el, 'flex-wrap', getComputedStyle(this.el))
+      this.drafts.apply(this.el, 'flex-wrap', current === 'wrap' ? 'nowrap' : 'wrap')
+      this.refresh()
+      this.onEdited()
+    })
+    this.wrapToggle = wrapBtn
+    this.directionField.root.append(wrapBtn)
 
     const grid = document.createElement('div')
     grid.className = 'layout-grid'
@@ -761,22 +781,6 @@ export class Panel {
     })
     this.gapField.root.dataset.props = GAP_SPEC.props.join(' ')
     side.append(this.gapField.root)
-
-    this.wrapField = new SegmentField({
-      label: 'Wrap',
-      options: [
-        { value: 'nowrap', label: 'No wrap', title: 'flex-wrap: nowrap' },
-        { value: 'wrap', label: 'Wrap', title: 'flex-wrap: wrap' },
-      ],
-      onInput: (value) => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        this.drafts.apply(this.el, 'flex-wrap', value)
-        this.refresh()
-        this.onEdited()
-      },
-    })
-    side.append(this.wrapField.root)
 
     grid.append(side)
     controls.append(grid)
