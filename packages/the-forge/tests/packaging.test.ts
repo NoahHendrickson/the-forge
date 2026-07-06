@@ -49,11 +49,33 @@ describe('package.json publish readiness', () => {
     expect(pkg.license).toBe('MIT')
   })
 
-  it('declares a repository and homepage', () => {
+  it('declares a repository (with monorepo directory) and homepage', () => {
     expect(pkg.repository).toEqual({
       type: 'git',
       url: 'git+https://github.com/NoahHendrickson/the-forge.git',
+      directory: 'packages/the-forge',
     })
     expect(pkg.homepage).toBe('https://github.com/NoahHendrickson/the-forge#readme')
+  })
+
+  // npm renders the README found inside the tarball, and npm pack only picks it
+  // up from the package directory itself — the repo-root README never ships.
+  // Without this file the npm page says "This package does not have a README",
+  // which kills the paste-the-npm-link-to-your-agent install flow.
+  it('has a package-local README.md for the npm page', () => {
+    const readmePath = path.join(path.dirname(pkgPath), 'README.md')
+    expect(fs.existsSync(readmePath), 'packages/the-forge/README.md must exist').toBe(true)
+    const readme = fs.readFileSync(readmePath, 'utf8')
+    expect(readme).toContain('npx the-forge init')
+    // Agents reading the npm page need an absolute link — relative README links
+    // are only rewritten by npm's renderer, not by registry API consumers.
+    expect(readme).toContain('https://github.com/NoahHendrickson/the-forge/blob/main/SETUP.md')
+  })
+
+  it('guards publish with a prepublishOnly build', () => {
+    // "files": ["dist"] means a stale or missing dist/ publishes silently
+    // without this; the build script rm -rf's dist first, so this always
+    // ships a fresh compile.
+    expect(pkg.scripts.prepublishOnly).toBe('npm run build')
   })
 })
