@@ -121,6 +121,13 @@ describe('AlignMatrix', () => {
     expect(dots(am)).toHaveLength(9)
   })
 
+  it('dots carry a CSS-hint title', () => {
+    const m = new AlignMatrix({ onInput: () => {} })
+    m.set('flex-start', 'flex-start', 'row', false)
+    const dot = m.root.querySelector('.am-dot') as HTMLElement
+    expect(dot.title).toBe('justify-content: flex-start · align-items: flex-start')
+  })
+
   it('in row direction, columns map to justify and rows map to align', () => {
     const { am, onInput } = make()
     am.set(null, null, 'row', false)

@@ -16,4 +16,7 @@ describe('cssHintFor', () => {
   it('covers the gap spec', () => {
     expect(cssHintFor(GAP_SPEC)).toBe('gap → gap-*')
   })
+  it('special-cases font-size to the text-* utility (mirrors request-path mapping in tokens.ts)', () => {
+    expect(cssHintFor({ props: ['font-size'] })).toBe('font-size → text-*')
+  })
 })

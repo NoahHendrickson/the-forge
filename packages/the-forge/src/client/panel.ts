@@ -809,6 +809,7 @@ export class Panel {
           this.onEdited()
         },
       })
+      familySelect.title = 'font-family'
       this.typeFamilySelect = familySelect
       wrap.append(familySelect)
 
@@ -824,6 +825,7 @@ export class Panel {
           this.onEdited()
         },
       })
+      weightSelect.title = 'font-weight → font-*'
       this.typeWeightSelect = weightSelect
       wrap.append(weightSelect)
     }
@@ -986,6 +988,7 @@ export class Panel {
         this.onEdited()
       },
     })
+    styleSelect.title = 'border-style → border-solid / border-dashed / border-dotted'
     this.strokeStyleSelect = styleSelect
     row1.append(styleSelect)
 
@@ -1107,9 +1110,9 @@ export class Panel {
       label: 'Align',
       options: [
         { value: 'auto', label: 'Auto' },
-        { value: 'flex-start', label: 'Start' },
-        { value: 'center', label: 'Center' },
-        { value: 'flex-end', label: 'End' },
+        { value: 'flex-start', label: 'Start', title: 'align-self: flex-start → self-start' },
+        { value: 'center', label: 'Center', title: 'align-self: center → self-center' },
+        { value: 'flex-end', label: 'End', title: 'align-self: flex-end → self-end' },
         { value: 'stretch', label: 'Stretch' },
       ],
       onInput: (value) => {

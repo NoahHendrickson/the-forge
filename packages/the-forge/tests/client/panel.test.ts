@@ -1029,6 +1029,12 @@ describe('Panel Typography section', () => {
     expect(drafts.current(el, 'font-weight')).toBe('600')
   })
 
+  it('typography and stroke selects carry CSS-hint titles', () => {
+    const { panel } = textSetup()
+    expect((panel.root.querySelector('.type-weight') as HTMLElement).title).toBe('font-weight → font-*')
+    expect((panel.root.querySelector('.type-family') as HTMLElement).title).toBe('font-family')
+  })
+
   it('S field drafts font-size in px', () => {
     const { el, panel, drafts } = textSetup()
     commit(fieldInput(panel, P.S), '18')

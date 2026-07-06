@@ -139,6 +139,7 @@ export class AlignMatrix {
     dot.className = 'am-dot'
     dot.dataset.j = j
     dot.dataset.a = a
+    dot.title = `justify-content: ${j} · align-items: ${a}`
     return dot
   }
 }
