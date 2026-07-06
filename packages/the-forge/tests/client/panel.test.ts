@@ -233,7 +233,7 @@ describe('Panel', () => {
     expect(fieldInput(panel, P.PX).value).toBe('Mixed') // originals differ → mixed again
   })
 
-  it('section order is Layout, Size, Padding, Margin, Typography, Fill, Stroke, Appearance regardless of visibility', () => {
+  it('section order is Layout, Margin, Typography, Fill, Stroke, Appearance regardless of visibility', () => {
     const { panel } = setup()
     // Sections with an expand button now parent it inside the title row, so title row
     // textContent includes the '⋯' glyph for expandable sections (and Layout's title row
@@ -242,24 +242,27 @@ describe('Panel', () => {
     const titles = [...panel.root.querySelectorAll('.panel-section')].map(
       (n) => n.textContent?.replace('⋯', '').replace('−', '').trim()
     )
-    expect(titles).toEqual(['Layout', 'Size', 'Padding', 'Margin', 'Typography', 'Fill', 'Stroke', 'Appearance'])
+    expect(titles).toEqual(['Layout', 'Margin', 'Typography', 'Fill', 'Stroke', 'Appearance'])
   })
 
   it('expand button is parented inside the section title row, not the rows wrap', () => {
     const { panel } = setup()
     const sections = [...panel.root.querySelectorAll('.panel-section')]
-    const paddingTitle = sections.find((s) => s.textContent?.includes('Padding'))!
-    const btn = paddingTitle.querySelector('[data-expand="padding"]')
+    // Padding no longer has its own section (M-C unified Layout) — its `⋯` expand button
+    // now lives on the Layout title, alongside the '−' remove-auto-layout button.
+    const layoutTitle = sections.find((s) => s.textContent?.includes('Layout'))!
+    const btn = layoutTitle.querySelector('[data-expand="padding"]')
     expect(btn).toBeTruthy()
     // must NOT be inside a .panel-rows wrap
-    expect(paddingTitle.querySelector('.panel-rows [data-expand="padding"]')).toBeFalsy()
+    expect(layoutTitle.querySelector('.panel-rows [data-expand="padding"]')).toBeFalsy()
   })
 
   it('Layout section TITLE stays visible (but still first) for a non-flex element — empty state is title + add-auto-layout button, no floating headerless button', () => {
     const { panel } = setup()
     const sections = [...panel.root.querySelectorAll('.panel-section')]
-    // Title row textContent also carries the '−' remove-auto-layout button.
-    expect(sections[0].textContent).toBe('Layout−')
+    // Title row textContent also carries the '−' remove-auto-layout button and (since M-C)
+    // the '⋯' padding-expand button — strip both glyphs before comparing the label.
+    expect(sections[0].textContent?.replace('−', '').replace('⋯', '')).toBe('Layout')
     expect((sections[0] as HTMLElement).hidden).toBe(false)
     // the layout CONTROLS (direction/gap/align/wrap) are hidden — only the
     // add-auto-layout button is shown alongside the always-visible title
@@ -278,9 +281,26 @@ describe('Panel', () => {
   it('Layout section is visible for a flex element', () => {
     const { panel } = flexSetup()
     const sections = [...panel.root.querySelectorAll('.panel-section')]
-    // Title row textContent also carries the '−' remove-auto-layout button.
-    expect(sections[0].textContent).toBe('Layout−')
+    // Title row textContent also carries the '−' remove-auto-layout button and '⋯' padding-expand.
+    expect(sections[0].textContent?.replace('−', '').replace('⋯', '')).toBe('Layout')
     expect((sections[0] as HTMLElement).hidden).toBe(false)
+  })
+
+  it('unified Layout body composes W/H, flex-child strip, cluster, padding in order (spec M-C)', () => {
+    const { panel } = flexSetup()
+    const body = panel.root.querySelector('.layout-section') as HTMLElement
+    const kinds = [...body.children].map((c) =>
+      c.classList.contains('size-row')
+        ? 'size'
+        : c.classList.contains('flex-child-controls')
+          ? 'flex-child'
+          : c.classList.contains('layout-controls') || c.hasAttribute('data-add-layout')
+            ? 'cluster'
+            : (c as HTMLElement).dataset.props?.startsWith('padding')
+              ? 'padding'
+              : c.className
+    )
+    expect(kinds).toEqual(['size', 'size', 'flex-child', 'cluster', 'cluster', 'padding', 'padding'])
   })
 
   it('layout controls compose a layout-grid with a matrix-tile and a layout-side column', () => {
@@ -483,6 +503,7 @@ describe('Panel', () => {
       expect(btn.classList.contains('seg-active')).toBe(true)
       expect(btn.getAttribute('aria-pressed')).toBe('true')
       expect(panel.root.querySelector('.am-dot.am-active')).toBeNull()
+      expect(btn.classList.contains('baseline-toggle')).toBe(true)
     })
 
     it('clicking active toggle releases baseline (targeted discard of the session draft)', () => {
@@ -2347,20 +2368,27 @@ describe('Panel multi-select (B6)', () => {
     expect(drafts.hasDrafts(b)).toBe(false)
   })
 
-  it('Layout section is hidden entirely in multi-select', () => {
+  it('multi-select: Layout section stays visible with rows; cluster and remove hidden (M-C)', () => {
     const { panel } = multiSetup()
     const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent?.startsWith('Layout'))!
-    expect((layoutTitle as HTMLElement).hidden).toBe(true)
+    // Unlike Fill/Stroke (fully hidden in multi), Layout's W/H and padding rows keep the
+    // B6 relative-delta behavior across a selection — only the cluster/add/remove hide.
+    expect((layoutTitle as HTMLElement).hidden).toBe(false)
+    expect((panel.root.querySelector('.layout-controls') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-add-layout]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-remove-layout]') as HTMLElement).hidden).toBe(true)
+    expect(fieldInput(panel, P.W)).toBeTruthy() // W row alive in multi
+    expect(fieldInput(panel, P.PX)).toBeTruthy() // padding row alive in multi
   })
 
-  it('Layout section BODY (not just the title) is hidden in multi-select (final review fix #1)', () => {
+  it('Layout section BODY (not just the title) stays visible in multi-select — it holds the live W/H/padding rows (M-C)', () => {
     const { panel } = multiSetup()
     const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent?.startsWith('Layout'))!
-    // Layout's custom body (.layout-section wrap, holding the add-auto-layout button and/or
-    // layout-controls) is the very next sibling after the title.
+    // Layout's unified body (.layout-section wrap, holding size rows, the cluster, and
+    // padding rows) is the very next sibling after the title.
     const bodyWrap = layoutTitle.nextElementSibling as HTMLElement
     expect(bodyWrap.classList.contains('layout-section')).toBe(true)
-    expect(bodyWrap.hidden).toBe(true)
+    expect(bodyWrap.hidden).toBe(false)
   })
 
   it('size-mode selects are hidden in multi-select', () => {
@@ -2374,6 +2402,13 @@ describe('Panel multi-select (B6)', () => {
     const { panel } = multiSetup()
     const wrap = panel.root.querySelector('.flex-child-controls') as HTMLElement
     expect(wrap.hidden).toBe(true)
+  })
+
+  it('multi-select with a flex FIRST element still hides the cluster (early-return precedes any flex read)', () => {
+    const { panel } = multiSetup('display: flex; width: 100px;', 'width: 100px;')
+    expect((panel.root.querySelector('.layout-controls') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-add-layout]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-remove-layout]') as HTMLElement).hidden).toBe(true)
   })
 
   it('single-element show() remains unaffected: Layout visibility follows single-el rules', () => {

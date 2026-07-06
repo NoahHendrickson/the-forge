@@ -127,16 +127,34 @@ Four milestones, each its own dated plan in `docs/plans/` and its own feature br
 ### M-C — Unified Layout section (the structural move)
 
 - One "Layout" section containing, in fixed order: **W row → H row (size modes + flex-child
-  controls as today) → auto-layout cluster (add/remove, direction+wrap, gap, alignment) →
-  Padding rows (H/V, expand to T/R/B/L)**. Padding always renders here, flex or not.
-- Standalone Size and Padding sections are deleted; their row markup moves verbatim (same
-  classes, same `expandKey: 'padding'`), so most `.panel-rows`-level test hooks survive.
-  Section-count/title assertions are updated once.
+  Align controls) → auto-layout cluster (add/remove, direction+wrap, gap, 9-dot matrix +
+  Baseline) → Padding rows (H/V, `⋯` expands to T/R/B/L, sharing the section's title row with
+  the `−` remove-auto-layout affordance)**. Padding always renders here, flex or not; the
+  cluster is the only single-select-only piece (hidden in multi, same rule as before the move).
+- Standalone Size and Padding sections are deleted; their row markup moved verbatim (same
+  classes, same `expandKey: 'padding'`) into the new `LayoutSection` class
+  (`src/client/panel-layout.ts`), extracted from `panel.ts` per PR #16's refactor promise —
+  `buildBody`/`buildRemoveButton`/`buildFlexChildControls`/`refresh` own the cluster's
+  construction and per-`show()` rebuild lifecycle; `panel.ts` still births every field via its
+  single `buildField` site and passes them in via `LayoutSectionDeps`.
 - **Multi-select behavior preserved per-row:** W/H/Padding rows keep working in multi-select
-  (relative deltas), the auto-layout cluster stays single-element-only (decision B6) and is
-  hidden in multi — same rules as today, just co-resident in one section.
-- Section list becomes: Layout → Margin (conditional) → Typography → Fill → Stroke → Appearance.
-  Amendment appended to `docs/research/2026-07-04-panel-patterns.md`.
+  (relative deltas, Mixed-not-blank), the auto-layout cluster and flex-child Align strip stay
+  single-element-only (decision B6) and hidden in multi — same rules as today, just co-resident
+  in one section.
+- Section order re-ratified: Layout → Margin (conditional) → Typography → Fill → Stroke →
+  Appearance. Amendment appended to `docs/research/2026-07-04-panel-patterns.md`.
+- **Baseline clip fix (M-C Task 5).** The 9-dot matrix's `.seg` rule hard-clips overflow by
+  design (a deliberate escape hatch via `title`), but "Baseline" is a word, not a glyph — it
+  clipped to "Ba…" at the panel's 280px minimum width (an M-B review finding, deferred to this
+  task). Fixed with a `.baseline-toggle` class (`width: auto; flex: none; overflow: visible;
+  padding: 0 8px;`) on the toggle alone, leaving the matrix's own segments clipped as intended.
+- **E2E-verified (M-C Task 5, real browser, Playwright against the demo app):** the unified
+  section's full row order and visibility rules (W/H/cluster/padding, `⋯`/`−` shared title row,
+  cluster hidden in multi while W/H/padding stay editable), the re-ratified section order, the
+  Baseline label rendering at zero clip (`scrollWidth === clientWidth` at the panel's true
+  280px minimum, confirmed via a real resize-handle drag), the remove-auto-layout intent line
+  landing byte-identical in the queued change request, and that the Prompt/float-mode header
+  cluster and the conditional Margin disclosure survived the refactor untouched.
 
 ### M-D — Min/max sizing
 

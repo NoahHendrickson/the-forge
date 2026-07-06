@@ -110,6 +110,31 @@ describe('SegmentField', () => {
     const btn = field.root.querySelector('.seg') as HTMLElement
     expect(btn.title).toBe('Space between')
   })
+
+  it('wraps track + trailing elements in a seg-cluster when trailing is provided', () => {
+    const addon = document.createElement('button')
+    addon.setAttribute('data-wrap-toggle', '')
+    const f = new SegmentField({
+      label: 'Direction',
+      options: [
+        { value: 'row', label: '→', ariaLabel: 'Horizontal' },
+        { value: 'column', label: '↓', ariaLabel: 'Vertical' },
+      ],
+      trailing: [addon],
+      onInput: () => {},
+    })
+    const cluster = f.root.querySelector('.seg-cluster') as HTMLElement
+    expect(cluster).toBeTruthy()
+    expect(cluster.querySelector('.seg-track')).toBeTruthy()
+    expect(cluster.contains(addon)).toBe(true)
+    expect([...f.root.children].map((c) => c.className)).toEqual(['seg-field-label', 'seg-cluster'])
+  })
+
+  it('renders no seg-cluster when trailing is absent (existing DOM untouched)', () => {
+    const f = new SegmentField({ label: 'X', options: [{ value: 'a', label: 'A' }], onInput: () => {} })
+    expect(f.root.querySelector('.seg-cluster')).toBeNull()
+    expect([...f.root.children].map((c) => c.className)).toEqual(['seg-field-label', 'seg-track'])
+  })
 })
 
 describe('AlignMatrix', () => {

@@ -9,6 +9,8 @@ export interface ChangeItem {
   beforeUtility: string | null
   afterUtility: string | null
   tokenExact: boolean
+  /** Optional plain-language instruction overriding the literal before→after reading — set by the BUILDER (policy lives at construction), rendered generically. */
+  intent?: string
 }
 
 export interface ElementChange {
@@ -61,6 +63,8 @@ export const KEYWORD_PASSTHROUGH = new Set([
   'dashed',
   'dotted',
 ])
+
+export const REMOVE_AUTO_LAYOUT_INTENT = 'remove auto layout (flexbox) from this element; remove flex/inline-flex/flex-row/flex-col/flex-wrap/gap-*/justify-*/items-* classes rather than adding `display: block`'
 
 const COLLAPSE: Array<{ into: string; parts: string[] }> = [
   {
@@ -230,14 +234,21 @@ export function buildChangeRequestWithElements(
       // send entirely when nothing actually changed.
       if (v.beforeCss === v.afterCss) continue
       const suggestion = suggestUtility(property, v.afterCss, theme, tokens)
-      changes.push({
+      const item: ChangeItem = {
         property,
         beforeCss: v.beforeCss,
         afterCss: v.afterCss,
         beforeUtility: theme.spacingBasePx === null ? null : findExistingUtility(className, property),
         afterUtility: suggestion?.utility ?? null,
         tokenExact: suggestion?.tokenExact ?? false,
-      })
+      }
+      // 'display: flex → block' is never the literal ask — it is the panel's deterministic
+      // preview of REMOVING auto layout. Stamp the intent here at construction so the agent
+      // edits classes (removes the flex family); the renderer prints it without owning policy.
+      if (item.property === 'display' && (item.beforeCss === 'flex' || item.beforeCss === 'inline-flex') && item.afterCss === 'block') {
+        item.intent = REMOVE_AUTO_LAYOUT_INTENT
+      }
+      changes.push(item)
     }
     if (changes.length === 0) continue // every drafted property was a no-op — nothing to request
 
@@ -289,12 +300,7 @@ export function renderMarkdown(req: ChangeRequest): string {
           : ` — add \`${c.afterUtility}\``
         line += c.tokenExact ? '' : ' (off the token scale — arbitrary value; double-check intent)'
       }
-      // 'display: flex → block' is never the literal ask — it is the panel's deterministic
-      // preview of REMOVING auto layout. Spell the intent out so the agent edits classes
-      // (removes the flex family) instead of faithfully adding a block utility.
-      if (c.property === 'display' && (c.beforeCss === 'flex' || c.beforeCss === 'inline-flex') && c.afterCss === 'block') {
-        line += ' — intent: remove auto layout (flexbox) from this element; remove flex/inline-flex/flex-row/flex-col/flex-wrap/gap-*/justify-*/items-* classes rather than adding `display: block`'
-      }
+      if (c.intent) line += ` — intent: ${c.intent}`
       lines.push(line)
     }
     lines.push('')

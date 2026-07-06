@@ -184,36 +184,37 @@ const SIZE_MODES: Array<[value: string, label: string]> = [
   ['fill', 'Fill'],
 ]
 
-// Section ORDER is fixed forever: Layout -> Size -> Padding -> Margin -> Typography -> Fill -> Stroke -> Appearance.
+// The W/H specs — rendered as the first two rows of the unified Layout section body
+// (spec M-C). Exported so panel.ts's buildBody layout branch can compose them directly.
+const SIZE_ROWS: RowSpec[] = [
+  { label: 'W', props: ['width'], min: 0, sizeMode: true },
+  { label: 'H', props: ['height'], min: 0, sizeMode: true },
+]
+
+// The padding H/V specs — rendered as the last two rows of the unified Layout section
+// body (spec M-C), after the auto-layout cluster. Exported so panel.ts's buildBody
+// layout branch can compose them directly.
+const PADDING_ROWS: RowSpec[] = [
+  { label: 'H', props: ['padding-left', 'padding-right'], min: 0 },
+  { label: 'V', props: ['padding-top', 'padding-bottom'], min: 0 },
+]
+
+// Section ORDER is fixed forever: Layout -> Margin -> Typography -> Fill -> Stroke -> Appearance.
 const SECTIONS: SectionSpec[] = [
   {
     title: 'Layout',
     rows: [],
     custom: 'layout',
-    // The section TITLE is always visible (empty state = title + add-auto-layout button —
-    // no floating headerless button). refreshLayoutSection toggles the add-button vs.
-    // layout-controls visibility beneath it based on flex-ness.
-  },
-  {
-    title: 'Size',
-    rows: [
-      { label: 'W', props: ['width'], min: 0, sizeMode: true },
-      { label: 'H', props: ['height'], min: 0, sizeMode: true },
-    ],
-  },
-  {
-    title: 'Padding',
     expandKey: 'padding',
-    rows: [
-      { label: 'H', props: ['padding-left', 'padding-right'], min: 0 },
-      { label: 'V', props: ['padding-top', 'padding-bottom'], min: 0 },
-    ],
     expandRows: [
       { label: 'T', props: ['padding-top'], min: 0 },
       { label: 'R', props: ['padding-right'], min: 0 },
       { label: 'B', props: ['padding-bottom'], min: 0 },
       { label: 'L', props: ['padding-left'], min: 0 },
     ],
+    // Unified UI3 section (spec M-C, re-ratified 2026-07-06): W/H rows -> flex-child strip ->
+    // auto-layout cluster -> padding rows, one fixed order, flex or not. The cluster alone is
+    // single-select-only (B6); rows keep multi relative-delta behavior.
   },
   {
     title: 'Margin',
@@ -295,5 +296,7 @@ export {
   WEIGHTS,
   STROKE_STYLES,
   SIZE_MODES,
+  SIZE_ROWS,
+  PADDING_ROWS,
   SECTIONS,
 }

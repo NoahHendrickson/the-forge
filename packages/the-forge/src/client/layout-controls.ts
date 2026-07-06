@@ -1,6 +1,11 @@
 export interface SegmentFieldOpts {
   label: string
   options: Array<{ value: string; label: string; title?: string; ariaLabel?: string }>
+  /** Extra controls that belong on the segment row but NOT in the exclusive track (e.g. the
+   * wrap toggle riding the Direction row). When present, SegmentField wraps track + trailing
+   * in a .seg-cluster so a column-stacked field ([data-flex-direction]) keeps them on one
+   * visual row — the field owns this structure; callers must not rewire its children. */
+  trailing?: HTMLElement[]
   onInput: (value: string) => void
 }
 
@@ -20,7 +25,6 @@ export class SegmentField {
 
     const track = document.createElement('div')
     track.className = 'seg-track'
-    this.root.append(track)
 
     for (const option of opts.options) {
       const button = document.createElement('button')
@@ -38,6 +42,16 @@ export class SegmentField {
       })
       track.append(button)
       this.buttons.push(button)
+    }
+
+    if (opts.trailing && opts.trailing.length > 0) {
+      const cluster = document.createElement('div')
+      cluster.className = 'seg-cluster'
+      cluster.append(track)
+      for (const t of opts.trailing) cluster.append(t)
+      this.root.append(cluster)
+    } else {
+      this.root.append(track)
     }
   }
 

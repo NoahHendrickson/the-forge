@@ -5,9 +5,10 @@ import { NumberField } from './controls'
 import { createButton } from './ui/button'
 import { createSelect } from './ui/select'
 import { createColorRow } from './ui/swatch'
-import { SegmentField, AlignMatrix } from './layout-controls'
+import { SegmentField } from './layout-controls'
 import { ColorPicker } from './colorpicker'
 import { PanelTokenUi, colorDisplay } from './panel-token-ui'
+import { LayoutSection } from './panel-layout'
 import { readTokens, readTheme, parseColor as parseColorLocal } from './tokens'
 import {
   type RowSpec,
@@ -23,13 +24,14 @@ import {
   WEIGHTS,
   STROKE_STYLES,
   SIZE_MODES,
+  SIZE_ROWS,
+  PADDING_ROWS,
   SECTIONS,
 } from './panel-specs'
 import {
   px,
   fromPx,
   effectiveBackground,
-  isFlex,
   normalizeJustify,
   normalizeAlign,
   hasDirectText,
@@ -37,26 +39,14 @@ import {
   firstFamily,
   cssFamilyValue,
   documentFontFamilies,
-  mainAxisProp,
 } from './panel-readers'
 
 export { tokenEntriesFor, colorTokenEntries } from './panel-specs'
 export { normalizeJustify, normalizeAlign, hasDirectText } from './panel-readers'
 
-// The container-side flex props the panel can draft — the set 'remove auto layout' must
-// clean up alongside display (child props like align-self/flex-grow belong to the CHILD's
-// own remove story, not the container's).
-const FLEX_CONTAINER_PROPS = ['flex-direction', 'gap', 'justify-content', 'align-items', 'flex-wrap']
-
 interface BoundField {
   field: NumberField
   spec: RowSpec
-}
-
-interface BoundSizeMode {
-  select: HTMLSelectElement
-  spec: RowSpec
-  field: NumberField
 }
 
 export class Panel {
@@ -105,21 +95,13 @@ export class Panel {
   // element rebuilds the DOM but should keep sections the user expanded, expanded).
   private expandState = new Map<string, boolean>()
 
-  // Layout section widgets (rebuilt per show(), re-set() per refresh()).
-  private directionField: SegmentField | null = null
+  // Layout section + flex-child widgets — owned by LayoutSection (panel-layout.ts),
+  // rebuilt per show() via buildBody()/buildFlexChildControls(), re-set() per refresh().
+  private layoutSection: LayoutSection
+  // The gap NumberField itself stays born in panel.ts (buildGapField, the single field-birth
+  // site) — LayoutSection holds its own reference for refresh purposes, but panel.ts still
+  // owns destroy() on rebuild, same as every other field in `this.fields`.
   private gapField: NumberField | null = null
-  private alignMatrix: AlignMatrix | null = null
-  private baselineToggle: HTMLButtonElement | null = null
-  private wrapToggle: HTMLButtonElement | null = null
-  private addLayoutBtn: HTMLElement | null = null
-  private removeLayoutBtn: HTMLButtonElement | null = null
-  private layoutControlsWrap: HTMLElement | null = null
-
-  // Flex-child widgets.
-  private alignSelfField: SegmentField | null = null
-  private alignSelfWrap: HTMLElement | null = null
-  private flexChildControlsWrap: HTMLElement | null = null
-  private sizeModes: BoundSizeMode[] = []
 
   // Typography section widgets (rebuilt per show(), re-set() per refresh()).
   private typeFamilySelect: HTMLSelectElement | null = null
@@ -215,6 +197,16 @@ export class Panel {
     // .panel-body comment).
     this.colorPicker = new ColorPicker(this.body)
     this.tokenUi = new PanelTokenUi(this.body, () => this.el)
+    this.layoutSection = new LayoutSection({
+      drafts: this.drafts,
+      getEl: () => this.el,
+      currentValue: (el, prop, computed) => this.currentValue(el, prop, computed),
+      onBeforeEdit: (el) => this.onBeforeEdit(el),
+      onEdited: () => this.onEdited(),
+      refresh: () => this.refresh(),
+      tokenUi: this.tokenUi,
+      buildGapField: () => this.buildGapField(),
+    })
     // Mutual exclusivity (final review fix #11): opening one popover must close the other —
     // two open at once would overlap/fight for the same anchor-relative position. Wired here
     // so ColorPicker and TokenPicker stay fully decoupled from one another; only Panel, which
@@ -333,12 +325,12 @@ export class Panel {
     const multi = this.isMulti()
 
     for (const { spec, els: sectionEls } of this.sectionEls) {
-      if (spec.title === 'Layout') {
-        // Decision (B6): Layout is single-element only — matrix/direction across N
-        // elements is ambiguous, so the whole section (not just its controls) hides.
-        this.setSectionHidden(spec, sectionEls, multi)
-        continue
-      }
+      // Decision (B6, re-scoped M-C): the auto-layout cluster (matrix/direction) across N
+      // elements is ambiguous, so LayoutSection.refresh (below) hides just the cluster/add/
+      // remove widgets in multi — but the section itself (W/H + padding rows) stays visible,
+      // since those rows keep the same relative-delta multi behavior as every other row.
+      // Layout has no `visible` predicate, so it falls through to the generic path and is
+      // always shown here.
       if (spec.title === 'Fill' || spec.title === 'Stroke') {
         // Replaced by Selection colors in multi-mode — title AND body hide together.
         this.setSectionHidden(spec, sectionEls, multi || (spec.visible ? !spec.visible(el, this.drafts) : false))
@@ -393,122 +385,15 @@ export class Panel {
       this.tokenUi.rebind(spec, field, values[0], mixed, this.drafts.isComparing(el))
     }
 
+    this.layoutSection.refresh(el, computed, multi)
     if (!multi) {
-      // Layout/flex-child controls, family/weight/align selects, and Fill/Stroke's
-      // single-element swatches are single-selection only (B6 decision).
-      this.refreshLayoutSection(el, computed)
-      this.refreshFlexChild(el, computed)
+      // Family/weight/align selects and Fill/Stroke's single-element swatches are
+      // single-selection only (B6 decision).
       this.refreshTypography(el, computed)
       this.refreshFillStroke(el, computed)
     } else {
-      // Flex-child align/size-modes are single-only — DOM stays (stable order) but hidden.
-      if (this.flexChildControlsWrap) this.flexChildControlsWrap.hidden = true
-      for (const sm of this.sizeModes) sm.select.hidden = true
       this.refreshSelectionColors()
     }
-  }
-
-  private refreshLayoutSection(el: TaggedElement, computed: CSSStyleDeclaration): void {
-    const flex = isFlex(el)
-    if (this.addLayoutBtn) this.addLayoutBtn.hidden = flex
-    if (this.removeLayoutBtn) this.removeLayoutBtn.hidden = !flex
-    if (this.layoutControlsWrap) this.layoutControlsWrap.hidden = !flex
-    if (!flex) return
-
-    const direction = this.currentValue(el, 'flex-direction', computed) === 'column' ? 'column' : 'row'
-    const justify = this.currentValue(el, 'justify-content', computed)
-    const align = this.currentValue(el, 'align-items', computed)
-    const wrap = this.currentValue(el, 'flex-wrap', computed)
-    const spaceBetween = justify === 'space-between'
-
-    this.directionField?.set(direction)
-    // wrap-reverse deliberately reads as OFF (same as the old Wrap segment) — the toggle is a
-    // two-state wrap/nowrap control; reversal is out of its vocabulary.
-    const wrapping = wrap === 'wrap'
-    this.wrapToggle?.classList.toggle('seg-active', wrapping)
-    this.wrapToggle?.setAttribute('aria-pressed', String(wrapping))
-
-    if (this.gapField) {
-      if (spaceBetween) {
-        // setAuto (Figma "space it out for me") supersedes any bound pill — same rule as
-        // the sizeMode W/H auto-continue path above: a switch to Auto must clear the
-        // bookkeeping, not just the visible pill, so a later equal-px value can't resurrect it.
-        this.gapField.setAuto()
-        this.tokenUi.drop(GAP_SPEC)
-      } else {
-        const gapCss = this.drafts.isComparing(el) ? null : this.drafts.current(el, 'gap')
-        const css = gapCss ?? computed.getPropertyValue('gap')
-        const value = fromPx(css)
-        this.gapField.set(value)
-
-        // B5 re-bind contract — see PanelTokenUi.rebind
-        this.tokenUi.rebind(GAP_SPEC, this.gapField, value, false, this.drafts.isComparing(el))
-      }
-    }
-
-    this.alignMatrix?.set(normalizeJustify(justify), normalizeAlign(align), direction, spaceBetween)
-    const baselineOn = normalizeAlign(align) === 'baseline'
-    this.baselineToggle?.classList.toggle('seg-active', baselineOn)
-    this.baselineToggle?.setAttribute('aria-pressed', String(baselineOn))
-  }
-
-  private refreshFlexChild(el: TaggedElement, computed: CSSStyleDeclaration): void {
-    const parent = el.parentElement
-    const visible = parent !== null && isFlex(parent as TaggedElement)
-    if (this.alignSelfWrap) this.alignSelfWrap.hidden = !visible
-    for (const sm of this.sizeModes) sm.select.hidden = !visible
-    if (!visible) return
-
-    const parentDirection = getComputedStyle(parent as TaggedElement).flexDirection.startsWith('column')
-      ? 'column'
-      : 'row'
-    const main = mainAxisProp(parentDirection)
-
-    const alignSelf = this.currentValue(el, 'align-self', computed)
-    this.alignSelfField?.set(alignSelf || 'auto')
-
-    for (const sm of this.sizeModes) {
-      this.updateSizeMode(el, sm, main)
-    }
-  }
-
-  /**
-   * Mode inference heuristic (kept intentionally simple):
-   * - Fixed: there's an explicit draft OR inline style for this axis's size prop (px value authored).
-   * - Fill: no explicit size draft/inline AND either
-   *     - main axis: computed flex-grow >= 1
-   *     - cross axis: computed align-self is 'stretch'
-   * - Hug: no explicit size draft/inline AND not Fill (default content-based sizing).
-   */
-  private updateSizeMode(el: TaggedElement, sm: BoundSizeMode, main: 'width' | 'height'): void {
-    const prop = sm.spec.props[0] as 'width' | 'height'
-    const isMain = prop === main
-    const draft = this.drafts.isComparing(el) ? null : this.drafts.current(el, prop)
-    const inline = el.style.getPropertyValue(prop)
-    const hasExplicitSize = !!draft || !!inline
-
-    if (hasExplicitSize) {
-      sm.select.value = 'fixed'
-      return
-    }
-
-    const computed = getComputedStyle(el)
-    if (isMain) {
-      const grow = Number.parseFloat(computed.flexGrow || '0')
-      if (grow >= 1) {
-        sm.select.value = 'fill'
-        return
-      }
-    } else {
-      const alignSelfDraft = this.drafts.isComparing(el) ? null : this.drafts.current(el, 'align-self')
-      const alignSelfCss = alignSelfDraft ?? computed.alignSelf
-      if (alignSelfCss === 'stretch') {
-        sm.select.value = 'fill'
-        return
-      }
-    }
-
-    sm.select.value = 'hug'
   }
 
   private refreshTypography(el: TaggedElement, computed: CSSStyleDeclaration): void {
@@ -578,18 +463,8 @@ export class Panel {
     this.sectionsRoot.replaceChildren()
     this.fields = []
     this.sectionEls = []
-    this.directionField = null
     this.gapField = null
-    this.alignMatrix = null
-    this.baselineToggle = null
-    this.wrapToggle = null
-    this.addLayoutBtn = null
-    this.removeLayoutBtn = null
-    this.layoutControlsWrap = null
-    this.alignSelfField = null
-    this.alignSelfWrap = null
-    this.flexChildControlsWrap = null
-    this.sizeModes = []
+    this.layoutSection.teardown()
     this.typeFamilySelect = null
     this.typeWeightSelect = null
     this.typeAlignField = null
@@ -614,34 +489,27 @@ export class Panel {
       const sectionBodyEls: HTMLElement[] = [title]
 
       if (section.custom === 'layout') {
-        const removeBtn = createButton({ label: '−' })
-        removeBtn.setAttribute('data-remove-layout', '')
-        removeBtn.setAttribute('aria-label', 'Remove auto layout')
-        removeBtn.title = 'Remove auto layout — the request tells the agent to drop flex/inline-flex/flex-row/flex-col/flex-wrap/gap-*/justify-*/items-* classes'
-        removeBtn.hidden = true
-        removeBtn.addEventListener('click', () => {
-          if (!this.el) return
-          this.onBeforeEdit(this.el)
-          if (this.drafts.current(this.el, 'display') !== null) {
-            // Auto layout was added (or display re-drafted) this session — pure undo: targeted
-            // discard restores the recorded originals, so the element returns to its stylesheet
-            // reality and there is nothing to send.
-            this.drafts.discard(this.el, ['display', ...FLEX_CONTAINER_PROPS])
-          } else {
-            // Flex comes from the app's own CSS: draft display:block as the deterministic preview,
-            // and discard any container-prop drafts so the request is just the removal.
-            this.drafts.discard(this.el, FLEX_CONTAINER_PROPS)
-            this.drafts.apply(this.el, 'display', 'block')
-          }
-          this.refresh()
-          this.onEdited()
-        })
-        this.removeLayoutBtn = removeBtn
-        title.append(removeBtn)
+        // Remove ('−') comes first in the title, then the padding '⋯' expand (added by the
+        // generic expandRows block below) — button order in the title matches the M-B glyph-
+        // strip test convention ('Layout−⋯').
+        title.append(this.layoutSection.buildRemoveButton())
 
-        const layoutBody = this.buildLayoutSection()
-        this.sectionsRoot.append(layoutBody)
-        sectionBodyEls.push(layoutBody)
+        // Unified UI3-style Layout body (spec M-C): W/H rows -> flex-child strip -> auto-
+        // layout cluster -> padding rows, one fixed order, flex or not (the ORDER is the
+        // contract — see panel.test.ts's composition test).
+        const rowWrap = document.createElement('div')
+        rowWrap.className = 'panel-rows layout-section'
+        for (const row of SIZE_ROWS) rowWrap.append(this.buildRow(row))
+        rowWrap.append(this.layoutSection.buildFlexChildControls())
+        // buildBodyInto appends the add-button + controls wrap directly onto rowWrap, so the
+        // section body stays a single flat .panel-rows (CSS contract) with no carrier to drain.
+        this.layoutSection.buildBodyInto(rowWrap)
+        for (const row of PADDING_ROWS) rowWrap.append(this.buildRow(row))
+
+        this.sectionsRoot.append(rowWrap)
+        sectionBodyEls.push(rowWrap)
+        this.appendExpandRows(section, title, sectionBodyEls)
+
         this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
       }
@@ -677,27 +545,7 @@ export class Panel {
         for (const row of section.rows) rowWrap.append(this.buildRow(row))
       }
       sectionBodyEls.push(rowWrap)
-
-      if (section.title === 'Size') {
-        rowWrap.append(this.buildFlexChildControls())
-      }
-
-      if (section.expandRows && section.expandKey) {
-        const expandKey = section.expandKey
-        const expandWrap = document.createElement('div')
-        expandWrap.className = 'panel-rows'
-        expandWrap.hidden = !(this.expandState.get(expandKey) ?? false)
-        const btn = createButton({ label: '⋯' })
-        btn.setAttribute('data-expand', expandKey)
-        btn.addEventListener('click', () => {
-          expandWrap.hidden = !expandWrap.hidden
-          this.expandState.set(expandKey, !expandWrap.hidden)
-        })
-        title.append(btn)
-        for (const row of section.expandRows) expandWrap.append(this.buildRow(row))
-        this.sectionsRoot.append(expandWrap)
-        sectionBodyEls.push(expandWrap)
-      }
+      this.appendExpandRows(section, title, sectionBodyEls)
 
       this.sectionEls.push({ spec: section, els: sectionBodyEls })
 
@@ -712,125 +560,39 @@ export class Panel {
     }
   }
 
-  private buildLayoutSection(): HTMLElement {
-    const wrap = document.createElement('div')
-    wrap.className = 'panel-rows layout-section'
-
-    const addBtn = createButton({ label: '+ Add auto layout' })
-    addBtn.setAttribute('data-add-layout', '')
-    addBtn.addEventListener('click', () => {
-      if (!this.el) return
-      this.onBeforeEdit(this.el)
-      this.drafts.apply(this.el, 'display', 'flex')
-      this.refresh()
-      this.onEdited()
+  /**
+   * The `⋯`-expandable sub-rows shared by every section with `expandRows`/`expandKey`
+   * (Layout's padding T/R/B/L, Stroke's border-width T/R/B/L, Appearance's radius corners) —
+   * appends the toggle button to the section's title row and the collapsible row wrap right
+   * after `rowWrap` in `sectionsRoot`, same shape regardless of which section owns it.
+   */
+  private appendExpandRows(section: SectionSpec, title: HTMLElement, sectionBodyEls: HTMLElement[]): void {
+    if (!section.expandRows || !section.expandKey) return
+    const expandKey = section.expandKey
+    const expandWrap = document.createElement('div')
+    expandWrap.className = 'panel-rows'
+    expandWrap.hidden = !(this.expandState.get(expandKey) ?? false)
+    const btn = createButton({ label: '⋯' })
+    btn.setAttribute('data-expand', expandKey)
+    btn.addEventListener('click', () => {
+      expandWrap.hidden = !expandWrap.hidden
+      this.expandState.set(expandKey, !expandWrap.hidden)
     })
-    this.addLayoutBtn = addBtn
-    wrap.append(addBtn)
+    title.append(btn)
+    for (const row of section.expandRows) expandWrap.append(this.buildRow(row))
+    this.sectionsRoot.append(expandWrap)
+    sectionBodyEls.push(expandWrap)
+  }
 
-    const controls = document.createElement('div')
-    controls.className = 'panel-rows layout-controls'
-    this.layoutControlsWrap = controls
-
-    this.directionField = new SegmentField({
-      label: 'Direction',
-      options: [
-        { value: 'row', label: '→', ariaLabel: 'Horizontal', title: 'flex-direction: row → flex-row' },
-        { value: 'column', label: '↓', ariaLabel: 'Vertical', title: 'flex-direction: column → flex-col' },
-      ],
-      onInput: (value) => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        this.drafts.apply(this.el, 'flex-direction', value)
-        this.refresh()
-        this.onEdited()
-      },
-    })
-    // Marks the row for the stacked label-above-track CSS ([data-flex-direction] in
-    // overlay.ts) — the "Direction" label overflows the shared 40px label column.
-    this.directionField.root.setAttribute('data-flex-direction', '')
-    controls.append(this.directionField.root)
-
-    // [data-flex-direction] stacks the field column-wise (label above content) so
-    // "Direction" doesn't crush the track — but that same column axis would stack the
-    // wrap toggle BELOW the track instead of beside it. A .seg-cluster row wrapper holds
-    // track + toggle so they stay inline while the outer field still stacks label vs
-    // cluster (browser-verified: M-B Task 5 caught the toggle rendering on its own row).
-    const track = this.directionField.root.querySelector('.seg-track') as HTMLElement
-    const cluster = document.createElement('div')
-    cluster.className = 'seg-cluster'
-    track.replaceWith(cluster)
-    cluster.append(track)
-
-    // Wrap lives on the Direction row (Figma UI3 grouping) as an independent toggle —
-    // it is NOT part of the exclusive direction segment, so it's a sibling of the track.
-    const wrapBtn = createButton({ label: '↩' })
-    wrapBtn.classList.add('seg', 'wrap-toggle')
-    wrapBtn.setAttribute('data-wrap-toggle', '')
-    wrapBtn.setAttribute('aria-label', 'Wrap')
-    wrapBtn.title = 'flex-wrap: wrap → flex-wrap'
-    wrapBtn.addEventListener('click', () => {
-      if (!this.el) return
-      this.onBeforeEdit(this.el)
-      const current = this.currentValue(this.el, 'flex-wrap', getComputedStyle(this.el))
-      this.drafts.apply(this.el, 'flex-wrap', current === 'wrap' ? 'nowrap' : 'wrap')
-      this.refresh()
-      this.onEdited()
-    })
-    this.wrapToggle = wrapBtn
-    cluster.append(wrapBtn)
-
-    const grid = document.createElement('div')
-    grid.className = 'layout-grid'
-
-    const tile = document.createElement('div')
-    tile.className = 'matrix-tile'
-
-    this.alignMatrix = new AlignMatrix({
-      onInput: ({ justify, align }) => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        this.drafts.apply(this.el, 'justify-content', justify)
-        this.drafts.apply(this.el, 'align-items', align)
-        this.refresh()
-        this.onEdited()
-      },
-    })
-    tile.append(this.alignMatrix.root)
-
-    // Figma keeps baseline out of the 9-dot matrix (it's an 'align text baseline' extra) —
-    // a small toggle under the matrix drafts it. Toggling OFF discards the session draft
-    // (stylesheet reality returns); if baseline came from the app's own CSS there is no
-    // draft to discard, so OFF drafts flex-start (the normalize default) instead.
-    const baselineBtn = createButton({ label: 'Baseline' })
-    baselineBtn.classList.add('seg')
-    baselineBtn.setAttribute('data-align-baseline', '')
-    baselineBtn.title = 'align-items: baseline → items-baseline'
-    baselineBtn.addEventListener('click', () => {
-      if (!this.el) return
-      this.onBeforeEdit(this.el)
-      const active = this.currentValue(this.el, 'align-items', getComputedStyle(this.el)) === 'baseline'
-      if (!active) {
-        this.drafts.apply(this.el, 'align-items', 'baseline')
-      } else if (this.drafts.current(this.el, 'align-items') !== null) {
-        this.drafts.discard(this.el, ['align-items'])
-      } else {
-        this.drafts.apply(this.el, 'align-items', 'flex-start')
-      }
-      this.refresh()
-      this.onEdited()
-    })
-    this.baselineToggle = baselineBtn
-    tile.append(baselineBtn)
-
-    grid.append(tile)
-
-    const side = document.createElement('div')
-    side.className = 'layout-side'
-
-    // Shared absolute-commit path for gap — the field's own onInput AND the token picker's
-    // apply route through it, so the two can't drift (PR #6 review: the picker's inlined
-    // commit body was byte-equivalent to onInput).
+  /**
+   * The single field-birth site for the Gap NumberField — LayoutSection.buildBodyInto() calls
+   * this via deps.buildGapField() rather than constructing a NumberField itself, so every
+   * field in the panel (Gap included) is still born in exactly one place (buildField/this).
+   * Shared absolute-commit path for gap — the field's own onInput AND the token picker's
+   * apply route through it, so the two can't drift (PR #6 review: the picker's inlined
+   * commit body was byte-equivalent to onInput).
+   */
+  private buildGapField(): NumberField {
     const commitGap = (n: number): void => {
       if (!this.el) return
       this.onBeforeEdit(this.el)
@@ -839,7 +601,7 @@ export class Panel {
       this.onEdited()
     }
 
-    this.gapField = new NumberField({
+    const field = new NumberField({
       label: 'Gap',
       hint: cssHintFor(GAP_SPEC),
       min: 0,
@@ -853,7 +615,7 @@ export class Panel {
       onTokenOpen:
         !this.isMulti() && tokenEntriesFor(GAP_SPEC, readTheme(), readTokens()) !== null
           ? () => {
-              if (this.gapField) this.tokenUi.openScalePicker(GAP_SPEC, this.gapField, commitGap)
+              this.tokenUi.openScalePicker(GAP_SPEC, field, commitGap)
             }
           : undefined,
       onKeyword: (kw) => {
@@ -870,14 +632,9 @@ export class Panel {
         this.onEdited()
       },
     })
-    this.gapField.root.dataset.props = GAP_SPEC.props.join(' ')
-    side.append(this.gapField.root)
-
-    grid.append(side)
-    controls.append(grid)
-
-    wrap.append(controls)
-    return wrap
+    field.root.dataset.props = GAP_SPEC.props.join(' ')
+    this.gapField = field
+    return field
   }
 
   private buildTypographySection(multi = false): HTMLElement {
@@ -1197,33 +954,6 @@ export class Panel {
     }
   }
 
-  private buildFlexChildControls(): HTMLElement {
-    const wrap = document.createElement('div')
-    wrap.className = 'flex-child-controls'
-    this.flexChildControlsWrap = wrap
-    this.alignSelfField = new SegmentField({
-      label: 'Align',
-      options: [
-        { value: 'auto', label: 'Auto' },
-        { value: 'flex-start', label: 'Start', title: 'align-self: flex-start → self-start' },
-        { value: 'center', label: 'Center', title: 'align-self: center → self-center' },
-        { value: 'flex-end', label: 'End', title: 'align-self: flex-end → self-end' },
-        { value: 'stretch', label: 'Stretch' },
-      ],
-      onInput: (value) => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        this.drafts.apply(this.el, 'align-self', value)
-        this.refresh()
-        this.onEdited()
-      },
-    })
-    this.alignSelfField.root.setAttribute('data-align-self', '')
-    this.alignSelfWrap = this.alignSelfField.root
-    wrap.append(this.alignSelfField.root)
-    return wrap
-  }
-
   private buildRow(spec: RowSpec): HTMLElement {
     const bound = this.buildField(spec)
     if (!spec.sizeMode) return bound.field.root
@@ -1235,71 +965,14 @@ export class Panel {
     const select = createSelect({
       options: SIZE_MODES.map(([value, label]) => ({ value, label })),
       onChange: (value) => {
-        this.onSizeModeChange(spec, value)
+        this.layoutSection.onSizeModeChange(spec, value)
       },
     })
     select.title = 'Fixed: exact px · Hug: fit-content · Fill: stretch / flex-1'
     row.append(select)
 
-    this.sizeModes.push({ select, spec, field: bound.field })
+    this.layoutSection.registerSizeMode({ select, spec, field: bound.field })
     return row
-  }
-
-  private onSizeModeChange(spec: RowSpec, mode: string): void {
-    if (!this.el) return
-    this.onBeforeEdit(this.el)
-    const prop = spec.props[0]
-    const parent = this.el.parentElement
-    const parentDirection =
-      parent && isFlex(parent as TaggedElement)
-        ? getComputedStyle(parent as TaggedElement).flexDirection.startsWith('column')
-          ? 'column'
-          : 'row'
-        : 'row'
-    const main = mainAxisProp(parentDirection)
-    const isMain = prop === main
-
-    if (mode === 'fixed') {
-      // Figma semantics: selecting Fixed pins the element's CURRENT rendered size —
-      // it doesn't wait for the user to type a number. First capture the computed size
-      // the user SEES (before discarding mode props that may affect layout), then clear
-      // whatever mode props produced the current Fill/Hug layout so they don't leak into
-      // the change request, then draft the computed size as an explicit px value so
-      // the mode-inference heuristic reads it back as Fixed immediately.
-      // Cross-axis: only discard align-self when it holds the 'stretch' value Fill wrote —
-      // a user-drafted value (e.g. flex-start via the Align segment field) must survive
-      // switching this axis to Fixed.
-      const modeProps = isMain
-        ? ['flex-grow', 'flex-basis']
-        : this.drafts.current(this.el, 'align-self') === 'stretch'
-          ? ['align-self']
-          : []
-      const isAutoNow = this.drafts.current(this.el, prop) === 'auto'
-      if (isAutoNow) modeProps.push(prop)
-      let computedSize = Math.round(parseFloat(getComputedStyle(this.el).getPropertyValue(prop)))
-      // If jsdom can't compute the size (returns NaN for 'auto' without layout engine),
-      // fall back to the original value that will be restored by discard()
-      if (isNaN(computedSize) && isAutoNow) {
-        const draftEntry = this.drafts.entries().get(this.el)?.get(prop)
-        computedSize = draftEntry ? Math.round(parseFloat(draftEntry.original)) : computedSize
-      }
-      // Unconditional guard: whatever the source, never draft a non-finite size — bail
-      // out of the pin entirely rather than writing e.g. "NaNpx" into the change request.
-      if (!Number.isFinite(computedSize)) return
-      this.drafts.discard(this.el, modeProps)
-      this.drafts.apply(this.el, prop, `${computedSize}px`)
-    } else if (mode === 'hug') {
-      this.drafts.apply(this.el, prop, 'auto')
-    } else if (mode === 'fill') {
-      if (isMain) {
-        this.drafts.apply(this.el, 'flex-grow', '1')
-        this.drafts.apply(this.el, 'flex-basis', '0%')
-      } else {
-        this.drafts.apply(this.el, 'align-self', 'stretch')
-      }
-    }
-    this.refresh()
-    this.onEdited()
   }
 
   private buildField(spec: RowSpec): BoundField {
