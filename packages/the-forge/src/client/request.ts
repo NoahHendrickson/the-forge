@@ -354,3 +354,32 @@ export function renderPromptMarkdown(req: PromptRequest): string {
   lines.push('Do not run the app, take screenshots, or preview the result — the user is watching the live app.')
   return lines.join('\n')
 }
+
+/** Rebuilds a single-element request + markdown from a failed seed for resend() — the one
+ * place that reconstructs the shape `buildChangeRequestWithElements`/`buildPromptRequest`
+ * produce fresh, so a future change to either request's fields only needs updating here, not
+ * separately in resend(). `seed.prompt !== undefined` is the same mode discriminator used
+ * everywhere else a seed is inspected (ChangeList, persistence). */
+export function rebuildRequestFromSeed(seed: {
+  change: ElementChange
+  prompt?: string
+}): { request: ChangeRequest | PromptRequest; markdown: string } {
+  const viewport = { width: window.innerWidth, height: window.innerHeight }
+  if (seed.prompt !== undefined) {
+    const request: PromptRequest = {
+      kind: 'prompt',
+      createdAt: new Date().toISOString(),
+      viewport,
+      prompt: seed.prompt,
+      elements: [seed.change],
+    }
+    return { request, markdown: renderPromptMarkdown(request) }
+  }
+  const request: ChangeRequest = {
+    createdAt: new Date().toISOString(),
+    viewport,
+    tailwind: readTheme().spacingBasePx !== null,
+    elements: [seed.change],
+  }
+  return { request, markdown: renderMarkdown(request) }
+}
