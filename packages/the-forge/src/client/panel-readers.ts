@@ -76,6 +76,20 @@ export function marginSectionVisible(el: TaggedElement, drafts?: DraftStore): bo
   })
 }
 
+/**
+ * Min/max row disclosure (spec M-D): a constraint row shows when the user opened it this
+ * selection, a draft is live, or the computed value is non-default. Defaults: min-* '', '0px',
+ * 'auto'; max-* '', 'none' (jsdom '' counts as default, same convention as marginSectionVisible).
+ * KNOWN LIMIT: an authored `min-width: 0` computes to the same '0px' as the true default, so it
+ * cannot auto-disclose — computed styles carry no authorship signal (same inherent limit as an
+ * authored `margin: 0`). Pinned by test.
+ */
+export function minMaxRowVisible(prop: string, computed: string, hasDraft: boolean, opened: boolean): boolean {
+  if (opened || hasDraft) return true
+  const defaults = prop.startsWith('min-') ? ['', '0px', 'auto'] : ['', 'none']
+  return !defaults.includes(computed)
+}
+
 /** Snaps a computed font-weight keyword/number to one of the 9 named-weight values. */
 function snapWeight(css: string): string {
   if (css === 'normal') return '400'

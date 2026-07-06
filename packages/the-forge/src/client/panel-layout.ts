@@ -14,7 +14,7 @@ import { createButton } from './ui/button'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { PanelTokenUi } from './panel-token-ui'
 import { type RowSpec, GAP_SPEC } from './panel-specs'
-import { fromPx, isFlex, normalizeJustify, normalizeAlign, mainAxisProp } from './panel-readers'
+import { fromPx, isFlex, normalizeJustify, normalizeAlign, mainAxisProp, minMaxRowVisible } from './panel-readers'
 
 // The container-side flex props the panel can draft — the set 'remove auto layout' must
 // clean up alongside display (child props like align-self/flex-grow belong to the CHILD's
@@ -309,29 +309,16 @@ export class LayoutSection {
   }
 
   /**
-   * Disclosure predicate (single-select only): a row is visible iff it was explicitly opened
-   * this session (openedMinMax), OR it holds a live draft, OR its computed value is already
-   * non-default — so an element with an authored min/max constraint shows its row on selection
-   * without the user having to "Add" it first. jsdom reports '' for an unset min/max longhand
-   * (same quirk as marginSectionVisible/draftSolidIfNone) — treated as default alongside the
-   * real CSS initial values (min-*: auto, max-*: none) and the computed zero-px min case.
+   * Disclosure predicate (single-select only) — delegates to the canonical minMaxRowVisible
+   * (panel-readers.ts) so the rule lives in one place alongside marginSectionVisible's sibling
+   * jsdom-default conventions.
    */
   private refreshMinMax(el: TaggedElement, computed: CSSStyleDeclaration): void {
     for (const mm of this.minMaxRows) {
       const prop = mm.spec.props[0]
       const draft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, prop)
-      if (draft !== null) {
-        mm.rowEl.hidden = false
-        continue
-      }
-      if (this.openedMinMax.has(prop)) {
-        mm.rowEl.hidden = false
-        continue
-      }
-      const css = computed.getPropertyValue(prop)
-      const isMin = prop.startsWith('min-')
-      const isDefault = isMin ? css === '' || css === '0px' || css === 'auto' : css === '' || css === 'none'
-      mm.rowEl.hidden = isDefault
+      const visible = minMaxRowVisible(prop, computed.getPropertyValue(prop), draft !== null, this.openedMinMax.has(prop))
+      mm.rowEl.hidden = !visible
     }
   }
 

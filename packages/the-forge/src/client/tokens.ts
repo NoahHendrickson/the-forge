@@ -469,20 +469,16 @@ export function suggestUtility(
   const prefix = UTILITY_PREFIXES[prop]
   if (!prefix || theme.spacingBasePx === null) return null
 
-  if ((prop === 'width' || prop === 'height') && css === 'auto') {
-    return { utility: `${prefix}-auto`, tokenExact: true }
+  // Keyword drafts (Hug's auto, min/max clearing) map to real static utilities, not px math —
+  // without this, the numeric path below would emit `${prefix}-[NaNpx]` (E2E-caught in M-D).
+  // width/height's 'auto' is Hug mode; min-width/min-height's CSS initial value is 'auto' and
+  // max-width/max-height's is 'none' (both real static Tailwind utilities: min-w-auto,
+  // max-w-none, ...) — Number.parseFloat('auto'/'none') would otherwise fall through to NaN.
+  const CLEAR_KEYWORDS: Record<string, string[]> = {
+    auto: ['width', 'height', 'min-width', 'min-height'],
+    none: ['max-width', 'max-height'],
   }
-
-  // M-D min/max clearing keywords: min-width/min-height's CSS initial value is 'auto',
-  // max-width/max-height's is 'none' — both are real static Tailwind utilities (min-w-auto,
-  // max-w-none, ...), not numeric scale steps. Without this, the fallthrough below hits
-  // Number.parseFloat('auto'/'none') -> NaN -> a bogus `min-w-[NaNpx]` arbitrary value.
-  if ((prop === 'min-width' || prop === 'min-height') && css === 'auto') {
-    return { utility: `${prefix}-auto`, tokenExact: true }
-  }
-  if ((prop === 'max-width' || prop === 'max-height') && css === 'none') {
-    return { utility: `${prefix}-none`, tokenExact: true }
-  }
+  if (CLEAR_KEYWORDS[css]?.includes(prop)) return { utility: `${prefix}-${css}`, tokenExact: true }
 
   if (prop === 'opacity') {
     const pct = Number.parseFloat(css) * 100

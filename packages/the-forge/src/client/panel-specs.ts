@@ -199,15 +199,18 @@ const PADDING_ROWS: RowSpec[] = [
   { label: 'V', props: ['padding-top', 'padding-bottom'], min: 0 },
 ]
 
-// M-D min/max sizing (spec M-D): disclosure rows under W/H. Typing `auto` clears the
-// constraint — autoCss carries each property's CSS initial value (min-*: auto, max-*: none),
-// so the request says "remove the constraint" in keywords, never a measured px.
-const MIN_MAX_ROWS: RowSpec[] = [
-  { label: 'Min', props: ['min-width'], min: 0, allowAuto: true, autoCss: 'auto' },
-  { label: 'Max', props: ['max-width'], min: 0, allowAuto: true, autoCss: 'none' },
-  { label: 'Min', props: ['min-height'], min: 0, allowAuto: true, autoCss: 'auto' },
-  { label: 'Max', props: ['max-height'], min: 0, allowAuto: true, autoCss: 'none' },
-]
+// M-D min/max sizing (spec M-D): disclosure rows under W/H, derived from the size row they
+// constrain (rather than a positional slice of a flat 4-entry array) so W and H can never
+// desync from their own min/max pair. Typing `auto` clears the constraint — autoCss carries
+// each property's CSS initial value (min-*: auto, max-*: none), so the request says "remove
+// the constraint" in keywords, never a measured px.
+export function minMaxRowsFor(sizeSpec: RowSpec): RowSpec[] {
+  const p = sizeSpec.props[0] // 'width' | 'height'
+  return [
+    { label: 'Min', props: [`min-${p}`], min: 0, allowAuto: true, autoCss: 'auto' },
+    { label: 'Max', props: [`max-${p}`], min: 0, allowAuto: true, autoCss: 'none' },
+  ]
+}
 
 // Section ORDER is fixed forever: Layout -> Margin -> Typography -> Fill -> Stroke -> Appearance.
 const SECTIONS: SectionSpec[] = [
@@ -308,6 +311,5 @@ export {
   SIZE_MODES,
   SIZE_ROWS,
   PADDING_ROWS,
-  MIN_MAX_ROWS,
   SECTIONS,
 }

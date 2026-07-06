@@ -26,7 +26,7 @@ import {
   SIZE_MODES,
   SIZE_ROWS,
   PADDING_ROWS,
-  MIN_MAX_ROWS,
+  minMaxRowsFor,
   SECTIONS,
 } from './panel-specs'
 import {
@@ -500,11 +500,12 @@ export class Panel {
         // contract — see panel.test.ts's composition test).
         const rowWrap = document.createElement('div')
         rowWrap.className = 'panel-rows layout-section'
-        for (const [i, row] of SIZE_ROWS.entries()) {
+        for (const row of SIZE_ROWS) {
           rowWrap.append(this.buildRow(row))
-          // W gets min/max-width (indices 0,1), H gets min/max-height (2,3) — disclosure rows,
-          // hidden until LayoutSection.refresh discloses them (opened / drafted / non-default).
-          for (const mm of MIN_MAX_ROWS.slice(i * 2, i * 2 + 2)) {
+          // Each size row's own min/max pair (min-width/max-width for W, min-height/max-height
+          // for H) — disclosure rows, hidden until LayoutSection.refresh discloses them
+          // (opened / drafted / non-default).
+          for (const mm of minMaxRowsFor(row)) {
             const mmBound = this.buildField(mm)
             const mmRow = document.createElement('div')
             mmRow.className = 'panel-rows'
