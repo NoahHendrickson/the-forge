@@ -17,11 +17,31 @@ function setup(html = `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padd
   return { el, drafts, panel, onEdited }
 }
 
-function fieldInput(panel: Panel, label: string): HTMLInputElement {
-  const nf = [...panel.root.querySelectorAll('.nf')].find(
-    (n) => n.querySelector('.nf-label')!.textContent === label
-  )
-  if (!nf) throw new Error(`no field labeled ${label}`)
+// Field identities (data-props) — labels are display text and are free to change.
+const P = {
+  W: 'width',
+  H: 'height',
+  PX: 'padding-left padding-right',
+  PY: 'padding-top padding-bottom',
+  PT: 'padding-top',
+  PR: 'padding-right',
+  PB: 'padding-bottom',
+  PL: 'padding-left',
+  MX: 'margin-left margin-right',
+  MY: 'margin-top margin-bottom',
+  GAP: 'gap',
+  R: 'border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius',
+  O: 'opacity',
+  S: 'font-size',
+  LH: 'line-height',
+  LS: 'letter-spacing',
+  TL: 'border-top-left-radius',
+  STROKE_W: 'border-top-width border-right-width border-bottom-width border-left-width',
+} as const
+
+function fieldInput(panel: Panel, props: string): HTMLInputElement {
+  const nf = [...panel.root.querySelectorAll('.nf')].find((n) => (n as HTMLElement).dataset.props === props)
+  if (!nf) throw new Error(`no field with data-props ${props}`)
   return nf.querySelector('input')!
 }
 
@@ -52,9 +72,40 @@ describe('Panel', () => {
   it('shows header with source location and populates fields from computed styles', () => {
     const { panel } = setup()
     expect(panel.root.textContent).toContain('src/Card.tsx:4:7')
-    expect(fieldInput(panel, 'W').value).toBe('200')
-    expect(fieldInput(panel, 'PX').value).toBe('8')
-    expect(fieldInput(panel, 'PY').value).toBe('8')
+    expect(fieldInput(panel, P.W).value).toBe('200')
+    expect(fieldInput(panel, P.PX).value).toBe('8')
+    expect(fieldInput(panel, P.PY).value).toBe('8')
+  })
+
+  it('numeric fields carry data-props identity', () => {
+    const { panel } = setup()
+    const roots = [...panel.root.querySelectorAll('.nf')] as HTMLElement[]
+    expect(roots.find((n) => n.dataset.props === 'padding-left padding-right')).toBeDefined()
+    expect(roots.find((n) => n.dataset.props === 'width')).toBeDefined()
+    expect(roots.find((n) => n.dataset.props === 'gap')).toBeDefined()
+  })
+
+  it('field labels carry CSS/Tailwind hint tooltips', () => {
+    const { panel } = setup()
+    const nf = [...panel.root.querySelectorAll('.nf')].find(
+      (n) => (n as HTMLElement).dataset.props === P.PX
+    ) as HTMLElement
+    expect((nf.querySelector('.nf-label') as HTMLElement).title).toBe('padding-left, padding-right → px-*')
+  })
+
+  it('padding and margin speak designer labels (H/V + T/R/B/L)', () => {
+    const { panel } = setup()
+    const labelFor = (props: string): string => {
+      const nf = [...panel.root.querySelectorAll('.nf')].find(
+        (n) => (n as HTMLElement).dataset.props === props
+      ) as HTMLElement
+      return (nf.querySelector('.nf-label') as HTMLElement).textContent ?? ''
+    }
+    expect(labelFor(P.PX)).toBe('H')
+    expect(labelFor(P.PY)).toBe('V')
+    expect(labelFor(P.PT)).toBe('T')
+    expect(labelFor(P.MX)).toBe('H')
+    expect(labelFor(P.MY)).toBe('V')
   })
 
   it('renders the header as two separate nodes: tag and source', () => {
@@ -102,7 +153,7 @@ describe('Panel', () => {
 
   it('editing a linked padding field writes both longhands as drafts', () => {
     const { el, panel, drafts, onEdited } = setup()
-    commit(fieldInput(panel, 'PX'), '16')
+    commit(fieldInput(panel, P.PX), '16')
     expect(drafts.current(el, 'padding-left')).toBe('16px')
     expect(drafts.current(el, 'padding-right')).toBe('16px')
     expect(el.style.getPropertyValue('padding-left')).toBe('16px')
@@ -113,20 +164,20 @@ describe('Panel', () => {
     const { panel } = setup(
       `<div data-dc-source="src/a.tsx:1:1" id="t" style="padding-left: 4px; padding-right: 12px;"></div>`
     )
-    expect(fieldInput(panel, 'PX').value).toBe('Mixed')
+    expect(fieldInput(panel, P.PX).value).toBe('Mixed')
   })
 
   it('expanding padding reveals per-side fields that edit one longhand', () => {
     const { el, panel, drafts } = setup()
     ;(panel.root.querySelector('[data-expand="padding"]') as HTMLElement).click()
-    commit(fieldInput(panel, 'PT'), '20')
+    commit(fieldInput(panel, P.PT), '20')
     expect(drafts.current(el, 'padding-top')).toBe('20px')
     expect(drafts.current(el, 'padding-bottom')).toBeNull()
   })
 
   it('radius linked field writes all four corner longhands', () => {
     const { el, panel, drafts } = setup()
-    commit(fieldInput(panel, 'R'), '10')
+    commit(fieldInput(panel, P.R), '10')
     for (const c of ['top-left', 'top-right', 'bottom-right', 'bottom-left']) {
       expect(drafts.current(el, `border-${c}-radius`)).toBe('10px')
     }
@@ -134,20 +185,20 @@ describe('Panel', () => {
 
   it('opacity field maps percent to 0-1 css', () => {
     const { el, panel, drafts } = setup()
-    commit(fieldInput(panel, 'O'), '60')
+    commit(fieldInput(panel, P.O), '60')
     expect(drafts.current(el, 'opacity')).toBe('0.6')
   })
 
   it('per-element compare and reset buttons drive the store', () => {
     const { el, panel, drafts } = setup()
-    commit(fieldInput(panel, 'W'), '300')
+    commit(fieldInput(panel, P.W), '300')
     panel.compareButton.click()
     expect(drafts.isComparing(el)).toBe(true)
     panel.compareButton.click()
     expect(drafts.isComparing(el)).toBe(false)
     panel.resetButton.click()
     expect(drafts.hasDrafts(el)).toBe(false)
-    expect(fieldInput(panel, 'W').value).toBe('200') // refreshed back to computed
+    expect(fieldInput(panel, P.W).value).toBe('200') // refreshed back to computed
   })
 
   it('hide clears the panel', () => {
@@ -158,28 +209,28 @@ describe('Panel', () => {
 
   it('fields show on-screen (original) values while comparing', () => {
     const { el, panel } = setup()
-    commit(fieldInput(panel, 'W'), '300')
+    commit(fieldInput(panel, P.W), '300')
     panel.compareButton.click()
-    expect(fieldInput(panel, 'W').value).toBe('200')
+    expect(fieldInput(panel, P.W).value).toBe('200')
     panel.compareButton.click()
-    expect(fieldInput(panel, 'W').value).toBe('300')
+    expect(fieldInput(panel, P.W).value).toBe('300')
   })
 
   it('opacity 0 round-trips as 0, not 100', () => {
     const { panel } = setup()
-    commit(fieldInput(panel, 'O'), '0')
+    commit(fieldInput(panel, P.O), '0')
     panel.refresh()
-    expect(fieldInput(panel, 'O').value).toBe('0')
+    expect(fieldInput(panel, P.O).value).toBe('0')
   })
 
   it('mixed detection still works while comparing', () => {
     const { panel, drafts, el } = setup(
       `<div data-dc-source="src/a.tsx:1:1" id="t" style="padding-left: 4px; padding-right: 12px;"></div>`
     )
-    commit(fieldInput(panel, 'PX'), '16')
+    commit(fieldInput(panel, P.PX), '16')
     drafts.compare(el, true)
     panel.refresh()
-    expect(fieldInput(panel, 'PX').value).toBe('Mixed') // originals differ → mixed again
+    expect(fieldInput(panel, P.PX).value).toBe('Mixed') // originals differ → mixed again
   })
 
   it('section order is Layout, Size, Padding, Margin, Typography, Fill, Stroke, Appearance regardless of visibility', () => {
@@ -282,7 +333,7 @@ describe('Panel', () => {
       (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
     )!
     const buttons = [...seg.querySelectorAll('.seg')] as HTMLElement[]
-    const column = buttons.find((b) => b.textContent === 'Column')!
+    const column = buttons.find((b) => b.textContent === 'Vertical')!
     column.click()
     expect(drafts.current(el, 'flex-direction')).toBe('column')
   })
@@ -296,29 +347,29 @@ describe('Panel', () => {
 
   it('gap field drafts gap:Npx on a number', () => {
     const { el, panel, drafts } = flexSetup()
-    commit(fieldInput(panel, 'Gap'), '24')
+    commit(fieldInput(panel, P.GAP), '24')
     expect(drafts.current(el, 'gap')).toBe('24px')
   })
 
   it('gap field typed "auto" drafts justify-content:space-between and clears gap draft', () => {
     const { el, panel, drafts } = flexSetup()
-    commit(fieldInput(panel, 'Gap'), '24')
+    commit(fieldInput(panel, P.GAP), '24')
     expect(drafts.current(el, 'gap')).toBe('24px')
-    commit(fieldInput(panel, 'Gap'), 'auto')
+    commit(fieldInput(panel, P.GAP), 'auto')
     expect(drafts.current(el, 'justify-content')).toBe('space-between')
     expect(drafts.current(el, 'gap')).toBeNull()
   })
 
   it('gap field displays auto when computed justify-content is space-between', () => {
     const { panel } = flexSetup('justify-content: space-between;')
-    expect(fieldInput(panel, 'Gap').value).toBe('auto')
+    expect(fieldInput(panel, P.GAP).value).toBe('auto')
   })
 
   it('gap auto restores a pre-existing inline gap instead of destroying it', () => {
     const { el, panel, drafts } = flexSetup('gap: 16px;')
-    commit(fieldInput(panel, 'Gap'), '24')
+    commit(fieldInput(panel, P.GAP), '24')
     expect(drafts.current(el, 'gap')).toBe('24px')
-    commit(fieldInput(panel, 'Gap'), 'auto')
+    commit(fieldInput(panel, P.GAP), 'auto')
     expect(drafts.current(el, 'justify-content')).toBe('space-between')
     expect(drafts.current(el, 'gap')).toBeNull()
     expect(el.style.getPropertyValue('gap')).toBe('16px')
@@ -371,7 +422,7 @@ describe('Panel', () => {
     const seg = [...panel.root.querySelectorAll('.seg-field')].find(
       (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
     )!
-    const columnBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Column') as HTMLElement
+    const columnBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Vertical') as HTMLElement
     columnBtn.click()
     // after direction change, the matrix should have re-rendered with column mapping;
     // the physical dot that emitted (flex-end, flex-start) in row mode now emits
@@ -435,7 +486,7 @@ describe('Panel', () => {
 
   it('W size-mode Fill on a row parent drafts flex-grow and flex-basis (main axis)', () => {
     const { el, panel, drafts } = childSetup()
-    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
     const select = wRow.querySelector('.size-mode') as HTMLSelectElement
     select.value = 'fill'
     select.dispatchEvent(new Event('change', { bubbles: true }))
@@ -445,7 +496,7 @@ describe('Panel', () => {
 
   it('H size-mode Fill on a row parent drafts align-self:stretch (cross axis)', () => {
     const { el, panel, drafts } = childSetup()
-    const hRow = fieldInput(panel, 'H').closest('.nf')!.parentElement!
+    const hRow = fieldInput(panel, P.H).closest('.nf')!.parentElement!
     const select = hRow.querySelector('.size-mode') as HTMLSelectElement
     select.value = 'fill'
     select.dispatchEvent(new Event('change', { bubbles: true }))
@@ -454,17 +505,17 @@ describe('Panel', () => {
 
   it('H size-mode Hug drafts height:auto and the field shows auto', () => {
     const { el, panel, drafts } = childSetup()
-    const hRow = fieldInput(panel, 'H').closest('.nf')!.parentElement!
+    const hRow = fieldInput(panel, P.H).closest('.nf')!.parentElement!
     const select = hRow.querySelector('.size-mode') as HTMLSelectElement
     select.value = 'hug'
     select.dispatchEvent(new Event('change', { bubbles: true }))
     expect(drafts.current(el, 'height')).toBe('auto')
-    expect(fieldInput(panel, 'H').value).toBe('auto')
+    expect(fieldInput(panel, P.H).value).toBe('auto')
   })
 
   it('W size-mode Fill then Fixed pins width as a px draft and clears flex-grow/flex-basis', () => {
     const { el, panel, drafts } = childSetup()
-    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
     const select = wRow.querySelector('.size-mode') as HTMLSelectElement
     select.value = 'fill'
     select.dispatchEvent(new Event('change', { bubbles: true }))
@@ -478,7 +529,7 @@ describe('Panel', () => {
 
   it('W size-mode Fixed sticks on refresh after Fill then Fixed', () => {
     const { panel } = childSetup()
-    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
     const select = wRow.querySelector('.size-mode') as HTMLSelectElement
     select.value = 'fill'
     select.dispatchEvent(new Event('change', { bubbles: true }))
@@ -490,7 +541,7 @@ describe('Panel', () => {
 
   it('H size-mode Hug then Fixed pins height as a px draft, not auto', () => {
     const { el, panel, drafts } = childSetup()
-    const hRow = fieldInput(panel, 'H').closest('.nf')!.parentElement!
+    const hRow = fieldInput(panel, P.H).closest('.nf')!.parentElement!
     const select = hRow.querySelector('.size-mode') as HTMLSelectElement
     select.value = 'hug'
     select.dispatchEvent(new Event('change', { bubbles: true }))
@@ -509,7 +560,7 @@ describe('Panel', () => {
     expect(drafts.current(el, 'align-self')).toBe('flex-start')
 
     // Switch H (cross axis on a row parent) to Fixed — must NOT clobber the user's align-self.
-    const hRow = fieldInput(panel, 'H').closest('.nf')!.parentElement!
+    const hRow = fieldInput(panel, P.H).closest('.nf')!.parentElement!
     const select = hRow.querySelector('.size-mode') as HTMLSelectElement
     select.value = 'fixed'
     select.dispatchEvent(new Event('change', { bubbles: true }))
@@ -531,7 +582,7 @@ describe('Panel', () => {
     panel.show(child, buildInspectorData(child))
 
     // Apply Fill mode to width (drafts flex-grow: 1, flex-basis: 0%)
-    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
     const select = wRow.querySelector('.size-mode') as HTMLSelectElement
     select.value = 'fill'
     select.dispatchEvent(new Event('change', { bubbles: true }))
@@ -589,7 +640,7 @@ describe('Panel', () => {
       return cs
     })
 
-    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
     const select = wRow.querySelector('.size-mode') as HTMLSelectElement
     select.value = 'fixed'
     select.dispatchEvent(new Event('change', { bubbles: true }))
@@ -602,7 +653,7 @@ describe('Panel', () => {
     const { panel } = setup(
       `<div data-dc-source="src/Card.tsx:4:7" id="t" style="width: auto; height: 100px;"></div>`
     )
-    expect(fieldInput(panel, 'W').value).toBe('auto')
+    expect(fieldInput(panel, P.W).value).toBe('auto')
   })
 
 })
@@ -662,19 +713,19 @@ describe('Panel onBeforeEdit pre-hook (M2b Task 4)', () => {
 
   it('is optional — omitting it does not throw on edit', () => {
     const { panel } = setup()
-    expect(() => commit(fieldInput(panel, 'W'), '300')).not.toThrow()
+    expect(() => commit(fieldInput(panel, P.W), '300')).not.toThrow()
   })
 
   it('a plain number-field edit calls onBeforeEdit with the element before onEdited', () => {
     const { el, panel, onBeforeEdit, onEdited } = setupWithBeforeEdit()
-    commit(fieldInput(panel, 'PX'), '16')
+    commit(fieldInput(panel, P.PX), '16')
     expect(onBeforeEdit).toHaveBeenCalledWith(el)
     expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
   })
 
   it('reset also calls onBeforeEdit before onEdited', () => {
     const { el, panel, onBeforeEdit, onEdited } = setupWithBeforeEdit()
-    commit(fieldInput(panel, 'W'), '300')
+    commit(fieldInput(panel, P.W), '300')
     onBeforeEdit.mockClear()
     onEdited.mockClear()
     panel.resetButton.click()
@@ -702,7 +753,7 @@ describe('Panel onBeforeEdit pre-hook (M2b Task 4)', () => {
     document.body.appendChild(panel.root)
     panel.show(el, buildInspectorData(el))
 
-    const wRow = fieldInput(panel, 'W').closest('.nf')!.parentElement!
+    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
     const select = wRow.querySelector('.size-mode') as HTMLSelectElement
     select.value = 'fill'
     select.dispatchEvent(new Event('change', { bubbles: true }))
@@ -980,24 +1031,24 @@ describe('Panel Typography section', () => {
 
   it('S field drafts font-size in px', () => {
     const { el, panel, drafts } = textSetup()
-    commit(fieldInput(panel, 'S'), '18')
+    commit(fieldInput(panel, P.S), '18')
     expect(drafts.current(el, 'font-size')).toBe('18px')
   })
 
   it('LH field shows auto when computed line-height is normal', () => {
     const { panel } = textSetup('line-height: normal;')
-    expect(fieldInput(panel, 'LH').value).toBe('auto')
+    expect(fieldInput(panel, P.LH).value).toBe('auto')
   })
 
   it('LH field typing a number drafts line-height in px', () => {
     const { el, panel, drafts } = textSetup()
-    commit(fieldInput(panel, 'LH'), '24')
+    commit(fieldInput(panel, P.LH), '24')
     expect(drafts.current(el, 'line-height')).toBe('24px')
   })
 
   it('LS field allows negative values and drafts letter-spacing in px', () => {
     const { el, panel, drafts } = textSetup()
-    commit(fieldInput(panel, 'LS'), '-1')
+    commit(fieldInput(panel, P.LS), '-1')
     expect(drafts.current(el, 'letter-spacing')).toBe('-1px')
   })
 
@@ -1182,13 +1233,15 @@ describe('Panel Stroke section', () => {
     }
   })
 
-  it('expand reveals per-side width fields BT/BR/BB/BL', () => {
+  it('expand reveals per-side width fields (border-top/right/bottom/left-width)', () => {
     const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
     const btn = strokeSection(panel).querySelector('[data-expand="stroke"]') as HTMLElement
     expect(btn).toBeTruthy()
     btn.click()
-    const labels = [...panel.root.querySelectorAll('.nf-label')].map((n) => n.textContent)
-    expect(labels).toEqual(expect.arrayContaining(['BT', 'BR', 'BB', 'BL']))
+    const propsList = [...panel.root.querySelectorAll('.nf')].map((n) => (n as HTMLElement).dataset.props)
+    expect(propsList).toEqual(
+      expect.arrayContaining(['border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width'])
+    )
   })
 
   it('clicking the border-color swatch opens the picker with contrastAgainst set to the effective background', () => {
@@ -1379,11 +1432,9 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     resetTokensCache()
   })
 
-  function pxField(panel: Panel, label: string): HTMLElement {
-    const nf = [...panel.root.querySelectorAll('.nf')].find(
-      (n) => n.querySelector('.nf-label')!.textContent === label
-    )
-    if (!nf) throw new Error(`no field labeled ${label}`)
+  function pxField(panel: Panel, props: string): HTMLElement {
+    const nf = [...panel.root.querySelectorAll('.nf')].find((n) => (n as HTMLElement).dataset.props === props)
+    if (!nf) throw new Error(`no field with data-props ${props}`)
     return nf as HTMLElement
   }
 
@@ -1395,7 +1446,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
 
   it('`=` on a spacing field (PX) opens the token picker with the spacing scale entries', () => {
     const { panel } = setupTailwind()
-    const input = pxField(panel, 'PX').querySelector('input') as HTMLInputElement
+    const input = pxField(panel, P.PX).querySelector('input') as HTMLInputElement
     const picker = pickerOf(panel)
     pressEquals(input)
     expect(picker.root.hidden).toBe(false)
@@ -1405,7 +1456,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
 
   it('`=` on the Opacity field (no scale) does nothing — tokenEntriesFor is null', () => {
     const { panel } = setupTailwind()
-    const input = pxField(panel, 'O').querySelector('input') as HTMLInputElement
+    const input = pxField(panel, P.O).querySelector('input') as HTMLInputElement
     const picker = pickerOf(panel)
     pressEquals(input)
     expect(picker.root.hidden).toBe(true)
@@ -1413,7 +1464,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
 
   it('applying a spacing entry drafts px through the normal commit path and binds a full-utility pill', () => {
     const { el, panel, drafts } = setupTailwind()
-    const field = pxField(panel, 'PX')
+    const field = pxField(panel, P.PX)
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
@@ -1429,7 +1480,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
 
   it('applying a radius entry binds a rounded-<name> pill', () => {
     const { el, panel, drafts } = setupTailwind()
-    const field = pxField(panel, 'R')
+    const field = pxField(panel, P.R)
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
@@ -1454,7 +1505,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     document.head.appendChild(style)
     document.documentElement.style.setProperty('--text-sm', '14px')
     const { el, panel, drafts } = setupTailwind(`<div data-dc-source="src/Card.tsx:4:7" id="t">Some text</div>`)
-    const input = fieldInput(panel, 'S')
+    const input = fieldInput(panel, P.S)
     pressEquals(input)
     const picker = pickerOf(panel)
     const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('sm'))!
@@ -1466,7 +1517,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
 
   it('Backspace on a pill-bound field detaches: numeric display returns, draft is unchanged', () => {
     const { el, panel, drafts } = setupTailwind()
-    const field = pxField(panel, 'PX')
+    const field = pxField(panel, P.PX)
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
@@ -1483,7 +1534,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
 
   it('a bound pill survives refresh() when the draft still equals the bound px', () => {
     const { panel, onEdited } = setupTailwind()
-    const field = pxField(panel, 'PX')
+    const field = pxField(panel, P.PX)
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
@@ -1502,7 +1553,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
 
   it('a bound pill is cleared when the draft value diverges from the bound px', () => {
     const { el, panel, drafts } = setupTailwind()
-    const field = pxField(panel, 'PX')
+    const field = pxField(panel, P.PX)
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
@@ -1523,7 +1574,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     // and back to the exact same px later — refresh()'s early `setAuto()` continue must clear
     // the bookkeeping too, not just the visible pill state.
     const { el, panel, drafts } = setupTailwind()
-    const field = pxField(panel, 'W')
+    const field = pxField(panel, P.W)
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
@@ -1543,7 +1594,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
 
   it('a bound pill is cleared on selection change (show() with a new element)', () => {
     const { panel } = setupTailwind()
-    const field = pxField(panel, 'PX')
+    const field = pxField(panel, P.PX)
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
@@ -1558,13 +1609,13 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     document.body.appendChild(el2)
     panel.show(el2, buildInspectorData(el2))
 
-    const field2 = pxField(panel, 'PX')
+    const field2 = pxField(panel, P.PX)
     expect(field2.classList.contains('nf-pill')).toBe(false)
   })
 
   it('show() closes any open token picker from a previous selection', () => {
     const { panel } = setupTailwind()
-    const input = pxField(panel, 'PX').querySelector('input') as HTMLInputElement
+    const input = pxField(panel, P.PX).querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
     expect(picker.root.hidden).toBe(false)
@@ -1579,7 +1630,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
 
   it('hide() closes any open token picker', () => {
     const { panel } = setupTailwind()
-    const input = pxField(panel, 'PX').querySelector('input') as HTMLInputElement
+    const input = pxField(panel, P.PX).querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
     expect(picker.root.hidden).toBe(false)
@@ -1594,7 +1645,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const radiusBtn = [...btn].find((b) => b.getAttribute('data-expand') === 'radius') as HTMLElement
     radiusBtn.click()
 
-    const field = pxField(panel, 'TL')
+    const field = pxField(panel, P.TL)
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
@@ -1611,7 +1662,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     // Pins the R row's behavior alongside the TL row fix above so the two can't regress
     // into each other (R must stay collapsed, TL must stay per-side).
     const { panel } = setupTailwind()
-    const field = pxField(panel, 'R')
+    const field = pxField(panel, P.R)
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
@@ -1628,7 +1679,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     document.documentElement.style.removeProperty('--radius-lg')
     resetTokensCache()
     const { panel } = setup()
-    const input = pxField(panel, 'R').querySelector('input') as HTMLInputElement
+    const input = pxField(panel, P.R).querySelector('input') as HTMLInputElement
     const picker = pickerOf(panel)
     pressEquals(input)
     expect(picker.root.hidden).toBe(true)
@@ -1636,7 +1687,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
 
   it('un-Compare restores a bound pill (Compare must not permanently destroy pill bookkeeping)', () => {
     const { el, panel, drafts } = setupTailwind()
-    const field = pxField(panel, 'PX')
+    const field = pxField(panel, P.PX)
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
@@ -1663,7 +1714,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     const { el, panel, drafts } = setupTailwind(
       `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding-left: 16px; padding-right: 16px; width: 200px;"></div>`
     )
-    const field = pxField(panel, 'PX')
+    const field = pxField(panel, P.PX)
     const input = field.querySelector('input') as HTMLInputElement
     pressEquals(input)
     const picker = pickerOf(panel)
@@ -1698,7 +1749,7 @@ describe('Panel Gap field + TokenPicker (B5 important #1)', () => {
   })
 
   function gapInput(panel: Panel): HTMLInputElement {
-    return fieldInput(panel, 'Gap')
+    return fieldInput(panel, P.GAP)
   }
 
   function pressEquals(input: HTMLInputElement): KeyboardEvent {
@@ -1819,31 +1870,25 @@ describe('Panel + token-btn icon (T4)', () => {
     resetTokensCache()
   })
 
-  function pxField(panel: Panel, label: string): HTMLElement {
-    const nf = [...panel.root.querySelectorAll('.nf')].find(
-      (n) => n.querySelector('.nf-label')!.textContent === label
-    )
-    if (!nf) throw new Error(`no field labeled ${label}`)
+  function pxField(panel: Panel, props: string): HTMLElement {
+    const nf = [...panel.root.querySelectorAll('.nf')].find((n) => (n as HTMLElement).dataset.props === props)
+    if (!nf) throw new Error(`no field with data-props ${props}`)
     return nf as HTMLElement
   }
 
   it('PX field root contains a .token-btn; Opacity (O) and Stroke width (W) do not', () => {
     const { panel } = setupTailwind()
-    expect(pxField(panel, 'PX').querySelector('.token-btn')).not.toBeNull()
-    expect(pxField(panel, 'O').querySelector('.token-btn')).toBeNull()
-    // Two fields share the label 'W' (Size's Width and Stroke's border-width) — scope to
-    // the Stroke section so this asserts the border-width field, not Size's Width (which
-    // DOES get an icon, being on the spacing scale).
-    const strokeRows = panel.root.querySelector('.stroke-rows') as HTMLElement
-    const strokeWidth = [...strokeRows.querySelectorAll('.nf')].find(
-      (n) => n.querySelector('.nf-label')!.textContent === 'W'
-    )!
+    expect(pxField(panel, P.PX).querySelector('.token-btn')).not.toBeNull()
+    expect(pxField(panel, P.O).querySelector('.token-btn')).toBeNull()
+    // Size's Width and Stroke's border-width used to share the display label 'W' — data-props
+    // disambiguates them directly now, no section-scoping needed.
+    const strokeWidth = pxField(panel, P.STROKE_W)
     expect(strokeWidth.querySelector('.token-btn')).toBeNull()
   })
 
   it('clicking PX\'s .token-btn opens the token popover with spacing entries', () => {
     const { panel } = setupTailwind()
-    const field = pxField(panel, 'PX')
+    const field = pxField(panel, P.PX)
     const btn = field.querySelector('.token-btn') as HTMLButtonElement
     const picker = pickerOf(panel)
     btn.click()
@@ -1854,7 +1899,7 @@ describe('Panel + token-btn icon (T4)', () => {
 
   it('picking an entry via the icon applies the draft and binds a pill (same end state as `=`)', () => {
     const { el, panel, drafts } = setupTailwind()
-    const field = pxField(panel, 'PX')
+    const field = pxField(panel, P.PX)
     const btn = field.querySelector('.token-btn') as HTMLButtonElement
     const input = field.querySelector('input') as HTMLInputElement
     btn.click()
@@ -1874,7 +1919,7 @@ describe('Panel + token-btn icon (T4)', () => {
 
   it('with a pill already bound, clicking the icon re-opens the picker and swaps the pill on a new pick', () => {
     const { el, panel, drafts } = setupTailwind()
-    const field = pxField(panel, 'PX')
+    const field = pxField(panel, P.PX)
     const btn = field.querySelector('.token-btn') as HTMLButtonElement
     const input = field.querySelector('input') as HTMLInputElement
     const picker = pickerOf(panel)
@@ -1980,7 +2025,7 @@ describe('Panel + ColorPicker lifecycle', () => {
       const colorPicker = (panel as unknown as { colorPicker: { root: HTMLElement } }).colorPicker
       expect(colorPicker.root.hidden).toBe(false)
 
-      const input = fieldInput(panel, 'PX')
+      const input = fieldInput(panel, P.PX)
       input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
       const tokenPicker = pickerOf(panel)
       expect(tokenPicker.root.hidden).toBe(false)
@@ -1995,7 +2040,7 @@ describe('Panel + ColorPicker lifecycle', () => {
     document.documentElement.style.setProperty('--spacing', '4px')
     try {
       const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px;"></div>`)
-      const input = fieldInput(panel, 'PX')
+      const input = fieldInput(panel, P.PX)
       input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
       const tokenPicker = pickerOf(panel)
       expect(tokenPicker.root.hidden).toBe(false)
@@ -2039,7 +2084,7 @@ describe('Panel multi-select: `=` token picker is gated off (final review fix #6
 
   it('`=` on a regular field (PX) in multi-select does not open the token picker', () => {
     const { panel } = multiSetupTailwind()
-    const input = fieldInput(panel, 'PX')
+    const input = fieldInput(panel, P.PX)
     const picker = pickerOf(panel)
     input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
     expect(picker.root.hidden).toBe(true)
@@ -2047,8 +2092,8 @@ describe('Panel multi-select: `=` token picker is gated off (final review fix #6
 
   it('`=` on a regular field in multi-select produces no pill and no boundTokens entry', () => {
     const { panel } = multiSetupTailwind()
-    const field = fieldInput(panel, 'PX').closest('.nf') as HTMLElement
-    const input = fieldInput(panel, 'PX')
+    const field = fieldInput(panel, P.PX).closest('.nf') as HTMLElement
+    const input = fieldInput(panel, P.PX)
     input.dispatchEvent(new KeyboardEvent('keydown', { key: '=', bubbles: true, cancelable: true }))
     expect(field.classList.contains('nf-pill')).toBe(false)
     const boundTokens = (panel as unknown as { tokenUi: { bound: Map<string, unknown> } }).tokenUi.bound
@@ -2100,38 +2145,38 @@ describe('Panel multi-select (B6)', () => {
 
   it('a field with equal values across the selection shows that value', () => {
     const { panel } = multiSetup('width: 100px;', 'width: 100px;')
-    expect(fieldInput(panel, 'W').value).toBe('100')
+    expect(fieldInput(panel, P.W).value).toBe('100')
   })
 
   it('a field with divergent values across the selection shows Mixed', () => {
     const { panel } = multiSetup('padding: 10px;', 'padding: 20px;')
-    expect(fieldInput(panel, 'PX').value).toBe('Mixed')
+    expect(fieldInput(panel, P.PX).value).toBe('Mixed')
   })
 
   it('a plain typed number applies the same absolute css to every element', () => {
     const { a, b, panel, drafts } = multiSetup()
-    commit(fieldInput(panel, 'W'), '250')
+    commit(fieldInput(panel, P.W), '250')
     expect(drafts.current(a, 'width')).toBe('250px')
     expect(drafts.current(b, 'width')).toBe('250px')
   })
 
   it('a relative delta (+8) applies per-element against each own current value', () => {
     const { a, b, panel, drafts } = multiSetup('width: 10px;', 'width: 20px;')
-    commit(fieldInput(panel, 'W'), '+8')
+    commit(fieldInput(panel, P.W), '+8')
     expect(drafts.current(a, 'width')).toBe('18px')
     expect(drafts.current(b, 'width')).toBe('28px')
   })
 
   it('a relative multiply (*2) applies per-element too', () => {
     const { a, b, panel, drafts } = multiSetup('width: 10px;', 'width: 20px;')
-    commit(fieldInput(panel, 'W'), '*2')
+    commit(fieldInput(panel, P.W), '*2')
     expect(drafts.current(a, 'width')).toBe('20px')
     expect(drafts.current(b, 'width')).toBe('40px')
   })
 
   it('scrub: onScrubStart snapshots per-element baselines; subsequent onRelative calls replace, not accumulate', () => {
     const { a, b, panel, drafts } = multiSetup('width: 10px;', 'width: 20px;')
-    const input = fieldInput(panel, 'W')
+    const input = fieldInput(panel, P.W)
     const label = input.closest('.nf')!.querySelector('.nf-label') as HTMLElement
     label.dispatchEvent(new MouseEvent('mousedown', { clientX: 0 }))
     window.dispatchEvent(new MouseEvent('mousemove', { clientX: 5 }))
@@ -2146,7 +2191,7 @@ describe('Panel multi-select (B6)', () => {
 
   it('Compare acts on every element in the selection', () => {
     const { a, b, panel, drafts } = multiSetup()
-    commit(fieldInput(panel, 'W'), '250')
+    commit(fieldInput(panel, P.W), '250')
     panel.compareButton.click()
     expect(drafts.isComparing(a)).toBe(true)
     expect(drafts.isComparing(b)).toBe(true)
@@ -2154,7 +2199,7 @@ describe('Panel multi-select (B6)', () => {
 
   it('Reset acts on every element in the selection', () => {
     const { a, b, panel, drafts } = multiSetup()
-    commit(fieldInput(panel, 'W'), '250')
+    commit(fieldInput(panel, P.W), '250')
     panel.resetButton.click()
     expect(drafts.hasDrafts(a)).toBe(false)
     expect(drafts.hasDrafts(b)).toBe(false)
@@ -2201,6 +2246,55 @@ describe('Panel multi-select (B6)', () => {
   })
 })
 
+describe('Margin section disclosure', () => {
+  function marginSection(panel: Panel): HTMLElement {
+    // Margin's title row parents the expand button, so textContent includes the '⋯'
+    // glyph — strip it before comparing the leading label text.
+    return [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => n.textContent?.replace('⋯', '').trim() === 'Margin'
+    ) as HTMLElement
+  }
+
+  it('is hidden for a margin-less element', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px; width: 200px;"></div>`)
+    const title = marginSection(panel)
+    const body = title.nextElementSibling as HTMLElement
+    expect(title.hidden).toBe(true)
+    expect(body.hidden).toBe(true)
+  })
+
+  it('is shown when the element has margins', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="margin-top: 12px;"></div>`)
+    const title = marginSection(panel)
+    const body = title.nextElementSibling as HTMLElement
+    expect(title.hidden).toBe(false)
+    expect(body.hidden).toBe(false)
+  })
+
+  it('stays shown while a margin draft exists after editing to 0', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="margin-top: 12px; margin-bottom: 12px;"></div>`)
+    const title = marginSection(panel)
+    expect(title.hidden).toBe(false)
+    commit(fieldInput(panel, P.MY), '0')
+    expect(title.hidden).toBe(false)
+  })
+
+  it('multi-select: shown when ANY selected element has margins', () => {
+    document.body.innerHTML = `
+      <div data-dc-source="src/A.tsx:1:1" id="a" style="margin-top: 12px;"></div>
+      <div data-dc-source="src/B.tsx:2:2" id="b"></div>
+    `
+    const a = document.getElementById('a')! as HTMLElement
+    const b = document.getElementById('b')! as HTMLElement
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show([a, b], buildInspectorData(a))
+    const title = marginSection(panel)
+    expect(title.hidden).toBe(false)
+  })
+})
+
 describe('Panel multi-select Typography (B6)', () => {
   function multiSetup(styleA: string, styleB: string) {
     document.body.innerHTML = `
@@ -2221,14 +2315,14 @@ describe('Panel multi-select Typography (B6)', () => {
     expect(panel.root.querySelector('.type-family')).toBeFalsy()
     expect(panel.root.querySelector('.type-weight')).toBeFalsy()
     expect(panel.root.querySelector('[data-text-align]')).toBeFalsy()
-    expect(fieldInput(panel, 'S')).toBeTruthy()
-    expect(fieldInput(panel, 'LH')).toBeTruthy()
-    expect(fieldInput(panel, 'LS')).toBeTruthy()
+    expect(fieldInput(panel, P.S)).toBeTruthy()
+    expect(fieldInput(panel, P.LH)).toBeTruthy()
+    expect(fieldInput(panel, P.LS)).toBeTruthy()
   })
 
   it('font-size is Mixed-capable: divergent sizes across selection show Mixed', () => {
     const { panel } = multiSetup('font-size: 16px;', 'font-size: 24px;')
-    expect(fieldInput(panel, 'S').value).toBe('Mixed')
+    expect(fieldInput(panel, P.S).value).toBe('Mixed')
   })
 })
 
@@ -2275,7 +2369,7 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
     expect(fillBody.classList.contains('panel-rows')).toBe(true)
     expect(fillBody.hidden).toBe(true)
     // Stroke's body is its own rowWrap (stroke-rows) — the first .panel-rows sibling after
-    // the Stroke title, followed by the BT/BR/BB/BL expandWrap.
+    // the Stroke title, followed by the T/R/B/L expandWrap.
     const strokeBody = strokeTitleEl.nextElementSibling as HTMLElement
     expect(strokeBody.classList.contains('stroke-rows')).toBe(true)
     expect(strokeBody.hidden).toBe(true)

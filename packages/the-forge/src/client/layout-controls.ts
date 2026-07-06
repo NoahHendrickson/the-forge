@@ -1,6 +1,6 @@
 export interface SegmentFieldOpts {
   label: string
-  options: Array<{ value: string; label: string }>
+  options: Array<{ value: string; label: string; title?: string }>
   onInput: (value: string) => void
 }
 
@@ -30,7 +30,7 @@ export class SegmentField {
       button.dataset.value = option.value
       // .seg hard-clips overflow (overflow: hidden; nowrap) — the title is the escape hatch
       // for any label that still doesn't fit at the current panel width.
-      button.title = option.label
+      button.title = option.title ?? option.label
       button.addEventListener('click', () => {
         this.setActiveValue(option.value)
         this.opts.onInput(option.value)

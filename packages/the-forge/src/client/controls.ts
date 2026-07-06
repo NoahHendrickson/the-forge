@@ -1,5 +1,7 @@
 export interface NumberFieldOpts {
   label: string
+  /** Tooltip (title attr) on the label — the CSS/Tailwind mapping hint. */
+  hint?: string
   min?: number
   max?: number
   /** When true, the field accepts the literal keyword `auto` (case-insensitive, trimmed). */
@@ -202,6 +204,7 @@ export class NumberField {
     this.root.className = 'nf'
     this.labelEl.className = 'nf-label'
     this.labelEl.textContent = opts.label
+    if (opts.hint) this.labelEl.title = opts.hint
     this.input.type = 'text'
     this.input.inputMode = 'numeric'
     this.root.append(this.labelEl, this.input)

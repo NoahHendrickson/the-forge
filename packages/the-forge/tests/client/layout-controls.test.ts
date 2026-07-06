@@ -60,6 +60,20 @@ describe('SegmentField', () => {
     expect(buttons[0].classList.contains('seg-active')).toBe(true)
   })
 
+  it('applies per-option titles, falling back to the label', () => {
+    const f = new SegmentField({
+      label: 'Direction',
+      options: [
+        { value: 'row', label: 'Horizontal', title: 'flex-direction: row → flex-row' },
+        { value: 'column', label: 'Vertical' },
+      ],
+      onInput: () => {},
+    })
+    const btns = [...f.root.querySelectorAll('.seg')] as HTMLElement[]
+    expect(btns[0].title).toBe('flex-direction: row → flex-row')
+    expect(btns[1].title).toBe('Vertical')
+  })
+
   it('wraps the segment buttons in a .seg-track appended after the label', () => {
     const { sf, buttons } = make()
     const track = sf.root.querySelector('.seg-track') as HTMLElement

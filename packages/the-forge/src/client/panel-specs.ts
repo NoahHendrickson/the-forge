@@ -2,7 +2,7 @@ import type { TaggedElement } from './source'
 import { DraftStore } from './drafts'
 import { UTILITY_PREFIXES, parseColor, type Theme, type Tokens } from './tokens'
 import type { ColorEntry, ScaleEntry } from './tokenpicker'
-import { hasDirectText } from './panel-readers'
+import { hasDirectText, marginSectionVisible } from './panel-readers'
 
 export interface RowSpec {
   label: string
@@ -33,9 +33,11 @@ export interface SectionSpec {
   expandKey?: string
   expandRows?: RowSpec[]
   /** Section renders always (stable DOM order) but is hidden via the `hidden` attribute when this returns false. */
-  visible?: (el: TaggedElement) => boolean
+  visible?: (el: TaggedElement, drafts?: DraftStore) => boolean
   /** Custom section body — used by Layout, which isn't a plain row-field grid. */
   custom?: 'layout' | 'typography' | 'fill' | 'stroke'
+  /** Tooltip (title attr) on the section title — used where the section name itself needs explaining (Margin). */
+  hint?: string
 }
 
 const RADIUS = ['border-top-left-radius', 'border-top-right-radius', 'border-bottom-right-radius', 'border-bottom-left-radius']
@@ -80,6 +82,19 @@ function utilityPrefixFor(props: string[]): string | undefined {
   if (props.length === 1) return UTILITY_PREFIXES[props[0]]
   const synthetic = MULTI_PROP_SYNTHETIC[props.join(',')]
   return synthetic ? UTILITY_PREFIXES[synthetic] : undefined
+}
+
+/**
+ * Tooltip text bridging a row to its CSS props and Tailwind utility ("padding-left,
+ * padding-right → px-*"). Derived via utilityPrefixFor from the same UTILITY_PREFIXES map
+ * request.ts emits from, so a hint that names a utility can never drift from what request.ts
+ * emits; rows the utility map doesn't cover (font-size, stroke width) fall back to the bare
+ * CSS prop list.
+ */
+export function cssHintFor(spec: { props: string[] }): string {
+  const css = spec.props.join(', ')
+  const prefix = utilityPrefixFor(spec.props)
+  return prefix ? `${css} → ${prefix}-*` : css
 }
 
 const RADIUS_PROP_SET = new Set(RADIUS)
@@ -186,29 +201,31 @@ const SECTIONS: SectionSpec[] = [
     title: 'Padding',
     expandKey: 'padding',
     rows: [
-      { label: 'PX', props: ['padding-left', 'padding-right'], min: 0 },
-      { label: 'PY', props: ['padding-top', 'padding-bottom'], min: 0 },
+      { label: 'H', props: ['padding-left', 'padding-right'], min: 0 },
+      { label: 'V', props: ['padding-top', 'padding-bottom'], min: 0 },
     ],
     expandRows: [
-      { label: 'PT', props: ['padding-top'], min: 0 },
-      { label: 'PR', props: ['padding-right'], min: 0 },
-      { label: 'PB', props: ['padding-bottom'], min: 0 },
-      { label: 'PL', props: ['padding-left'], min: 0 },
+      { label: 'T', props: ['padding-top'], min: 0 },
+      { label: 'R', props: ['padding-right'], min: 0 },
+      { label: 'B', props: ['padding-bottom'], min: 0 },
+      { label: 'L', props: ['padding-left'], min: 0 },
     ],
   },
   {
     title: 'Margin',
     expandKey: 'margin',
     rows: [
-      { label: 'MX', props: ['margin-left', 'margin-right'] },
-      { label: 'MY', props: ['margin-top', 'margin-bottom'] },
+      { label: 'H', props: ['margin-left', 'margin-right'] },
+      { label: 'V', props: ['margin-top', 'margin-bottom'] },
     ],
     expandRows: [
-      { label: 'MT', props: ['margin-top'] },
-      { label: 'MR', props: ['margin-right'] },
-      { label: 'MB', props: ['margin-bottom'] },
-      { label: 'ML', props: ['margin-left'] },
+      { label: 'T', props: ['margin-top'] },
+      { label: 'R', props: ['margin-right'] },
+      { label: 'B', props: ['margin-bottom'] },
+      { label: 'L', props: ['margin-left'] },
     ],
+    visible: marginSectionVisible,
+    hint: 'Space this element adds around itself (CSS margin) — shown only when the element actually has margins',
   },
   {
     title: 'Typography',
@@ -227,10 +244,10 @@ const SECTIONS: SectionSpec[] = [
     custom: 'stroke',
     expandKey: 'stroke',
     expandRows: [
-      { label: 'BT', props: ['border-top-width'], min: 0, onBeforeApply: draftSolidIfNone },
-      { label: 'BR', props: ['border-right-width'], min: 0, onBeforeApply: draftSolidIfNone },
-      { label: 'BB', props: ['border-bottom-width'], min: 0, onBeforeApply: draftSolidIfNone },
-      { label: 'BL', props: ['border-left-width'], min: 0, onBeforeApply: draftSolidIfNone },
+      { label: 'T', props: ['border-top-width'], min: 0, onBeforeApply: draftSolidIfNone },
+      { label: 'R', props: ['border-right-width'], min: 0, onBeforeApply: draftSolidIfNone },
+      { label: 'B', props: ['border-bottom-width'], min: 0, onBeforeApply: draftSolidIfNone },
+      { label: 'L', props: ['border-left-width'], min: 0, onBeforeApply: draftSolidIfNone },
     ],
   },
   {

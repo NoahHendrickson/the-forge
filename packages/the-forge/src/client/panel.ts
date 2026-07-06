@@ -19,6 +19,7 @@ import {
   draftSolidIfNone,
   tokenEntriesFor,
   colorTokenEntries,
+  cssHintFor,
   WEIGHTS,
   STROKE_STYLES,
   SIZE_MODES,
@@ -319,14 +320,14 @@ export class Panel {
       }
       if (spec.title === 'Fill' || spec.title === 'Stroke') {
         // Replaced by Selection colors in multi-mode — title AND body hide together.
-        this.setSectionHidden(spec, sectionEls, multi || (spec.visible ? !spec.visible(el) : false))
+        this.setSectionHidden(spec, sectionEls, multi || (spec.visible ? !spec.visible(el, this.drafts) : false))
         continue
       }
       if (multi) {
         // visible when applicable to ANY element in the selection (hasDirectText any, flex any…).
-        this.setSectionHidden(spec, sectionEls, spec.visible ? !this.els.some((e) => spec.visible!(e)) : false)
+        this.setSectionHidden(spec, sectionEls, spec.visible ? !this.els.some((e) => spec.visible!(e, this.drafts)) : false)
       } else {
-        this.setSectionHidden(spec, sectionEls, spec.visible ? !spec.visible(el) : false)
+        this.setSectionHidden(spec, sectionEls, spec.visible ? !spec.visible(el, this.drafts) : false)
       }
     }
     if (this.selectionColorsTitle) this.selectionColorsTitle.hidden = !multi
@@ -574,6 +575,7 @@ export class Panel {
       const title = document.createElement('div')
       title.className = 'panel-section'
       title.textContent = section.title
+      if (section.hint) title.title = section.hint
       this.sectionsRoot.append(title)
       // Every body element belonging to this section (title + rowWrap + custom body +
       // expandWrap, whichever apply) collects here so refresh() can hide them all together —
@@ -677,8 +679,8 @@ export class Panel {
     this.directionField = new SegmentField({
       label: 'Direction',
       options: [
-        { value: 'row', label: 'Row' },
-        { value: 'column', label: 'Column' },
+        { value: 'row', label: 'Horizontal', title: 'flex-direction: row → flex-row' },
+        { value: 'column', label: 'Vertical', title: 'flex-direction: column → flex-col' },
       ],
       onInput: (value) => {
         if (!this.el) return
@@ -728,6 +730,7 @@ export class Panel {
 
     this.gapField = new NumberField({
       label: 'Gap',
+      hint: cssHintFor(GAP_SPEC),
       min: 0,
       allowAuto: true,
       onInput: commitGap,
@@ -756,13 +759,14 @@ export class Panel {
         this.onEdited()
       },
     })
+    this.gapField.root.dataset.props = GAP_SPEC.props.join(' ')
     side.append(this.gapField.root)
 
     this.wrapField = new SegmentField({
       label: 'Wrap',
       options: [
-        { value: 'nowrap', label: 'No wrap' },
-        { value: 'wrap', label: 'Wrap' },
+        { value: 'nowrap', label: 'No wrap', title: 'flex-wrap: nowrap' },
+        { value: 'wrap', label: 'Wrap', title: 'flex-wrap: wrap' },
       ],
       onInput: (value) => {
         if (!this.el) return
@@ -1136,6 +1140,7 @@ export class Panel {
         this.onSizeModeChange(spec, value)
       },
     })
+    select.title = 'Fixed: exact px · Hug: fit-content · Fill: stretch / flex-1'
     row.append(select)
 
     this.sizeModes.push({ select, spec, field: bound.field })
@@ -1270,6 +1275,7 @@ export class Panel {
 
     const field = new NumberField({
       label: spec.label,
+      hint: cssHintFor(spec),
       min: spec.min,
       max: spec.max,
       allowAuto: spec.sizeMode || spec.allowAuto,
@@ -1321,6 +1327,9 @@ export class Panel {
           ? () => this.tokenUi.openScalePicker(spec, field, commit)
           : undefined,
     })
+    // Stable machine identity for tests/tooling — labels are designer-facing display text and
+    // may collide across sections (Size H vs Padding H); props are the field's real identity.
+    field.root.dataset.props = spec.props.join(' ')
     const bound: BoundField = { field, spec }
     this.fields.push(bound)
     return bound

@@ -12,7 +12,7 @@ export default function App() {
             Add mod
           </button>
         </div>
-        <div className="flex-1 rounded-xl bg-white p-6 shadow-sm">
+        <div className="mt-6 flex-1 rounded-xl bg-white p-6 shadow-sm">
           <h1 className="text-lg font-medium text-neutral-900">Recovery</h1>
           <p className="mt-1 text-sm text-neutral-500">Tier 4 · 92 total</p>
           <button
