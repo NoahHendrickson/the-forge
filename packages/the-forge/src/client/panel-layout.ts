@@ -13,8 +13,9 @@ import { NumberField } from './controls'
 import { createButton } from './ui/button'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { PanelTokenUi } from './panel-token-ui'
-import { type RowSpec, GAP_SPEC } from './panel-specs'
+import { type RowSpec, GAP_SPEC, SIZE_MODES } from './panel-specs'
 import { fromPx, isFlex, normalizeJustify, normalizeAlign, mainAxisProp, minMaxRowVisible, alignSelfRowOn } from './panel-readers'
+import type { MenuItem } from './ui/menu'
 
 // The container-side flex props the panel can draft — the set 'remove auto layout' must
 // clean up alongside display (child props like align-self/flex-grow belong to the CHILD's
@@ -22,9 +23,10 @@ import { fromPx, isFlex, normalizeJustify, normalizeAlign, mainAxisProp, minMaxR
 export const FLEX_CONTAINER_PROPS = ['flex-direction', 'gap', 'justify-content', 'align-items', 'flex-wrap']
 
 interface BoundSizeMode {
-  select: HTMLSelectElement
+  menuBtn: HTMLButtonElement
   spec: RowSpec
   field: NumberField
+  mode: 'fixed' | 'hug' | 'fill'
 }
 
 interface BoundMinMaxRow {
@@ -286,6 +288,23 @@ export class LayoutSection {
     this.sizeModes.push(sm)
   }
 
+  /** Items for the sizing chevron menu, computed at open time. Mode items (checkmark on the
+   * inferred current mode) only exist for flex children — Fill/Hug are flex concepts and
+   * updateSizeMode only runs there. Min/Max/Variable are universal. */
+  sizeMenuItems(spec: RowSpec, hasVariable: boolean): MenuItem[] {
+    const items: MenuItem[] = []
+    const el = this.deps.getEl()
+    const parent = el?.parentElement
+    const sm = this.sizeModes.find((s) => s.spec === spec)
+    if (el && parent && isFlex(parent as TaggedElement) && sm) {
+      for (const [value, label] of SIZE_MODES) items.push({ value, label, checked: sm.mode === value })
+    }
+    items.push({ value: 'add-min', label: 'Min…', separator: items.length > 0 })
+    items.push({ value: 'add-max', label: 'Max…' })
+    if (hasVariable) items.push({ value: 'variable', label: 'Variable…', separator: true })
+    return items
+  }
+
   /** Registers a min/max disclosure row bound to a NumberField — called by panel.ts's
    * buildBody layout branch right after each size row (W/H). Mirrors registerSizeMode's
    * per-selection registry lifecycle (populated in buildBody, cleared in teardown). */
@@ -351,12 +370,17 @@ export class LayoutSection {
       if (this.layoutControlsWrap) this.layoutControlsWrap.hidden = true
       // Flex-child align/size-modes are single-only — DOM stays (stable order) but hidden.
       if (this.flexChildControlsWrap) this.flexChildControlsWrap.hidden = true
-      for (const sm of this.sizeModes) sm.select.hidden = true
+      for (const sm of this.sizeModes) sm.menuBtn.hidden = true
       // Min/max disclosure rows are single-select-only, same rule as the cluster/flex-child
       // strip above — ambiguous across N elements, so all hidden regardless of opened state.
       for (const mm of this.minMaxRows) mm.rowEl.hidden = true
       return
     }
+
+    // The sizing chevron renders for every single-selected element — min/max and variable
+    // apply universally; only the Fixed/Hug/Fill items inside the menu are flex-gated
+    // (sizeMenuItems). Before the menu, the whole select vanished for non-flex children.
+    for (const sm of this.sizeModes) sm.menuBtn.hidden = false
 
     this.refreshLayoutSection(el, computed)
     this.refreshFlexChild(el, computed)
@@ -425,7 +449,6 @@ export class LayoutSection {
     const parent = el.parentElement
     const visible = parent !== null && isFlex(parent as TaggedElement)
     if (this.flexChildControlsWrap) this.flexChildControlsWrap.hidden = !visible
-    for (const sm of this.sizeModes) sm.select.hidden = !visible
     if (!visible) return
 
     const parentDirection = getComputedStyle(parent as TaggedElement).flexDirection.startsWith('column')
@@ -461,7 +484,7 @@ export class LayoutSection {
     const hasExplicitSize = !!draft || !!inline
 
     if (hasExplicitSize) {
-      sm.select.value = 'fixed'
+      sm.mode = 'fixed'
       return
     }
 
@@ -469,19 +492,19 @@ export class LayoutSection {
     if (isMain) {
       const grow = Number.parseFloat(computed.flexGrow || '0')
       if (grow >= 1) {
-        sm.select.value = 'fill'
+        sm.mode = 'fill'
         return
       }
     } else {
       const alignSelfDraft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, 'align-self')
       const alignSelfCss = alignSelfDraft ?? computed.alignSelf
       if (alignSelfCss === 'stretch') {
-        sm.select.value = 'fill'
+        sm.mode = 'fill'
         return
       }
     }
 
-    sm.select.value = 'hug'
+    sm.mode = 'hug'
   }
 
   // WRITE half of the size-mode policy — its READ half, updateSizeMode, sits right above.

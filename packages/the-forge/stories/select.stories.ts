@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/html-vite'
 import { createSelect } from '../src/client/ui/select'
-import { WEIGHTS, STROKE_STYLES, SIZE_MODES } from '../src/client/panel-specs'
+import { WEIGHTS, STROKE_STYLES } from '../src/client/panel-specs'
 import { mountInShadow } from './mount'
 
 const meta: Meta = {
@@ -47,19 +47,6 @@ export const StrokeStyle: Story = {
         className: 'stroke-style',
         options: STROKE_STYLES.map(([value, label]) => ({ value, label })),
         value: 'solid',
-        onChange: () => {},
-      }),
-      'panel'
-    ),
-}
-
-// Size mode — the real SIZE_MODES table from panel-specs.ts (per-row sibling select in buildRow).
-export const SizeMode: Story = {
-  render: () =>
-    mountInShadow(
-      createSelect({
-        options: SIZE_MODES.map(([value, label]) => ({ value, label })),
-        value: 'fixed',
         onChange: () => {},
       }),
       'panel'

@@ -4,6 +4,7 @@ import { DraftStore } from './drafts'
 import { NumberField } from './controls'
 import { createButton } from './ui/button'
 import { createSelect } from './ui/select'
+import { createMenuButton } from './ui/menu'
 import { createColorRow } from './ui/swatch'
 import { SegmentField } from './layout-controls'
 import { ColorPicker } from './colorpicker'
@@ -23,7 +24,6 @@ import {
   cssHintFor,
   WEIGHTS,
   STROKE_STYLES,
-  SIZE_MODES,
   SIZE_ROWS,
   PADDING_ROWS,
   minMaxRowsFor,
@@ -1009,26 +1009,28 @@ export class Panel {
     row.className = 'size-row'
     row.append(bound.field.root)
 
-    const select = createSelect({
-      options: [
-        ...SIZE_MODES.map(([value, label]) => ({ value, label })),
-        // Figma UI3 keeps min/max in the sizing dropdown — action items, not modes. SIZE_MODES
-        // itself stays a pure mode table (stories import it as the canonical catalog).
-        { value: 'add-min', label: 'Add min…' },
-        { value: 'add-max', label: 'Add max…' },
-      ],
-      onChange: (value) => {
+    // Figma UI3 keeps min/max in the sizing dropdown — action items, not modes. SIZE_MODES
+    // itself stays a pure mode table (stories import it as the canonical catalog). The
+    // variable binding also lives here (2026-07-06 size-pair spec) — W/H render no { } button.
+    const menu = createMenuButton({
+      title: 'Sizing — Fixed: exact px · Hug: fit-content · Fill: stretch / flex-1 · min/max · variable',
+      popoverHost: this.body,
+      items: () => this.layoutSection.sizeMenuItems(spec, bound.field.canOpenToken()),
+      onSelect: (value) => {
         if (value === 'add-min' || value === 'add-max') {
           this.layoutSection.openMinMax(spec, value === 'add-min' ? 'min' : 'max')
-          return // refresh() inside openMinMax re-syncs the select to the real mode
+          return
+        }
+        if (value === 'variable') {
+          bound.field.openToken()
+          return
         }
         this.layoutSection.onSizeModeChange(spec, value)
       },
     })
-    select.title = 'Fixed: exact px · Hug: fit-content · Fill: stretch / flex-1'
-    row.append(select)
+    row.append(menu.button)
 
-    this.layoutSection.registerSizeMode({ select, spec, field: bound.field })
+    this.layoutSection.registerSizeMode({ menuBtn: menu.button, spec, field: bound.field, mode: 'fixed' })
     return row
   }
 
@@ -1107,6 +1109,7 @@ export class Panel {
       min: spec.min,
       max: spec.max,
       allowAuto: spec.sizeMode || spec.allowAuto,
+      noTokenButton: !!spec.sizeMode,
       onInput: commit,
       onRelative: multi
         ? (apply) => {
