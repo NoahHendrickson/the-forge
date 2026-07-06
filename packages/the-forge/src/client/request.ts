@@ -9,7 +9,15 @@ export interface ChangeItem {
   beforeUtility: string | null
   afterUtility: string | null
   tokenExact: boolean
+  /** Tagged at construction time (not string-matched later by the renderer) when this change
+   * is the panel's deterministic 'remove auto layout' preview rather than a literal ask. */
+  intent?: 'remove-auto-layout'
 }
+
+// The Tailwind class families 'remove auto layout' asks the agent to drop — the single source
+// both the panel's button tooltip and the rendered markdown intent line read from, so the two
+// can't drift apart.
+export const REMOVE_AUTO_LAYOUT_CLASSES = 'flex/inline-flex/flex-row/flex-col/flex-wrap/gap-*/justify-*/items-*'
 
 export interface ElementChange {
   tag: string
@@ -208,6 +216,12 @@ export function buildChangeRequestWithElements(
       // send entirely when nothing actually changed.
       if (v.beforeCss === v.afterCss) continue
       const suggestion = suggestUtility(property, v.afterCss, theme, tokens)
+      // 'display: flex → block' is never the literal ask — it is the panel's deterministic
+      // preview of REMOVING auto layout. Tag the intent here, at construction time, so
+      // renderMarkdown (and any other consumer) formats from metadata instead of re-deriving
+      // it from CSS values.
+      const isRemoveAutoLayout =
+        property === 'display' && (v.beforeCss === 'flex' || v.beforeCss === 'inline-flex') && v.afterCss === 'block'
       changes.push({
         property,
         beforeCss: v.beforeCss,
@@ -215,6 +229,7 @@ export function buildChangeRequestWithElements(
         beforeUtility: theme.spacingBasePx === null ? null : findExistingUtility(className, property),
         afterUtility: suggestion?.utility ?? null,
         tokenExact: suggestion?.tokenExact ?? false,
+        ...(isRemoveAutoLayout ? { intent: 'remove-auto-layout' as const } : {}),
       })
     }
     if (changes.length === 0) continue // every drafted property was a no-op — nothing to request
@@ -274,11 +289,11 @@ export function renderMarkdown(req: ChangeRequest): string {
           : ` — add \`${c.afterUtility}\``
         line += c.tokenExact ? '' : ' (off the token scale — arbitrary value; double-check intent)'
       }
-      // 'display: flex → block' is never the literal ask — it is the panel's deterministic
-      // preview of REMOVING auto layout. Spell the intent out so the agent edits classes
-      // (removes the flex family) instead of faithfully adding a block utility.
-      if (c.property === 'display' && (c.beforeCss === 'flex' || c.beforeCss === 'inline-flex') && c.afterCss === 'block') {
-        line += ' — intent: remove auto layout (flexbox) from this element; remove flex/inline-flex/flex-row/flex-col/flex-wrap/gap-*/justify-*/items-* classes rather than adding `display: block`'
+      // Spell the tagged intent out so the agent edits classes (removes the flex family)
+      // instead of faithfully adding a block utility — the tag was set once, at construction
+      // time (buildChangeRequestWithElements), not re-derived here from CSS values.
+      if (c.intent === 'remove-auto-layout') {
+        line += ` — intent: remove auto layout (flexbox) from this element; remove ${REMOVE_AUTO_LAYOUT_CLASSES} classes rather than adding \`display: block\``
       }
       lines.push(line)
     }

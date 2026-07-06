@@ -2,6 +2,10 @@ export interface SegmentFieldOpts {
   label: string
   options: Array<{ value: string; label: string; title?: string; ariaLabel?: string }>
   onInput: (value: string) => void
+  /** Elements appended inline beside the track (e.g. Direction's independent Wrap toggle) —
+   * built into a `.seg-cluster` row wrapper at construction time so callers never need to
+   * reach into the track's internal markup to attach a sibling control. */
+  trackAddons?: HTMLElement[]
 }
 
 /** A row of small toggle buttons — dumb view: state in via set(), events out via onInput. */
@@ -20,7 +24,6 @@ export class SegmentField {
 
     const track = document.createElement('div')
     track.className = 'seg-track'
-    this.root.append(track)
 
     for (const option of opts.options) {
       const button = document.createElement('button')
@@ -38,6 +41,15 @@ export class SegmentField {
       })
       track.append(button)
       this.buttons.push(button)
+    }
+
+    if (opts.trackAddons?.length) {
+      const cluster = document.createElement('div')
+      cluster.className = 'seg-cluster'
+      cluster.append(track, ...opts.trackAddons)
+      this.root.append(cluster)
+    } else {
+      this.root.append(track)
     }
   }
 

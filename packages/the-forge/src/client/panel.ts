@@ -9,6 +9,7 @@ import { SegmentField, AlignMatrix } from './layout-controls'
 import { ColorPicker } from './colorpicker'
 import { PanelTokenUi, colorDisplay } from './panel-token-ui'
 import { readTokens, readTheme, parseColor as parseColorLocal } from './tokens'
+import { REMOVE_AUTO_LAYOUT_CLASSES } from './request'
 import {
   type RowSpec,
   type SectionSpec,
@@ -47,6 +48,17 @@ export { normalizeJustify, normalizeAlign, hasDirectText } from './panel-readers
 // clean up alongside display (child props like align-self/flex-grow belong to the CHILD's
 // own remove story, not the container's).
 const FLEX_CONTAINER_PROPS = ['flex-direction', 'gap', 'justify-content', 'align-items', 'flex-wrap']
+
+type BaselineToggleAction = 'apply-baseline' | 'discard' | 'apply-flex-start'
+
+// Figma keeps baseline out of the 9-dot matrix (it's an 'align text baseline' extra), so a
+// dedicated toggle drafts/discards align-items around it. Toggling OFF discards the session
+// draft (stylesheet reality returns) if one exists; if baseline came from the app's own CSS
+// there is no draft to discard, so OFF drafts flex-start (the normalize default) instead.
+function resolveBaselineToggle(isActive: boolean, hasDraft: boolean): BaselineToggleAction {
+  if (!isActive) return 'apply-baseline'
+  return hasDraft ? 'discard' : 'apply-flex-start'
+}
 
 interface BoundField {
   field: NumberField
@@ -603,7 +615,7 @@ export class Panel {
         const removeBtn = createButton({ label: '−' })
         removeBtn.setAttribute('data-remove-layout', '')
         removeBtn.setAttribute('aria-label', 'Remove auto layout')
-        removeBtn.title = 'Remove auto layout — the request tells the agent to drop flex/inline-flex/flex-row/flex-col/flex-wrap/gap-*/justify-*/items-* classes'
+        removeBtn.title = `Remove auto layout — the request tells the agent to drop ${REMOVE_AUTO_LAYOUT_CLASSES} classes`
         removeBtn.hidden = true
         removeBtn.addEventListener('click', () => {
           if (!this.el) return
@@ -718,38 +730,10 @@ export class Panel {
     controls.className = 'panel-rows layout-controls'
     this.layoutControlsWrap = controls
 
-    this.directionField = new SegmentField({
-      label: 'Direction',
-      options: [
-        { value: 'row', label: '→', ariaLabel: 'Horizontal', title: 'flex-direction: row → flex-row' },
-        { value: 'column', label: '↓', ariaLabel: 'Vertical', title: 'flex-direction: column → flex-col' },
-      ],
-      onInput: (value) => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        this.drafts.apply(this.el, 'flex-direction', value)
-        this.refresh()
-        this.onEdited()
-      },
-    })
-    // Marks the row for the stacked label-above-track CSS ([data-flex-direction] in
-    // overlay.ts) — the "Direction" label overflows the shared 40px label column.
-    this.directionField.root.setAttribute('data-flex-direction', '')
-    controls.append(this.directionField.root)
-
-    // [data-flex-direction] stacks the field column-wise (label above content) so
-    // "Direction" doesn't crush the track — but that same column axis would stack the
-    // wrap toggle BELOW the track instead of beside it. A .seg-cluster row wrapper holds
-    // track + toggle so they stay inline while the outer field still stacks label vs
-    // cluster (browser-verified: M-B Task 5 caught the toggle rendering on its own row).
-    const track = this.directionField.root.querySelector('.seg-track') as HTMLElement
-    const cluster = document.createElement('div')
-    cluster.className = 'seg-cluster'
-    track.replaceWith(cluster)
-    cluster.append(track)
-
-    // Wrap lives on the Direction row (Figma UI3 grouping) as an independent toggle —
-    // it is NOT part of the exclusive direction segment, so it's a sibling of the track.
+    // Wrap lives on the Direction row (Figma UI3 grouping) as an independent toggle — it is
+    // NOT part of the exclusive direction segment, so it rides in as a track addon (a sibling
+    // of the track inside SegmentField's own .seg-cluster row) rather than the panel reaching
+    // into SegmentField's internals to splice it in after the fact.
     const wrapBtn = createButton({ label: '↩' })
     wrapBtn.classList.add('seg', 'wrap-toggle')
     wrapBtn.setAttribute('data-wrap-toggle', '')
@@ -764,7 +748,29 @@ export class Panel {
       this.onEdited()
     })
     this.wrapToggle = wrapBtn
-    cluster.append(wrapBtn)
+
+    this.directionField = new SegmentField({
+      label: 'Direction',
+      options: [
+        { value: 'row', label: '→', ariaLabel: 'Horizontal', title: 'flex-direction: row → flex-row' },
+        { value: 'column', label: '↓', ariaLabel: 'Vertical', title: 'flex-direction: column → flex-col' },
+      ],
+      onInput: (value) => {
+        if (!this.el) return
+        this.onBeforeEdit(this.el)
+        this.drafts.apply(this.el, 'flex-direction', value)
+        this.refresh()
+        this.onEdited()
+      },
+      trackAddons: [wrapBtn],
+    })
+    // Marks the row for the stacked label-above-track CSS ([data-flex-direction] in
+    // overlay.ts) — the "Direction" label overflows the shared 40px label column. The
+    // resulting .seg-cluster row (built inside SegmentField via trackAddons) keeps the
+    // track and wrap toggle inline even though the field itself stacks label-above-content
+    // (browser-verified: M-B Task 5 caught the toggle rendering on its own row).
+    this.directionField.root.setAttribute('data-flex-direction', '')
+    controls.append(this.directionField.root)
 
     const grid = document.createElement('div')
     grid.className = 'layout-grid'
@@ -784,10 +790,6 @@ export class Panel {
     })
     tile.append(this.alignMatrix.root)
 
-    // Figma keeps baseline out of the 9-dot matrix (it's an 'align text baseline' extra) —
-    // a small toggle under the matrix drafts it. Toggling OFF discards the session draft
-    // (stylesheet reality returns); if baseline came from the app's own CSS there is no
-    // draft to discard, so OFF drafts flex-start (the normalize default) instead.
     const baselineBtn = createButton({ label: 'Baseline' })
     baselineBtn.classList.add('seg')
     baselineBtn.setAttribute('data-align-baseline', '')
@@ -795,13 +797,18 @@ export class Panel {
     baselineBtn.addEventListener('click', () => {
       if (!this.el) return
       this.onBeforeEdit(this.el)
-      const active = this.currentValue(this.el, 'align-items', getComputedStyle(this.el)) === 'baseline'
-      if (!active) {
-        this.drafts.apply(this.el, 'align-items', 'baseline')
-      } else if (this.drafts.current(this.el, 'align-items') !== null) {
-        this.drafts.discard(this.el, ['align-items'])
-      } else {
-        this.drafts.apply(this.el, 'align-items', 'flex-start')
+      const isActive = this.currentValue(this.el, 'align-items', getComputedStyle(this.el)) === 'baseline'
+      const hasDraft = this.drafts.current(this.el, 'align-items') !== null
+      switch (resolveBaselineToggle(isActive, hasDraft)) {
+        case 'apply-baseline':
+          this.drafts.apply(this.el, 'align-items', 'baseline')
+          break
+        case 'discard':
+          this.drafts.discard(this.el, ['align-items'])
+          break
+        case 'apply-flex-start':
+          this.drafts.apply(this.el, 'align-items', 'flex-start')
+          break
       }
       this.refresh()
       this.onEdited()
