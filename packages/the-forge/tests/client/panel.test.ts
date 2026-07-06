@@ -294,12 +294,10 @@ describe('Panel', () => {
     const { panel } = flexSetup()
     const body = panel.root.querySelector('.layout-section') as HTMLElement
     const kinds = [...body.children].map((c) =>
-      c.classList.contains('size-row')
+      c.hasAttribute('data-size-block')
         ? 'size'
         : c.hasAttribute('data-minmax-row')
-          ? (c as HTMLElement).dataset.propsRow?.startsWith('min')
-            ? 'minmax-min'
-            : 'minmax-max'
+          ? ((c as HTMLElement).dataset.propsRow?.startsWith('min') ? 'minmax-min' : 'minmax-max')
           : c.classList.contains('flex-child-controls')
             ? 'align'
             : c.classList.contains('layout-controls') || c.hasAttribute('data-add-layout')
@@ -312,7 +310,6 @@ describe('Panel', () => {
       'size',
       'minmax-min',
       'minmax-max',
-      'size',
       'minmax-min',
       'minmax-max',
       'cluster',
@@ -320,6 +317,21 @@ describe('Panel', () => {
       'padding',
       'align',
     ])
+  })
+
+  it('size block carries a group label and one line with W then H (2026-07-06 size-pair spec)', () => {
+    const { panel } = setup()
+    const block = panel.root.querySelector('[data-size-block]') as HTMLElement
+    expect(block).toBeTruthy()
+    expect((block.querySelector('.group-label') as HTMLElement).textContent).toBe('Size')
+    const fields = [...block.querySelectorAll('.size-fields .nf')] as HTMLElement[]
+    expect(fields.map((f) => f.dataset.props)).toEqual(['width', 'height'])
+  })
+
+  it('min/max rows carry axis-qualified labels below the size pair', () => {
+    const { panel } = setup()
+    const labels = [...panel.root.querySelectorAll('[data-minmax-row] .nf-label')].map((l) => l.textContent)
+    expect(labels).toEqual(['Min W', 'Max W', 'Min H', 'Max H'])
   })
 
   it('padding block carries a group label and one line with both H/V fields', () => {

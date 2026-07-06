@@ -500,11 +500,23 @@ export class Panel {
         // flex or not (the ORDER is the contract — see panel.test.ts's composition test).
         const rowWrap = document.createElement('div')
         rowWrap.className = 'panel-rows layout-section'
+        // Size block (2026-07-06 size-pair spec): a "Size" group label above ONE line holding
+        // the W and H size-rows side by side — mirrors the padding block's structure below.
+        const sizeBlock = document.createElement('div')
+        sizeBlock.className = 'size-block'
+        sizeBlock.setAttribute('data-size-block', '')
+        const sizeLabel = document.createElement('span')
+        sizeLabel.className = 'group-label'
+        sizeLabel.textContent = 'Size'
+        const sizeFields = document.createElement('div')
+        sizeFields.className = 'size-fields'
+        for (const row of SIZE_ROWS) sizeFields.append(this.buildRow(row))
+        sizeBlock.append(sizeLabel, sizeFields)
+        rowWrap.append(sizeBlock)
+        // Min/max disclosure rows sit BELOW the pair (W's pair then H's) with axis-qualified
+        // labels — they can no longer nest under their own axis row now that W|H share a line.
+        // Hidden until LayoutSection.refresh discloses them (opened / drafted / non-default).
         for (const row of SIZE_ROWS) {
-          rowWrap.append(this.buildRow(row))
-          // Each size row's own min/max pair (min-width/max-width for W, min-height/max-height
-          // for H) — disclosure rows, hidden until LayoutSection.refresh discloses them
-          // (opened / drafted / non-default).
           for (const mm of minMaxRowsFor(row)) {
             const mmBound = this.buildField(mm)
             const mmRow = document.createElement('div')

@@ -205,11 +205,13 @@ const PADDING_ROWS: RowSpec[] = [
 // desync from their own min/max pair. Typing `auto` clears the constraint — autoCss carries
 // each property's CSS initial value (min-*: auto, max-*: none), so the request says "remove
 // the constraint" in keywords, never a measured px.
+// Labels are axis-qualified (Min W / Max H) because the rows sit below the side-by-side W|H
+// pair (2026-07-06 size-pair spec), no longer nested under their axis.
 export function minMaxRowsFor(sizeSpec: RowSpec): RowSpec[] {
   const p = sizeSpec.props[0] // 'width' | 'height'
   return [
-    { label: 'Min', props: [`min-${p}`], min: 0, allowAuto: true, autoCss: 'auto' },
-    { label: 'Max', props: [`max-${p}`], min: 0, allowAuto: true, autoCss: 'none' },
+    { label: `Min ${sizeSpec.label}`, props: [`min-${p}`], min: 0, allowAuto: true, autoCss: 'auto' },
+    { label: `Max ${sizeSpec.label}`, props: [`max-${p}`], min: 0, allowAuto: true, autoCss: 'none' },
   ]
 }
 

@@ -320,6 +320,8 @@ button {
 .size-row { display: flex; gap: 4px; flex: 1 1 40%; min-width: 0; }
 .size-row .nf { flex: 1; }
 .group-label { color: var(--text-muted); font-size: 11px; }
+.size-block { display: flex; flex-direction: column; gap: 4px; }
+.size-fields { display: flex; gap: 6px; }
 .padding-block { display: flex; flex-direction: column; gap: 4px; }
 .padding-fields { display: flex; gap: 6px; }
 .align-head { display: flex; align-items: center; justify-content: space-between; }
