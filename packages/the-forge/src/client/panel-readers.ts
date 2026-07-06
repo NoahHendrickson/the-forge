@@ -72,7 +72,7 @@ export function marginSectionVisible(el: TaggedElement, drafts?: DraftStore): bo
   return MARGIN_PROPS.some((p) => {
     if (drafts && drafts.current(el, p) !== null) return true
     const v = computed.getPropertyValue(p)
-    return v !== '' && v !== '0px'
+    return v === 'auto' || fromPx(v) !== 0
   })
 }
 
