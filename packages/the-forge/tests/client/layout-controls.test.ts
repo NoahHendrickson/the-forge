@@ -86,6 +86,21 @@ describe('SegmentField', () => {
     expect(label.nextElementSibling).toBe(track)
   })
 
+  it('applies per-option aria-labels for icon options', () => {
+    const f = new SegmentField({
+      label: 'Direction',
+      options: [
+        { value: 'row', label: '→', ariaLabel: 'Horizontal', title: 'flex-direction: row → flex-row' },
+        { value: 'column', label: '↓', ariaLabel: 'Vertical' },
+      ],
+      onInput: () => {},
+    })
+    const btns = [...f.root.querySelectorAll('.seg')] as HTMLElement[]
+    expect(btns[0].getAttribute('aria-label')).toBe('Horizontal')
+    expect(btns[0].textContent).toBe('→')
+    expect(btns[1].getAttribute('aria-label')).toBe('Vertical')
+  })
+
   it('every segment button carries a title so clipped labels are still discoverable', () => {
     const field = new SegmentField({
       label: 'Justify',
@@ -119,6 +134,13 @@ describe('AlignMatrix', () => {
     const { am } = make()
     am.set(null, null, 'row', false)
     expect(dots(am)).toHaveLength(9)
+  })
+
+  it('dots carry a CSS-hint title', () => {
+    const m = new AlignMatrix({ onInput: () => {} })
+    m.set('flex-start', 'flex-start', 'row', false)
+    const dot = m.root.querySelector('.am-dot') as HTMLElement
+    expect(dot.title).toBe('justify-content: flex-start · align-items: flex-start')
   })
 
   it('in row direction, columns map to justify and rows map to align', () => {

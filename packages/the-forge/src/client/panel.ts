@@ -43,6 +43,11 @@ import {
 export { tokenEntriesFor, colorTokenEntries } from './panel-specs'
 export { normalizeJustify, normalizeAlign, hasDirectText } from './panel-readers'
 
+// The container-side flex props the panel can draft — the set 'remove auto layout' must
+// clean up alongside display (child props like align-self/flex-grow belong to the CHILD's
+// own remove story, not the container's).
+const FLEX_CONTAINER_PROPS = ['flex-direction', 'gap', 'justify-content', 'align-items', 'flex-wrap']
+
 interface BoundField {
   field: NumberField
   spec: RowSpec
@@ -96,8 +101,10 @@ export class Panel {
   private directionField: SegmentField | null = null
   private gapField: NumberField | null = null
   private alignMatrix: AlignMatrix | null = null
-  private wrapField: SegmentField | null = null
+  private baselineToggle: HTMLButtonElement | null = null
+  private wrapToggle: HTMLButtonElement | null = null
   private addLayoutBtn: HTMLElement | null = null
+  private removeLayoutBtn: HTMLButtonElement | null = null
   private layoutControlsWrap: HTMLElement | null = null
 
   // Flex-child widgets.
@@ -390,6 +397,7 @@ export class Panel {
   private refreshLayoutSection(el: TaggedElement, computed: CSSStyleDeclaration): void {
     const flex = isFlex(el)
     if (this.addLayoutBtn) this.addLayoutBtn.hidden = flex
+    if (this.removeLayoutBtn) this.removeLayoutBtn.hidden = !flex
     if (this.layoutControlsWrap) this.layoutControlsWrap.hidden = !flex
     if (!flex) return
 
@@ -400,7 +408,11 @@ export class Panel {
     const spaceBetween = justify === 'space-between'
 
     this.directionField?.set(direction)
-    this.wrapField?.set(wrap === 'wrap' ? 'wrap' : 'nowrap')
+    // wrap-reverse deliberately reads as OFF (same as the old Wrap segment) — the toggle is a
+    // two-state wrap/nowrap control; reversal is out of its vocabulary.
+    const wrapping = wrap === 'wrap'
+    this.wrapToggle?.classList.toggle('seg-active', wrapping)
+    this.wrapToggle?.setAttribute('aria-pressed', String(wrapping))
 
     if (this.gapField) {
       if (spaceBetween) {
@@ -421,6 +433,9 @@ export class Panel {
     }
 
     this.alignMatrix?.set(normalizeJustify(justify), normalizeAlign(align), direction, spaceBetween)
+    const baselineOn = normalizeAlign(align) === 'baseline'
+    this.baselineToggle?.classList.toggle('seg-active', baselineOn)
+    this.baselineToggle?.setAttribute('aria-pressed', String(baselineOn))
   }
 
   private refreshFlexChild(el: TaggedElement, computed: CSSStyleDeclaration): void {
@@ -552,8 +567,10 @@ export class Panel {
     this.directionField = null
     this.gapField = null
     this.alignMatrix = null
-    this.wrapField = null
+    this.baselineToggle = null
+    this.wrapToggle = null
     this.addLayoutBtn = null
+    this.removeLayoutBtn = null
     this.layoutControlsWrap = null
     this.alignSelfField = null
     this.alignSelfWrap = null
@@ -583,6 +600,31 @@ export class Panel {
       const sectionBodyEls: HTMLElement[] = [title]
 
       if (section.custom === 'layout') {
+        const removeBtn = createButton({ label: '−' })
+        removeBtn.setAttribute('data-remove-layout', '')
+        removeBtn.setAttribute('aria-label', 'Remove auto layout')
+        removeBtn.title = 'Remove auto layout — the request tells the agent to drop flex/inline-flex/flex-row/flex-col/flex-wrap/gap-*/justify-*/items-* classes'
+        removeBtn.hidden = true
+        removeBtn.addEventListener('click', () => {
+          if (!this.el) return
+          this.onBeforeEdit(this.el)
+          if (this.drafts.current(this.el, 'display') !== null) {
+            // Auto layout was added (or display re-drafted) this session — pure undo: targeted
+            // discard restores the recorded originals, so the element returns to its stylesheet
+            // reality and there is nothing to send.
+            this.drafts.discard(this.el, ['display', ...FLEX_CONTAINER_PROPS])
+          } else {
+            // Flex comes from the app's own CSS: draft display:block as the deterministic preview,
+            // and discard any container-prop drafts so the request is just the removal.
+            this.drafts.discard(this.el, FLEX_CONTAINER_PROPS)
+            this.drafts.apply(this.el, 'display', 'block')
+          }
+          this.refresh()
+          this.onEdited()
+        })
+        this.removeLayoutBtn = removeBtn
+        title.append(removeBtn)
+
         const layoutBody = this.buildLayoutSection()
         this.sectionsRoot.append(layoutBody)
         sectionBodyEls.push(layoutBody)
@@ -679,8 +721,8 @@ export class Panel {
     this.directionField = new SegmentField({
       label: 'Direction',
       options: [
-        { value: 'row', label: 'Horizontal', title: 'flex-direction: row → flex-row' },
-        { value: 'column', label: 'Vertical', title: 'flex-direction: column → flex-col' },
+        { value: 'row', label: '→', ariaLabel: 'Horizontal', title: 'flex-direction: row → flex-row' },
+        { value: 'column', label: '↓', ariaLabel: 'Vertical', title: 'flex-direction: column → flex-col' },
       ],
       onInput: (value) => {
         if (!this.el) return
@@ -694,6 +736,35 @@ export class Panel {
     // overlay.ts) — the "Direction" label overflows the shared 40px label column.
     this.directionField.root.setAttribute('data-flex-direction', '')
     controls.append(this.directionField.root)
+
+    // [data-flex-direction] stacks the field column-wise (label above content) so
+    // "Direction" doesn't crush the track — but that same column axis would stack the
+    // wrap toggle BELOW the track instead of beside it. A .seg-cluster row wrapper holds
+    // track + toggle so they stay inline while the outer field still stacks label vs
+    // cluster (browser-verified: M-B Task 5 caught the toggle rendering on its own row).
+    const track = this.directionField.root.querySelector('.seg-track') as HTMLElement
+    const cluster = document.createElement('div')
+    cluster.className = 'seg-cluster'
+    track.replaceWith(cluster)
+    cluster.append(track)
+
+    // Wrap lives on the Direction row (Figma UI3 grouping) as an independent toggle —
+    // it is NOT part of the exclusive direction segment, so it's a sibling of the track.
+    const wrapBtn = createButton({ label: '↩' })
+    wrapBtn.classList.add('seg', 'wrap-toggle')
+    wrapBtn.setAttribute('data-wrap-toggle', '')
+    wrapBtn.setAttribute('aria-label', 'Wrap')
+    wrapBtn.title = 'flex-wrap: wrap → flex-wrap'
+    wrapBtn.addEventListener('click', () => {
+      if (!this.el) return
+      this.onBeforeEdit(this.el)
+      const current = this.currentValue(this.el, 'flex-wrap', getComputedStyle(this.el))
+      this.drafts.apply(this.el, 'flex-wrap', current === 'wrap' ? 'nowrap' : 'wrap')
+      this.refresh()
+      this.onEdited()
+    })
+    this.wrapToggle = wrapBtn
+    cluster.append(wrapBtn)
 
     const grid = document.createElement('div')
     grid.className = 'layout-grid'
@@ -712,6 +783,32 @@ export class Panel {
       },
     })
     tile.append(this.alignMatrix.root)
+
+    // Figma keeps baseline out of the 9-dot matrix (it's an 'align text baseline' extra) —
+    // a small toggle under the matrix drafts it. Toggling OFF discards the session draft
+    // (stylesheet reality returns); if baseline came from the app's own CSS there is no
+    // draft to discard, so OFF drafts flex-start (the normalize default) instead.
+    const baselineBtn = createButton({ label: 'Baseline' })
+    baselineBtn.classList.add('seg')
+    baselineBtn.setAttribute('data-align-baseline', '')
+    baselineBtn.title = 'align-items: baseline → items-baseline'
+    baselineBtn.addEventListener('click', () => {
+      if (!this.el) return
+      this.onBeforeEdit(this.el)
+      const active = this.currentValue(this.el, 'align-items', getComputedStyle(this.el)) === 'baseline'
+      if (!active) {
+        this.drafts.apply(this.el, 'align-items', 'baseline')
+      } else if (this.drafts.current(this.el, 'align-items') !== null) {
+        this.drafts.discard(this.el, ['align-items'])
+      } else {
+        this.drafts.apply(this.el, 'align-items', 'flex-start')
+      }
+      this.refresh()
+      this.onEdited()
+    })
+    this.baselineToggle = baselineBtn
+    tile.append(baselineBtn)
+
     grid.append(tile)
 
     const side = document.createElement('div')
@@ -762,22 +859,6 @@ export class Panel {
     this.gapField.root.dataset.props = GAP_SPEC.props.join(' ')
     side.append(this.gapField.root)
 
-    this.wrapField = new SegmentField({
-      label: 'Wrap',
-      options: [
-        { value: 'nowrap', label: 'No wrap', title: 'flex-wrap: nowrap' },
-        { value: 'wrap', label: 'Wrap', title: 'flex-wrap: wrap' },
-      ],
-      onInput: (value) => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        this.drafts.apply(this.el, 'flex-wrap', value)
-        this.refresh()
-        this.onEdited()
-      },
-    })
-    side.append(this.wrapField.root)
-
     grid.append(side)
     controls.append(grid)
 
@@ -809,6 +890,7 @@ export class Panel {
           this.onEdited()
         },
       })
+      familySelect.title = 'font-family'
       this.typeFamilySelect = familySelect
       wrap.append(familySelect)
 
@@ -824,6 +906,7 @@ export class Panel {
           this.onEdited()
         },
       })
+      weightSelect.title = 'font-weight → font-*'
       this.typeWeightSelect = weightSelect
       wrap.append(weightSelect)
     }
@@ -986,6 +1069,7 @@ export class Panel {
         this.onEdited()
       },
     })
+    styleSelect.title = 'border-style → border-solid / border-dashed / border-dotted'
     this.strokeStyleSelect = styleSelect
     row1.append(styleSelect)
 
@@ -1107,9 +1191,9 @@ export class Panel {
       label: 'Align',
       options: [
         { value: 'auto', label: 'Auto' },
-        { value: 'flex-start', label: 'Start' },
-        { value: 'center', label: 'Center' },
-        { value: 'flex-end', label: 'End' },
+        { value: 'flex-start', label: 'Start', title: 'align-self: flex-start → self-start' },
+        { value: 'center', label: 'Center', title: 'align-self: center → self-center' },
+        { value: 'flex-end', label: 'End', title: 'align-self: flex-end → self-end' },
         { value: 'stretch', label: 'Stretch' },
       ],
       onInput: (value) => {

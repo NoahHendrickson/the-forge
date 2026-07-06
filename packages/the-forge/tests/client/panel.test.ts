@@ -236,10 +236,11 @@ describe('Panel', () => {
   it('section order is Layout, Size, Padding, Margin, Typography, Fill, Stroke, Appearance regardless of visibility', () => {
     const { panel } = setup()
     // Sections with an expand button now parent it inside the title row, so title row
-    // textContent includes the '⋯' glyph for expandable sections — compare the leading
-    // label text only (title row's first text-bearing segment) rather than exact equality.
+    // textContent includes the '⋯' glyph for expandable sections (and Layout's title row
+    // also carries the '−' remove-auto-layout button) — compare the leading label text
+    // only (title row's first text-bearing segment) rather than exact equality.
     const titles = [...panel.root.querySelectorAll('.panel-section')].map(
-      (n) => n.textContent?.replace('⋯', '').trim()
+      (n) => n.textContent?.replace('⋯', '').replace('−', '').trim()
     )
     expect(titles).toEqual(['Layout', 'Size', 'Padding', 'Margin', 'Typography', 'Fill', 'Stroke', 'Appearance'])
   })
@@ -257,7 +258,8 @@ describe('Panel', () => {
   it('Layout section TITLE stays visible (but still first) for a non-flex element — empty state is title + add-auto-layout button, no floating headerless button', () => {
     const { panel } = setup()
     const sections = [...panel.root.querySelectorAll('.panel-section')]
-    expect(sections[0].textContent).toBe('Layout')
+    // Title row textContent also carries the '−' remove-auto-layout button.
+    expect(sections[0].textContent).toBe('Layout−')
     expect((sections[0] as HTMLElement).hidden).toBe(false)
     // the layout CONTROLS (direction/gap/align/wrap) are hidden — only the
     // add-auto-layout button is shown alongside the always-visible title
@@ -276,7 +278,8 @@ describe('Panel', () => {
   it('Layout section is visible for a flex element', () => {
     const { panel } = flexSetup()
     const sections = [...panel.root.querySelectorAll('.panel-section')]
-    expect(sections[0].textContent).toBe('Layout')
+    // Title row textContent also carries the '−' remove-auto-layout button.
+    expect(sections[0].textContent).toBe('Layout−')
     expect((sections[0] as HTMLElement).hidden).toBe(false)
   })
 
@@ -291,18 +294,54 @@ describe('Panel', () => {
     expect(side).toBeTruthy()
     // matrix-tile wraps the align-matrix
     expect(tile.querySelector('.align-matrix')).toBeTruthy()
-    // layout-side contains Gap (a .nf) then Wrap (a .seg-field), in that order
+    // layout-side contains only Gap (a .nf) — Wrap moved to the Direction row (Task 2)
     const gapField = side.querySelector('.nf')
-    const wrapField = [...side.querySelectorAll('.seg-field')].find(
-      (n) => n.querySelector('.seg-field-label')?.textContent === 'Wrap'
-    )
     expect(gapField).toBeTruthy()
-    expect(wrapField).toBeTruthy()
     // Direction segment field renders as a full row OUTSIDE the grid (before it)
     const directionField = [...controlsWrap.querySelectorAll('.seg-field')].find(
       (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
     )!
     expect(grid.contains(directionField)).toBe(false)
+  })
+
+  it('direction row is icon pair + wrap toggle; layout-side holds only Gap', () => {
+    const { panel } = flexSetup()
+    const dirField = [...panel.root.querySelectorAll('.seg-field')].find(
+      (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
+    ) as HTMLElement
+    const segs = [...dirField.querySelectorAll('.seg-track .seg')] as HTMLElement[]
+    expect(segs.map((b) => b.textContent)).toEqual(['→', '↓'])
+    expect(segs.map((b) => b.getAttribute('aria-label'))).toEqual(['Horizontal', 'Vertical'])
+    const wrapBtn = dirField.querySelector('[data-wrap-toggle]') as HTMLElement
+    expect(wrapBtn).toBeTruthy()
+    expect(wrapBtn.getAttribute('aria-label')).toBe('Wrap')
+    const side = panel.root.querySelector('.layout-side') as HTMLElement
+    expect(side.querySelector('.seg-field')).toBeNull() // old Wrap segment gone
+    expect(side.querySelector('.nf')).toBeTruthy() // Gap stays
+  })
+
+  it('direction row nests track + wrap toggle in a .seg-cluster (label stays outside)', () => {
+    const { panel } = flexSetup()
+    const dirField = [...panel.root.querySelectorAll('.seg-field')].find(
+      (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
+    ) as HTMLElement
+    const cluster = dirField.querySelector('.seg-cluster') as HTMLElement
+    expect(cluster).toBeTruthy()
+    expect(cluster.querySelector('.seg-track')).toBeTruthy()
+    expect(cluster.querySelector('[data-wrap-toggle]')).toBeTruthy()
+    expect(cluster.querySelector('.seg-field-label')).toBeNull()
+  })
+
+  it('wrap toggle drafts flex-wrap and reflects state', () => {
+    const { el, panel } = flexSetup()
+    const wrapBtn = panel.root.querySelector('[data-wrap-toggle]') as HTMLButtonElement
+    wrapBtn.click()
+    expect(el.style.getPropertyValue('flex-wrap')).toBe('wrap')
+    expect(wrapBtn.classList.contains('seg-active')).toBe(true)
+    expect(wrapBtn.getAttribute('aria-pressed')).toBe('true')
+    wrapBtn.click()
+    expect(el.style.getPropertyValue('flex-wrap')).toBe('nowrap')
+    expect(wrapBtn.classList.contains('seg-active')).toBe(false)
   })
 
   it('non-flex element shows only the add-auto-layout button in Layout section', () => {
@@ -333,7 +372,7 @@ describe('Panel', () => {
       (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
     )!
     const buttons = [...seg.querySelectorAll('.seg')] as HTMLElement[]
-    const column = buttons.find((b) => b.textContent === 'Vertical')!
+    const column = buttons.find((b) => b.getAttribute('aria-label') === 'Vertical')!
     column.click()
     expect(drafts.current(el, 'flex-direction')).toBe('column')
   })
@@ -422,7 +461,9 @@ describe('Panel', () => {
     const seg = [...panel.root.querySelectorAll('.seg-field')].find(
       (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
     )!
-    const columnBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Vertical') as HTMLElement
+    const columnBtn = [...seg.querySelectorAll('.seg')].find(
+      (b) => b.getAttribute('aria-label') === 'Vertical'
+    ) as HTMLElement
     columnBtn.click()
     // after direction change, the matrix should have re-rendered with column mapping;
     // the physical dot that emitted (flex-end, flex-start) in row mode now emits
@@ -433,14 +474,96 @@ describe('Panel', () => {
     expect(dotAfter).toBeTruthy()
   })
 
-  it('wrap segment field drafts flex-wrap', () => {
-    const { el, panel, drafts } = flexSetup()
-    const seg = [...panel.root.querySelectorAll('.seg-field')].find(
-      (n) => n.querySelector('.seg-field-label')?.textContent === 'Wrap'
-    )!
-    const wrapBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Wrap') as HTMLElement
-    wrapBtn.click()
-    expect(drafts.current(el, 'flex-wrap')).toBe('wrap')
+  describe('baseline alignment', () => {
+    it('toggle drafts align-items baseline and carries active state; matrix has no active dot', () => {
+      const { el, panel } = flexSetup()
+      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
+      btn.click()
+      expect(el.style.getPropertyValue('align-items')).toBe('baseline')
+      expect(btn.classList.contains('seg-active')).toBe(true)
+      expect(btn.getAttribute('aria-pressed')).toBe('true')
+      expect(panel.root.querySelector('.am-dot.am-active')).toBeNull()
+    })
+
+    it('clicking active toggle releases baseline (targeted discard of the session draft)', () => {
+      const { el, panel } = flexSetup()
+      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
+      btn.click()
+      expect(el.style.getPropertyValue('align-items')).toBe('baseline')
+      btn.click()
+      expect(el.style.getPropertyValue('align-items')).toBe('')
+      expect(btn.classList.contains('seg-active')).toBe(false)
+      expect(btn.getAttribute('aria-pressed')).toBe('false')
+    })
+
+    it('app-authored baseline (no session draft): toggle starts active, OFF drafts flex-start', () => {
+      const { el, panel, drafts } = flexSetup('align-items: baseline;')
+      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
+      // baseline comes from the app's own CSS — active on show(), with no draft to discard
+      expect(btn.classList.contains('seg-active')).toBe(true)
+      expect(btn.getAttribute('aria-pressed')).toBe('true')
+      expect(drafts.current(el, 'align-items')).toBeNull()
+
+      btn.click()
+
+      expect(drafts.current(el, 'align-items')).toBe('flex-start')
+      expect(btn.classList.contains('seg-active')).toBe(false)
+      expect(btn.getAttribute('aria-pressed')).toBe('false')
+    })
+
+    it('clicking a matrix dot exits baseline', () => {
+      const { el, panel, drafts } = flexSetup()
+      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
+      btn.click()
+      expect(drafts.current(el, 'align-items')).toBe('baseline')
+
+      const dot = panel.root.querySelector('.am-dot') as HTMLElement
+      dot.click()
+
+      expect(drafts.current(el, 'align-items')).toBe(dot.dataset.a)
+      expect(btn.classList.contains('seg-active')).toBe(false)
+    })
+  })
+
+  describe('remove auto layout', () => {
+    it('remove button is visible only when the element is flex (mirror of add)', () => {
+      const { panel: nonFlexPanel } = setup()
+      const nonFlexRemove = nonFlexPanel.root.querySelector('[data-remove-layout]') as HTMLElement
+      const nonFlexAdd = nonFlexPanel.root.querySelector('[data-add-layout]') as HTMLElement
+      expect(nonFlexRemove.hidden).toBe(true)
+      expect(nonFlexAdd.hidden).toBe(false)
+
+      const { panel: flexPanel } = flexSetup()
+      const flexRemove = flexPanel.root.querySelector('[data-remove-layout]') as HTMLElement
+      const flexAdd = flexPanel.root.querySelector('[data-add-layout]') as HTMLElement
+      expect(flexRemove.hidden).toBe(false)
+      expect(flexAdd.hidden).toBe(true)
+    })
+
+    it('added-this-session: remove is a pure undo (discards drafts, nothing left to send)', () => {
+      const { el, panel, drafts } = setup()
+      ;(panel.root.querySelector('[data-add-layout]') as HTMLElement).click()
+      commit(fieldInput(panel, P.GAP), '24')
+      expect(drafts.current(el, 'gap')).toBe('24px')
+
+      ;(panel.root.querySelector('[data-remove-layout]') as HTMLElement).click()
+
+      expect(el.style.display).toBe('')
+      expect(el.style.getPropertyValue('gap')).toBe('')
+      expect(buildChangeRequest(drafts).elements.find((e) => e.selector === '#t')).toBeUndefined()
+    })
+
+    it('stylesheet flex: remove drafts display block and discards other flex drafts', () => {
+      const { el, panel, drafts } = flexSetup()
+      const dot = panel.root.querySelector('.am-dot') as HTMLElement
+      dot.click()
+      expect(drafts.current(el, 'justify-content')).not.toBeNull()
+
+      ;(panel.root.querySelector('[data-remove-layout]') as HTMLElement).click()
+
+      expect(drafts.current(el, 'display')).toBe('block')
+      expect(drafts.current(el, 'justify-content')).toBeNull()
+    })
   })
 
   it('flex-child controls are hidden when parent is not flex', () => {
@@ -1027,6 +1150,15 @@ describe('Panel Typography section', () => {
     select.value = '600'
     select.dispatchEvent(new Event('change', { bubbles: true }))
     expect(drafts.current(el, 'font-weight')).toBe('600')
+  })
+
+  it('typography and stroke selects carry CSS-hint titles', () => {
+    const { panel } = textSetup()
+    expect((panel.root.querySelector('.type-weight') as HTMLElement).title).toBe('font-weight → font-*')
+    expect((panel.root.querySelector('.type-family') as HTMLElement).title).toBe('font-family')
+    expect((panel.root.querySelector('.stroke-style') as HTMLElement).title).toBe(
+      'border-style → border-solid / border-dashed / border-dotted'
+    )
   })
 
   it('S field drafts font-size in px', () => {
@@ -2207,13 +2339,13 @@ describe('Panel multi-select (B6)', () => {
 
   it('Layout section is hidden entirely in multi-select', () => {
     const { panel } = multiSetup()
-    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Layout')!
+    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent?.startsWith('Layout'))!
     expect((layoutTitle as HTMLElement).hidden).toBe(true)
   })
 
   it('Layout section BODY (not just the title) is hidden in multi-select (final review fix #1)', () => {
     const { panel } = multiSetup()
-    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Layout')!
+    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent?.startsWith('Layout'))!
     // Layout's custom body (.layout-section wrap, holding the add-auto-layout button and/or
     // layout-controls) is the very next sibling after the title.
     const bodyWrap = layoutTitle.nextElementSibling as HTMLElement
@@ -2241,7 +2373,7 @@ describe('Panel multi-select (B6)', () => {
     const panel = new Panel(drafts, vi.fn())
     document.body.appendChild(panel.root)
     panel.show(el, buildInspectorData(el))
-    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Layout')!
+    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent?.startsWith('Layout'))!
     expect((layoutTitle as HTMLElement).hidden).toBe(false)
   })
 })

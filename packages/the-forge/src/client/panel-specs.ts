@@ -92,6 +92,10 @@ function utilityPrefixFor(props: string[]): string | undefined {
  * CSS prop list.
  */
 export function cssHintFor(spec: { props: string[] }): string {
+  // font-size maps to text-* on the request path via a special case in tokens.ts (the 'text'
+  // prefix is shared with color utilities, so it can't live in UTILITY_PREFIXES) — mirror it
+  // here so the S field's tooltip names the utility the request will actually emit.
+  if (spec.props.includes('font-size')) return 'font-size → text-*'
   const css = spec.props.join(', ')
   const prefix = utilityPrefixFor(spec.props)
   return prefix ? `${css} → ${prefix}-*` : css

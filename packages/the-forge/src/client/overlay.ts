@@ -239,6 +239,11 @@ button {
  * otherwise be content-sized (~64px) and the track would still crush "Column". */
 [data-flex-direction] { flex-direction: column; align-items: stretch; gap: 3px; flex: 1 1 100%; }
 [data-flex-direction] .seg-field-label { width: auto; }
+/* .seg-cluster holds the track + wrap toggle as a row inside the column-stacked
+ * [data-flex-direction] field — without it the toggle inherits the field's column
+ * axis and stacks below the track instead of sitting inline beside it (browser-only
+ * bug: jsdom can't see flex layout, caught in M-B Task 5's real-browser E2E pass). */
+.seg-cluster { display: flex; align-items: center; gap: 4px; }
 .seg {
   flex: 1; padding: 3px 0; text-align: center; border-radius: 4px;
   background: transparent; color: var(--text-faint); font-size: 10px; white-space: nowrap;
@@ -246,6 +251,9 @@ button {
 }
 .seg:hover { color: var(--text-primary); }
 .seg-active { background: var(--control-active); color: #fff; }
+/* Wrap toggle sits on the Direction row as a sibling of the exclusive track (Task 2) —
+ * a small left margin reads as attached-but-separate rather than a third track option. */
+.wrap-toggle { flex: none; margin-left: 6px; }
 
 .layout-grid { display: flex; gap: 8px; width: 100%; }
 .layout-side { flex: 1; display: flex; flex-direction: column; gap: 6px; }

@@ -38,3 +38,18 @@ export const ActiveSegment: Story = {
     return mountInShadow(field.root, 'panel')
   },
 }
+
+export const IconSegments: Story = {
+  render: () => {
+    const field = new SegmentField({
+      label: 'Direction',
+      options: [
+        { value: 'row', label: '→', ariaLabel: 'Horizontal', title: 'flex-direction: row → flex-row' },
+        { value: 'column', label: '↓', ariaLabel: 'Vertical', title: 'flex-direction: column → flex-col' },
+      ],
+      onInput: () => {},
+    })
+    field.set('row')
+    return mountInShadow(field.root, 'panel')
+  },
+}
