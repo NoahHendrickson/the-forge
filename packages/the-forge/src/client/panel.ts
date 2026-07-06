@@ -72,6 +72,10 @@ export class Panel {
   private head = document.createElement('div')
   private headTag = document.createElement('div')
   private headSrc = document.createElement('div')
+  /** Corner action cluster (Prompt + mode toggle) — a single absolutely-positioned flex
+   * wrapper so .panel-prompt (content-sized) can sit beside .panel-mode (fixed 22px)
+   * without either button needing a guessed fixed offset (overlay.ts .panel-head-actions). */
+  private headActions = document.createElement('div')
   private actions = document.createElement('div')
   private body = document.createElement('div')
   /** The per-selection rebuild target inside `body`. Sections live HERE, the popover
@@ -193,7 +197,9 @@ export class Panel {
     this.modeButton.type = 'button'
     this.promptButton.type = 'button'
     this.promptButton.hidden = true
-    this.head.append(this.promptButton, this.modeButton)
+    this.headActions.className = 'panel-head-actions'
+    this.headActions.append(this.promptButton, this.modeButton)
+    this.head.append(this.headActions)
     this.root.append(this.resizeHandle, this.head, this.actions, this.emptyEl, this.body, this.changesSlot, this.footer)
     // Popovers mount in the BODY (the scroll container), not the root — anchor.offsetTop
     // and the popover's absolute top must share the body's scrolled coordinate space or

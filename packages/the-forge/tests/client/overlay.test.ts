@@ -453,8 +453,11 @@ describe('Dock CSS (docked-panel spec)', () => {
 })
 
 describe('Dock polish CSS (PR #2 follow-ups)', () => {
-  it('panel head reserves right padding so the absolute mode button cannot overlap a long tag', () => {
-    expect(CSS).toContain('#panel .panel-head { position: relative; padding: 12px 36px 10px 12px; }')
+  // Padding widened from 36px (PR #2, mode-button-only) to 96px (prompt-mode) to reserve
+  // room for the whole .panel-head-actions cluster (Prompt + mode button), not just the
+  // mode button alone — see the .panel-head-actions tests below.
+  it('panel head reserves right padding so the absolute action cluster cannot overlap a long tag', () => {
+    expect(CSS).toContain('#panel .panel-head { position: relative; padding: 12px 96px 10px 12px; }')
   })
 })
 
@@ -464,5 +467,23 @@ describe('Overlay CSS prompt box (prompt-mode)', () => {
     expect(CSS).toContain('.prompt-textarea')
     expect(CSS).toContain('.prompt-send')
     expect(CSS).toContain('.panel-prompt')
+  })
+
+  // Finding 1 fix: .panel-head is a block container (position: relative only, so
+  // .panel-mode can corner-anchor) — margin-left: auto on .panel-prompt had no effect.
+  // The fix anchors a shared .panel-head-actions flex wrapper instead, since
+  // .panel-prompt (content-sized "Prompt" label) can't share .panel-mode's fixed 22px
+  // width for a guessed fixed `right:` offset.
+  it('anchors the header action cluster to the corner as a flex row, not .panel-prompt directly', () => {
+    expect(CSS).toMatch(/\.panel-head-actions\s*{[^}]*position:\s*absolute/s)
+    expect(CSS).toMatch(/\.panel-head-actions\s*{[^}]*display:\s*flex/s)
+    expect(CSS).not.toMatch(/\.panel-prompt\s*{[^}]*margin-left:\s*auto/s)
+  })
+
+  // Finding 2 fix: PromptBox mounts outside #panel/#status, so .prompt-send previously
+  // fell back to the light base `button {}` pill. Pin the explicit dark token styling.
+  it('styles .prompt-send with the dark control tokens, not the light base button fallback', () => {
+    expect(CSS).toMatch(/\.prompt-box \.prompt-send\s*{[^}]*background:\s*var\(--control\)/s)
+    expect(CSS).toMatch(/\.prompt-box \.prompt-send:hover\s*{[^}]*background:\s*var\(--control-hover\)/s)
   })
 })

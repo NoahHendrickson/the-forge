@@ -134,17 +134,27 @@ button {
   cursor: col-resize; z-index: 20;
 }
 .panel-resize:hover, .panel-resize:active { background: rgba(13,153,255,0.4); }
+/* .panel-mode's corner anchor moved onto the shared .panel-head-actions wrapper below —
+ * .panel-prompt (content-sized, unlike .panel-mode's fixed 22px) needs a flex sibling to
+ * sit beside rather than a guessed fixed right offset. */
 .panel-mode {
-  position: absolute; top: 10px; right: 10px;
   width: 22px; height: 20px; padding: 0; line-height: 1;
+}
+/* Header corner action cluster (Prompt + mode toggle) — anchored where .panel-mode used
+ * to anchor itself; .panel-head's right padding below reserves room for this whole
+ * cluster, not just the mode button, so a long tag/source line still can't run under it. */
+.panel-head-actions {
+  position: absolute; top: 10px; right: 10px;
+  display: flex; align-items: center; gap: 6px;
 }
 #toggle.dock-open { right: calc(16px + var(--forge-dock-w, ${DEFAULT_WIDTH}px)); }
 .panel-body::-webkit-scrollbar { width: 8px; }
 .panel-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 
-/* Right padding reserves the absolute .panel-mode button's footprint so a long tag
- * (or "No selection") never runs underneath it. */
-#panel .panel-head { position: relative; padding: 12px 36px 10px 12px; }
+/* Right padding reserves the absolute .panel-head-actions cluster's footprint (Prompt +
+ * mode button, not just the mode button alone) so a long tag (or "No selection") never
+ * runs underneath it. */
+#panel .panel-head { position: relative; padding: 12px 96px 10px 12px; }
 #panel .panel-head-tag { font: 600 var(--text-md) var(--font-ui); color: var(--text-primary); }
 /* Dir + tail spans: the DIRECTORY ellipsizes while the filename:line:col tail keeps
  * flex: none — the useful part of a source path is its end, which plain end-ellipsis
@@ -446,7 +456,17 @@ button {
 }
 .prompt-textarea:focus { border-color: var(--accent); }
 .prompt-box .prompt-send { align-self: flex-end; }
-.panel-prompt { margin-left: auto; }
+/* PromptBox mounts as a shadow-root sibling of #panel/#status (see mountPromptBox above),
+ * so .prompt-send falls outside both of those scoped button rules and would otherwise
+ * fall back to the plain base button rule (light pill) — mirror the dark #panel/#status
+ * control idiom explicitly here instead. */
+.prompt-box .prompt-send {
+  background: var(--control); color: var(--text-primary); border: none; border-radius: 6px;
+}
+.prompt-box .prompt-send:hover { background: var(--control-hover); }
+/* .panel-prompt is a layout-only class hook now — position/size comes from the
+ * .panel-head-actions flex wrapper it's placed in (panel.ts); no rule needed here, but the
+ * selector name stays a stable test contract (see panel.test.ts / overlay.test.ts). */
 `
 
 export class Overlay {
