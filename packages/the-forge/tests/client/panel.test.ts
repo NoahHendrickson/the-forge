@@ -972,6 +972,70 @@ describe('Panel', () => {
     expect(drafts.current(child, 'width')).toBeNull()
   })
 
+  it('picking Fixed on an app-CSS-fill element defeats the fill so the pin is real', () => {
+    const { el, panel, drafts } = childSetup()
+    el.style.flexGrow = '1' // app-CSS fill proxy (inline, NOT a draft)
+    panel.refresh()
+    pickSizeMode(panel, P.W, 'Fixed')
+    expect(drafts.current(el, 'width')).toMatch(/^\d+px$/)
+    expect(drafts.current(el, 'flex-grow')).toBe('0')
+    expect(drafts.current(el, 'flex-basis')).toBe('auto')
+    const menu = openSizeMenu(panel, P.W)
+    const checked = [...menu.querySelectorAll('.menu-item')].find((b) => b.querySelector('.menu-check'))!
+    expect(checked.textContent).toContain('Fixed')
+  })
+
+  it('picking Hug on an app-CSS-fill element defeats the fill and reads back Hug', () => {
+    const { el, panel, drafts } = childSetup()
+    el.style.flexGrow = '1'
+    panel.refresh()
+    pickSizeMode(panel, P.W, 'Hug')
+    expect(drafts.current(el, 'width')).toBe('auto')
+    expect(drafts.current(el, 'flex-grow')).toBe('0')
+    expect(drafts.current(el, 'flex-basis')).toBe('auto')
+    const menu = openSizeMenu(panel, P.W)
+    const checked = [...menu.querySelectorAll('.menu-item')].find((b) => b.querySelector('.menu-check'))!
+    expect(checked.textContent).toContain('Hug')
+  })
+
+  it('typing a main-axis size on an app-CSS-fill element defeats the fill (onBeforeApply)', () => {
+    const { el, panel, drafts } = childSetup()
+    el.style.flexGrow = '1'
+    panel.refresh()
+    commit(fieldInput(panel, P.W), '200')
+    expect(drafts.current(el, 'width')).toBe('200px')
+    expect(drafts.current(el, 'flex-grow')).toBe('0')
+    expect(drafts.current(el, 'flex-basis')).toBe('auto')
+  })
+
+  it('typing a cross-axis size never touches flex-grow', () => {
+    const { el, panel, drafts } = childSetup()
+    el.style.flexGrow = '1'
+    panel.refresh()
+    commit(fieldInput(panel, P.H), '80')
+    expect(drafts.current(el, 'height')).toBe('80px')
+    expect(drafts.current(el, 'flex-grow')).toBeNull()
+  })
+
+  it('cross axis reads Fixed when an explicit size defeats app-CSS stretch', () => {
+    const { el, panel } = childSetup()
+    el.style.alignSelf = 'stretch' // app-CSS stretch proxy; child keeps inline height: 50px
+    panel.refresh()
+    const menu = openSizeMenu(panel, P.H)
+    const checked = [...menu.querySelectorAll('.menu-item')].find((b) => b.querySelector('.menu-check'))!
+    expect(checked.textContent).toContain('Fixed')
+  })
+
+  it('picking Fill on the cross axis clears an explicit size so stretch actually applies', () => {
+    const { el, panel, drafts } = childSetup()
+    pickSizeMode(panel, P.H, 'Fill')
+    expect(drafts.current(el, 'align-self')).toBe('stretch')
+    expect(drafts.current(el, 'height')).toBe('auto')
+    const menu = openSizeMenu(panel, P.H)
+    const checked = [...menu.querySelectorAll('.menu-item')].find((b) => b.querySelector('.menu-check'))!
+    expect(checked.textContent).toContain('Fill')
+  })
+
   it('W/H shows the auto keyword when the element authored inline style="width: auto" (no draft)', () => {
     const { panel } = setup(
       `<div data-dc-source="src/Card.tsx:4:7" id="t" style="width: auto; height: 100px;"></div>`

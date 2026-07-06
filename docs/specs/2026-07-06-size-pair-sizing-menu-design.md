@@ -134,3 +134,34 @@ never shows a whisper.
 - Extending Fill/Hug semantics to non-flex elements (width:auto / width:100% inference).
 - A menu-based "remove min/max" action (clearing stays `auto`-keyword in the row).
 - Any change to the request builder, queue, or MCP surface — this is panel-only.
+
+## Amendment (2026-07-06, E2E finding)
+
+Real-browser E2E on the demo app (a Tailwind `flex-1` card) found that the write half must
+defeat app-CSS-authored fill on the main axis, or Fixed/Hug picks and typed sizes visibly
+no-op: `flex-basis: 0%` + grow (from the stylesheet, not a draft) keep winning the main-axis
+sizing even after a px is drafted. The old "app-CSS-authored fill is out of scope" line
+applied to the READ half (whisper honesty) and now applies **only to cross-axis Hug** (see
+below) — the write half defeats it:
+
+- **Fixed/Hug picks (main axis):** after the existing discard + pin (Fixed) or `auto`
+  (Hug), if computed `flex-grow` is still >= 1 (fill survives because it's stylesheet-
+  authored, not drafted), also draft `flex-grow: '0'` and `flex-basis: 'auto'`.
+- **Typing/scrubbing/token-picking a main-axis size** performs the same defeat via an
+  `onBeforeApply` hook on the W/H rows (one shared implementation, `defeatFillIfGrowing`,
+  used by both the typed-value path and the Fixed/Hug menu picks).
+- **Fill pick (cross axis):** an explicit cross size defeats `align-self: stretch` in CSS
+  (stretch only applies when the cross size is auto), so picking Fill also clears an
+  explicit cross size to `auto`. Main axis needs no equivalent — drafted `flex-basis: 0%`
+  already beats an explicit width.
+
+The read half (mode inference) is now axis-split instead of Fill-first on both axes:
+
+- **Main axis (unchanged):** Fill (computed flex-grow >= 1) -> explicit size -> Hug.
+- **Cross axis (fixed regression):** explicit size -> Fill (`align-self: stretch`) -> Hug.
+  The old stretch-first order misreported Fill for an element rendering at a fixed height.
+
+The "app-CSS fill out of scope" carve-out now applies only to **cross-axis Hug**: with
+app-CSS `align-items: stretch` and no explicit size, Hug is unreachable (the mode correctly
+reads Fill, since the element truly stretches) — defeating it would mean drafting
+`align-self: flex-start`, which changes alignment, not just size.

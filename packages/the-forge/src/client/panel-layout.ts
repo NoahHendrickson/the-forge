@@ -13,7 +13,7 @@ import { NumberField } from './controls'
 import { createButton } from './ui/button'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { PanelTokenUi } from './panel-token-ui'
-import { type RowSpec, GAP_SPEC, SIZE_MODES } from './panel-specs'
+import { type RowSpec, GAP_SPEC, SIZE_MODES, defeatFillIfGrowing } from './panel-specs'
 import { fromPx, isFlex, normalizeJustify, normalizeAlign, mainAxisProp, minMaxRowVisible, alignSelfRowOn } from './panel-readers'
 import type { MenuItem } from './ui/menu'
 
@@ -468,16 +468,22 @@ export class LayoutSection {
   }
 
   /**
-   * Mode inference heuristic (kept intentionally simple):
-   * - Fill: either
-   *     - main axis: computed flex-grow >= 1
-   *     - cross axis: computed align-self is 'stretch'
-   *   Checked FIRST and wins outright — picking Fill only ever drafts flex-grow/flex-basis
-   *   or align-self, never the size prop itself, so a stale inline/pre-Fill px would
-   *   otherwise still read as an explicit size and misreport Fixed.
-   * - Fixed: no Fill AND there's an explicit draft OR inline style for this axis's size prop
-   *   (px value authored — the `auto` keyword is excluded; it reads as Hug/Fill).
-   * - Hug: no Fill AND no explicit size draft/inline (default content-based sizing).
+   * Mode inference heuristic (kept intentionally simple), axis-split priority (2026-07-06 E2E
+   * finding — cross axis was regressed by a stretch-first order, see below):
+   * - Main axis: Fill (computed flex-grow >= 1) -> explicit size -> Hug. Fill checked FIRST and
+   *   wins outright — picking Fill only ever drafts flex-grow/flex-basis, never the size prop
+   *   itself, so a stale inline/pre-Fill px would otherwise still read as an explicit size and
+   *   misreport Fixed. Correct because basis 0% + grow genuinely beat an authored width.
+   * - Cross axis: explicit size -> Fill (computed align-self is 'stretch') -> Hug. An explicit
+   *   cross size beats stretch in CSS (stretch only applies when the cross size is auto) — the
+   *   old stretch-first order misreported Fill for an element rendering at a fixed height (T6
+   *   review regression).
+   * - Fixed (either axis): an explicit draft OR inline style for this axis's size prop (px value
+   *   authored — the `auto` keyword is excluded; it reads as Hug/Fill).
+   * - Hug: no explicit size draft/inline and (main axis only) no Fill (default content-based
+   *   sizing). On the cross axis, with app-CSS `align-items: stretch` and no explicit size, Hug
+   *   is unreachable — the mode reads Fill because the element truly stretches. Deliberately out
+   *   of scope: defeating it would mean drafting `align-self: flex-start` and changing alignment.
    */
   // READ half of the size-mode policy — its WRITE half, onSizeModeChange, sits right below.
   private updateSizeMode(el: TaggedElement, sm: BoundSizeMode, main: 'width' | 'height'): void {
@@ -485,7 +491,13 @@ export class LayoutSection {
     const isMain = prop === main
     const computed = getComputedStyle(el)
 
-    let mode: 'fixed' | 'hug' | 'fill'
+    const draft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, prop)
+    const inline = el.style.getPropertyValue(prop)
+    // Hug's own `auto` keyword is NOT an explicit size — counting it made the mode read back
+    // Fixed immediately after the user picked Hug (latent select-era quirk, fixed by the
+    // 2026-07-06 size-pair spec: the whisper label sits on this inference).
+    const hasExplicitSize = (!!draft && draft !== 'auto') || (draft === null && !!inline && inline !== 'auto')
+
     let isFill: boolean
     if (isMain) {
       const grow = Number.parseFloat(computed.flexGrow || '0')
@@ -496,16 +508,11 @@ export class LayoutSection {
       isFill = alignSelfCss === 'stretch'
     }
 
-    if (isFill) {
-      mode = 'fill'
+    let mode: 'fixed' | 'hug' | 'fill'
+    if (isMain) {
+      mode = isFill ? 'fill' : hasExplicitSize ? 'fixed' : 'hug'
     } else {
-      const draft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, prop)
-      const inline = el.style.getPropertyValue(prop)
-      // Hug's own `auto` keyword is NOT an explicit size — counting it made the mode read
-      // back Fixed immediately after the user picked Hug (latent select-era quirk, fixed by
-      // the 2026-07-06 size-pair spec: the whisper label sits on this inference).
-      const hasExplicitSize = (!!draft && draft !== 'auto') || (draft === null && !!inline && inline !== 'auto')
-      mode = hasExplicitSize ? 'fixed' : 'hug'
+      mode = hasExplicitSize ? 'fixed' : isFill ? 'fill' : 'hug'
     }
 
     sm.mode = mode
@@ -518,7 +525,9 @@ export class LayoutSection {
       sm.field.setWhisper(null)
       return
     }
-    const px = Math.round(Number.parseFloat(getComputedStyle(el).getPropertyValue(prop)))
+    // Reuse the computed snapshot taken above instead of a second getComputedStyle(el) call
+    // (approved review nit).
+    const px = Math.round(Number.parseFloat(computed.getPropertyValue(prop)))
     if (Number.isFinite(px)) sm.field.set(px)
     sm.field.setWhisper(mode === 'hug' ? 'Hug' : 'Fill')
   }
@@ -571,11 +580,17 @@ export class LayoutSection {
       if (!Number.isFinite(computedSize)) return
       this.deps.drafts.discard(el, modeProps)
       this.deps.drafts.apply(el, prop, `${computedSize}px`)
+      // A pinned px is moot while flex-basis: 0% + grow still win the main-axis sizing — the
+      // discard above only clears a DRAFTED fill; when the fill comes from the app's own
+      // stylesheet, computed flex-grow is still >= 1 after discard. Figma's Fixed defeats the
+      // fill, it doesn't just record a wish.
+      if (isMain) defeatFillIfGrowing(el, prop, this.deps.drafts)
     } else if (mode === 'hug') {
       // Leaving Fill must retract what Fill drafted (same cleanup contract as the Fixed
       // branch) — a retained flex-grow/stretch keeps the element filling, and the inference
       // would correctly read Fill right back. App-CSS-authored fill (stylesheet flex-grow)
-      // is deliberately out of scope — the whisper then honestly reports Fill.
+      // used to be out of scope here too — the whisper then honestly reported Fill — but E2E
+      // showed Hug must also defeat app-CSS fill on the main axis, or the pick visibly no-ops.
       const modeProps = isMain
         ? ['flex-grow', 'flex-basis']
         : this.deps.drafts.current(el, 'align-self') === 'stretch'
@@ -583,12 +598,18 @@ export class LayoutSection {
           : []
       this.deps.drafts.discard(el, modeProps)
       this.deps.drafts.apply(el, prop, 'auto')
+      if (isMain) defeatFillIfGrowing(el, prop, this.deps.drafts)
     } else if (mode === 'fill') {
       if (isMain) {
         this.deps.drafts.apply(el, 'flex-grow', '1')
         this.deps.drafts.apply(el, 'flex-basis', '0%')
       } else {
         this.deps.drafts.apply(el, 'align-self', 'stretch')
+        // An explicit cross size defeats align-self: stretch in CSS (stretch only applies
+        // when the cross size is auto) — Fill must remove the fixed size, per Figma semantics.
+        // Main axis needs no equivalent: drafted flex-basis: 0% already beats an explicit width.
+        const current = this.deps.drafts.current(el, prop) ?? el.style.getPropertyValue(prop)
+        if (current && current !== 'auto') this.deps.drafts.apply(el, prop, 'auto')
       }
     }
     this.deps.refresh()
