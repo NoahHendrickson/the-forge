@@ -333,6 +333,13 @@ export const UTILITY_PREFIXES: Record<string, string> = {
   'margin-inline': 'mx',
   width: 'w',
   height: 'h',
+  // M-D min/max sizing — Tailwind v4 sizes these off the same numeric spacing scale as w/h.
+  // Named container widths (max-w-md …) are deliberately out of the picker's first pass
+  // (spec M-D); nearest-token resolves numerically.
+  'min-width': 'min-w',
+  'max-width': 'max-w',
+  'min-height': 'min-h',
+  'max-height': 'max-h',
   'border-radius': 'rounded',
   'border-top-left-radius': 'rounded-tl',
   'border-top-right-radius': 'rounded-tr',

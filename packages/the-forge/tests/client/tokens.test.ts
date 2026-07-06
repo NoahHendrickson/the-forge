@@ -128,6 +128,22 @@ describe('suggestUtility', () => {
   })
 })
 
+describe('min/max sizing utilities (M-D)', () => {
+  it('suggestUtility emits min-w-*/max-h-* from the spacing scale', () => {
+    // spacingBasePx 4 in TW: 16px -> step 4
+    expect(suggestUtility('min-width', '16px', TW)).toEqual({ utility: 'min-w-4', tokenExact: true })
+    expect(suggestUtility('max-height', '16px', TW)).toEqual({ utility: 'max-h-4', tokenExact: true })
+  })
+
+  it('does not cross-match w-* and min-w-* class prefixes', () => {
+    // guards the substring hazard both directions: an existing `min-w-4` class must not be
+    // read as a width utility, and `w-4` must not be read as a min-width utility.
+    expect(findExistingUtility('min-w-4 p-2', 'width')).toBeNull()
+    expect(findExistingUtility('w-4 p-2', 'min-width')).toBeNull()
+    expect(findExistingUtility('min-w-4 p-2', 'min-width')).toBe('min-w-4')
+  })
+})
+
 describe('findExistingUtility', () => {
   const cls = 'mt-4 rounded-lg bg-blue-600 px-4 py-2.5 text-sm text-white'
   it('finds the bare utility for a prop', () => {

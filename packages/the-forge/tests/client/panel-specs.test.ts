@@ -19,4 +19,8 @@ describe('cssHintFor', () => {
   it('special-cases font-size to the text-* utility (mirrors request-path mapping in tokens.ts)', () => {
     expect(cssHintFor({ props: ['font-size'] })).toBe('font-size → text-*')
   })
+  it('min/max props inherit utility hints (M-D)', () => {
+    expect(cssHintFor({ props: ['min-width'] })).toBe('min-width → min-w-*')
+    expect(cssHintFor({ props: ['max-height'] })).toBe('max-height → max-h-*')
+  })
 })
