@@ -756,6 +756,7 @@ export class Panel {
         this.onEdited()
       },
     })
+    this.gapField.root.dataset.props = GAP_SPEC.props.join(' ')
     side.append(this.gapField.root)
 
     this.wrapField = new SegmentField({
@@ -1321,6 +1322,9 @@ export class Panel {
           ? () => this.tokenUi.openScalePicker(spec, field, commit)
           : undefined,
     })
+    // Stable machine identity for tests/tooling — labels are designer-facing display text and
+    // may collide across sections (Size H vs Padding H); props are the field's real identity.
+    field.root.dataset.props = spec.props.join(' ')
     const bound: BoundField = { field, spec }
     this.fields.push(bound)
     return bound

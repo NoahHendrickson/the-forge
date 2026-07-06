@@ -12,6 +12,11 @@ import { loadLifecycle, saveLifecycle } from '../../src/client/lifecycle-store'
 // persist across tests within this file (jsdom's `document` is shared per
 // test file, not per test). Track every instance created via setActive so
 // afterEach can deactivate it and avoid leaking listeners into later tests.
+// Field identities (data-props) — labels are display text and are free to change.
+const P = {
+  PY: 'padding-top padding-bottom',
+} as const
+
 const liveModes: DesignMode[] = []
 
 beforeEach(() => {
@@ -1136,9 +1141,9 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
 })
 
 describe('DesignMode layout-ripple wiring (M2b Task 4)', () => {
-  function fieldInput(root: HTMLElement, label: string): HTMLInputElement {
-    const nf = [...root.querySelectorAll('.nf')].find((n) => n.querySelector('.nf-label')!.textContent === label)
-    if (!nf) throw new Error(`no field labeled ${label}`)
+  function fieldInput(root: HTMLElement, props: string): HTMLInputElement {
+    const nf = [...root.querySelectorAll('.nf')].find((n) => (n as HTMLElement).dataset.props === props)
+    if (!nf) throw new Error(`no field with data-props ${props}`)
     return nf.querySelector('input')!
   }
 
@@ -1183,7 +1188,7 @@ describe('DesignMode layout-ripple wiring (M2b Task 4)', () => {
     mode.select(selected)
     const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
 
-    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    commit(fieldInput(mode.panelRoot, P.PY), '40')
     // post-edit reflow: the sibling moved down (simulating the padding push) before
     // the rAF-scheduled diff runs
     stubRect(sibling, { x: 0, y: 60, width: 100, height: 20 })
@@ -1204,7 +1209,7 @@ describe('DesignMode layout-ripple wiring (M2b Task 4)', () => {
     const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
     // the selected element itself also changes rect due to the edit (padding growth) —
     // it must never appear in the ripple set even though it moved.
-    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    commit(fieldInput(mode.panelRoot, P.PY), '40')
     stubRect(selected, { x: 0, y: 0, width: 100, height: 60 })
     stubRect(sibling, { x: 0, y: 90, width: 100, height: 20 })
     runRaf()
@@ -1227,7 +1232,7 @@ describe('DesignMode layout-ripple wiring (M2b Task 4)', () => {
     stubRect(sibling, { x: 0, y: 30, width: 100, height: 20 })
     mode.select(selected)
 
-    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    commit(fieldInput(mode.panelRoot, P.PY), '40')
     stubRect(sibling, { x: 0, y: 60, width: 100, height: 20 })
 
     mode.setActive(false) // exits before the queued rAF runs
@@ -1247,9 +1252,9 @@ describe('DesignMode layout-ripple debounce (M2b Task 4)', () => {
     vi.useRealTimers()
   })
 
-  function fieldInput(root: HTMLElement, label: string): HTMLInputElement {
-    const nf = [...root.querySelectorAll('.nf')].find((n) => n.querySelector('.nf-label')!.textContent === label)
-    if (!nf) throw new Error(`no field labeled ${label}`)
+  function fieldInput(root: HTMLElement, props: string): HTMLInputElement {
+    const nf = [...root.querySelectorAll('.nf')].find((n) => (n as HTMLElement).dataset.props === props)
+    if (!nf) throw new Error(`no field with data-props ${props}`)
     return nf.querySelector('input')!
   }
 
@@ -1290,17 +1295,17 @@ describe('DesignMode layout-ripple debounce (M2b Task 4)', () => {
 
     // Burst: 3 edits within 300ms — the FIRST snapshot (sibling at y=30) should be
     // the baseline the final diff is measured against, not a snapshot re-taken mid-burst.
-    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    commit(fieldInput(mode.panelRoot, P.PY), '10')
     stubRect(sibling, { x: 0, y: 40, width: 100, height: 20 }) // mid-burst noise
     runRaf()
     vi.advanceTimersByTime(100)
-    commit(fieldInput(mode.panelRoot, 'PY'), '20')
+    commit(fieldInput(mode.panelRoot, P.PY), '20')
     stubRect(sibling, { x: 0, y: 50, width: 100, height: 20 }) // mid-burst noise
     runRaf()
     vi.advanceTimersByTime(100)
 
     const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
-    commit(fieldInput(mode.panelRoot, 'PY'), '30')
+    commit(fieldInput(mode.panelRoot, P.PY), '30')
     stubRect(sibling, { x: 0, y: 70, width: 100, height: 20 }) // final settled position
     runRaf()
 
@@ -1341,17 +1346,17 @@ describe('DesignMode layout-ripple debounce (M2b Task 4)', () => {
 
     const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
 
-    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    commit(fieldInput(mode.panelRoot, P.PY), '10')
     stubRect(sibling, { x: 0, y: 30.4, width: 100, height: 20 }) // +0.4px vs previous — sub-threshold
     runRaf()
     vi.advanceTimersByTime(50) // well within the 300ms quiet window
 
-    commit(fieldInput(mode.panelRoot, 'PY'), '20')
+    commit(fieldInput(mode.panelRoot, P.PY), '20')
     stubRect(sibling, { x: 0, y: 30.8, width: 100, height: 20 }) // +0.4px vs previous — sub-threshold
     runRaf()
     vi.advanceTimersByTime(50)
 
-    commit(fieldInput(mode.panelRoot, 'PY'), '30')
+    commit(fieldInput(mode.panelRoot, P.PY), '30')
     stubRect(sibling, { x: 0, y: 31.2, width: 100, height: 20 }) // +0.4px vs previous, +1.2px vs drag-start
     runRaf()
 
@@ -1398,7 +1403,7 @@ describe('DesignMode layout-ripple debounce (M2b Task 4)', () => {
 
     // STEP 1: Select childA and edit it. This snapshots ComponentA's scope (includes siblingA).
     mode.select(childA)
-    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    commit(fieldInput(mode.panelRoot, P.PY), '10')
     // The rAF is queued but NOT yet run — snapshot still in memory
     expect(queue).toHaveLength(1)
 
@@ -1410,7 +1415,7 @@ describe('DesignMode layout-ripple debounce (M2b Task 4)', () => {
     // handleBeforeEdit(childB) should re-snapshot because the element changed, but the
     // buggy code only checks elapsed time, not which element the snapshot was for.
     mode.select(childB)
-    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    commit(fieldInput(mode.panelRoot, P.PY), '10')
     // Now we have TWO rAFs queued: one from childA edit, one from childB edit
     expect(queue).toHaveLength(2)
 
@@ -1455,9 +1460,9 @@ describe('DesignMode layout-ripple multi-select (B6 follow-up)', () => {
     vi.useRealTimers()
   })
 
-  function fieldInput(root: HTMLElement, label: string): HTMLInputElement {
-    const nf = [...root.querySelectorAll('.nf')].find((n) => n.querySelector('.nf-label')!.textContent === label)
-    if (!nf) throw new Error(`no field labeled ${label}`)
+  function fieldInput(root: HTMLElement, props: string): HTMLInputElement {
+    const nf = [...root.querySelectorAll('.nf')].find((n) => (n as HTMLElement).dataset.props === props)
+    if (!nf) throw new Error(`no field with data-props ${props}`)
     return nf.querySelector('input')!
   }
 
@@ -1523,7 +1528,7 @@ describe('DesignMode layout-ripple multi-select (B6 follow-up)', () => {
     const { overlay, mode, siblingA, siblingB, runRaf } = twoScopeSetup()
     const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
 
-    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    commit(fieldInput(mode.panelRoot, P.PY), '40')
     // post-edit reflow in BOTH scopes before the rAF-scheduled diff runs
     stubRect(siblingA, { x: 0, y: 60, width: 100, height: 20 })
     stubRect(siblingB, { x: 400, y: 60, width: 100, height: 20 })
@@ -1546,20 +1551,20 @@ describe('DesignMode layout-ripple multi-select (B6 follow-up)', () => {
     const { overlay, mode, siblingA, siblingB, runRaf } = twoScopeSetup()
     const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
 
-    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    commit(fieldInput(mode.panelRoot, P.PY), '10')
     stubRect(siblingA, { x: 0, y: 30.4, width: 100, height: 20 })
     stubRect(siblingB, { x: 400, y: 30.4, width: 100, height: 20 })
     runRaf()
     vi.advanceTimersByTime(50) // well within the 300ms quiet window
 
-    commit(fieldInput(mode.panelRoot, 'PY'), '20')
+    commit(fieldInput(mode.panelRoot, P.PY), '20')
     stubRect(siblingA, { x: 0, y: 30.8, width: 100, height: 20 })
     stubRect(siblingB, { x: 400, y: 30.8, width: 100, height: 20 })
     runRaf()
     vi.advanceTimersByTime(50)
 
     showRipplesSpy.mockClear()
-    commit(fieldInput(mode.panelRoot, 'PY'), '30')
+    commit(fieldInput(mode.panelRoot, P.PY), '30')
     stubRect(siblingA, { x: 0, y: 31.2, width: 100, height: 20 })
     stubRect(siblingB, { x: 400, y: 31.2, width: 100, height: 20 })
     runRaf()
@@ -1577,7 +1582,7 @@ describe('DesignMode layout-ripple multi-select (B6 follow-up)', () => {
     // per-element calls always failed the rippleSnapshotFor === el reuse check.
     const { mode, siblingA, siblingB, runRaf } = twoScopeSetup()
 
-    commit(fieldInput(mode.panelRoot, 'PY'), '10')
+    commit(fieldInput(mode.panelRoot, P.PY), '10')
     runRaf() // flush the first diff (one legitimate re-measure per sibling)
     vi.advanceTimersByTime(50)
 
@@ -1588,7 +1593,7 @@ describe('DesignMode layout-ripple multi-select (B6 follow-up)', () => {
     siblingA.getBoundingClientRect = () => (measuresA++, rectA)
     siblingB.getBoundingClientRect = () => (measuresB++, rectB)
 
-    commit(fieldInput(mode.panelRoot, 'PY'), '20')
+    commit(fieldInput(mode.panelRoot, P.PY), '20')
     // No rAF flush yet: any measurement so far came from onBeforeEdit re-snapshotting.
     expect(measuresA).toBe(0)
     expect(measuresB).toBe(0)
@@ -1630,7 +1635,7 @@ describe('DesignMode layout-ripple multi-select (B6 follow-up)', () => {
     click(selB, { shiftKey: true })
     const showRipplesSpy = vi.spyOn(overlay, 'showRipples')
 
-    commit(fieldInput(mode.panelRoot, 'PY'), '40')
+    commit(fieldInput(mode.panelRoot, P.PY), '40')
     // BOTH edited elements grow (padding), pushing the sibling down
     stubRect(selA, { x: 0, y: 0, width: 100, height: 60 })
     stubRect(selB, { x: 0, y: 70, width: 100, height: 60 })
