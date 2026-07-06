@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { marginSectionVisible } from '../../src/client/panel-readers'
+import { marginSectionVisible, normalizeAlign } from '../../src/client/panel-readers'
 import { DraftStore } from '../../src/client/drafts'
 import type { TaggedElement } from '../../src/client/source'
 
@@ -29,5 +29,11 @@ describe('marginSectionVisible', () => {
     const drafts = new DraftStore()
     drafts.apply(e, 'margin-top', '0px')
     expect(marginSectionVisible(e, drafts)).toBe(true)
+  })
+})
+
+describe('normalizeAlign', () => {
+  it('normalizeAlign passes baseline through untouched (baseline is a real matrix-less state)', () => {
+    expect(normalizeAlign('baseline')).toBe('baseline')
   })
 })

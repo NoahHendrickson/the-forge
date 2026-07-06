@@ -101,6 +101,7 @@ export class Panel {
   private directionField: SegmentField | null = null
   private gapField: NumberField | null = null
   private alignMatrix: AlignMatrix | null = null
+  private baselineToggle: HTMLButtonElement | null = null
   private wrapToggle: HTMLButtonElement | null = null
   private addLayoutBtn: HTMLElement | null = null
   private removeLayoutBtn: HTMLButtonElement | null = null
@@ -430,6 +431,7 @@ export class Panel {
     }
 
     this.alignMatrix?.set(normalizeJustify(justify), normalizeAlign(align), direction, spaceBetween)
+    this.baselineToggle?.classList.toggle('seg-active', normalizeAlign(align) === 'baseline')
   }
 
   private refreshFlexChild(el: TaggedElement, computed: CSSStyleDeclaration): void {
@@ -561,6 +563,7 @@ export class Panel {
     this.directionField = null
     this.gapField = null
     this.alignMatrix = null
+    this.baselineToggle = null
     this.wrapToggle = null
     this.addLayoutBtn = null
     this.removeLayoutBtn = null
@@ -765,6 +768,32 @@ export class Panel {
       },
     })
     tile.append(this.alignMatrix.root)
+
+    // Figma keeps baseline out of the 9-dot matrix (it's an 'align text baseline' extra) —
+    // a small toggle under the matrix drafts it. Toggling OFF discards the session draft
+    // (stylesheet reality returns); if baseline came from the app's own CSS there is no
+    // draft to discard, so OFF drafts flex-start (the normalize default) instead.
+    const baselineBtn = createButton({ label: 'Baseline' })
+    baselineBtn.classList.add('seg')
+    baselineBtn.setAttribute('data-align-baseline', '')
+    baselineBtn.title = 'align-items: baseline → items-baseline'
+    baselineBtn.addEventListener('click', () => {
+      if (!this.el) return
+      this.onBeforeEdit(this.el)
+      const active = this.currentValue(this.el, 'align-items', getComputedStyle(this.el)) === 'baseline'
+      if (!active) {
+        this.drafts.apply(this.el, 'align-items', 'baseline')
+      } else if (this.drafts.current(this.el, 'align-items') !== null) {
+        this.drafts.discard(this.el, ['align-items'])
+      } else {
+        this.drafts.apply(this.el, 'align-items', 'flex-start')
+      }
+      this.refresh()
+      this.onEdited()
+    })
+    this.baselineToggle = baselineBtn
+    tile.append(baselineBtn)
+
     grid.append(tile)
 
     const side = document.createElement('div')

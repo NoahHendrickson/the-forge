@@ -462,6 +462,40 @@ describe('Panel', () => {
     expect(dotAfter).toBeTruthy()
   })
 
+  describe('baseline alignment', () => {
+    it('toggle drafts align-items baseline and carries active state; matrix has no active dot', () => {
+      const { el, panel } = flexSetup()
+      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
+      btn.click()
+      expect(el.style.getPropertyValue('align-items')).toBe('baseline')
+      expect(btn.classList.contains('seg-active')).toBe(true)
+      expect(panel.root.querySelector('.am-dot.am-active')).toBeNull()
+    })
+
+    it('clicking active toggle releases baseline (targeted discard of the session draft)', () => {
+      const { el, panel } = flexSetup()
+      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
+      btn.click()
+      expect(el.style.getPropertyValue('align-items')).toBe('baseline')
+      btn.click()
+      expect(el.style.getPropertyValue('align-items')).toBe('')
+      expect(btn.classList.contains('seg-active')).toBe(false)
+    })
+
+    it('clicking a matrix dot exits baseline', () => {
+      const { el, panel, drafts } = flexSetup()
+      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
+      btn.click()
+      expect(drafts.current(el, 'align-items')).toBe('baseline')
+
+      const dot = panel.root.querySelector('.am-dot') as HTMLElement
+      dot.click()
+
+      expect(drafts.current(el, 'align-items')).toBe(dot.dataset.a)
+      expect(btn.classList.contains('seg-active')).toBe(false)
+    })
+  })
+
   describe('remove auto layout', () => {
     it('remove button is visible only when the element is flex (mirror of add)', () => {
       const { panel: nonFlexPanel } = setup()
