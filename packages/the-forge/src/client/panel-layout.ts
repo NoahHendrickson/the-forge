@@ -481,7 +481,10 @@ export class LayoutSection {
     const isMain = prop === main
     const draft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, prop)
     const inline = el.style.getPropertyValue(prop)
-    const hasExplicitSize = !!draft || !!inline
+    // Hug's own `auto` keyword is NOT an explicit size — counting it made the mode read
+    // back Fixed immediately after the user picked Hug (latent select-era quirk, fixed by
+    // the 2026-07-06 size-pair spec: the whisper label sits on this inference).
+    const hasExplicitSize = (!!draft && draft !== 'auto') || (draft === null && !!inline && inline !== 'auto')
 
     if (hasExplicitSize) {
       sm.mode = 'fixed'
@@ -556,6 +559,16 @@ export class LayoutSection {
       this.deps.drafts.discard(el, modeProps)
       this.deps.drafts.apply(el, prop, `${computedSize}px`)
     } else if (mode === 'hug') {
+      // Leaving Fill must retract what Fill drafted (same cleanup contract as the Fixed
+      // branch) — a retained flex-grow/stretch keeps the element filling, and the inference
+      // would correctly read Fill right back. App-CSS-authored fill (stylesheet flex-grow)
+      // is deliberately out of scope — the whisper then honestly reports Fill.
+      const modeProps = isMain
+        ? ['flex-grow', 'flex-basis']
+        : this.deps.drafts.current(el, 'align-self') === 'stretch'
+          ? ['align-self']
+          : []
+      this.deps.drafts.discard(el, modeProps)
       this.deps.drafts.apply(el, prop, 'auto')
     } else if (mode === 'fill') {
       if (isMain) {

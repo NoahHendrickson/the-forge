@@ -826,6 +826,33 @@ describe('Panel', () => {
     expect(drafts.current(el, 'height')).not.toBe('auto')
   })
 
+  it('after picking Hug the menu reads Hug back, not Fixed (auto draft is not an explicit size)', () => {
+    const { panel } = childSetup()
+    pickSizeMode(panel, P.H, 'Hug')
+    const menu = openSizeMenu(panel, P.H)
+    const hugItem = [...menu.querySelectorAll('.menu-item')].find((b) => b.textContent?.startsWith('Hug'))!
+    expect(hugItem.querySelector('.menu-check')).toBeTruthy()
+  })
+
+  it('Fill then Hug retracts the drafted flex-grow/flex-basis (main axis)', () => {
+    const { el, panel, drafts } = childSetup()
+    pickSizeMode(panel, P.W, 'Fill')
+    expect(drafts.current(el, 'flex-grow')).toBe('1')
+    pickSizeMode(panel, P.W, 'Hug')
+    expect(drafts.current(el, 'flex-grow')).toBeNull()
+    expect(drafts.current(el, 'flex-basis')).toBeNull()
+    expect(drafts.current(el, 'width')).toBe('auto')
+  })
+
+  it('Fill then Hug on the cross axis retracts only the stretch Fill wrote', () => {
+    const { el, panel, drafts } = childSetup()
+    pickSizeMode(panel, P.H, 'Fill')
+    expect(drafts.current(el, 'align-self')).toBe('stretch')
+    pickSizeMode(panel, P.H, 'Hug')
+    expect(drafts.current(el, 'align-self')).toBeNull()
+    expect(drafts.current(el, 'height')).toBe('auto')
+  })
+
   it('cross-axis Fixed preserves a user-drafted align-self (only discards it when Fill wrote "stretch")', () => {
     const { el, panel, drafts } = childSetup()
     const seg = panel.root.querySelector('[data-align-self]')!
