@@ -378,7 +378,7 @@ const BORDER_STYLE_KEYWORDS: Record<string, string> = {
 // Props that reach suggestUtility carrying a border-style value: the collapsed synthetic prop
 // (all four sides equal — the common case) plus the four longhands (unequal sides, so
 // request.ts's collapse() leaves them separate — see COLLAPSE in request.ts).
-const BORDER_STYLE_PROPS = new Set([
+const BORDER_STYLE_SUGGEST_PROPS = new Set([
   'border-style',
   'border-top-style',
   'border-right-style',
@@ -490,7 +490,7 @@ export function suggestUtility(
     return suggestFontWeightUtility(css)
   }
 
-  if (BORDER_STYLE_PROPS.has(prop)) {
+  if (BORDER_STYLE_SUGGEST_PROPS.has(prop)) {
     if (theme.spacingBasePx === null) return null
     const utility = BORDER_STYLE_KEYWORDS[css.trim().toLowerCase()]
     return utility ? { utility, tokenExact: true } : null

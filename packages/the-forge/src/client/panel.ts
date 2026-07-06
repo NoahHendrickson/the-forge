@@ -122,6 +122,7 @@ export class Panel {
   private strokeRemoveBtn: HTMLButtonElement | null = null
   private strokeRowsWrap: HTMLElement | null = null
   private strokeExpandBtn: HTMLElement | null = null
+  private strokeExpandKey: string | null = null
   private strokeExpandWrap: HTMLElement | null = null
 
   // Selection colors (B6, multi-select only) — section title + rows wrap, rebuilt per show().
@@ -448,8 +449,10 @@ export class Panel {
     if (this.strokeExpandWrap) {
       // An empty stroke has nothing to fine-tune: force the BT/BR/BB/BL wrap closed, but
       // restore the user's sticky expandState when the stroke comes back (remove → add
-      // round-trip must not silently reset an opened ⋯).
-      this.strokeExpandWrap.hidden = strokeEmpty || !(this.expandState.get('stroke') ?? false)
+      // round-trip must not silently reset an opened ⋯). Keyed by the captured spec
+      // expandKey, never a literal — see the buildBody capture comment.
+      const key = this.strokeExpandKey
+      this.strokeExpandWrap.hidden = strokeEmpty || key === null || !(this.expandState.get(key) ?? false)
     }
 
     if (this.strokeStyleSelect) {
@@ -504,6 +507,7 @@ export class Panel {
     this.strokeRemoveBtn = null
     this.strokeRowsWrap = null
     this.strokeExpandBtn = null
+    this.strokeExpandKey = null
     this.strokeExpandWrap = null
     this.selectionColorsTitle = null
     this.selectionColorsRows = null
@@ -622,7 +626,10 @@ export class Panel {
       if (section.custom === 'stroke') {
         // appendExpandRows just appended the ⋯ to the title and pushed expandWrap last —
         // refreshFillStroke needs both to hide the whole fine-tune affordance on an empty stroke.
-        this.strokeExpandBtn = title.querySelector<HTMLButtonElement>('[data-expand="stroke"]')
+        // The key is read off the spec (not a literal) so a spec rename can't silently break
+        // the expand-state restore on a remove→add round-trip (PR #20 review, finding 3).
+        this.strokeExpandKey = section.expandKey ?? null
+        this.strokeExpandBtn = title.querySelector<HTMLButtonElement>(`[data-expand="${section.expandKey}"]`)
         this.strokeExpandWrap = sectionBodyEls[sectionBodyEls.length - 1]
       }
 
