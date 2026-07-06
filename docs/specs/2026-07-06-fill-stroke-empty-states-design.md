@@ -48,7 +48,7 @@ Both go through the standard `onBeforeEdit` → `drafts.apply` → `refresh` →
 
 ## Downstream
 
-Nothing new. Drafts flow through the existing request builder, queue, dispatch, and verifier untouched. No server, MCP, or request-format changes.
+Drafts flow through the existing request builder, queue, dispatch, and verifier. No server, MCP, or request-format changes. One request-builder addition rode along (final-review finding): `suggestUtility` gained a border-style keyword mapping (`none → border-none`, `solid/dashed/dotted` likewise) so stroke removal and the style select emit the token-first class delta this spec promises — previously those deltas carried no utility suggestion.
 
 ## Testing
 
