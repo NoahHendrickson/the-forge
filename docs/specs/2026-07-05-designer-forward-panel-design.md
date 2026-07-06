@@ -85,11 +85,12 @@ Four milestones, each its own dated plan in `docs/plans/` and its own feature br
   changes.
 - **Tooltips everywhere.** `cssHintFor(spec)` (props + `utilityPrefixFor`) → `title` attr on
   every row label, segment, select, and the section titles that need explaining (Margin).
-- **Margin visibility.** `SectionSpec.visible` for Margin, evaluated **at selection time and
-  latched**: shown iff any of the four computed margins is non-zero when the element is
-  selected, OR any margin prop currently has a draft. The latch prevents the section from
-  vanishing mid-edit when a user scrubs a margin to 0 (computed would read 0 and un-render the
-  section under the user's pointer). Re-evaluated on selection change only.
+- **Margin visibility.** `SectionSpec.visible` for Margin, evaluated **on every `refresh()`**:
+  shown iff any of the four computed margins is non-zero, OR any margin prop currently has a
+  live draft. The draft clause is what prevents the section from vanishing mid-edit when a user
+  scrubs a margin to 0 (computed alone would read 0 and un-render the section under the user's
+  pointer) — the same mid-edit guarantee as a selection-time latch, but without any
+  selection-scoped state to keep in sync.
 - Panel CSS class names untouched (test hooks — extend, don't rename).
 
 ### M-B — Auto-layout cluster rework
