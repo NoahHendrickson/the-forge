@@ -9,6 +9,7 @@ import {
   renderMarkdown,
   renderPromptMarkdown,
   type PromptRequest,
+  REMOVE_AUTO_LAYOUT_INTENT,
 } from '../../src/client/request'
 import type { TaggedElement } from '../../src/client/source'
 import { resetTokensCache, type Theme } from '../../src/client/tokens'
@@ -481,6 +482,16 @@ line2 \`code\`</button>`
     expect(md).toContain(
       'remove flex/inline-flex/flex-row/flex-col/flex-wrap/gap-*/justify-*/items-* classes rather than adding `display: block`'
     )
+  })
+
+  it('builder stamps REMOVE_AUTO_LAYOUT_INTENT on the display change (renderer stays policy-free)', () => {
+    document.body.innerHTML = `<div data-dc-source="src/Box.tsx:1:1" id="box" style="display: flex;"></div>`
+    const el = document.getElementById('box')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(el, 'display', 'block')
+    const req = buildChangeRequest(store, PLAIN)
+    const displayChange = req.elements[0].changes.find((c) => c.property === 'display')!
+    expect(displayChange.intent).toBe(REMOVE_AUTO_LAYOUT_INTENT)
   })
 })
 
