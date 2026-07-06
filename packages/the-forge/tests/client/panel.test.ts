@@ -43,6 +43,12 @@ const P = {
   STROKE_W: 'border-top-width border-right-width border-bottom-width border-left-width',
 } as const
 
+// Section title rows carry glyph buttons — '⋯' expand, '−' remove, '+' add (fill/stroke
+// empty states) — strip all of them before comparing the label text.
+function titleText(n: Element): string {
+  return (n.textContent ?? '').replace(/[⋯−+]/g, '').trim()
+}
+
 function fieldInput(panel: Panel, props: string): HTMLInputElement {
   const nf = [...panel.root.querySelectorAll('.nf')].find((n) => (n as HTMLElement).dataset.props === props)
   if (!nf) throw new Error(`no field with data-props ${props}`)
@@ -244,7 +250,7 @@ describe('Panel', () => {
     // also carries the '−' remove-auto-layout button) — compare the leading label text
     // only (title row's first text-bearing segment) rather than exact equality.
     const titles = [...panel.root.querySelectorAll('.panel-section')].map(
-      (n) => n.textContent?.replace('⋯', '').replace('−', '').trim()
+      (n) => titleText(n)
     )
     expect(titles).toEqual(['Layout', 'Margin', 'Typography', 'Fill', 'Stroke', 'Appearance'])
   })
@@ -266,7 +272,7 @@ describe('Panel', () => {
     const sections = [...panel.root.querySelectorAll('.panel-section')]
     // Title row textContent also carries the '−' remove-auto-layout button and (since M-C)
     // the '⋯' padding-expand button — strip both glyphs before comparing the label.
-    expect(sections[0].textContent?.replace('−', '').replace('⋯', '')).toBe('Layout')
+    expect(titleText(sections[0])).toBe('Layout')
     expect((sections[0] as HTMLElement).hidden).toBe(false)
     // the layout CONTROLS (direction/gap/align/wrap) are hidden — only the
     // add-auto-layout button is shown alongside the always-visible title
@@ -286,7 +292,7 @@ describe('Panel', () => {
     const { panel } = flexSetup()
     const sections = [...panel.root.querySelectorAll('.panel-section')]
     // Title row textContent also carries the '−' remove-auto-layout button and '⋯' padding-expand.
-    expect(sections[0].textContent?.replace('−', '').replace('⋯', '')).toBe('Layout')
+    expect(titleText(sections[0])).toBe('Layout')
     expect((sections[0] as HTMLElement).hidden).toBe(false)
   })
 
@@ -1287,7 +1293,7 @@ describe('Panel Typography section', () => {
 
   function typographySection(panel: Panel): HTMLElement {
     return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Typography'
+      (n) => titleText(n) === 'Typography'
     ) as HTMLElement
   }
 
@@ -1313,7 +1319,7 @@ describe('Panel Typography section', () => {
   it('sits between Margin and Fill in stable DOM order', () => {
     const { panel } = textSetup()
     const titles = [...panel.root.querySelectorAll('.panel-section')].map(
-      (n) => n.textContent?.replace('⋯', '').trim()
+      (n) => titleText(n)
     )
     const marginIdx = titles.indexOf('Margin')
     const typographyIdx = titles.indexOf('Typography')
@@ -1425,7 +1431,7 @@ describe('Panel Typography section', () => {
 describe('Panel Fill section', () => {
   function fillSection(panel: Panel): HTMLElement {
     return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Fill'
+      (n) => titleText(n) === 'Fill'
     ) as HTMLElement
   }
 
@@ -1538,7 +1544,7 @@ describe('Panel Fill section', () => {
 describe('Panel Stroke section', () => {
   function strokeSection(panel: Panel): HTMLElement {
     return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+      (n) => titleText(n) === 'Stroke'
     ) as HTMLElement
   }
 
@@ -1629,7 +1635,7 @@ describe('Panel Stroke section', () => {
 describe('Panel color rows + token-btn icon (T5)', () => {
   function fillSection(panel: Panel): HTMLElement {
     return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Fill'
+      (n) => titleText(n) === 'Fill'
     ) as HTMLElement
   }
 
@@ -1642,7 +1648,7 @@ describe('Panel color rows + token-btn icon (T5)', () => {
 
   function strokeSection(panel: Panel): HTMLElement {
     return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+      (n) => titleText(n) === 'Stroke'
     ) as HTMLElement
   }
 
@@ -2619,7 +2625,7 @@ describe('Margin section disclosure', () => {
     // Margin's title row parents the expand button, so textContent includes the '⋯'
     // glyph — strip it before comparing the leading label text.
     return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Margin'
+      (n) => titleText(n) === 'Margin'
     ) as HTMLElement
   }
 
@@ -2714,14 +2720,14 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
   }
 
   function sectionTitles(panel: Panel): string[] {
-    return [...panel.root.querySelectorAll('.panel-section')].map((n) => n.textContent?.replace('⋯', '').trim() ?? '')
+    return [...panel.root.querySelectorAll('.panel-section')].map((n) => titleText(n))
   }
 
   it('Fill and Stroke section titles are hidden in multi-select', () => {
     const { panel } = multiSetup('background-color: red;', 'background-color: blue;')
     const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Fill')!
     const strokeTitleEl = [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+      (n) => titleText(n) === 'Stroke'
     )!
     expect((fillTitle as HTMLElement).hidden).toBe(true)
     expect((strokeTitleEl as HTMLElement).hidden).toBe(true)
@@ -2731,7 +2737,7 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
     const { panel } = multiSetup('background-color: red;', 'background-color: blue;')
     const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Fill')!
     const strokeTitleEl = [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+      (n) => titleText(n) === 'Stroke'
     )!
     const fillBody = fillTitle.nextElementSibling as HTMLElement
     expect(fillBody.classList.contains('panel-rows')).toBe(true)
