@@ -119,6 +119,7 @@ const MUTATING_PATHS = new Set([
   '/__the-forge/mark',
   '/__the-forge/dispatch',
   '/__the-forge/wait',
+  '/__the-forge/unwatch',
 ])
 
 export interface DispatchConfig {
@@ -267,6 +268,14 @@ export function createForgeMiddleware(
       res.on('close', cancel)
       promise.then((waitResponse) => send(res, 200, waitResponse))
       return
+    }
+
+    if (pathname === '/__the-forge/unwatch') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      // The strip's ✕ (2026-07-05 watcher-unlink spec). No body — the hub knows its own
+      // watcher. Returns the post-unlink state so the client can render without re-polling.
+      watcherHub.unlink()
+      return send(res, 200, { watcher: watcherHub.state() })
     }
 
     if (pathname === '/__the-forge/dispatch') {
