@@ -352,6 +352,12 @@ button {
 // `#panel` prefix exists purely to out-rank `#panel .panel-rows`'s own (1,0,1) specificity —
 // without it this (0,2,0) rule lost the cascade and the rows sat ~18.5px too far right (E2E finding).
 `#panel .layout-section .panel-rows { padding: 0; }
+` +
+// The section body is class="panel-rows layout-section", so plain .layout-section (0,1,0)
+// loses its stretch to #panel .panel-rows's align-items: center (1,0,1) — this #panel-prefixed
+// override (1,2,0) out-ranks it. Same specificity trap as the min/max padding rule above
+// (browser-verified E2E finding; jsdom can't see it).
+`#panel .layout-section.panel-rows { align-items: stretch; }
 
 .type-family { width: 100%; }
 .type-row { display: flex; gap: 4px; width: 100%; }
