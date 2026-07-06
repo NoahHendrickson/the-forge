@@ -11,7 +11,7 @@ export interface QueueItemLike {
 export type WaitOutcome =
   | { kind: 'items'; items: QueueItemLike[] }
   | { kind: 'empty' }
-  | { kind: 'stop'; reason: 'idle' | 'replaced' | 'no-server' }
+  | { kind: 'stop'; reason: 'idle' | 'replaced' | 'no-server' | 'unlinked' }
   | { kind: 'unreachable' }
 
 export interface ForgeBackend {
@@ -68,12 +68,14 @@ const TOOLS = [
  * list, which mirrors pull_design_edits' existing reminder format. */
 const WAIT_EMPTY_TEXT =
   'No design edits yet. Call wait_for_design_edits again now to keep watching. Do not add commentary between calls.'
-const WAIT_STOP_TEXTS: Record<'idle' | 'replaced' | 'no-server', string> = {
+const WAIT_STOP_TEXTS: Record<'idle' | 'replaced' | 'no-server' | 'unlinked', string> = {
   idle: 'Watching stopped — no design activity for a while. Tell the user: watching paused; run /forge-watch to resume. Do not call wait_for_design_edits again unless the user asks.',
   replaced:
     'Watching stopped — another session took over watching this project. Do not call wait_for_design_edits again unless the user asks.',
   'no-server':
     'No running dev server found. Tell the user to start their Vite dev server, then run /forge-watch again. Do not call wait_for_design_edits until then.',
+  unlinked:
+    'Watching stopped — the user unlinked this session from the design panel. Run /forge-watch to re-link if asked. Do not call wait_for_design_edits again unless the user asks.',
 }
 const WAIT_UNREACHABLE_TEXT =
   'The dev server did not respond. Wait a few seconds, then call wait_for_design_edits once more; if it fails again, stop watching and tell the user to run /forge-watch when the dev server is back.'
