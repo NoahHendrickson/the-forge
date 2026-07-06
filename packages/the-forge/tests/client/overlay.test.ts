@@ -14,6 +14,15 @@ beforeEach(() => {
 })
 
 describe('Overlay CSS (Track A visibility correctness)', () => {
+  it('ships no comment prose in the CSS string — TS comments belong BETWEEN template segments', () => {
+    // A `//` line inside the template literal is not a CSS comment: the browser's error
+    // recovery swallows the entire next rule (a pasted-inside comment silently killed
+    // .matrix-tile — user-reported). Line-start match only: data-URI `http://` is legit.
+    expect(CSS).not.toMatch(/(^|\n)\s*\/\//)
+    // /* */ would parse, but it ships as bundle bytes — the whole point of the migration.
+    expect(CSS).not.toContain('/*')
+  })
+
   it('declares a shadow-root-wide [hidden] rule as the very first rule, forcing display:none regardless of other selectors', () => {
     const trimmed = CSS.trim()
     // Must be the first rule in the stylesheet so nothing declared later can outrank it.
