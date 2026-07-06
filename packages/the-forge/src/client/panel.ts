@@ -735,6 +735,17 @@ export class Panel {
     this.directionField.root.setAttribute('data-flex-direction', '')
     controls.append(this.directionField.root)
 
+    // [data-flex-direction] stacks the field column-wise (label above content) so
+    // "Direction" doesn't crush the track — but that same column axis would stack the
+    // wrap toggle BELOW the track instead of beside it. A .seg-cluster row wrapper holds
+    // track + toggle so they stay inline while the outer field still stacks label vs
+    // cluster (browser-verified: M-B Task 5 caught the toggle rendering on its own row).
+    const track = this.directionField.root.querySelector('.seg-track') as HTMLElement
+    const cluster = document.createElement('div')
+    cluster.className = 'seg-cluster'
+    track.replaceWith(cluster)
+    cluster.append(track)
+
     // Wrap lives on the Direction row (Figma UI3 grouping) as an independent toggle —
     // it is NOT part of the exclusive direction segment, so it's a sibling of the track.
     const wrapBtn = createButton({ label: '↩' })
@@ -751,7 +762,7 @@ export class Panel {
       this.onEdited()
     })
     this.wrapToggle = wrapBtn
-    this.directionField.root.append(wrapBtn)
+    cluster.append(wrapBtn)
 
     const grid = document.createElement('div')
     grid.className = 'layout-grid'
