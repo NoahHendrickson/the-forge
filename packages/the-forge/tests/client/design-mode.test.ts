@@ -2317,3 +2317,29 @@ describe('boot restore guard against corrupt storage (final-review F3)', () => {
     expect(mode.active).toBe(true)
   })
 })
+
+describe('watcher unlink wiring', () => {
+  it('✕ POSTs /unwatch with the secret header, then re-polls watcher state immediately', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    ;(globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__ = { secret: 's3cret', agent: 'claude-code' }
+    try {
+      const { overlay, mode } = fullSetup()
+      mode.setActive(true) // watch poller only runs while design mode is on
+      overlay.unlinkButton.click()
+      await new Promise((r) => setTimeout(r, 5)) // fetch .then chain + the re-poll's 0ms timer
+      expect(fetchMock).toHaveBeenCalledWith('/__the-forge/unwatch', {
+        method: 'POST',
+        headers: { 'X-Forge-Secret': 's3cret' },
+      })
+      // Re-poll: at least one status probe AFTER the unwatch call (setActive fired the first).
+      const calls = fetchMock.mock.calls.map((c) => c[0])
+      const unwatchIndex = calls.indexOf('/__the-forge/unwatch')
+      expect(calls.slice(unwatchIndex + 1)).toContain('/__the-forge/status?ids=')
+    } finally {
+      delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
+    }
+  })
+})

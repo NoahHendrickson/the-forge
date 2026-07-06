@@ -209,6 +209,22 @@ export class DesignMode {
         .then(() => this.flashButton(overlay.copyButton, 'Copied ✓', 'Copy for agent'))
         .catch(() => this.flashButton(overlay.copyButton, 'Copy failed', 'Copy for agent'))
     })
+    overlay.unlinkButton.addEventListener('click', () => {
+      // The strip's ✕ (2026-07-05 watcher-unlink spec): stop the linked /forge-watch loop
+      // (or dismiss the asleep hint) server-side. Fire-and-forget with a same-shape catch —
+      // a failed unlink leaves the indicator as-is and the next 5s poll re-syncs anyway.
+      void fetch('/__the-forge/unwatch', { method: 'POST', headers: forgeSecretHeaders() })
+        .then((res) => {
+          if (!res.ok || !this.active) return
+          // Immediate re-poll instead of waiting out WATCH_POLL_MS: stop() resets the cached
+          // state to 'none' and start() probes on a 0ms tick, so the strip flips to
+          // "Not linked" right away and the server confirms within the same tick.
+          this.watch.stop()
+          this.watch.start()
+          this.refreshStatus()
+        })
+        .catch(() => {})
+    })
     overlay.compareAllButton.addEventListener('click', () => {
       this.drafts.compareAll(!this.drafts.isComparingAll())
       this.panel.refresh()
