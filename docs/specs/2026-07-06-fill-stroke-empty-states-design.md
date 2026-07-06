@@ -20,6 +20,8 @@ Refresh-driven toggle inside `Panel` (`src/client/panel.ts`). The +/− buttons 
 
 Both predicates read through `currentValue` (draft wins over computed, except during Compare), so a drafted fill flips the section to its populated state immediately, and Compare mode shows the *before* reality — consistent with every other Compare behavior.
 
+**Accepted edge:** `fillIsEmpty` reads only `background-color` — an element painted solely by a `background-image`/gradient still shows the Fill empty state. Accepted: the panel doesn't manage backgrounds beyond `background-color`.
+
 ## UI states
 
 **Empty:**

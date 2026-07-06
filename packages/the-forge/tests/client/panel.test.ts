@@ -1689,6 +1689,24 @@ describe('Panel Stroke section', () => {
     expect((panel.root.querySelector('[data-expand="stroke"]') as HTMLElement).hidden).toBe(true)
   })
 
+  it('title glyph order: Fill is − then +; Stroke is − then + then ⋯', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => titleText(n) === 'Fill'
+    ) as HTMLElement
+    const fillRemove = fillTitle.querySelector('[data-remove-fill]') as HTMLElement
+    const fillAdd = fillTitle.querySelector('[data-add-fill]') as HTMLElement
+    // DOCUMENT_POSITION_FOLLOWING (4) means fillAdd comes after fillRemove in document order.
+    expect(fillRemove.compareDocumentPosition(fillAdd) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    const strokeTitle = strokeSection(panel)
+    const strokeRemove = strokeTitle.querySelector('[data-remove-stroke]') as HTMLElement
+    const strokeAdd = strokeTitle.querySelector('[data-add-stroke]') as HTMLElement
+    const strokeExpand = strokeTitle.querySelector('[data-expand="stroke"]') as HTMLElement
+    expect(strokeRemove.compareDocumentPosition(strokeAdd) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(strokeAdd.compareDocumentPosition(strokeExpand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('width set but style none still reads empty', () => {
     const { panel } = setup(
       `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-top-width: 3px;"></div>`

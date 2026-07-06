@@ -914,7 +914,7 @@ export class Panel {
     const btn = createButton({ label: '−' })
     btn.setAttribute('data-remove-fill', '')
     btn.setAttribute('aria-label', 'Remove fill')
-    btn.title = 'Remove fill — the request tells the agent to drop bg-* classes'
+    btn.title = 'Remove fill — the request becomes bg-transparent (background transparent)'
     btn.hidden = true
     btn.addEventListener('click', () => {
       const el = this.el
