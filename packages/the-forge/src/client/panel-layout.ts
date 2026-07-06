@@ -39,8 +39,9 @@ export interface LayoutSectionDeps {
   /** Gap-field token affordance — the panel's tokenUi cluster, passed through. */
   tokenUi: PanelTokenUi
   /** NumberField factory for Gap so panel-layout doesn't duplicate hint/data-props wiring —
-   * the panel's buildField machinery stays the single place fields are born. */
-  buildGapField: () => { root: HTMLElement }
+   * the panel's buildField machinery stays the single place fields are born. Must return a
+   * real NumberField (not just `{ root }`): refreshLayoutSection drives it via `.set`/`.setAuto`. */
+  buildGapField: () => NumberField
 }
 
 export class LayoutSection {
@@ -91,7 +92,8 @@ export class LayoutSection {
     return removeBtn
   }
 
-  /** The add-button + cluster body (today's buildLayoutSection return value, same DOM). */
+  /** Builds the cluster's children on a carrier element — the panel hoists them into the
+   * unified Layout body and discards the carrier (panel.ts's buildBody layout branch). */
   buildBody(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'panel-rows layout-section'
@@ -209,11 +211,7 @@ export class LayoutSection {
     const side = document.createElement('div')
     side.className = 'layout-side'
 
-    // buildGapField's declared return type is the minimal shape LayoutSection's deps
-    // contract needs ({ root }) so this module doesn't have to duplicate NumberField's
-    // construction — but the closure panel.ts passes in always builds a real NumberField,
-    // which is what refreshLayoutSection needs (.set/.setAuto) below.
-    const gapField = this.deps.buildGapField() as NumberField
+    const gapField = this.deps.buildGapField()
     this.gapField = gapField
     side.append(gapField.root)
 
@@ -355,6 +353,7 @@ export class LayoutSection {
    *     - cross axis: computed align-self is 'stretch'
    * - Hug: no explicit size draft/inline AND not Fill (default content-based sizing).
    */
+  // READ half of the size-mode policy — keep in lockstep with the WRITE half, onSizeModeChange in panel.ts.
   private updateSizeMode(el: TaggedElement, sm: BoundSizeMode, main: 'width' | 'height'): void {
     const prop = sm.spec.props[0] as 'width' | 'height'
     const isMain = prop === main

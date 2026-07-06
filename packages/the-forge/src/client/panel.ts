@@ -978,6 +978,7 @@ export class Panel {
     return row
   }
 
+  // WRITE half of the size-mode policy — keep in lockstep with the READ half, updateSizeMode in panel-layout.ts.
   private onSizeModeChange(spec: RowSpec, mode: string): void {
     if (!this.el) return
     this.onBeforeEdit(this.el)

@@ -2404,6 +2404,13 @@ describe('Panel multi-select (B6)', () => {
     expect(wrap.hidden).toBe(true)
   })
 
+  it('multi-select with a flex FIRST element still hides the cluster (early-return precedes any flex read)', () => {
+    const { panel } = multiSetup('display: flex; width: 100px;', 'width: 100px;')
+    expect((panel.root.querySelector('.layout-controls') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-add-layout]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-remove-layout]') as HTMLElement).hidden).toBe(true)
+  })
+
   it('single-element show() remains unaffected: Layout visibility follows single-el rules', () => {
     document.body.innerHTML = `<div data-dc-source="src/Card.tsx:4:7" id="t" style="width: 200px;"></div>`
     const el = document.getElementById('t')! as HTMLElement
