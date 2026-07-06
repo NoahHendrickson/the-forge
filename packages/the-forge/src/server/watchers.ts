@@ -250,7 +250,10 @@ export class WatcherHub {
       // deny that token's NEXT wait instead — without this, flipping `watching` off would
       // make its next /wait read as a legitimate /forge-watch re-arm and silently re-link.
       // A tokenless legacy bin can't be denied and re-arms on its next wait (accepted —
-      // same advisory-only degradation as replacedToken's tokenless fallback).
+      // same advisory-only degradation as replacedToken's tokenless fallback). Accepted
+      // micro-edge: lastToken may name an OLDER tokened session when the current watcher
+      // is a tokenless legacy bin, so that older session's next deliberate re-arm eats one
+      // spurious one-shot 'unlinked' stop — self-healing (the wait after re-arms cleanly).
       this.unlinkedToken = this.lastToken
     }
     this.watching = false

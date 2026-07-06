@@ -187,7 +187,7 @@ describe('Overlay (M2 additions)', () => {
     expect((overlay.host.shadowRoot!.getElementById('status') as HTMLElement).hidden).toBe(true)
   })
 
-  it('status strip includes the copy button after send', () => {
+  it('status strip orders copy button after send, after the watch ✕', () => {
     const overlay = new Overlay()
     overlay.mount()
     const status = overlay.host.shadowRoot!.getElementById('status')!
@@ -198,7 +198,7 @@ describe('Overlay (M2 additions)', () => {
 })
 
 describe('Overlay (M4 additions)', () => {
-  it('status strip includes the send button first, before copy', () => {
+  it('status strip orders send after the watch ✕, before copy', () => {
     const overlay = new Overlay()
     overlay.mount()
     const status = overlay.host.shadowRoot!.getElementById('status')!

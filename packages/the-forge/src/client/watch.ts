@@ -115,7 +115,7 @@ export class WatchStatus {
     this.timer = null
     // Forget the last observed state: a design-mode re-entry must never flash a cached
     // "● Linked" from the previous session before the first probe answers — 'none'
-    // renders nothing until the server says otherwise. No onChange fire: design mode is
+    // renders the not-linked hint (2026-07-05 watcher-unlink spec), a conservative default until the server says otherwise. No onChange fire: design mode is
     // off, so there is no indicator to update (refreshStatus no-ops while inactive).
     this.state = 'none'
   }
