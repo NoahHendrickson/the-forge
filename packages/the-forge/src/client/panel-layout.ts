@@ -309,7 +309,7 @@ export class LayoutSection {
 
   private alignOn(el: TaggedElement, computed: CSSStyleDeclaration): boolean {
     const draft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, 'align-self')
-    return alignSelfRowOn(computed.getPropertyValue('align-self'), draft !== null, this.alignOpened)
+    return alignSelfRowOn(computed.getPropertyValue('align-self'), draft, this.alignOpened)
   }
 
   /** Align toggle. OFF→ON latches the row open and drafts nothing (openMinMax's non-withEdit

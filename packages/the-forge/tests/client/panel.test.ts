@@ -708,6 +708,24 @@ describe('Panel', () => {
     expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(false)
     toggle.click()
     expect(drafts.current(el, 'align-self')).toBe('auto')
+    // The switch must actually turn OFF: a drafted `auto` reads as default (spec: drafted
+    // align-self of auto/normal is non-disclosing) — final-review regression.
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('auto-ON for a restored (pre-show) align-self draft', () => {
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px;"></div>
+    </div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    drafts.apply(el, 'align-self', 'center')
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    expect((panel.root.querySelector('[data-align-toggle]') as HTMLElement).getAttribute('aria-pressed')).toBe('true')
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(false)
   })
 
   it('cross-axis Fill turns the align toggle ON (stretch is real, never masked)', () => {

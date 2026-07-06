@@ -48,7 +48,7 @@ jsdom cannot see flex layout — the acceptance gate for this piece is a real-br
 
 - `panel.test.ts` composition test updated for the new in-section order (W/H → cluster → Padding → Align).
 - New align-row tests: off by default when `align-self` is default; auto-on for app-CSS value, for restored draft, and after cross-axis Fill; toggle-off discards a session draft vs drafts `auto` over app CSS; drafting nothing on bare open; hidden when parent isn't flex; hidden in multi-select; latch cleared on selection change.
-- Padding row keeps `data-props-row` hooks; existing test hooks (`data-align-self`, `.flex-child-controls`) are extended, never renamed.
+- Padding row keeps `data-props` hooks; existing test hooks (`data-align-self`, `.flex-child-controls`) are extended, never renamed.
 - New DOM hooks for the toggle (e.g. `data-align-toggle`) follow the existing data-attribute convention.
 
 ## Non-goals
