@@ -43,6 +43,11 @@ import {
 export { tokenEntriesFor, colorTokenEntries } from './panel-specs'
 export { normalizeJustify, normalizeAlign, hasDirectText } from './panel-readers'
 
+// The container-side flex props the panel can draft — the set 'remove auto layout' must
+// clean up alongside display (child props like align-self/flex-grow belong to the CHILD's
+// own remove story, not the container's).
+const FLEX_CONTAINER_PROPS = ['flex-direction', 'gap', 'justify-content', 'align-items', 'flex-wrap']
+
 interface BoundField {
   field: NumberField
   spec: RowSpec
@@ -98,6 +103,7 @@ export class Panel {
   private alignMatrix: AlignMatrix | null = null
   private wrapToggle: HTMLButtonElement | null = null
   private addLayoutBtn: HTMLElement | null = null
+  private removeLayoutBtn: HTMLButtonElement | null = null
   private layoutControlsWrap: HTMLElement | null = null
 
   // Flex-child widgets.
@@ -390,6 +396,7 @@ export class Panel {
   private refreshLayoutSection(el: TaggedElement, computed: CSSStyleDeclaration): void {
     const flex = isFlex(el)
     if (this.addLayoutBtn) this.addLayoutBtn.hidden = flex
+    if (this.removeLayoutBtn) this.removeLayoutBtn.hidden = !flex
     if (this.layoutControlsWrap) this.layoutControlsWrap.hidden = !flex
     if (!flex) return
 
@@ -556,6 +563,7 @@ export class Panel {
     this.alignMatrix = null
     this.wrapToggle = null
     this.addLayoutBtn = null
+    this.removeLayoutBtn = null
     this.layoutControlsWrap = null
     this.alignSelfField = null
     this.alignSelfWrap = null
@@ -585,6 +593,31 @@ export class Panel {
       const sectionBodyEls: HTMLElement[] = [title]
 
       if (section.custom === 'layout') {
+        const removeBtn = createButton({ label: '−' })
+        removeBtn.setAttribute('data-remove-layout', '')
+        removeBtn.setAttribute('aria-label', 'Remove auto layout')
+        removeBtn.title = 'Remove auto layout — the request tells the agent to drop flex/flex-col/gap-*/justify-*/items-* classes'
+        removeBtn.hidden = true
+        removeBtn.addEventListener('click', () => {
+          if (!this.el) return
+          this.onBeforeEdit(this.el)
+          if (this.drafts.current(this.el, 'display') !== null) {
+            // Auto layout was added (or display re-drafted) this session — pure undo: targeted
+            // discard restores the recorded originals, so the element returns to its stylesheet
+            // reality and there is nothing to send.
+            this.drafts.discard(this.el, ['display', ...FLEX_CONTAINER_PROPS])
+          } else {
+            // Flex comes from the app's own CSS: draft display:block as the deterministic preview,
+            // and discard any container-prop drafts so the request is just the removal.
+            this.drafts.discard(this.el, FLEX_CONTAINER_PROPS)
+            this.drafts.apply(this.el, 'display', 'block')
+          }
+          this.refresh()
+          this.onEdited()
+        })
+        this.removeLayoutBtn = removeBtn
+        title.append(removeBtn)
+
         const layoutBody = this.buildLayoutSection()
         this.sectionsRoot.append(layoutBody)
         sectionBodyEls.push(layoutBody)

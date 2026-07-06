@@ -274,6 +274,12 @@ export function renderMarkdown(req: ChangeRequest): string {
           : ` — add \`${c.afterUtility}\``
         line += c.tokenExact ? '' : ' (off the token scale — arbitrary value; double-check intent)'
       }
+      // 'display: flex → block' is never the literal ask — it is the panel's deterministic
+      // preview of REMOVING auto layout. Spell the intent out so the agent edits classes
+      // (removes the flex family) instead of faithfully adding a block utility.
+      if (c.property === 'display' && (c.beforeCss === 'flex' || c.beforeCss === 'inline-flex') && c.afterCss === 'block') {
+        line += ' — intent: remove auto layout (flexbox) from this element; remove flex/flex-col/gap-*/justify-*/items-* classes rather than adding `display: block`'
+      }
       lines.push(line)
     }
     lines.push('')

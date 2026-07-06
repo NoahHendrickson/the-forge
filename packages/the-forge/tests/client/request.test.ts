@@ -461,4 +461,14 @@ line2 \`code\`</button>`
     const md = renderMarkdown(buildChangeRequest(store, PLAIN))
     expect(md).not.toContain('width: 240px → 240px')
   })
+
+  it('display flex→block carries the remove-auto-layout intent line', () => {
+    document.body.innerHTML = `<div data-dc-source="src/Box.tsx:1:1" id="box" style="display: flex;"></div>`
+    const el = document.getElementById('box')! as HTMLElement
+    const store = new DraftStore()
+    store.apply(el, 'display', 'block')
+    const md = renderMarkdown(buildChangeRequest(store, PLAIN))
+    expect(md).toContain('remove auto layout (flexbox) from this element')
+    expect(md).toContain('remove flex/flex-col/gap-*/justify-*/items-* classes rather than adding `display: block`')
+  })
 })

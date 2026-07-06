@@ -236,10 +236,11 @@ describe('Panel', () => {
   it('section order is Layout, Size, Padding, Margin, Typography, Fill, Stroke, Appearance regardless of visibility', () => {
     const { panel } = setup()
     // Sections with an expand button now parent it inside the title row, so title row
-    // textContent includes the '⋯' glyph for expandable sections — compare the leading
-    // label text only (title row's first text-bearing segment) rather than exact equality.
+    // textContent includes the '⋯' glyph for expandable sections (and Layout's title row
+    // also carries the '−' remove-auto-layout button) — compare the leading label text
+    // only (title row's first text-bearing segment) rather than exact equality.
     const titles = [...panel.root.querySelectorAll('.panel-section')].map(
-      (n) => n.textContent?.replace('⋯', '').trim()
+      (n) => n.textContent?.replace('⋯', '').replace('−', '').trim()
     )
     expect(titles).toEqual(['Layout', 'Size', 'Padding', 'Margin', 'Typography', 'Fill', 'Stroke', 'Appearance'])
   })
@@ -257,7 +258,8 @@ describe('Panel', () => {
   it('Layout section TITLE stays visible (but still first) for a non-flex element — empty state is title + add-auto-layout button, no floating headerless button', () => {
     const { panel } = setup()
     const sections = [...panel.root.querySelectorAll('.panel-section')]
-    expect(sections[0].textContent).toBe('Layout')
+    // Title row textContent also carries the '−' remove-auto-layout button.
+    expect(sections[0].textContent).toBe('Layout−')
     expect((sections[0] as HTMLElement).hidden).toBe(false)
     // the layout CONTROLS (direction/gap/align/wrap) are hidden — only the
     // add-auto-layout button is shown alongside the always-visible title
@@ -276,7 +278,8 @@ describe('Panel', () => {
   it('Layout section is visible for a flex element', () => {
     const { panel } = flexSetup()
     const sections = [...panel.root.querySelectorAll('.panel-section')]
-    expect(sections[0].textContent).toBe('Layout')
+    // Title row textContent also carries the '−' remove-auto-layout button.
+    expect(sections[0].textContent).toBe('Layout−')
     expect((sections[0] as HTMLElement).hidden).toBe(false)
   })
 
@@ -457,6 +460,47 @@ describe('Panel', () => {
       (d) => (d as HTMLElement).dataset.j === 'flex-start' && (d as HTMLElement).dataset.a === 'flex-end'
     ) as HTMLElement
     expect(dotAfter).toBeTruthy()
+  })
+
+  describe('remove auto layout', () => {
+    it('remove button is visible only when the element is flex (mirror of add)', () => {
+      const { panel: nonFlexPanel } = setup()
+      const nonFlexRemove = nonFlexPanel.root.querySelector('[data-remove-layout]') as HTMLElement
+      const nonFlexAdd = nonFlexPanel.root.querySelector('[data-add-layout]') as HTMLElement
+      expect(nonFlexRemove.hidden).toBe(true)
+      expect(nonFlexAdd.hidden).toBe(false)
+
+      const { panel: flexPanel } = flexSetup()
+      const flexRemove = flexPanel.root.querySelector('[data-remove-layout]') as HTMLElement
+      const flexAdd = flexPanel.root.querySelector('[data-add-layout]') as HTMLElement
+      expect(flexRemove.hidden).toBe(false)
+      expect(flexAdd.hidden).toBe(true)
+    })
+
+    it('added-this-session: remove is a pure undo (discards drafts, nothing left to send)', () => {
+      const { el, panel, drafts } = setup()
+      ;(panel.root.querySelector('[data-add-layout]') as HTMLElement).click()
+      commit(fieldInput(panel, P.GAP), '24')
+      expect(drafts.current(el, 'gap')).toBe('24px')
+
+      ;(panel.root.querySelector('[data-remove-layout]') as HTMLElement).click()
+
+      expect(el.style.display).toBe('')
+      expect(el.style.getPropertyValue('gap')).toBe('')
+      expect(buildChangeRequest(drafts).elements.find((e) => e.selector === '#t')).toBeUndefined()
+    })
+
+    it('stylesheet flex: remove drafts display block and discards other flex drafts', () => {
+      const { el, panel, drafts } = flexSetup()
+      const dot = panel.root.querySelector('.am-dot') as HTMLElement
+      dot.click()
+      expect(drafts.current(el, 'justify-content')).not.toBeNull()
+
+      ;(panel.root.querySelector('[data-remove-layout]') as HTMLElement).click()
+
+      expect(drafts.current(el, 'display')).toBe('block')
+      expect(drafts.current(el, 'justify-content')).toBeNull()
+    })
   })
 
   it('flex-child controls are hidden when parent is not flex', () => {
@@ -2229,13 +2273,13 @@ describe('Panel multi-select (B6)', () => {
 
   it('Layout section is hidden entirely in multi-select', () => {
     const { panel } = multiSetup()
-    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Layout')!
+    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent?.startsWith('Layout'))!
     expect((layoutTitle as HTMLElement).hidden).toBe(true)
   })
 
   it('Layout section BODY (not just the title) is hidden in multi-select (final review fix #1)', () => {
     const { panel } = multiSetup()
-    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Layout')!
+    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent?.startsWith('Layout'))!
     // Layout's custom body (.layout-section wrap, holding the add-auto-layout button and/or
     // layout-controls) is the very next sibling after the title.
     const bodyWrap = layoutTitle.nextElementSibling as HTMLElement
@@ -2263,7 +2307,7 @@ describe('Panel multi-select (B6)', () => {
     const panel = new Panel(drafts, vi.fn())
     document.body.appendChild(panel.root)
     panel.show(el, buildInspectorData(el))
-    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Layout')!
+    const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent?.startsWith('Layout'))!
     expect((layoutTitle as HTMLElement).hidden).toBe(false)
   })
 })
