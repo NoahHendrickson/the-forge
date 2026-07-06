@@ -469,45 +469,58 @@ export class LayoutSection {
 
   /**
    * Mode inference heuristic (kept intentionally simple):
-   * - Fixed: there's an explicit draft OR inline style for this axis's size prop (px value authored).
-   * - Fill: no explicit size draft/inline AND either
+   * - Fill: either
    *     - main axis: computed flex-grow >= 1
    *     - cross axis: computed align-self is 'stretch'
-   * - Hug: no explicit size draft/inline AND not Fill (default content-based sizing).
+   *   Checked FIRST and wins outright — picking Fill only ever drafts flex-grow/flex-basis
+   *   or align-self, never the size prop itself, so a stale inline/pre-Fill px would
+   *   otherwise still read as an explicit size and misreport Fixed.
+   * - Fixed: no Fill AND there's an explicit draft OR inline style for this axis's size prop
+   *   (px value authored — the `auto` keyword is excluded; it reads as Hug/Fill).
+   * - Hug: no Fill AND no explicit size draft/inline (default content-based sizing).
    */
   // READ half of the size-mode policy — its WRITE half, onSizeModeChange, sits right below.
   private updateSizeMode(el: TaggedElement, sm: BoundSizeMode, main: 'width' | 'height'): void {
     const prop = sm.spec.props[0] as 'width' | 'height'
     const isMain = prop === main
-    const draft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, prop)
-    const inline = el.style.getPropertyValue(prop)
-    // Hug's own `auto` keyword is NOT an explicit size — counting it made the mode read
-    // back Fixed immediately after the user picked Hug (latent select-era quirk, fixed by
-    // the 2026-07-06 size-pair spec: the whisper label sits on this inference).
-    const hasExplicitSize = (!!draft && draft !== 'auto') || (draft === null && !!inline && inline !== 'auto')
-
-    if (hasExplicitSize) {
-      sm.mode = 'fixed'
-      return
-    }
-
     const computed = getComputedStyle(el)
+
+    let mode: 'fixed' | 'hug' | 'fill'
+    let isFill: boolean
     if (isMain) {
       const grow = Number.parseFloat(computed.flexGrow || '0')
-      if (grow >= 1) {
-        sm.mode = 'fill'
-        return
-      }
+      isFill = grow >= 1
     } else {
       const alignSelfDraft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, 'align-self')
       const alignSelfCss = alignSelfDraft ?? computed.alignSelf
-      if (alignSelfCss === 'stretch') {
-        sm.mode = 'fill'
-        return
-      }
+      isFill = alignSelfCss === 'stretch'
     }
 
-    sm.mode = 'hug'
+    if (isFill) {
+      mode = 'fill'
+    } else {
+      const draft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, prop)
+      const inline = el.style.getPropertyValue(prop)
+      // Hug's own `auto` keyword is NOT an explicit size — counting it made the mode read
+      // back Fixed immediately after the user picked Hug (latent select-era quirk, fixed by
+      // the 2026-07-06 size-pair spec: the whisper label sits on this inference).
+      const hasExplicitSize = (!!draft && draft !== 'auto') || (draft === null && !!inline && inline !== 'auto')
+      mode = hasExplicitSize ? 'fixed' : 'hug'
+    }
+
+    sm.mode = mode
+    // Display half (2026-07-06 size-pair spec): Fixed shows a plain number; Hug/Fill show
+    // the MEASURED px with a whisper naming the applied mode — the field's set()-family
+    // clears whispers, so every refresh re-asserts (or drops) it here and staleness is
+    // structurally impossible. jsdom can't compute auto sizes (NaN) — keep the literal
+    // `auto` display the fields loop already rendered and still whisper the mode.
+    if (mode === 'fixed') {
+      sm.field.setWhisper(null)
+      return
+    }
+    const px = Math.round(Number.parseFloat(getComputedStyle(el).getPropertyValue(prop)))
+    if (Number.isFinite(px)) sm.field.set(px)
+    sm.field.setWhisper(mode === 'hug' ? 'Hug' : 'Fill')
   }
 
   // WRITE half of the size-mode policy — its READ half, updateSizeMode, sits right above.

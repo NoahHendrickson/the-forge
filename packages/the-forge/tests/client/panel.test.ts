@@ -853,6 +853,38 @@ describe('Panel', () => {
     expect(drafts.current(el, 'height')).toBe('auto')
   })
 
+  function whisperOf(panel: Panel, props: string): HTMLElement {
+    return fieldInput(panel, props).closest('.nf')!.querySelector('.nf-whisper') as HTMLElement
+  }
+
+  it('picking Hug shows a Hug whisper on the field', () => {
+    const { panel } = childSetup()
+    pickSizeMode(panel, P.H, 'Hug')
+    expect(whisperOf(panel, P.H).hidden).toBe(false)
+    expect(whisperOf(panel, P.H).textContent).toBe('Hug')
+  })
+
+  it('picking Fill shows a Fill whisper; switching to Fixed clears it', () => {
+    const { panel } = childSetup()
+    pickSizeMode(panel, P.W, 'Fill')
+    expect(whisperOf(panel, P.W).textContent).toBe('Fill')
+    pickSizeMode(panel, P.W, 'Fixed')
+    expect(whisperOf(panel, P.W).hidden).toBe(true)
+  })
+
+  it('typing a number into a Hug field flips it to Fixed and clears the whisper', () => {
+    const { el, panel, drafts } = childSetup()
+    pickSizeMode(panel, P.W, 'Hug')
+    commit(fieldInput(panel, P.W), '120')
+    expect(drafts.current(el, 'width')).toBe('120px')
+    expect(whisperOf(panel, P.W).hidden).toBe(true)
+  })
+
+  it('no whisper for non-flex children (mode inference never runs)', () => {
+    const { panel } = setup()
+    expect(whisperOf(panel, P.W).hidden).toBe(true)
+  })
+
   it('cross-axis Fixed preserves a user-drafted align-self (only discards it when Fill wrote "stretch")', () => {
     const { el, panel, drafts } = childSetup()
     const seg = panel.root.querySelector('[data-align-self]')!
