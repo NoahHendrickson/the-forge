@@ -473,6 +473,17 @@ export function suggestUtility(
     return { utility: `${prefix}-auto`, tokenExact: true }
   }
 
+  // M-D min/max clearing keywords: min-width/min-height's CSS initial value is 'auto',
+  // max-width/max-height's is 'none' — both are real static Tailwind utilities (min-w-auto,
+  // max-w-none, ...), not numeric scale steps. Without this, the fallthrough below hits
+  // Number.parseFloat('auto'/'none') -> NaN -> a bogus `min-w-[NaNpx]` arbitrary value.
+  if ((prop === 'min-width' || prop === 'min-height') && css === 'auto') {
+    return { utility: `${prefix}-auto`, tokenExact: true }
+  }
+  if ((prop === 'max-width' || prop === 'max-height') && css === 'none') {
+    return { utility: `${prefix}-none`, tokenExact: true }
+  }
+
   if (prop === 'opacity') {
     const pct = Number.parseFloat(css) * 100
     const rounded = Math.round(pct)

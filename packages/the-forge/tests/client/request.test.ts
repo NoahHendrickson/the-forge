@@ -324,6 +324,11 @@ describe('buildChangeRequest — min/max sizing (M-D)', () => {
     const minC = req.elements[0].changes.find((x) => x.property === 'min-width')!
     expect(maxC.afterCss).toBe('none')
     expect(minC.afterCss).toBe('auto')
+    // the utility suggestion must be the real static Tailwind class, not a NaN arbitrary
+    // value (Number.parseFloat('none'/'auto') falls through to `${prefix}-[NaNpx]` unless
+    // suggestUtility special-cases these keywords the same way it does w-auto/h-auto).
+    expect(maxC.afterUtility).toBe('max-w-none')
+    expect(minC.afterUtility).toBe('min-w-auto')
     expect(md).toContain('none')
     expect(md).toContain('auto')
   })

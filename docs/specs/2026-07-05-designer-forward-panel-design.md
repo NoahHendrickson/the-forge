@@ -159,16 +159,54 @@ Four milestones, each its own dated plan in `docs/plans/` and its own feature br
 ### M-D — Min/max sizing
 
 - The W/H size-mode select gains **Add min… / Add max…** action items (Figma UI3 keeps min/max
-  in the same dropdown as Fixed/Hug/Fill). Choosing one inserts a disclosure row beneath the
-  W/H row (changed-from-default disclosure: min/max rows render only when the element has a
-  non-default computed value or the user just added one). Clearing the field removes the
-  constraint (drafts `max-*` to `none`, `min-*` to `auto` — their respective CSS initial
-  values — and the request drops the utility).
+  in the same dropdown as Fixed/Hug/Fill). Choosing one inserts a disclosure row (`data-minmax-row`
+  hook) beneath the W/H row, focused immediately, while the W/H select itself reverts to display
+  the element's real size mode (Fixed/Hug/Fill) — "Add min…"/"Add max…" are one-shot actions, not
+  persistent select states.
+- **Disclosure predicate**, evaluated on every selection/refresh, same shape as M-A's Margin
+  latch: a min/max row renders when the element's computed value is non-default (`min-width`/
+  `min-height` computed ≠ `auto`, `max-width`/`max-height` computed ≠ `none`), OR the row was just
+  opened via the size-mode action, OR the property currently carries a live draft — so a
+  pre-existing constraint (a `max-w-*` class, an inline style) discloses on selection with no
+  interaction required, and a row a user just added or is mid-editing never vanishes under their
+  pointer.
+- **Clearing via the `auto` keyword.** Typing the literal keyword `auto` into a min/max field
+  (the same `NumberField.allowAuto` mechanism as the W/H Hug path) clears the constraint: it
+  drafts `min-width`/`min-height` to `auto` and `max-width`/`max-height` to `none` — their
+  respective CSS initial values — per-property via `autoCss` on `MIN_MAX_ROWS` (`panel-specs.ts`).
+  There is no separate `none` keyword the user types for Max — `auto` is the one clearing keyword
+  across all four rows; the field displays "auto", the live computed style resolves to each
+  property's real initial value. The row stays visible (and, if a draft, sendable) while the
+  clearing draft lives; it only re-hides once the draft is gone AND the computed value is back to
+  default.
 - `UTILITY_PREFIXES` gains `min-width: 'min-w'`, `max-width: 'max-w'`, `min-height: 'min-h'`,
   `max-height: 'max-h'`; the numeric spacing scale token picker applies (Tailwind v4 sizes these
-  off the spacing scale). Named container widths (`max-w-md` etc.) are out of scope for the
-  picker's first pass — nearest-token still resolves numerically.
+  off the spacing scale) for drafted px values, e.g. `min-w-30` for 120px. The clearing keywords
+  resolve to Tailwind's own static utilities for each property's initial value — `min-w-auto`,
+  `max-w-none`, `min-h-auto`, `max-h-none` — via a dedicated special case in `suggestUtility`
+  mirroring the pre-existing `w-auto`/`h-auto` case; **found and fixed during this task's
+  real-browser E2E** — the fallthrough numeric path (`Number.parseFloat('auto'|'none')`) silently
+  produced a bogus `max-w-[NaNpx]` arbitrary-value class before the fix (regression-tested in
+  `tokens.test.ts` and `request.test.ts`). Named container widths (`max-w-md` etc.) remain out of
+  scope for the picker's first pass — nearest-token still resolves numerically.
+- **Multi-select:** the size-mode select's Add min…/Add max… actions and all four min/max rows
+  are single-select-only (same rule as the auto-layout cluster and flex-child Align strip,
+  decision B6) — hidden entirely in multi-select, not merely disabled; W/H and Padding rows keep
+  working with relative deltas/Mixed-not-blank as before. YAGNI-documented: no multi-select
+  min/max editing in this pass.
 - No verifier changes: min/max verify through the normal computed-style path.
+- **E2E-verified (Task 3, real browser, Playwright against the demo app):** single-select default
+  state (no min/max rows, W/H editable); the Add min…/Add max… action-item round-trip (row
+  appears focused, select reverts to the real mode, a typed px value takes effect immediately as
+  a real computed style with no reload); the token affordance opening the spacing-scale picker
+  from a min/max row; a sent request carrying a scale-token utility (`min-w-30`) for a plain px
+  value; the `auto`-keyword clear landing in a subsequent request as the literal keyword against
+  the real static utility (markdown bullets read `min-width: 80px → auto — add min-w-auto` and
+  `max-width: 300px → none — add max-w-none`), not a measured px/NaN; disclosure firing on
+  selection alone for an element with a pre-existing (non-drafted) `max-width` set outside the
+  panel; multi-select hiding every min/max row and the size-mode actions while leaving W/H
+  editable; and that the unified section order and the conditional Margin disclosure survived
+  unrelated selection changes (single- vs multi-select, cards with/without margin classes).
 
 ## Deferred / out of scope
 
