@@ -585,7 +585,7 @@ export class Panel {
   }
 
   /**
-   * The single field-birth site for the Gap NumberField — LayoutSection.buildBody() calls
+   * The single field-birth site for the Gap NumberField — LayoutSection.buildBodyInto() calls
    * this via deps.buildGapField() rather than constructing a NumberField itself, so every
    * field in the panel (Gap included) is still born in exactly one place (buildField/this).
    * Shared absolute-commit path for gap — the field's own onInput AND the token picker's
