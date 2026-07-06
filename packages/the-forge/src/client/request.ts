@@ -129,6 +129,28 @@ function escapeCssIdent(value: string): string {
   return out
 }
 
+/** Element identity/context block shared by the precise and prompt builders — tag, source,
+ * classes, trimmed text, selector. `changes` is the caller's: measured deltas for the precise
+ * flow, always [] for prompts. */
+function elementContext(el: TaggedElement, changes: ChangeItem[]): ElementChange {
+  const className = typeof el.className === 'string' ? el.className : [...el.classList].join(' ')
+  return {
+    tag: el.tagName.toLowerCase(),
+    source: el.dataset.dcSource ? parseSourceAttr(el.dataset.dcSource) : null,
+    className,
+    text: (el.textContent ?? '').replace(/[`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80),
+    selector: cssPath(el),
+    changes,
+  }
+}
+
+// "skip and report", never "pause": an unresolved (claimed-but-unmarked) item goes stale
+// after CLAIM_TIMEOUT_MS and gets re-delivered on a later watch cycle — a paused agent would
+// be re-asked the same question every few minutes. The command texts (server/setup.ts) spell
+// out the MCP mechanics: mark_applied status "failed", note "needs confirmation: <why>".
+export const SCOPE_GUARDRAIL =
+  'Scope: apply to this call site only. If a change would modify a shared component rendered elsewhere, skip it and report it back as needing confirmation — do not pause waiting for an answer.'
+
 export function cssPath(start: TaggedElement): string {
   const parts: string[] = []
   let el: Element | null = start
@@ -219,14 +241,7 @@ export function buildChangeRequestWithElements(
     }
     if (changes.length === 0) continue // every drafted property was a no-op — nothing to request
 
-    const elementChange: ElementChange = {
-      tag: el.tagName.toLowerCase(),
-      source: el.dataset.dcSource ? parseSourceAttr(el.dataset.dcSource) : null,
-      className,
-      text: (el.textContent ?? '').replace(/[`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80),
-      selector: cssPath(el),
-      changes,
-    }
+    const elementChange = elementContext(el, changes)
     elementList.push(elementChange)
     elements.set(el, elementChange)
   }
@@ -279,14 +294,63 @@ export function renderMarkdown(req: ChangeRequest): string {
     lines.push('')
   })
 
-  // "skip and report", never "pause": an unresolved (claimed-but-unmarked) item goes stale
-  // after CLAIM_TIMEOUT_MS and gets re-delivered on a later watch cycle — a paused agent would
-  // be re-asked the same question every few minutes. The command texts (server/setup.ts) spell
-  // out the MCP mechanics: mark_applied status "failed", note "needs confirmation: <why>".
-  lines.push('Scope: apply to this call site only. If a change would modify a shared component rendered elsewhere, skip it and report it back as needing confirmation — do not pause waiting for an answer.')
+  lines.push(SCOPE_GUARDRAIL)
   // No verification ask here on purpose: the browser-side verifier (verifier.ts) checks computed
   // styles post-HMR itself. Telling the agent to "verify" makes it spin up dev servers/screenshots
   // to preview the result the user is already watching live.
   lines.push('Do not run the app, take screenshots, or preview the result — the user is watching the live app, and The Forge verifies the changes automatically.')
+  return lines.join('\n')
+}
+
+export interface PromptRequest {
+  kind: 'prompt'
+  createdAt: string
+  viewport: { width: number; height: number }
+  prompt: string
+  elements: ElementChange[]
+}
+
+export function buildPromptRequest(
+  els: TaggedElement[],
+  prompt: string
+): { request: PromptRequest; pairs: Array<[TaggedElement, ElementChange]> } {
+  const pairs: Array<[TaggedElement, ElementChange]> = els.map((el) => [el, elementContext(el, [])])
+  return {
+    request: {
+      kind: 'prompt',
+      createdAt: new Date().toISOString(),
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      prompt,
+      elements: pairs.map(([, c]) => c),
+    },
+    pairs,
+  }
+}
+
+export function renderPromptMarkdown(req: PromptRequest): string {
+  const lines: string[] = []
+  lines.push('# Design prompt')
+  lines.push('')
+  lines.push(
+    `The user selected the element(s) below in the running app and typed a free-form instruction. Apply it to the identified source location(s). Written at viewport ${req.viewport.width}×${req.viewport.height}.`
+  )
+  lines.push('')
+  req.elements.forEach((el, i) => {
+    const loc = el.source ? `${el.source.file}:${el.source.line}:${el.source.col}` : '(no source tag — locate by selector/text)'
+    lines.push(`## ${i + 1}. <${el.tag}> — ${loc}`)
+    if (el.text) lines.push(`Text: "${el.text}"`)
+    if (el.className) lines.push(`Current classes: \`${el.className}\``)
+    lines.push(`Selector: \`${el.selector}\``)
+    lines.push('')
+  })
+  lines.push('## Instruction')
+  lines.push('')
+  lines.push(req.prompt.trim())
+  lines.push('')
+  lines.push(SCOPE_GUARDRAIL)
+  // Unlike renderMarkdown's closing line, this one does NOT say The Forge verifies the result —
+  // free-form prompts have no expected computed styles, so nothing is verified (spec: terminal
+  // state comes from mark_applied alone). The don't-preview instruction still applies verbatim.
+  lines.push('Do not run the app, take screenshots, or preview the result — the user is watching the live app.')
   return lines.join('\n')
 }

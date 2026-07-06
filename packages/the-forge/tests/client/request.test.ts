@@ -1,7 +1,16 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest'
 import { DraftStore } from '../../src/client/drafts'
-import { buildChangeRequest, buildChangeRequestWithElements, cssPath, renderMarkdown } from '../../src/client/request'
+import {
+  buildChangeRequest,
+  buildChangeRequestWithElements,
+  buildPromptRequest,
+  cssPath,
+  renderMarkdown,
+  renderPromptMarkdown,
+  type PromptRequest,
+} from '../../src/client/request'
+import type { TaggedElement } from '../../src/client/source'
 import { resetTokensCache, type Theme } from '../../src/client/tokens'
 
 const TW: Theme = { rootFontPx: 16, spacingBasePx: 4, radiusScale: { lg: 8, xl: 12 } }
@@ -460,5 +469,55 @@ line2 \`code\`</button>`
     store.apply(child, 'width', '240px')
     const md = renderMarkdown(buildChangeRequest(store, PLAIN))
     expect(md).not.toContain('width: 240px → 240px')
+  })
+})
+
+describe('buildPromptRequest / renderPromptMarkdown', () => {
+  it('captures element context with an empty changes list', () => {
+    const el = document.createElement('button')
+    el.dataset.dcSource = 'src/App.tsx:12:4'
+    el.className = 'px-4 py-2'
+    el.textContent = 'Get started'
+    document.body.appendChild(el)
+    const { request, pairs } = buildPromptRequest([el as unknown as TaggedElement], 'make this more prominent')
+    expect(request.kind).toBe('prompt')
+    expect(request.prompt).toBe('make this more prominent')
+    expect(request.elements).toHaveLength(1)
+    expect(request.elements[0]).toMatchObject({
+      tag: 'button',
+      className: 'px-4 py-2',
+      text: 'Get started',
+      changes: [],
+    })
+    expect(request.elements[0].source).toEqual({ file: 'src/App.tsx', line: 12, col: 4 })
+    expect(pairs[0][0]).toBe(el)
+    el.remove()
+  })
+
+  it('renders markdown with instruction, per-element context, and guardrails', () => {
+    const req: PromptRequest = {
+      kind: 'prompt', createdAt: 'now', viewport: { width: 1440, height: 900 },
+      prompt: 'make this more prominent',
+      elements: [{ tag: 'button', source: { file: 'src/App.tsx', line: 12, col: 4 },
+        className: 'px-4', text: 'Go', selector: 'div > button', changes: [] }],
+    }
+    const md = renderPromptMarkdown(req)
+    expect(md).toContain('# Design prompt')
+    expect(md).toContain('## 1. <button> — src/App.tsx:12:4')
+    expect(md).toContain('Selector: `div > button`')
+    expect(md).toContain('## Instruction')
+    expect(md).toContain('make this more prominent')
+    expect(md).toContain('Scope: apply to this call site only.')
+    // prompt flow has no style verifier — its no-preview line must NOT promise verification
+    expect(md).toContain('Do not run the app, take screenshots, or preview the result')
+    expect(md).not.toContain('verifies the changes automatically')
+  })
+
+  it('renders a no-source fallback header', () => {
+    const req: PromptRequest = {
+      kind: 'prompt', createdAt: 'now', viewport: { width: 800, height: 600 }, prompt: 'x',
+      elements: [{ tag: 'div', source: null, className: '', text: '', selector: 'div', changes: [] }],
+    }
+    expect(renderPromptMarkdown(req)).toContain('(no source tag — locate by selector/text)')
   })
 })
