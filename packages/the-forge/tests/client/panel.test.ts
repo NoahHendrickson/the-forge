@@ -469,6 +469,7 @@ describe('Panel', () => {
       btn.click()
       expect(el.style.getPropertyValue('align-items')).toBe('baseline')
       expect(btn.classList.contains('seg-active')).toBe(true)
+      expect(btn.getAttribute('aria-pressed')).toBe('true')
       expect(panel.root.querySelector('.am-dot.am-active')).toBeNull()
     })
 
@@ -480,6 +481,22 @@ describe('Panel', () => {
       btn.click()
       expect(el.style.getPropertyValue('align-items')).toBe('')
       expect(btn.classList.contains('seg-active')).toBe(false)
+      expect(btn.getAttribute('aria-pressed')).toBe('false')
+    })
+
+    it('app-authored baseline (no session draft): toggle starts active, OFF drafts flex-start', () => {
+      const { el, panel, drafts } = flexSetup('align-items: baseline;')
+      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
+      // baseline comes from the app's own CSS — active on show(), with no draft to discard
+      expect(btn.classList.contains('seg-active')).toBe(true)
+      expect(btn.getAttribute('aria-pressed')).toBe('true')
+      expect(drafts.current(el, 'align-items')).toBeNull()
+
+      btn.click()
+
+      expect(drafts.current(el, 'align-items')).toBe('flex-start')
+      expect(btn.classList.contains('seg-active')).toBe(false)
+      expect(btn.getAttribute('aria-pressed')).toBe('false')
     })
 
     it('clicking a matrix dot exits baseline', () => {

@@ -431,7 +431,9 @@ export class Panel {
     }
 
     this.alignMatrix?.set(normalizeJustify(justify), normalizeAlign(align), direction, spaceBetween)
-    this.baselineToggle?.classList.toggle('seg-active', normalizeAlign(align) === 'baseline')
+    const baselineOn = normalizeAlign(align) === 'baseline'
+    this.baselineToggle?.classList.toggle('seg-active', baselineOn)
+    this.baselineToggle?.setAttribute('aria-pressed', String(baselineOn))
   }
 
   private refreshFlexChild(el: TaggedElement, computed: CSSStyleDeclaration): void {
