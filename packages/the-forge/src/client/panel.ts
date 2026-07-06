@@ -32,7 +32,6 @@ import {
   px,
   fromPx,
   effectiveBackground,
-  isFlex,
   normalizeJustify,
   normalizeAlign,
   hasDirectText,
@@ -40,7 +39,6 @@ import {
   firstFamily,
   cssFamilyValue,
   documentFontFamilies,
-  mainAxisProp,
 } from './panel-readers'
 
 export { tokenEntriesFor, colorTokenEntries } from './panel-specs'
@@ -503,10 +501,9 @@ export class Panel {
         rowWrap.className = 'panel-rows layout-section'
         for (const row of SIZE_ROWS) rowWrap.append(this.buildRow(row))
         rowWrap.append(this.layoutSection.buildFlexChildControls())
-        const clusterBody = this.layoutSection.buildBody()
-        // buildBody returns the add-button + controls wrap inside one element today — append
-        // its children in place so the section body stays a single flat .panel-rows (CSS contract).
-        while (clusterBody.firstChild) rowWrap.append(clusterBody.firstChild)
+        // buildBodyInto appends the add-button + controls wrap directly onto rowWrap, so the
+        // section body stays a single flat .panel-rows (CSS contract) with no carrier to drain.
+        this.layoutSection.buildBodyInto(rowWrap)
         for (const row of PADDING_ROWS) rowWrap.append(this.buildRow(row))
 
         this.sectionsRoot.append(rowWrap)
@@ -968,7 +965,7 @@ export class Panel {
     const select = createSelect({
       options: SIZE_MODES.map(([value, label]) => ({ value, label })),
       onChange: (value) => {
-        this.onSizeModeChange(spec, value)
+        this.layoutSection.onSizeModeChange(spec, value)
       },
     })
     select.title = 'Fixed: exact px · Hug: fit-content · Fill: stretch / flex-1'
@@ -976,64 +973,6 @@ export class Panel {
 
     this.layoutSection.registerSizeMode({ select, spec, field: bound.field })
     return row
-  }
-
-  // WRITE half of the size-mode policy — keep in lockstep with the READ half, updateSizeMode in panel-layout.ts.
-  private onSizeModeChange(spec: RowSpec, mode: string): void {
-    if (!this.el) return
-    this.onBeforeEdit(this.el)
-    const prop = spec.props[0]
-    const parent = this.el.parentElement
-    const parentDirection =
-      parent && isFlex(parent as TaggedElement)
-        ? getComputedStyle(parent as TaggedElement).flexDirection.startsWith('column')
-          ? 'column'
-          : 'row'
-        : 'row'
-    const main = mainAxisProp(parentDirection)
-    const isMain = prop === main
-
-    if (mode === 'fixed') {
-      // Figma semantics: selecting Fixed pins the element's CURRENT rendered size —
-      // it doesn't wait for the user to type a number. First capture the computed size
-      // the user SEES (before discarding mode props that may affect layout), then clear
-      // whatever mode props produced the current Fill/Hug layout so they don't leak into
-      // the change request, then draft the computed size as an explicit px value so
-      // the mode-inference heuristic reads it back as Fixed immediately.
-      // Cross-axis: only discard align-self when it holds the 'stretch' value Fill wrote —
-      // a user-drafted value (e.g. flex-start via the Align segment field) must survive
-      // switching this axis to Fixed.
-      const modeProps = isMain
-        ? ['flex-grow', 'flex-basis']
-        : this.drafts.current(this.el, 'align-self') === 'stretch'
-          ? ['align-self']
-          : []
-      const isAutoNow = this.drafts.current(this.el, prop) === 'auto'
-      if (isAutoNow) modeProps.push(prop)
-      let computedSize = Math.round(parseFloat(getComputedStyle(this.el).getPropertyValue(prop)))
-      // If jsdom can't compute the size (returns NaN for 'auto' without layout engine),
-      // fall back to the original value that will be restored by discard()
-      if (isNaN(computedSize) && isAutoNow) {
-        const draftEntry = this.drafts.entries().get(this.el)?.get(prop)
-        computedSize = draftEntry ? Math.round(parseFloat(draftEntry.original)) : computedSize
-      }
-      // Unconditional guard: whatever the source, never draft a non-finite size — bail
-      // out of the pin entirely rather than writing e.g. "NaNpx" into the change request.
-      if (!Number.isFinite(computedSize)) return
-      this.drafts.discard(this.el, modeProps)
-      this.drafts.apply(this.el, prop, `${computedSize}px`)
-    } else if (mode === 'hug') {
-      this.drafts.apply(this.el, prop, 'auto')
-    } else if (mode === 'fill') {
-      if (isMain) {
-        this.drafts.apply(this.el, 'flex-grow', '1')
-        this.drafts.apply(this.el, 'flex-basis', '0%')
-      } else {
-        this.drafts.apply(this.el, 'align-self', 'stretch')
-      }
-    }
-    this.refresh()
-    this.onEdited()
   }
 
   private buildField(spec: RowSpec): BoundField {

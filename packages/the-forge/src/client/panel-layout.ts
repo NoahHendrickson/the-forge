@@ -13,7 +13,7 @@ import { NumberField } from './controls'
 import { createButton } from './ui/button'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { PanelTokenUi } from './panel-token-ui'
-import { GAP_SPEC } from './panel-specs'
+import { type RowSpec, GAP_SPEC } from './panel-specs'
 import { fromPx, isFlex, normalizeJustify, normalizeAlign, mainAxisProp } from './panel-readers'
 
 // The container-side flex props the panel can draft — the set 'remove auto layout' must
@@ -23,7 +23,7 @@ export const FLEX_CONTAINER_PROPS = ['flex-direction', 'gap', 'justify-content',
 
 interface BoundSizeMode {
   select: HTMLSelectElement
-  spec: { props: string[] }
+  spec: RowSpec
   field: NumberField
 }
 
@@ -63,6 +63,18 @@ export class LayoutSection {
 
   constructor(private deps: LayoutSectionDeps) {}
 
+  /** The edit lifecycle every cluster control shares: bail without a selection, snapshot
+   * pre-edit state, mutate drafts, re-render, notify. Centralized so the ~8 click handlers
+   * can't drift on ordering. */
+  private withEdit(fn: (el: TaggedElement) => void): void {
+    const el = this.deps.getEl()
+    if (!el) return
+    this.deps.onBeforeEdit(el)
+    fn(el)
+    this.deps.refresh()
+    this.deps.onEdited()
+  }
+
   /** The − remove button for the section title (today's buildBody layout-branch block). */
   buildRemoveButton(): HTMLButtonElement {
     const removeBtn = createButton({ label: '−' })
@@ -71,45 +83,36 @@ export class LayoutSection {
     removeBtn.title = 'Remove auto layout — the request tells the agent to drop flex/inline-flex/flex-row/flex-col/flex-wrap/gap-*/justify-*/items-* classes'
     removeBtn.hidden = true
     removeBtn.addEventListener('click', () => {
-      const el = this.deps.getEl()
-      if (!el) return
-      this.deps.onBeforeEdit(el)
-      if (this.deps.drafts.current(el, 'display') !== null) {
-        // Auto layout was added (or display re-drafted) this session — pure undo: targeted
-        // discard restores the recorded originals, so the element returns to its stylesheet
-        // reality and there is nothing to send.
-        this.deps.drafts.discard(el, ['display', ...FLEX_CONTAINER_PROPS])
-      } else {
-        // Flex comes from the app's own CSS: draft display:block as the deterministic preview,
-        // and discard any container-prop drafts so the request is just the removal.
-        this.deps.drafts.discard(el, FLEX_CONTAINER_PROPS)
-        this.deps.drafts.apply(el, 'display', 'block')
-      }
-      this.deps.refresh()
-      this.deps.onEdited()
+      this.withEdit((el) => {
+        if (this.deps.drafts.current(el, 'display') !== null) {
+          // Auto layout was added (or display re-drafted) this session — pure undo: targeted
+          // discard restores the recorded originals, so the element returns to its stylesheet
+          // reality and there is nothing to send.
+          this.deps.drafts.discard(el, ['display', ...FLEX_CONTAINER_PROPS])
+        } else {
+          // Flex comes from the app's own CSS: draft display:block as the deterministic preview,
+          // and discard any container-prop drafts so the request is just the removal.
+          this.deps.drafts.discard(el, FLEX_CONTAINER_PROPS)
+          this.deps.drafts.apply(el, 'display', 'block')
+        }
+      })
     })
     this.removeLayoutBtn = removeBtn
     return removeBtn
   }
 
-  /** Builds the cluster's children on a carrier element — the panel hoists them into the
-   * unified Layout body and discards the carrier (panel.ts's buildBody layout branch). */
-  buildBody(): HTMLElement {
-    const wrap = document.createElement('div')
-    wrap.className = 'panel-rows layout-section'
-
+  /** Appends the cluster's children (add-button + controls-wrap) directly onto `parent` —
+   * the panel's unified Layout body (panel.ts's buildBody layout branch). */
+  buildBodyInto(parent: HTMLElement): void {
     const addBtn = createButton({ label: '+ Add auto layout' })
     addBtn.setAttribute('data-add-layout', '')
     addBtn.addEventListener('click', () => {
-      const el = this.deps.getEl()
-      if (!el) return
-      this.deps.onBeforeEdit(el)
-      this.deps.drafts.apply(el, 'display', 'flex')
-      this.deps.refresh()
-      this.deps.onEdited()
+      this.withEdit((el) => {
+        this.deps.drafts.apply(el, 'display', 'flex')
+      })
     })
     this.addLayoutBtn = addBtn
-    wrap.append(addBtn)
+    parent.append(addBtn)
 
     const controls = document.createElement('div')
     controls.className = 'panel-rows layout-controls'
@@ -124,13 +127,10 @@ export class LayoutSection {
     wrapBtn.setAttribute('aria-label', 'Wrap')
     wrapBtn.title = 'flex-wrap: wrap → flex-wrap'
     wrapBtn.addEventListener('click', () => {
-      const el = this.deps.getEl()
-      if (!el) return
-      this.deps.onBeforeEdit(el)
-      const current = this.deps.currentValue(el, 'flex-wrap', getComputedStyle(el))
-      this.deps.drafts.apply(el, 'flex-wrap', current === 'wrap' ? 'nowrap' : 'wrap')
-      this.deps.refresh()
-      this.deps.onEdited()
+      this.withEdit((el) => {
+        const current = this.deps.currentValue(el, 'flex-wrap', getComputedStyle(el))
+        this.deps.drafts.apply(el, 'flex-wrap', current === 'wrap' ? 'nowrap' : 'wrap')
+      })
     })
     this.wrapToggle = wrapBtn
 
@@ -148,12 +148,9 @@ export class LayoutSection {
       // its own row).
       trailing: [wrapBtn],
       onInput: (value) => {
-        const el = this.deps.getEl()
-        if (!el) return
-        this.deps.onBeforeEdit(el)
-        this.deps.drafts.apply(el, 'flex-direction', value)
-        this.deps.refresh()
-        this.deps.onEdited()
+        this.withEdit((el) => {
+          this.deps.drafts.apply(el, 'flex-direction', value)
+        })
       },
     })
     // Marks the row for the stacked label-above-track CSS ([data-flex-direction] in
@@ -169,13 +166,10 @@ export class LayoutSection {
 
     this.alignMatrix = new AlignMatrix({
       onInput: ({ justify, align }) => {
-        const el = this.deps.getEl()
-        if (!el) return
-        this.deps.onBeforeEdit(el)
-        this.deps.drafts.apply(el, 'justify-content', justify)
-        this.deps.drafts.apply(el, 'align-items', align)
-        this.deps.refresh()
-        this.deps.onEdited()
+        this.withEdit((el) => {
+          this.deps.drafts.apply(el, 'justify-content', justify)
+          this.deps.drafts.apply(el, 'align-items', align)
+        })
       },
     })
     tile.append(this.alignMatrix.root)
@@ -189,19 +183,16 @@ export class LayoutSection {
     baselineBtn.setAttribute('data-align-baseline', '')
     baselineBtn.title = 'align-items: baseline → items-baseline'
     baselineBtn.addEventListener('click', () => {
-      const el = this.deps.getEl()
-      if (!el) return
-      this.deps.onBeforeEdit(el)
-      const active = this.deps.currentValue(el, 'align-items', getComputedStyle(el)) === 'baseline'
-      if (!active) {
-        this.deps.drafts.apply(el, 'align-items', 'baseline')
-      } else if (this.deps.drafts.current(el, 'align-items') !== null) {
-        this.deps.drafts.discard(el, ['align-items'])
-      } else {
-        this.deps.drafts.apply(el, 'align-items', 'flex-start')
-      }
-      this.deps.refresh()
-      this.deps.onEdited()
+      this.withEdit((el) => {
+        const active = this.deps.currentValue(el, 'align-items', getComputedStyle(el)) === 'baseline'
+        if (!active) {
+          this.deps.drafts.apply(el, 'align-items', 'baseline')
+        } else if (this.deps.drafts.current(el, 'align-items') !== null) {
+          this.deps.drafts.discard(el, ['align-items'])
+        } else {
+          this.deps.drafts.apply(el, 'align-items', 'flex-start')
+        }
+      })
     })
     this.baselineToggle = baselineBtn
     tile.append(baselineBtn)
@@ -218,8 +209,7 @@ export class LayoutSection {
     grid.append(side)
     controls.append(grid)
 
-    wrap.append(controls)
-    return wrap
+    parent.append(controls)
   }
 
   /** The flex-child Align/size-mode strip (today's buildFlexChildControls). */
@@ -237,12 +227,9 @@ export class LayoutSection {
         { value: 'stretch', label: 'Stretch' },
       ],
       onInput: (value) => {
-        const el = this.deps.getEl()
-        if (!el) return
-        this.deps.onBeforeEdit(el)
-        this.deps.drafts.apply(el, 'align-self', value)
-        this.deps.refresh()
-        this.deps.onEdited()
+        this.withEdit((el) => {
+          this.deps.drafts.apply(el, 'align-self', value)
+        })
       },
     })
     this.alignSelfField.root.setAttribute('data-align-self', '')
@@ -254,7 +241,9 @@ export class LayoutSection {
   /** Registers a size-mode select bound to a NumberField — called by panel.ts's buildRow
    * for the Size section rows, so LayoutSection's refresh() can drive their visibility and
    * mode inference the same way it always has (sizeModes was a Panel-private array before
-   * the move; it now lives here since only flex-child refresh reads/writes it). */
+   * the move; it now lives here since only flex-child refresh reads/writes it). The full
+   * size-mode lifecycle — registry, read half (updateSizeMode), and write half
+   * (onSizeModeChange) — lives entirely in LayoutSection. */
   registerSizeMode(sm: BoundSizeMode): void {
     this.sizeModes.push(sm)
   }
@@ -353,7 +342,7 @@ export class LayoutSection {
    *     - cross axis: computed align-self is 'stretch'
    * - Hug: no explicit size draft/inline AND not Fill (default content-based sizing).
    */
-  // READ half of the size-mode policy — keep in lockstep with the WRITE half, onSizeModeChange in panel.ts.
+  // READ half of the size-mode policy — its WRITE half, onSizeModeChange, sits right below.
   private updateSizeMode(el: TaggedElement, sm: BoundSizeMode, main: 'width' | 'height'): void {
     const prop = sm.spec.props[0] as 'width' | 'height'
     const isMain = prop === main
@@ -383,6 +372,68 @@ export class LayoutSection {
     }
 
     sm.select.value = 'hug'
+  }
+
+  // WRITE half of the size-mode policy — its READ half, updateSizeMode, sits right above.
+  // Deviates from the shared withEdit frame: the Fixed-mode non-finite-size guard must bail
+  // out of the ENTIRE handler (no refresh/onEdited either), not just skip the mutation — so
+  // this can't route through withEdit, which always calls refresh/onEdited after `fn` returns.
+  onSizeModeChange(spec: RowSpec, mode: string): void {
+    const el = this.deps.getEl()
+    if (!el) return
+    this.deps.onBeforeEdit(el)
+    const prop = spec.props[0]
+    const parent = el.parentElement
+    const parentDirection =
+      parent && isFlex(parent as TaggedElement)
+        ? getComputedStyle(parent as TaggedElement).flexDirection.startsWith('column')
+          ? 'column'
+          : 'row'
+        : 'row'
+    const main = mainAxisProp(parentDirection)
+    const isMain = prop === main
+
+    if (mode === 'fixed') {
+      // Figma semantics: selecting Fixed pins the element's CURRENT rendered size —
+      // it doesn't wait for the user to type a number. First capture the computed size
+      // the user SEES (before discarding mode props that may affect layout), then clear
+      // whatever mode props produced the current Fill/Hug layout so they don't leak into
+      // the change request, then draft the computed size as an explicit px value so
+      // the mode-inference heuristic reads it back as Fixed immediately.
+      // Cross-axis: only discard align-self when it holds the 'stretch' value Fill wrote —
+      // a user-drafted value (e.g. flex-start via the Align segment field) must survive
+      // switching this axis to Fixed.
+      const modeProps = isMain
+        ? ['flex-grow', 'flex-basis']
+        : this.deps.drafts.current(el, 'align-self') === 'stretch'
+          ? ['align-self']
+          : []
+      const isAutoNow = this.deps.drafts.current(el, prop) === 'auto'
+      if (isAutoNow) modeProps.push(prop)
+      let computedSize = Math.round(parseFloat(getComputedStyle(el).getPropertyValue(prop)))
+      // If jsdom can't compute the size (returns NaN for 'auto' without layout engine),
+      // fall back to the original value that will be restored by discard()
+      if (isNaN(computedSize) && isAutoNow) {
+        const draftEntry = this.deps.drafts.entries().get(el)?.get(prop)
+        computedSize = draftEntry ? Math.round(parseFloat(draftEntry.original)) : computedSize
+      }
+      // Unconditional guard: whatever the source, never draft a non-finite size — bail
+      // out of the pin entirely rather than writing e.g. "NaNpx" into the change request.
+      if (!Number.isFinite(computedSize)) return
+      this.deps.drafts.discard(el, modeProps)
+      this.deps.drafts.apply(el, prop, `${computedSize}px`)
+    } else if (mode === 'hug') {
+      this.deps.drafts.apply(el, prop, 'auto')
+    } else if (mode === 'fill') {
+      if (isMain) {
+        this.deps.drafts.apply(el, 'flex-grow', '1')
+        this.deps.drafts.apply(el, 'flex-basis', '0%')
+      } else {
+        this.deps.drafts.apply(el, 'align-self', 'stretch')
+      }
+    }
+    this.deps.refresh()
+    this.deps.onEdited()
   }
 
   /** Null out widget refs (today's teardown lines). */
