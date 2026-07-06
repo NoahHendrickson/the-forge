@@ -290,7 +290,7 @@ describe('Panel', () => {
     expect((sections[0] as HTMLElement).hidden).toBe(false)
   })
 
-  it('unified Layout body composes W/H, flex-child strip, cluster, padding in order (spec M-C)', () => {
+  it('unified Layout body composes W/H, cluster, padding, align in order (2026-07-06 layout-polish spec)', () => {
     const { panel } = flexSetup()
     const body = panel.root.querySelector('.layout-section') as HTMLElement
     const kinds = [...body.children].map((c) =>
@@ -301,10 +301,10 @@ describe('Panel', () => {
             ? 'minmax-min'
             : 'minmax-max'
           : c.classList.contains('flex-child-controls')
-            ? 'flex-child'
+            ? 'align'
             : c.classList.contains('layout-controls') || c.hasAttribute('data-add-layout')
               ? 'cluster'
-              : (c as HTMLElement).dataset.props?.startsWith('padding')
+              : c.hasAttribute('data-padding-row')
                 ? 'padding'
                 : c.className
     )
@@ -315,12 +315,30 @@ describe('Panel', () => {
       'size',
       'minmax-min',
       'minmax-max',
-      'flex-child',
       'cluster',
       'cluster',
       'padding',
-      'padding',
+      'align',
     ])
+  })
+
+  it('padding block carries a group label and one line with both H/V fields', () => {
+    const { panel } = setup()
+    const block = panel.root.querySelector('[data-padding-row]') as HTMLElement
+    expect(block).toBeTruthy()
+    expect((block.querySelector('.group-label') as HTMLElement).textContent).toBe('Padding')
+    const fields = [...block.querySelectorAll('.padding-fields .nf')] as HTMLElement[]
+    expect(fields.map((f) => f.dataset.props)).toEqual([
+      'padding-left padding-right',
+      'padding-top padding-bottom',
+    ])
+  })
+
+  it('align block carries a group label and the toggle button', () => {
+    const { panel } = setup()
+    const wrap = panel.root.querySelector('.flex-child-controls') as HTMLElement
+    expect((wrap.querySelector('.group-label') as HTMLElement).textContent).toBe('Align')
+    expect(wrap.querySelector('[data-align-toggle]')).toBeTruthy()
   })
 
   it('layout controls compose a layout-grid with a matrix-tile and a layout-side column', () => {
@@ -609,6 +627,8 @@ describe('Panel', () => {
 
   it('flex-child controls are hidden when parent is not flex', () => {
     const { panel } = setup()
+    const wrap = panel.root.querySelector('.flex-child-controls') as HTMLElement
+    expect(wrap.hidden).toBe(true)
     const alignSelf = panel.root.querySelector('[data-align-self]') as HTMLElement
     expect(alignSelf.hidden).toBe(true)
     // .size-row wraps only the W/H sizing-mode selects (Typography's family/weight selects
@@ -631,21 +651,101 @@ describe('Panel', () => {
     return { el, drafts, panel, onEdited }
   }
 
-  it('flex-child controls appear when parent is flex', () => {
+  it('align strip is OFF by default when parent is flex and align-self is default', () => {
     const { panel } = childSetup()
-    const alignSelf = panel.root.querySelector('[data-align-self]') as HTMLElement
-    expect(alignSelf.hidden).toBe(false)
-    const modes = [...panel.root.querySelectorAll('.size-mode')] as HTMLElement[]
-    expect(modes.length).toBeGreaterThan(0)
+    const toggle = panel.root.querySelector('[data-align-toggle]') as HTMLElement
+    const strip = panel.root.querySelector('[data-align-self]') as HTMLElement
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect(strip.hidden).toBe(true)
+    // size-mode selects still shown for flex children — the toggle gates only the strip
+    const modes = [...panel.root.querySelectorAll('.size-row .size-mode')] as HTMLElement[]
     expect(modes.every((m) => !m.hidden)).toBe(true)
   })
 
-  it('align-self segment field drafts align-self', () => {
+  it('toggling ON reveals the strip without drafting anything', () => {
     const { el, panel, drafts } = childSetup()
+    ;(panel.root.querySelector('[data-align-toggle]') as HTMLElement).click()
+    const strip = panel.root.querySelector('[data-align-self]') as HTMLElement
+    expect(strip.hidden).toBe(false)
+    expect(drafts.current(el, 'align-self')).toBeNull()
+    // nothing to send: opening the row is not an edit (same contract as opening a min/max row)
+    expect(buildChangeRequest(drafts).elements.find((e) => e.selector === '#t')).toBeUndefined()
+  })
+
+  it('picking a segment after toggling ON drafts align-self', () => {
+    const { el, panel, drafts } = childSetup()
+    ;(panel.root.querySelector('[data-align-toggle]') as HTMLElement).click()
     const seg = panel.root.querySelector('[data-align-self]')!
-    const stretchBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Stretch') as HTMLElement
-    stretchBtn.click()
-    expect(drafts.current(el, 'align-self')).toBe('stretch')
+    const startBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Start') as HTMLElement
+    startBtn.click()
+    expect(drafts.current(el, 'align-self')).toBe('flex-start')
+    expect((panel.root.querySelector('[data-align-toggle]') as HTMLElement).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('toggling OFF discards a session draft (pure undo, Baseline semantics)', () => {
+    const { el, panel, drafts } = childSetup()
+    const toggle = panel.root.querySelector('[data-align-toggle]') as HTMLElement
+    toggle.click()
+    const seg = panel.root.querySelector('[data-align-self]')!
+    ;([...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Center') as HTMLElement).click()
+    expect(drafts.current(el, 'align-self')).toBe('center')
+    toggle.click()
+    expect(drafts.current(el, 'align-self')).toBeNull()
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('auto-ON when the app CSS sets align-self; toggling OFF drafts align-self: auto', () => {
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="align-self: center; width: 50px;"></div>
+    </div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    const toggle = panel.root.querySelector('[data-align-toggle]') as HTMLElement
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(false)
+    toggle.click()
+    expect(drafts.current(el, 'align-self')).toBe('auto')
+    // The switch must actually turn OFF: a drafted `auto` reads as default (spec: drafted
+    // align-self of auto/normal is non-disclosing) — final-review regression.
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('auto-ON for a restored (pre-show) align-self draft', () => {
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px;"></div>
+    </div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const drafts = new DraftStore()
+    drafts.apply(el, 'align-self', 'center')
+    const panel = new Panel(drafts, vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    expect((panel.root.querySelector('[data-align-toggle]') as HTMLElement).getAttribute('aria-pressed')).toBe('true')
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('cross-axis Fill turns the align toggle ON (stretch is real, never masked)', () => {
+    const { panel } = childSetup()
+    const hRow = fieldInput(panel, P.H).closest('.nf')!.parentElement!
+    const select = hRow.querySelector('.size-mode') as HTMLSelectElement
+    select.value = 'fill'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect((panel.root.querySelector('[data-align-toggle]') as HTMLElement).getAttribute('aria-pressed')).toBe('true')
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('manual-open latch clears on selection change', () => {
+    const { panel } = childSetup()
+    ;(panel.root.querySelector('[data-align-toggle]') as HTMLElement).click()
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(false)
+    // reselect the same element: buildBody rebuilds, latch must not survive
+    const el = document.getElementById('t')! as HTMLElement
+    panel.show(el, buildInspectorData(el))
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(true)
   })
 
   it('W size-mode Fill on a row parent drafts flex-grow and flex-basis (main axis)', () => {

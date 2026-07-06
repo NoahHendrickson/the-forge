@@ -42,3 +42,15 @@ M-C (spec 2026-07-05, user-ratified) merges Layout + Size + Padding into one Fig
 order, flex or not. Section order re-ratified, fixed forever: Layout → Margin (conditional) →
 Typography → Fill → Stroke → Appearance. The stable-order principle (contextual content, never
 contextual position) is unchanged — this is a one-time re-ratification, not a relaxation.
+
+## Amendment — 2026-07-06 (user-ratified in the layout-polish brainstorm)
+
+- **align-self is disclosure, not default surface.** The flex-child Align strip moved to the
+  BOTTOM of the Layout section behind an off-by-default toggle: designers think
+  container-first (9-dot matrix on the parent); Figma has no per-child start/center/end
+  override at all. Auto-on when a draft, the app's CSS, or cross-axis Fill already sets
+  align-self — an off toggle never masks reality. Spec:
+  [2026-07-06-layout-align-disclosure-design.md](../specs/2026-07-06-layout-align-disclosure-design.md).
+- **Within-Layout order re-ratified:** W/H (+min/max) → auto-layout cluster → Padding
+  (group label + one H|V line) → Align. Supersedes M-C's W/H → flex-child strip → cluster →
+  padding order.

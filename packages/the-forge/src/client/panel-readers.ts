@@ -90,6 +90,23 @@ export function minMaxRowVisible(prop: string, computed: string, hasDraft: boole
   return !defaults.includes(computed)
 }
 
+/**
+ * Align-self row disclosure (2026-07-06 layout-polish spec): the row's toggle reads ON when
+ * the user opened it this selection, a draft is live, or the computed value is non-default —
+ * an off toggle must never mask a real align-self from the app's CSS or from cross-axis
+ * size-mode Fill (which writes align-self: stretch). Defaults: '', 'auto', 'normal'
+ * (jsdom '' counts as default, same convention as minMaxRowVisible).
+ */
+export function alignSelfRowOn(computed: string, draft: string | null, opened: boolean): boolean {
+  if (opened) return true
+  const defaults = ['', 'auto', 'normal']
+  // A live draft speaks for the element (it masks the stylesheet value beneath): a drafted
+  // auto/normal reads as default so the toggle can actually turn OFF over app CSS — the
+  // pending "follow parent" edit still rides in the Changes list (final-review finding).
+  if (draft !== null) return !defaults.includes(draft)
+  return !defaults.includes(computed)
+}
+
 /** Snaps a computed font-weight keyword/number to one of the 9 named-weight values. */
 function snapWeight(css: string): string {
   if (css === 'normal') return '400'

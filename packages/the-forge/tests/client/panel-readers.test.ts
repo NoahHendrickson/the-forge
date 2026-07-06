@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { marginSectionVisible, minMaxRowVisible, normalizeAlign } from '../../src/client/panel-readers'
+import { alignSelfRowOn, marginSectionVisible, minMaxRowVisible, normalizeAlign } from '../../src/client/panel-readers'
 import { DraftStore } from '../../src/client/drafts'
 import type { TaggedElement } from '../../src/client/source'
 
@@ -60,5 +60,33 @@ describe('minMaxRowVisible', () => {
 describe('normalizeAlign', () => {
   it('normalizeAlign passes baseline through untouched (baseline is a real matrix-less state)', () => {
     expect(normalizeAlign('baseline')).toBe('baseline')
+  })
+})
+
+describe('alignSelfRowOn', () => {
+  it('is on when manually opened, regardless of value', () => {
+    expect(alignSelfRowOn('auto', null, true)).toBe(true)
+  })
+  it('is on when a draft is live with a non-default value', () => {
+    expect(alignSelfRowOn('auto', 'center', false)).toBe(true)
+  })
+  it('is off for default computed values (jsdom empty string counts as default)', () => {
+    expect(alignSelfRowOn('', null, false)).toBe(false)
+    expect(alignSelfRowOn('auto', null, false)).toBe(false)
+    expect(alignSelfRowOn('normal', null, false)).toBe(false)
+  })
+  it('auto-reveals a non-default computed align-self (app CSS or Fill-written stretch)', () => {
+    expect(alignSelfRowOn('stretch', null, false)).toBe(true)
+    expect(alignSelfRowOn('center', null, false)).toBe(true)
+  })
+  it('a drafted auto/normal reads as default even over non-default computed CSS (toggle OFF over app CSS)', () => {
+    expect(alignSelfRowOn('center', 'auto', false)).toBe(false)
+    expect(alignSelfRowOn('center', 'normal', false)).toBe(false)
+  })
+  it('a drafted non-default value is ON', () => {
+    expect(alignSelfRowOn('', 'center', false)).toBe(true)
+  })
+  it('opened wins even when the draft would read as default', () => {
+    expect(alignSelfRowOn('center', 'auto', true)).toBe(true)
   })
 })

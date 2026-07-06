@@ -14,7 +14,7 @@ import { createButton } from './ui/button'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { PanelTokenUi } from './panel-token-ui'
 import { type RowSpec, GAP_SPEC } from './panel-specs'
-import { fromPx, isFlex, normalizeJustify, normalizeAlign, mainAxisProp, minMaxRowVisible } from './panel-readers'
+import { fromPx, isFlex, normalizeJustify, normalizeAlign, mainAxisProp, minMaxRowVisible, alignSelfRowOn } from './panel-readers'
 
 // The container-side flex props the panel can draft — the set 'remove auto layout' must
 // clean up alongside display (child props like align-self/flex-grow belong to the CHILD's
@@ -65,6 +65,7 @@ export class LayoutSection {
   private alignSelfField: SegmentField | null = null
   private alignSelfWrap: HTMLElement | null = null
   private flexChildControlsWrap: HTMLElement | null = null
+  private alignToggle: HTMLButtonElement | null = null
   private sizeModes: BoundSizeMode[] = []
 
   // M-D min/max sizing: rows registered per-selection (same lifecycle as sizeModes) plus the
@@ -73,6 +74,11 @@ export class LayoutSection {
   // ∪ non-default-computed, see refreshMinMax). Keyed by CSS prop ('min-width', 'max-height', …).
   private minMaxRows: BoundMinMaxRow[] = []
   private openedMinMax = new Set<string>()
+
+  // Align-self disclosure latch — same per-selection lifecycle as openedMinMax (cleared in
+  // teardown): toggling ON without a draft latches the row open; the ON state itself is the
+  // canonical alignSelfRowOn predicate (opened ∪ live-draft ∪ non-default-computed).
+  private alignOpened = false
 
   constructor(private deps: LayoutSectionDeps) {}
 
@@ -225,13 +231,31 @@ export class LayoutSection {
     parent.append(controls)
   }
 
-  /** The flex-child Align/size-mode strip (today's buildFlexChildControls). */
+  /** The flex-child align block (2026-07-06 layout-polish spec): "Align" group label + the
+   * disclosure toggle, then the align-self segment strip. Off = follow the parent's 9-dot
+   * alignment; the toggle's behavior lands in onAlignToggle (Task 3). */
   buildFlexChildControls(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'flex-child-controls'
     this.flexChildControlsWrap = wrap
+
+    const head = document.createElement('div')
+    head.className = 'align-head'
+    const label = document.createElement('span')
+    label.className = 'group-label'
+    label.textContent = 'Align'
+    const toggle = createButton({ label: '' })
+    toggle.classList.add('align-toggle')
+    toggle.setAttribute('data-align-toggle', '')
+    toggle.setAttribute('aria-label', 'Align independently of parent')
+    toggle.title = "align-self — override the parent container's alignment for this element"
+    this.alignToggle = toggle
+    toggle.addEventListener('click', () => this.onAlignToggle())
+    head.append(label, toggle)
+    wrap.append(head)
+
     this.alignSelfField = new SegmentField({
-      label: 'Align',
+      label: '',
       options: [
         { value: 'auto', label: 'Auto' },
         { value: 'flex-start', label: 'Start', title: 'align-self: flex-start → self-start' },
@@ -246,6 +270,7 @@ export class LayoutSection {
       },
     })
     this.alignSelfField.root.setAttribute('data-align-self', '')
+    this.alignSelfField.root.hidden = true
     this.alignSelfWrap = this.alignSelfField.root
     wrap.append(this.alignSelfField.root)
     return wrap
@@ -280,6 +305,36 @@ export class LayoutSection {
     this.deps.refresh()
     const reg = this.minMaxRows.find((r) => r.spec.props[0] === prop)
     reg?.field.root.querySelector('input')?.focus()
+  }
+
+  private alignOn(el: TaggedElement, computed: CSSStyleDeclaration): boolean {
+    const draft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, 'align-self')
+    return alignSelfRowOn(computed.getPropertyValue('align-self'), draft, this.alignOpened)
+  }
+
+  /** Align toggle. OFF→ON latches the row open and drafts nothing (openMinMax's non-withEdit
+   * shape — there is nothing to send yet). ON→OFF composes both undo stories in one click:
+   * discard any session draft, and if the stylesheet STILL asserts a non-default align-self
+   * after the discard, draft `auto` so the change request says "follow the parent" — without
+   * the second half, an app-CSS value would auto-reveal the row right back ON. */
+  private onAlignToggle(): void {
+    const el = this.deps.getEl()
+    if (!el) return
+    if (!this.alignOn(el, getComputedStyle(el))) {
+      this.alignOpened = true
+      this.deps.refresh()
+      return
+    }
+    this.alignOpened = false
+    this.withEdit((elm) => {
+      if (this.deps.drafts.current(elm, 'align-self') !== null) {
+        this.deps.drafts.discard(elm, ['align-self'])
+      }
+      const css = getComputedStyle(elm).getPropertyValue('align-self')
+      if (!['', 'auto', 'normal'].includes(css)) {
+        this.deps.drafts.apply(elm, 'align-self', 'auto')
+      }
+    })
   }
 
   /**
@@ -369,7 +424,7 @@ export class LayoutSection {
   private refreshFlexChild(el: TaggedElement, computed: CSSStyleDeclaration): void {
     const parent = el.parentElement
     const visible = parent !== null && isFlex(parent as TaggedElement)
-    if (this.alignSelfWrap) this.alignSelfWrap.hidden = !visible
+    if (this.flexChildControlsWrap) this.flexChildControlsWrap.hidden = !visible
     for (const sm of this.sizeModes) sm.select.hidden = !visible
     if (!visible) return
 
@@ -379,7 +434,10 @@ export class LayoutSection {
     const main = mainAxisProp(parentDirection)
 
     const alignSelf = this.deps.currentValue(el, 'align-self', computed)
-    this.alignSelfField?.set(alignSelf || 'auto')
+    const on = this.alignOn(el, computed)
+    this.alignToggle?.setAttribute('aria-pressed', String(on))
+    if (this.alignSelfWrap) this.alignSelfWrap.hidden = !on
+    if (on) this.alignSelfField?.set(alignSelf || 'auto')
 
     for (const sm of this.sizeModes) {
       this.updateSizeMode(el, sm, main)
@@ -501,8 +559,10 @@ export class LayoutSection {
     this.alignSelfField = null
     this.alignSelfWrap = null
     this.flexChildControlsWrap = null
+    this.alignToggle = null
     this.sizeModes = []
     this.minMaxRows = []
     this.openedMinMax.clear()
+    this.alignOpened = false
   }
 }

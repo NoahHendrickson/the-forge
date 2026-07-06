@@ -131,6 +131,10 @@ Four milestones, each its own dated plan in `docs/plans/` and its own feature br
   Baseline) → Padding rows (H/V, `⋯` expands to T/R/B/L, sharing the section's title row with
   the `−` remove-auto-layout affordance)**. Padding always renders here, flex or not; the
   cluster is the only single-select-only piece (hidden in multi, same rule as before the move).
+
+  > Amended 2026-07-06: the flex-child Align strip moved to the bottom of the Layout section
+  > behind an off-by-default disclosure toggle, and padding gained a group label + one-line H|V
+  > row — see [2026-07-06-layout-align-disclosure-design.md](2026-07-06-layout-align-disclosure-design.md).
 - Standalone Size and Padding sections are deleted; their row markup moved verbatim (same
   classes, same `expandKey: 'padding'`) into the new `LayoutSection` class
   (`src/client/panel-layout.ts`), extracted from `panel.ts` per PR #16's refactor promise —
