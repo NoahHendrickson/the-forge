@@ -61,7 +61,7 @@ no custom tooltip component.
 | Alignment matrix (9-dot) | `justify-content` × `align-items` | `justify-*`, `items-*` |
 | Baseline align toggle | `align-items: baseline` | `items-baseline` |
 | W / H (Fixed) | `width` / `height` | `w-*` / `h-*` |
-| W / H (Hug) | `width/height: fit-content`/`auto` | `w-fit` / `h-auto` |
+| W / H (Hug) | `width/height: auto` | `w-auto` / `h-auto` (amended 2026-07-06: Hug ships `auto` on both axes; the originally-tabled `fit-content`/`w-fit` was never emitted) |
 | W / H (Fill) | `flex: 1` / `align-self: stretch` | `flex-1` / `self-stretch` |
 | Min/Max W/H | `min-width` `max-width` `min-height` `max-height` | `min-w-*` `max-w-*` `min-h-*` `max-h-*` |
 | Padding H / V (expand T/R/B/L) | `padding-*` | `px-*` `py-*` `pt-*` … |
@@ -194,6 +194,13 @@ Four milestones, each its own dated plan in `docs/plans/` and its own feature br
   decision B6) — hidden entirely in multi-select, not merely disabled; W/H and Padding rows keep
   working with relative deltas/Mixed-not-blank as before. YAGNI-documented: no multi-select
   min/max editing in this pass.
+- **Flex-child scoping (intentional, recorded post-review 2026-07-06):** the size-mode select —
+  the only ADD entry point for min/max — renders only when the selected element's parent is a
+  flex container (the pre-existing flex-child gate on `.size-mode`), so a non-flex-child element
+  can disclose and edit an EXISTING constraint (disclosure runs outside the flex gate) but
+  cannot add one from the panel. Figma-parallel (min/max lives in auto-layout sizing there);
+  revisit if real sessions want `max-width` on plain flow containers — the fix would be showing
+  the two action items (not the mode select) unconditionally.
 - No verifier changes: min/max verify through the normal computed-style path.
 - **E2E-verified (Task 3, real browser, Playwright against the demo app):** single-select default
   state (no min/max rows, W/H editable); the Add min…/Add max… action-item round-trip (row
