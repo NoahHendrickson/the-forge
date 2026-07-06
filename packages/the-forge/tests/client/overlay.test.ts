@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { Overlay, CSS, TOKENS } from '../../src/client/overlay'
+
+// The overlay's why-comments live as TS comments in the source (kept out of the shipped
+// CSS string for package-budget reasons — see perf(client) shipped-CSS-comments commit),
+// so tests that assert on comment TEXT read the source file directly instead of `CSS`.
+const overlaySource = readFileSync(path.join(__dirname, '../../src/client/overlay.ts'), 'utf8')
 
 beforeEach(() => {
   document.body.innerHTML = ''
@@ -119,11 +126,18 @@ describe('Overlay CSS design tokens (Task 1)', () => {
 
 
   it('the ripple why-comment ("must stay distinct from selection accent") is preserved verbatim', () => {
-    expect(CSS).toContain('must stay distinct from selection accent')
+    // Lives as a TS comment adjacent to the CSS now (not inside the CSS string itself) —
+    // see the source-comments note above.
+    expect(overlaySource).toContain('must stay distinct from selection accent')
   })
 
   it('the palette comment block documents token names, not raw values', () => {
-    const commentBlock = CSS.slice(CSS.indexOf('/*'), CSS.indexOf('*/') + 2)
+    // The token doc block is now the TS comment block directly above `export const CSS`
+    // (see the source-comments note above), not a CSS-embedded /* */ comment.
+    const commentBlock = overlaySource.slice(
+      overlaySource.indexOf('// Design tokens'),
+      overlaySource.indexOf('export const CSS'),
+    )
     expect(commentBlock).toContain('--surface')
     expect(commentBlock).toContain('--accent')
     expect(commentBlock).toContain('--ripple')
@@ -466,7 +480,10 @@ describe('Overlay CSS prompt box (prompt-mode)', () => {
     expect(CSS).toContain('.prompt-box')
     expect(CSS).toContain('.prompt-textarea')
     expect(CSS).toContain('.prompt-send')
-    expect(CSS).toContain('.panel-prompt')
+    // .panel-prompt itself is a layout-only class hook with no CSS rule of its own (see
+    // panel.ts / the why-comment in overlay.ts source) — its stable-contract status is
+    // documented in source comments, not a CSS-embedded rule.
+    expect(overlaySource).toContain('.panel-prompt')
   })
 
   // Finding 1 fix: .panel-head is a block container (position: relative only, so

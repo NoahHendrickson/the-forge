@@ -38,26 +38,24 @@ const tokenBlock = Object.entries(TOKENS)
   .map(([name, value]) => `  --${name}: ${value};`)
   .join('\n')
 
+// Design tokens (Figma UI3 dark reference) — used via var() throughout this file.
+// --surface / --surface-2: panel and elevated-popover backgrounds.
+// --control / --control-hover / --control-active: elevated control bg and its states.
+// --border-panel / --border-strong / --separator: panel border, strong border
+//   (toggle/status border, scrollbar thumb), and section-rule border.
+// --text-primary / --text-secondary / --text-title / --text-faint / --text-muted:
+//   the text-color scale, darkest (primary) to dimmest (muted).
+// --accent / --accent-soft / --accent-outline: interactive blue and its tints.
+// --positive / --watch-idle: watch indicator's live vs. idle color.
+// --ripple: sibling-reflow ripple outline (must stay distinct from selection accent)
+// --font-ui / --font-mono: font-family stacks.
+// --text-xs / --text-sm / --text-md: the 10/11/12px type scale.
+// Radius: panel 12px, controls 6px, matrix tile 8px.
 export const CSS = `
 [hidden] { display: none !important; }
 *, *::before, *::after { box-sizing: border-box; }
 :host { all: initial; }
 :host {
-  /*
-   * Design tokens (Figma UI3 dark reference) — used via var() throughout this file.
-   * --surface / --surface-2: panel and elevated-popover backgrounds.
-   * --control / --control-hover / --control-active: elevated control bg and its states.
-   * --border-panel / --border-strong / --separator: panel border, strong border
-   *   (toggle/status border, scrollbar thumb), and section-rule border.
-   * --text-primary / --text-secondary / --text-title / --text-faint / --text-muted:
-   *   the text-color scale, darkest (primary) to dimmest (muted).
-   * --accent / --accent-soft / --accent-outline: interactive blue and its tints.
-   * --positive / --watch-idle: watch indicator's live vs. idle color.
-   * --ripple: sibling-reflow ripple outline (must stay distinct from selection accent)
-   * --font-ui / --font-mono: font-family stacks.
-   * --text-xs / --text-sm / --text-md: the 10/11/12px type scale.
-   * Radius: panel 12px, controls 6px, matrix tile 8px.
-   */
 ${tokenBlock}
 }
 
@@ -113,17 +111,19 @@ button {
   box-shadow: 0 5px 24px rgba(0,0,0,0.35);
   -webkit-font-smoothing: antialiased;
 }
-/* Docked: full-height right sidebar; page content is pushed left by Dock's html
- * margin-right (the VisBug-style mechanism — see dock.ts). */
-#panel.docked {
+` +
+// Docked: full-height right sidebar; page content is pushed left by Dock's html
+// margin-right (the VisBug-style mechanism — see dock.ts).
+`#panel.docked {
   top: 0; right: 0; bottom: 0; max-height: none;
   border-radius: 0; border: none; border-left: 1px solid var(--border-panel);
   box-shadow: none;
 }
-/* The scroll container is the BODY, not the root: the root is a flex column so the
- * footer pins, and popovers live inside the body (position: relative) so they keep
- * tracking their anchor rows when the sections scroll. */
-.panel-body {
+` +
+// The scroll container is the BODY, not the root: the root is a flex column so the
+// footer pins, and popovers live inside the body (position: relative) so they keep
+// tracking their anchor rows when the sections scroll.
+`.panel-body {
   flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative;
 }
 #panel .panel-head, #panel .panel-actions { flex: none; }
@@ -136,16 +136,18 @@ button {
   cursor: col-resize; z-index: 20;
 }
 .panel-resize:hover, .panel-resize:active { background: rgba(13,153,255,0.4); }
-/* .panel-mode's corner anchor moved onto the shared .panel-head-actions wrapper below —
- * .panel-prompt (content-sized, unlike .panel-mode's fixed 22px) needs a flex sibling to
- * sit beside rather than a guessed fixed right offset. */
-.panel-mode {
+` +
+// .panel-mode's corner anchor moved onto the shared .panel-head-actions wrapper below —
+// .panel-prompt (content-sized, unlike .panel-mode's fixed 22px) needs a flex sibling to
+// sit beside rather than a guessed fixed right offset.
+`.panel-mode {
   width: 22px; height: 20px; padding: 0; line-height: 1;
 }
-/* Header corner action cluster (Prompt + mode toggle) — anchored where .panel-mode used
- * to anchor itself; .panel-head's right padding below reserves room for this whole
- * cluster, not just the mode button, so a long tag/source line still can't run under it. */
-.panel-head-actions {
+` +
+// Header corner action cluster (Prompt + mode toggle) — anchored where .panel-mode used
+// to anchor itself; .panel-head's right padding below reserves room for this whole
+// cluster, not just the mode button, so a long tag/source line still can't run under it.
+`.panel-head-actions {
   position: absolute; top: 10px; right: 10px;
   display: flex; align-items: center; gap: 6px;
 }
@@ -153,17 +155,19 @@ button {
 .panel-body::-webkit-scrollbar { width: 8px; }
 .panel-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 
-/* Right padding reserves the absolute .panel-head-actions cluster's footprint (Prompt +
- * mode button, not just the mode button alone) so a long tag (or "No selection") never
- * runs underneath it. */
-#panel .panel-head { position: relative; padding: 12px 96px 10px 12px; }
+` +
+// Right padding reserves the absolute .panel-head-actions cluster's footprint (Prompt +
+// mode button, not just the mode button alone) so a long tag (or "No selection") never
+// runs underneath it.
+`#panel .panel-head { position: relative; padding: 12px 96px 10px 12px; }
 #panel .panel-head-tag { font: 600 var(--text-md) var(--font-ui); color: var(--text-primary); }
-/* Dir + tail spans: the DIRECTORY ellipsizes while the filename:line:col tail keeps
- * flex: none — the useful part of a source path is its end, which plain end-ellipsis
- * used to cut first. (Chosen over a direction:rtl clip trick, which mangles
- * punctuation, and over JS width-measuring truncation, which needs re-running on
- * every resize.) */
-#panel .panel-head-src {
+` +
+// Dir + tail spans: the DIRECTORY ellipsizes while the filename:line:col tail keeps
+// flex: none — the useful part of a source path is its end, which plain end-ellipsis
+// used to cut first. (Chosen over a direction:rtl clip trick, which mangles
+// punctuation, and over JS width-measuring truncation, which needs re-running on
+// every resize.)
+`#panel .panel-head-src {
   font: 400 var(--text-xs) var(--font-mono); color: var(--text-muted); margin-top: 2px;
   display: flex; min-width: 0;
 }
@@ -208,10 +212,11 @@ button {
   width: 100%; min-width: 24px; flex: 1;
   border: none; outline: none; font: 400 var(--text-sm) var(--font-ui); color: var(--text-primary); background: transparent;
 }
-/* The one "this value is a design token" pill treatment — shared by numeric inputs and the
- * color rows' value chip (.color-value-pill, toggled by colorDisplay()'s exact-match check)
- * so the token look can't drift between field kinds. Input-specific layout stays below. */
-.nf-pill input, .color-value-pill {
+` +
+// The one "this value is a design token" pill treatment — shared by numeric inputs and the
+// color rows' value chip (.color-value-pill, toggled by colorDisplay()'s exact-match check)
+// so the token look can't drift between field kinds. Input-specific layout stays below.
+`.nf-pill input, .color-value-pill {
   background: rgba(13,153,255,0.15); color: var(--accent-soft); border-radius: 4px; padding: 1px 5px;
 }
 .nf-pill input {
@@ -234,28 +239,32 @@ button {
   flex: 1; display: flex; gap: 2px; min-width: 0;
   background: var(--control); border-radius: 6px; padding: 2px;
 }
-/* Align-self has 5 options — stack label above a full-width track so nothing clips. */
-[data-align-self] { flex-direction: column; align-items: stretch; gap: 3px; }
+` +
+// Align-self has 5 options — stack label above a full-width track so nothing clips.
+`[data-align-self] { flex-direction: column; align-items: stretch; gap: 3px; }
 [data-align-self] .seg-field-label { width: auto; }
-/* Typography's Align row shares its .type-row with the LS number field, leaving too little
- * width for the 3-option segment track — "Center" clips at the 280px panel width. Same fix
- * as [data-align-self] above: stack the label above a full-width track instead of sharing
- * the row's horizontal space with the label. */
-[data-text-align] { flex-direction: column; align-items: stretch; gap: 3px; }
+` +
+// Typography's Align row shares its .type-row with the LS number field, leaving too little
+// width for the 3-option segment track — "Center" clips at the 280px panel width. Same fix
+// as [data-align-self] above: stack the label above a full-width track instead of sharing
+// the row's horizontal space with the label.
+`[data-text-align] { flex-direction: column; align-items: stretch; gap: 3px; }
 [data-text-align] .seg-field-label { width: auto; }
-/* Layout's Direction row: "Direction" needs ~48px at 11px, overflowing the fixed 40px
- * label column and painting under the seg track (found by the 280px clipping audit).
- * Same fix as [data-align-self] above: stack the label above a full-width track — which
- * also gives "Row"/"Column" enough room to render without ellipsis at minimum width.
- * flex-basis 100% is load-bearing: inside the wrapping .panel-rows the field would
- * otherwise be content-sized (~64px) and the track would still crush "Column". */
-[data-flex-direction] { flex-direction: column; align-items: stretch; gap: 3px; flex: 1 1 100%; }
+` +
+// Layout's Direction row: "Direction" needs ~48px at 11px, overflowing the fixed 40px
+// label column and painting under the seg track (found by the 280px clipping audit).
+// Same fix as [data-align-self] above: stack the label above a full-width track — which
+// also gives "Row"/"Column" enough room to render without ellipsis at minimum width.
+// flex-basis 100% is load-bearing: inside the wrapping .panel-rows the field would
+// otherwise be content-sized (~64px) and the track would still crush "Column".
+`[data-flex-direction] { flex-direction: column; align-items: stretch; gap: 3px; flex: 1 1 100%; }
 [data-flex-direction] .seg-field-label { width: auto; }
-/* .seg-cluster holds the track + wrap toggle as a row inside the column-stacked
- * [data-flex-direction] field — without it the toggle inherits the field's column
- * axis and stacks below the track instead of sitting inline beside it (browser-only
- * bug: jsdom can't see flex layout, caught in M-B Task 5's real-browser E2E pass). */
-.seg-cluster { display: flex; align-items: center; gap: 4px; }
+` +
+// .seg-cluster holds the track + wrap toggle as a row inside the column-stacked
+// [data-flex-direction] field — without it the toggle inherits the field's column
+// axis and stacks below the track instead of sitting inline beside it (browser-only
+// bug: jsdom can't see flex layout, caught in M-B Task 5's real-browser E2E pass).
+`.seg-cluster { display: flex; align-items: center; gap: 4px; }
 .seg {
   flex: 1; padding: 3px 0; text-align: center; border-radius: 4px;
   background: transparent; color: var(--text-faint); font-size: 10px; white-space: nowrap;
@@ -263,13 +272,15 @@ button {
 }
 .seg:hover { color: var(--text-primary); }
 .seg-active { background: var(--control-active); color: #fff; }
-/* Wrap toggle sits on the Direction row as a sibling of the exclusive track (Task 2) —
- * a small left margin reads as attached-but-separate rather than a third track option. */
-.wrap-toggle { flex: none; margin-left: 6px; }
-/* .seg hard-clips overflow by design (title = escape hatch), but Baseline is a word, not a
-   glyph — let this one toggle size to its label so it doesn't clip to "Ba…" at the 280px
-   panel width (M-B review finding). */
-.baseline-toggle { width: auto; flex: none; overflow: visible; padding: 0 8px; }
+` +
+// Wrap toggle sits on the Direction row as a sibling of the exclusive track (Task 2) —
+// a small left margin reads as attached-but-separate rather than a third track option.
+`.wrap-toggle { flex: none; margin-left: 6px; }
+` +
+// .seg hard-clips overflow by design (title = escape hatch), but Baseline is a word, not a
+// glyph — let this one toggle size to its label so it doesn't clip to "Ba…" at the 280px
+// panel width (M-B review finding).
+`.baseline-toggle { width: auto; flex: none; overflow: visible; padding: 0 8px; }
 
 .layout-grid { display: flex; gap: 8px; width: 100%; }
 .layout-side { flex: 1; display: flex; flex-direction: column; gap: 6px; }
@@ -304,8 +315,9 @@ button {
 .padding-block { display: flex; flex-direction: column; gap: 4px; }
 .padding-fields { display: flex; gap: 6px; }
 .align-head { display: flex; align-items: center; justify-content: space-between; }
-/* Align toggle — a small switch (pill + knob); aria-pressed drives the on state. */
-.align-toggle {
+` +
+// Align toggle — a small switch (pill + knob); aria-pressed drives the on state.
+`.align-toggle {
   width: 26px; height: 14px; border-radius: 999px; background: var(--control);
   position: relative; padding: 0; flex: none;
 }
@@ -315,10 +327,12 @@ button {
 }
 .align-toggle[aria-pressed="true"] { background: var(--accent); }
 .align-toggle[aria-pressed="true"]::after { left: 14px; background: #fff; }
-/* The align strip's SegmentField now gets its label from .align-head — collapse the empty span. */
-[data-align-self] .seg-field-label:empty { display: none; }
-/* Data URIs can't reference custom properties, so the chevron's %239A9A9A stroke stays literal. */
-.size-mode {
+` +
+// The align strip's SegmentField now gets its label from .align-head — collapse the empty span.
+`[data-align-self] .seg-field-label:empty { display: none; }
+` +
+// Data URIs can't reference custom properties, so the chevron's %239A9A9A stroke stays literal.
+`.size-mode {
   appearance: none; -webkit-appearance: none;
   background-color: var(--control);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath d='M1 2.5L4 5.5L7 2.5' stroke='%239A9A9A' stroke-width='1' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -329,12 +343,13 @@ button {
 .size-mode:hover { border-color: var(--control-hover); }
 
 .layout-section, .flex-child-controls { display: flex; flex-direction: column; gap: 6px; width: 100%; align-items: stretch; }
-/* ^ align-items: stretch overrides .panel-rows's align-items: center, which in THIS column
- * context means horizontal centering — every non-full-width child floated toward the middle,
- * invisible at the 280px default and a mess at 700px (2026-07-06 layout-polish spec). */
-/* Nested .panel-rows (the min/max disclosure rows) inherit the outer 12px gutter from
- * .layout-section's own .panel-rows padding — zero theirs or the rows double-indent. */
-.layout-section .panel-rows { padding: 0; }
+` +
+// ^ align-items: stretch overrides .panel-rows's align-items: center, which in THIS column
+// context means horizontal centering — every non-full-width child floated toward the middle,
+// invisible at the 280px default and a mess at 700px (2026-07-06 layout-polish spec).
+// Nested .panel-rows (the min/max disclosure rows) inherit the outer 12px gutter from
+// .layout-section's own .panel-rows padding — zero theirs or the rows double-indent.
+`.layout-section .panel-rows { padding: 0; }
 
 .type-family { width: 100%; }
 .type-row { display: flex; gap: 4px; width: 100%; }
@@ -349,17 +364,17 @@ button {
     linear-gradient(-45deg, transparent 75%, var(--control-hover) 75%);
   background-size: 8px 8px; background-position: 0 0, 0 4px, 4px -4px, -4px 0;
 }
-/*
- * The swatch's own background-color (if any) would paint BENEATH the checkerboard
- * background-image layers above, inverting the design intent (checker base should
- * only ever show through actual transparency). So the color lives on a separate
- * CHILD element stacked on top instead — the parent keeps the checkerboard as its
- * only background.
- */
-.swatch-color { position: absolute; inset: 0; background-color: currentColor; }
+` +
+// The swatch's own background-color (if any) would paint BENEATH the checkerboard
+// background-image layers above, inverting the design intent (checker base should
+// only ever show through actual transparency). So the color lives on a separate
+// CHILD element stacked on top instead — the parent keeps the checkerboard as its
+// only background.
+`.swatch-color { position: absolute; inset: 0; background-color: currentColor; }
 .color-value { color: var(--text-muted); font-size: 10.5px; }
-/* .color-value-pill shares the .nf-pill input token-pill declaration block above. */
-.sc-row { justify-content: space-between; }
+` +
+// .color-value-pill shares the .nf-pill input token-pill declaration block above.
+`.sc-row { justify-content: space-between; }
 .sc-count { color: var(--text-muted); font-size: 10.5px; margin-left: auto; }
 .stroke-style { flex: 1 1 40%; }
 
@@ -430,14 +445,16 @@ button {
   width: 12px; height: 12px; border-radius: 3px; flex: none;
   border: 1px solid var(--border-strong);
 }
-/* .tp-row is flex + justify-content:space-between (label left, px right). A color row has
- * only swatch + label — space-between would fling the label to the right edge, so pull it
- * back left by absorbing the slack. Extend-only: .tp-row's own declarations are untouched. */
-.tp-row-swatch + .tp-row-label { margin-right: auto; }
+` +
+// .tp-row is flex + justify-content:space-between (label left, px right). A color row has
+// only swatch + label — space-between would fling the label to the right edge, so pull it
+// back left by absorbing the slack. Extend-only: .tp-row's own declarations are untouched.
+`.tp-row-swatch + .tp-row-label { margin-right: auto; }
 
-/* Changes lifecycle list (send-lifecycle spec) — chips reuse the design tokens above:
- * applying/mismatch share the ripple amber, done the watch-live green. */
-.changes-section {
+` +
+// Changes lifecycle list (send-lifecycle spec) — chips reuse the design tokens above:
+// applying/mismatch share the ripple amber, done the watch-live green.
+`.changes-section {
   flex: none; display: flex; flex-direction: column; max-height: 180px;
   border-top: 1px solid var(--separator);
 }
@@ -478,9 +495,10 @@ button {
 .change-note-mismatch { color: var(--ripple); }
 .change-actions { display: flex; gap: 4px; flex-basis: 100%; padding: 0 6px 2px 22px; }
 
-/* Free-form prompt box (prompt-mode spec) — floats anchored to the selected element, a
- * sibling of the outlines in the shadow root (see mountPromptBox below). */
-.prompt-box {
+` +
+// Free-form prompt box (prompt-mode spec) — floats anchored to the selected element, a
+// sibling of the outlines in the shadow root (see mountPromptBox below).
+`.prompt-box {
   position: fixed; z-index: 2147483646; width: 280px; box-sizing: border-box;
   display: flex; flex-direction: column; gap: 6px; padding: 8px;
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px;
@@ -493,17 +511,20 @@ button {
 }
 .prompt-textarea:focus { border-color: var(--accent); }
 .prompt-box .prompt-send { align-self: flex-end; }
-/* PromptBox mounts as a shadow-root sibling of #panel/#status (see mountPromptBox above),
- * so .prompt-send falls outside both of those scoped button rules and would otherwise
- * fall back to the plain base button rule (light pill) — mirror the dark #panel/#status
- * control idiom explicitly here instead. */
-.prompt-box .prompt-send {
+` +
+// PromptBox mounts as a shadow-root sibling of #panel/#status (see mountPromptBox above),
+// so .prompt-send falls outside both of those scoped button rules and would otherwise
+// fall back to the plain base button rule (light pill) — mirror the dark #panel/#status
+// control idiom explicitly here instead.
+`.prompt-box .prompt-send {
   background: var(--control); color: var(--text-primary); border: none; border-radius: 6px;
 }
 .prompt-box .prompt-send:hover { background: var(--control-hover); }
-/* .panel-prompt is a layout-only class hook now — position/size comes from the
- * .panel-head-actions flex wrapper it's placed in (panel.ts); no rule needed here, but the
- * selector name stays a stable test contract (see panel.test.ts / overlay.test.ts). */
+` +
+// .panel-prompt is a layout-only class hook now — position/size comes from the
+// .panel-head-actions flex wrapper it's placed in (panel.ts); no rule needed here, but the
+// selector name stays a stable test contract (see panel.test.ts / overlay.test.ts).
+`
 `
 
 export class Overlay {
