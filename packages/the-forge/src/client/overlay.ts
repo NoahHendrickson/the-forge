@@ -430,6 +430,23 @@ button {
 .change-note { flex-basis: 100%; color: #F87171; font-size: 10.5px; padding: 0 6px 2px 22px; white-space: normal; }
 .change-note-mismatch { color: var(--ripple); }
 .change-actions { display: flex; gap: 4px; flex-basis: 100%; padding: 0 6px 2px 22px; }
+
+/* Free-form prompt box (prompt-mode spec) — floats anchored to the selected element, a
+ * sibling of the outlines in the shadow root (see mountPromptBox below). */
+.prompt-box {
+  position: fixed; z-index: 2147483646; width: 280px; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.prompt-textarea {
+  box-sizing: border-box; width: 100%; resize: vertical; min-height: 56px;
+  background: var(--control); color: var(--text-primary); border: 1px solid var(--border-panel);
+  border-radius: 4px; padding: 6px; font: 400 var(--text-sm)/1.4 var(--font-ui); outline: none;
+}
+.prompt-textarea:focus { border-color: var(--accent); }
+.prompt-box .prompt-send { align-self: flex-end; }
+.panel-prompt { margin-left: auto; }
 `
 
 export class Overlay {
@@ -489,6 +506,12 @@ export class Overlay {
 
   attachPanel(panelRoot: HTMLElement): void {
     this.host.shadowRoot!.appendChild(panelRoot)
+  }
+
+  /** Prompt box mounts in the shadow root like the panel — fixed-position sibling of the
+   * outlines, so its coordinates share the overlay's viewport space. */
+  mountPromptBox(el: HTMLElement): void {
+    this.host.shadowRoot!.appendChild(el)
   }
 
   contains(target: EventTarget | null): boolean {

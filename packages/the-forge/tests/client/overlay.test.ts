@@ -420,7 +420,10 @@ describe('Overlay.showRipples (M2b Task 4)', () => {
 describe('Dock CSS (docked-panel spec)', () => {
   it('panel width is driven by --forge-dock-w with a 320px default (resize hook)', () => {
     expect(CSS).toContain('width: var(--forge-dock-w, 320px)')
-    expect(CSS).not.toContain('width: 280px')
+    // Scoped to #panel's own rule — the prompt box (unrelated floating control) legitimately
+    // has its own fixed 280px width, so a bare substring check would false-positive on it.
+    expect(CSS).toMatch(/#panel\s*{[^}]*width:\s*var\(--forge-dock-w/s)
+    expect(CSS).not.toMatch(/#panel\s*{[^}]*width:\s*280px/s)
   })
   it('panel is a flex column so the footer can pin and the body can scroll', () => {
     expect(CSS).toMatch(/#panel\s*{[^}]*display:\s*flex;\s*flex-direction:\s*column/s)
@@ -452,5 +455,14 @@ describe('Dock CSS (docked-panel spec)', () => {
 describe('Dock polish CSS (PR #2 follow-ups)', () => {
   it('panel head reserves right padding so the absolute mode button cannot overlap a long tag', () => {
     expect(CSS).toContain('#panel .panel-head { position: relative; padding: 12px 36px 10px 12px; }')
+  })
+})
+
+describe('Overlay CSS prompt box (prompt-mode)', () => {
+  it('styles the prompt box', () => {
+    expect(CSS).toContain('.prompt-box')
+    expect(CSS).toContain('.prompt-textarea')
+    expect(CSS).toContain('.prompt-send')
+    expect(CSS).toContain('.panel-prompt')
   })
 })

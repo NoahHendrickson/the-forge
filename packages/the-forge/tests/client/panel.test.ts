@@ -605,6 +605,16 @@ describe('Panel', () => {
     expect(fieldInput(panel, 'W').value).toBe('auto')
   })
 
+  it('has a Prompt button in the header, hidden when nothing is selected', () => {
+    const { panel, el } = setup()
+    expect(panel.promptButton.classList.contains('panel-prompt')).toBe(true)
+    expect(panel.root.querySelector('.panel-head .panel-prompt')).toBe(panel.promptButton)
+    panel.hide()
+    expect(panel.promptButton.hidden).toBe(true)
+    panel.show(el, buildInspectorData(el))
+    expect(panel.promptButton.hidden).toBe(false)
+  })
+
 })
 
 describe('Panel expand-state persistence (B1 nit)', () => {

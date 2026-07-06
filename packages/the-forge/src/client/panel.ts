@@ -60,6 +60,10 @@ export class Panel {
   footer = document.createElement('div')
   resizeHandle = document.createElement('div')
   modeButton = createButton()
+  /** Free-form prompt entry point (prompt-mode spec) — lives in the panel header, hidden
+   * whenever there's no live selection (docked "No selection" state included). Panel does
+   * NOT know about PromptBox itself; index.ts wires the click (Task 4). */
+  promptButton = createButton({ label: 'Prompt', className: 'panel-prompt' })
   /** Mount slot for the Changes lifecycle list (changelist.ts) — owned/populated by
    * DesignMode, positioned here so it pins between the scrolling sections and the footer
    * and stays visible in the docked no-selection empty state (body hidden, footer kept). */
@@ -187,7 +191,9 @@ export class Panel {
     this.resizeHandle.className = 'panel-resize'
     this.modeButton.className = 'panel-mode'
     this.modeButton.type = 'button'
-    this.head.append(this.modeButton)
+    this.promptButton.type = 'button'
+    this.promptButton.hidden = true
+    this.head.append(this.promptButton, this.modeButton)
     this.root.append(this.resizeHandle, this.head, this.actions, this.emptyEl, this.body, this.changesSlot, this.footer)
     // Popovers mount in the BODY (the scroll container), not the root — anchor.offsetTop
     // and the popover's absolute top must share the body's scrolled coordinate space or
@@ -221,6 +227,7 @@ export class Panel {
     this.actions.hidden = false
     this.body.hidden = false
     this.emptyEl.hidden = true
+    this.promptButton.hidden = false
     if (els.length > 1) {
       this.headTag.textContent = `${els.length} selected`
       this.headSrc.remove()
@@ -254,6 +261,7 @@ export class Panel {
     this.els = []
     this.colorPicker.close()
     this.tokenUi.picker.close()
+    this.promptButton.hidden = true
     if (this.docked) {
       // Docked empty state: root stays visible (the dock holds its space), header says
       // why the controls are gone, footer (status strip) remains usable.
