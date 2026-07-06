@@ -49,3 +49,16 @@ export const Expand: Story = {
     return mountInShadow(btn, 'panel')
   },
 }
+
+// Align-head switch — .align-toggle in overlay.ts; aria-pressed drives the on state.
+export const AlignToggle: Story = {
+  render: () => {
+    const off = createButton({ label: '' })
+    off.classList.add('align-toggle')
+    off.setAttribute('aria-pressed', 'false')
+    const on = createButton({ label: '' })
+    on.classList.add('align-toggle')
+    on.setAttribute('aria-pressed', 'true')
+    return mountInShadow([off, on], 'panel')
+  },
+}

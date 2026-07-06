@@ -300,6 +300,23 @@ button {
 
 .size-row { display: flex; gap: 4px; flex: 1 1 40%; min-width: 0; }
 .size-row .nf { flex: 1; }
+.group-label { color: var(--text-muted); font-size: 11px; }
+.padding-block { display: flex; flex-direction: column; gap: 4px; }
+.padding-fields { display: flex; gap: 6px; }
+.align-head { display: flex; align-items: center; justify-content: space-between; }
+/* Align toggle — a small switch (pill + knob); aria-pressed drives the on state. */
+.align-toggle {
+  width: 26px; height: 14px; border-radius: 999px; background: var(--control);
+  position: relative; padding: 0; flex: none;
+}
+.align-toggle::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px;
+  border-radius: 50%; background: var(--text-faint); transition: left 0.12s;
+}
+.align-toggle[aria-pressed="true"] { background: var(--accent); }
+.align-toggle[aria-pressed="true"]::after { left: 14px; background: #fff; }
+/* The align strip's SegmentField now gets its label from .align-head — collapse the empty span. */
+[data-align-self] .seg-field-label:empty { display: none; }
 /* Data URIs can't reference custom properties, so the chevron's %239A9A9A stroke stays literal. */
 .size-mode {
   appearance: none; -webkit-appearance: none;
@@ -311,7 +328,13 @@ button {
 }
 .size-mode:hover { border-color: var(--control-hover); }
 
-.layout-section, .flex-child-controls { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.layout-section, .flex-child-controls { display: flex; flex-direction: column; gap: 6px; width: 100%; align-items: stretch; }
+/* ^ align-items: stretch overrides .panel-rows's align-items: center, which in THIS column
+ * context means horizontal centering — every non-full-width child floated toward the middle,
+ * invisible at the 280px default and a mess at 700px (2026-07-06 layout-polish spec). */
+/* Nested .panel-rows (the min/max disclosure rows) inherit the outer 12px gutter from
+ * .layout-section's own .panel-rows padding — zero theirs or the rows double-indent. */
+.layout-section .panel-rows { padding: 0; }
 
 .type-family { width: 100%; }
 .type-row { display: flex; gap: 4px; width: 100%; }
