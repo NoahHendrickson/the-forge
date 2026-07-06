@@ -14,8 +14,8 @@ export const Unset: Story = {
     const field = new SegmentField({
       label: 'Direction',
       options: [
-        { value: 'row', label: 'Row' },
-        { value: 'column', label: 'Column' },
+        { value: 'row', label: 'Horizontal' },
+        { value: 'column', label: 'Vertical' },
       ],
       onInput: () => {},
     })
@@ -29,8 +29,8 @@ export const ActiveSegment: Story = {
     const field = new SegmentField({
       label: 'Direction',
       options: [
-        { value: 'row', label: 'Row' },
-        { value: 'column', label: 'Column' },
+        { value: 'row', label: 'Horizontal' },
+        { value: 'column', label: 'Vertical' },
       ],
       onInput: () => {},
     })

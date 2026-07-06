@@ -679,8 +679,8 @@ export class Panel {
     this.directionField = new SegmentField({
       label: 'Direction',
       options: [
-        { value: 'row', label: 'Row' },
-        { value: 'column', label: 'Column' },
+        { value: 'row', label: 'Horizontal', title: 'flex-direction: row → flex-row' },
+        { value: 'column', label: 'Vertical', title: 'flex-direction: column → flex-col' },
       ],
       onInput: (value) => {
         if (!this.el) return
@@ -765,8 +765,8 @@ export class Panel {
     this.wrapField = new SegmentField({
       label: 'Wrap',
       options: [
-        { value: 'nowrap', label: 'No wrap' },
-        { value: 'wrap', label: 'Wrap' },
+        { value: 'nowrap', label: 'No wrap', title: 'flex-wrap: nowrap' },
+        { value: 'wrap', label: 'Wrap', title: 'flex-wrap: wrap' },
       ],
       onInput: (value) => {
         if (!this.el) return

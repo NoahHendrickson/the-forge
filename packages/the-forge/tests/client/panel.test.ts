@@ -93,6 +93,21 @@ describe('Panel', () => {
     expect((nf.querySelector('.nf-label') as HTMLElement).title).toBe('padding-left, padding-right → px-*')
   })
 
+  it('padding and margin speak designer labels (H/V + T/R/B/L)', () => {
+    const { panel } = setup()
+    const labelFor = (props: string): string => {
+      const nf = [...panel.root.querySelectorAll('.nf')].find(
+        (n) => (n as HTMLElement).dataset.props === props
+      ) as HTMLElement
+      return (nf.querySelector('.nf-label') as HTMLElement).textContent ?? ''
+    }
+    expect(labelFor(P.PX)).toBe('H')
+    expect(labelFor(P.PY)).toBe('V')
+    expect(labelFor(P.PT)).toBe('T')
+    expect(labelFor(P.MX)).toBe('H')
+    expect(labelFor(P.MY)).toBe('V')
+  })
+
   it('renders the header as two separate nodes: tag and source', () => {
     const { panel } = setup()
     const tagEl = panel.root.querySelector('.panel-head-tag') as HTMLElement
@@ -318,7 +333,7 @@ describe('Panel', () => {
       (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
     )!
     const buttons = [...seg.querySelectorAll('.seg')] as HTMLElement[]
-    const column = buttons.find((b) => b.textContent === 'Column')!
+    const column = buttons.find((b) => b.textContent === 'Vertical')!
     column.click()
     expect(drafts.current(el, 'flex-direction')).toBe('column')
   })
@@ -407,7 +422,7 @@ describe('Panel', () => {
     const seg = [...panel.root.querySelectorAll('.seg-field')].find(
       (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
     )!
-    const columnBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Column') as HTMLElement
+    const columnBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Vertical') as HTMLElement
     columnBtn.click()
     // after direction change, the matrix should have re-rendered with column mapping;
     // the physical dot that emitted (flex-end, flex-start) in row mode now emits
@@ -1218,13 +1233,15 @@ describe('Panel Stroke section', () => {
     }
   })
 
-  it('expand reveals per-side width fields BT/BR/BB/BL', () => {
+  it('expand reveals per-side width fields (border-top/right/bottom/left-width)', () => {
     const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
     const btn = strokeSection(panel).querySelector('[data-expand="stroke"]') as HTMLElement
     expect(btn).toBeTruthy()
     btn.click()
-    const labels = [...panel.root.querySelectorAll('.nf-label')].map((n) => n.textContent)
-    expect(labels).toEqual(expect.arrayContaining(['BT', 'BR', 'BB', 'BL']))
+    const propsList = [...panel.root.querySelectorAll('.nf')].map((n) => (n as HTMLElement).dataset.props)
+    expect(propsList).toEqual(
+      expect.arrayContaining(['border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width'])
+    )
   })
 
   it('clicking the border-color swatch opens the picker with contrastAgainst set to the effective background', () => {
@@ -2303,7 +2320,7 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
     expect(fillBody.classList.contains('panel-rows')).toBe(true)
     expect(fillBody.hidden).toBe(true)
     // Stroke's body is its own rowWrap (stroke-rows) — the first .panel-rows sibling after
-    // the Stroke title, followed by the BT/BR/BB/BL expandWrap.
+    // the Stroke title, followed by the T/R/B/L expandWrap.
     const strokeBody = strokeTitleEl.nextElementSibling as HTMLElement
     expect(strokeBody.classList.contains('stroke-rows')).toBe(true)
     expect(strokeBody.hidden).toBe(true)
