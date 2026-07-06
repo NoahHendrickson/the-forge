@@ -348,8 +348,10 @@ button {
 // context means horizontal centering — every non-full-width child floated toward the middle,
 // invisible at the 280px default and a mess at 700px (2026-07-06 layout-polish spec).
 // Nested .panel-rows (the min/max disclosure rows) inherit the outer 12px gutter from
-// .layout-section's own .panel-rows padding — zero theirs or the rows double-indent.
-`.layout-section .panel-rows { padding: 0; }
+// .layout-section's own .panel-rows padding — zero theirs or the rows double-indent. The
+// `#panel` prefix exists purely to out-rank `#panel .panel-rows`'s own (1,0,1) specificity —
+// without it this (0,2,0) rule lost the cascade and the rows sat ~18.5px too far right (E2E finding).
+`#panel .layout-section .panel-rows { padding: 0; }
 
 .type-family { width: 100%; }
 .type-row { display: flex; gap: 4px; width: 100%; }

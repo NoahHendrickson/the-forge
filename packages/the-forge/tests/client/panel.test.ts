@@ -627,6 +627,8 @@ describe('Panel', () => {
 
   it('flex-child controls are hidden when parent is not flex', () => {
     const { panel } = setup()
+    const wrap = panel.root.querySelector('.flex-child-controls') as HTMLElement
+    expect(wrap.hidden).toBe(true)
     const alignSelf = panel.root.querySelector('[data-align-self]') as HTMLElement
     expect(alignSelf.hidden).toBe(true)
     // .size-row wraps only the W/H sizing-mode selects (Typography's family/weight selects

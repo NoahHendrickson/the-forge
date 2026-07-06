@@ -424,7 +424,7 @@ export class LayoutSection {
   private refreshFlexChild(el: TaggedElement, computed: CSSStyleDeclaration): void {
     const parent = el.parentElement
     const visible = parent !== null && isFlex(parent as TaggedElement)
-    if (this.alignSelfWrap) this.alignSelfWrap.hidden = !visible
+    if (this.flexChildControlsWrap) this.flexChildControlsWrap.hidden = !visible
     for (const sm of this.sizeModes) sm.select.hidden = !visible
     if (!visible) return
 
