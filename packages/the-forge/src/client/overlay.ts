@@ -85,6 +85,8 @@ button {
 #status button:hover { background: var(--control-hover); }
 #watch { color: var(--watch-idle); }
 #watch.live { color: var(--positive); }
+#status button.watch-unlink { background: none; color: var(--watch-idle); padding: 4px 6px; }
+#status button.watch-unlink:hover { background: var(--control); color: var(--text-primary); }
 #outline {
   position: fixed; z-index: 2147483645; pointer-events: none;
   border: 1.5px solid var(--accent-outline); border-radius: 2px;
@@ -440,6 +442,7 @@ export class Overlay {
   // compareAllButton's label is state-dependent ('Before'/'After') — set in updateStatus().
   compareAllButton = createButton()
   resetAllButton = createButton({ label: 'Reset all' })
+  unlinkButton = createButton({ label: '✕', title: 'Unlink watcher session', className: 'watch-unlink' })
 
   private outline = document.createElement('div')
   private selectOutline = document.createElement('div')
@@ -476,7 +479,8 @@ export class Overlay {
     this.watchLabel.hidden = true
     // Watch indicator leads the strip — it's ambient session state ("● Linked…"), read
     // before the per-draft controls and per-send summary.
-    this.status.append(this.watchLabel, this.statusLabel, this.sendButton, this.copyButton, this.compareAllButton, this.resetAllButton, this.sentLabel)
+    this.unlinkButton.hidden = true
+    this.status.append(this.watchLabel, this.unlinkButton, this.statusLabel, this.sendButton, this.copyButton, this.compareAllButton, this.resetAllButton, this.sentLabel)
     this.outline.hidden = true
     this.selectOutline.hidden = true
     this.status.hidden = true
@@ -601,12 +605,13 @@ export class Overlay {
     }, Overlay.RIPPLE_FADE_MS)
   }
 
-  updateStatus(draftCount: number, comparingAll: boolean, sentText?: string, watch?: { text: string; live: boolean }): void {
-    // Strip is visible when there are drafts OR a non-empty summary OR a watch indicator
-    // (the linked/asleep state is persistent messaging — user-ratified in the watch-mode
-    // plan — so it keeps the strip up even with zero drafts). No watcher (`watch`
-    // undefined) renders nothing: terminal-only users see the strip behave exactly as
-    // before watch mode existed.
+  updateStatus(draftCount: number, comparingAll: boolean, sentText?: string, watch?: { text: string; live: boolean; unlinkable?: boolean }): void {
+    // Strip is visible when there are drafts OR a non-empty summary OR a watch indicator.
+    // Since the 2026-07-05 watcher-unlink spec, watchIndicatorFor always returns an
+    // indicator (the 'none' state renders the upfront "not linked" hint — a deliberate
+    // reversal of the original zero-UI-change rule), so in practice the strip is visible
+    // whenever design mode is on. `watch` stays optional so callers without watch state
+    // (tests, panel-only flows) keep today's hide-when-empty behavior.
     this.status.hidden = draftCount === 0 && !sentText && !watch
     // Draft-count label and controls are hidden when no drafts (they act on drafts)
     this.statusLabel.hidden = draftCount === 0
@@ -625,5 +630,7 @@ export class Overlay {
     this.watchLabel.hidden = !watch
     this.watchLabel.textContent = watch?.text ?? ''
     this.watchLabel.classList.toggle('live', watch?.live === true)
+    // Unlink ✕: only when the indicator says there is a watcher to unlink/dismiss.
+    this.unlinkButton.hidden = watch?.unlinkable !== true
   }
 }

@@ -192,7 +192,7 @@ describe('Overlay (M2 additions)', () => {
     overlay.mount()
     const status = overlay.host.shadowRoot!.getElementById('status')!
     const buttons = [...status.querySelectorAll('button')]
-    expect(buttons[1]).toBe(overlay.copyButton)
+    expect(buttons[2]).toBe(overlay.copyButton)
     expect(overlay.copyButton.textContent).toBe('Copy for agent')
   })
 })
@@ -203,8 +203,8 @@ describe('Overlay (M4 additions)', () => {
     overlay.mount()
     const status = overlay.host.shadowRoot!.getElementById('status')!
     const buttons = [...status.querySelectorAll('button')]
-    expect(buttons[0]).toBe(overlay.sendButton)
-    expect(buttons[1]).toBe(overlay.copyButton)
+    expect(buttons[1]).toBe(overlay.sendButton)
+    expect(buttons[2]).toBe(overlay.copyButton)
     expect(overlay.sendButton.textContent).toBe('Send to agent')
   })
 
@@ -452,5 +452,24 @@ describe('Dock CSS (docked-panel spec)', () => {
 describe('Dock polish CSS (PR #2 follow-ups)', () => {
   it('panel head reserves right padding so the absolute mode button cannot overlap a long tag', () => {
     expect(CSS).toContain('#panel .panel-head { position: relative; padding: 12px 36px 10px 12px; }')
+  })
+})
+
+describe('Overlay (watch-unlink — Task 2)', () => {
+  it('updateStatus keeps the strip visible with zero drafts when a watch indicator is present (not-linked upfront)', () => {
+    const overlay = new Overlay()
+    overlay.updateStatus(0, false, undefined, { text: '○ Not linked — type /forge-watch in Claude Code to link', live: false, unlinkable: false })
+    expect(overlay.status.hidden).toBe(false)
+  })
+
+  it('unlink ✕ is shown for unlinkable states and hidden for none', () => {
+    const overlay = new Overlay()
+    expect(overlay.unlinkButton.className).toContain('watch-unlink')
+    overlay.updateStatus(0, false, undefined, { text: '● Linked to Claude Code', live: true, unlinkable: true })
+    expect(overlay.unlinkButton.hidden).toBe(false)
+    overlay.updateStatus(0, false, undefined, { text: '○ Not linked — type /forge-watch in Claude Code to link', live: false, unlinkable: false })
+    expect(overlay.unlinkButton.hidden).toBe(true)
+    overlay.updateStatus(1, false)
+    expect(overlay.unlinkButton.hidden).toBe(true)
   })
 })
