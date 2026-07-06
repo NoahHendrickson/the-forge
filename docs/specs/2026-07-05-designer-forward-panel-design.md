@@ -83,8 +83,11 @@ Four milestones, each its own dated plan in `docs/plans/` and its own feature br
   `Horizontal/Vertical` (still text; icons arrive in M-B). Appearance keeps `R`/`O` with
   tooltips. Labels are display text only — the request builder keys on `props`, so no request
   changes.
-- **Tooltips everywhere.** `cssHintFor(spec)` (props + `utilityPrefixFor`) → `title` attr on
-  every row label, segment, select, and the section titles that need explaining (Margin).
+- **Tooltips, where M-A reaches.** `cssHintFor(spec)` (props + `utilityPrefixFor`) → `title`
+  attr on every numeric row label (including Gap), the Direction/Wrap segment options, and the
+  Margin section title. The size-mode select gets a fixed (non-`cssHintFor`) descriptive title.
+  The remaining selects and segments — typography family/weight, stroke style, align controls —
+  pick up CSS-hint titles in M-B alongside the `SegmentField` icon work.
 - **Margin visibility.** `SectionSpec.visible` for Margin, evaluated **on every `refresh()`**:
   shown iff any of the four computed margins is non-zero, OR any margin prop currently has a
   live draft. The draft clause is what prevents the section from vanishing mid-edit when a user

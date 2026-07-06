@@ -8,15 +8,15 @@ import { readTokens, resetTokensCache } from '../../src/client/tokens'
 import * as tokensModule from '../../src/client/tokens'
 import { loadLifecycle, saveLifecycle } from '../../src/client/lifecycle-store'
 
-// DesignMode registers capture-phase listeners on `document`/`window`, which
-// persist across tests within this file (jsdom's `document` is shared per
-// test file, not per test). Track every instance created via setActive so
-// afterEach can deactivate it and avoid leaking listeners into later tests.
 // Field identities (data-props) — labels are display text and are free to change.
 const P = {
   PY: 'padding-top padding-bottom',
 } as const
 
+// DesignMode registers capture-phase listeners on `document`/`window`, which
+// persist across tests within this file (jsdom's `document` is shared per
+// test file, not per test). Track every instance created via setActive so
+// afterEach can deactivate it and avoid leaking listeners into later tests.
 const liveModes: DesignMode[] = []
 
 beforeEach(() => {

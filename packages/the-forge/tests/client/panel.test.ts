@@ -2248,6 +2248,8 @@ describe('Panel multi-select (B6)', () => {
 
 describe('Margin section disclosure', () => {
   function marginSection(panel: Panel): HTMLElement {
+    // Margin's title row parents the expand button, so textContent includes the '⋯'
+    // glyph — strip it before comparing the leading label text.
     return [...panel.root.querySelectorAll('.panel-section')].find(
       (n) => n.textContent?.replace('⋯', '').trim() === 'Margin'
     ) as HTMLElement

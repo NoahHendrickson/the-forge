@@ -87,8 +87,9 @@ function utilityPrefixFor(props: string[]): string | undefined {
 /**
  * Tooltip text bridging a row to its CSS props and Tailwind utility ("padding-left,
  * padding-right → px-*"). Derived via utilityPrefixFor from the same UTILITY_PREFIXES map
- * request.ts emits from, so the hint can never drift from the generated change request; rows
- * with no utility prefix fall back to the bare CSS prop list.
+ * request.ts emits from, so a hint that names a utility can never drift from what request.ts
+ * emits; rows the utility map doesn't cover (font-size, stroke width) fall back to the bare
+ * CSS prop list.
  */
 export function cssHintFor(spec: { props: string[] }): string {
   const css = spec.props.join(', ')
