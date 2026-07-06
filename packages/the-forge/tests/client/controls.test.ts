@@ -27,6 +27,11 @@ function make(
 }
 
 describe('NumberField', () => {
+  it('applies hint as the label title', () => {
+    const f = new NumberField({ label: 'H', hint: 'padding-left, padding-right → px-*', onInput: () => {} })
+    expect((f.root.querySelector('.nf-label') as HTMLElement).title).toBe('padding-left, padding-right → px-*')
+  })
+
   it('renders label and reflects set()', () => {
     const { nf, input } = make()
     nf.set(24)

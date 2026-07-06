@@ -85,6 +85,14 @@ describe('Panel', () => {
     expect(roots.find((n) => n.dataset.props === 'gap')).toBeDefined()
   })
 
+  it('field labels carry CSS/Tailwind hint tooltips', () => {
+    const { panel } = setup()
+    const nf = [...panel.root.querySelectorAll('.nf')].find(
+      (n) => (n as HTMLElement).dataset.props === P.PX
+    ) as HTMLElement
+    expect((nf.querySelector('.nf-label') as HTMLElement).title).toBe('padding-left, padding-right → px-*')
+  })
+
   it('renders the header as two separate nodes: tag and source', () => {
     const { panel } = setup()
     const tagEl = panel.root.querySelector('.panel-head-tag') as HTMLElement

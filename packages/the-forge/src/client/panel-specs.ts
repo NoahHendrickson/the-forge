@@ -36,6 +36,8 @@ export interface SectionSpec {
   visible?: (el: TaggedElement) => boolean
   /** Custom section body — used by Layout, which isn't a plain row-field grid. */
   custom?: 'layout' | 'typography' | 'fill' | 'stroke'
+  /** Tooltip (title attr) on the section title — used where the section name itself needs explaining (Margin). */
+  hint?: string
 }
 
 const RADIUS = ['border-top-left-radius', 'border-top-right-radius', 'border-bottom-right-radius', 'border-bottom-left-radius']
@@ -80,6 +82,18 @@ function utilityPrefixFor(props: string[]): string | undefined {
   if (props.length === 1) return UTILITY_PREFIXES[props[0]]
   const synthetic = MULTI_PROP_SYNTHETIC[props.join(',')]
   return synthetic ? UTILITY_PREFIXES[synthetic] : undefined
+}
+
+/**
+ * Tooltip text bridging a row to its CSS props and Tailwind utility ("padding-left,
+ * padding-right → px-*"). Derived via utilityPrefixFor from the same UTILITY_PREFIXES map
+ * request.ts emits from, so the hint can never drift from the generated change request; rows
+ * with no utility prefix fall back to the bare CSS prop list.
+ */
+export function cssHintFor(spec: { props: string[] }): string {
+  const css = spec.props.join(', ')
+  const prefix = utilityPrefixFor(spec.props)
+  return prefix ? `${css} → ${prefix}-*` : css
 }
 
 const RADIUS_PROP_SET = new Set(RADIUS)

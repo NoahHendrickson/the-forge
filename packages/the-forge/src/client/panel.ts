@@ -19,6 +19,7 @@ import {
   draftSolidIfNone,
   tokenEntriesFor,
   colorTokenEntries,
+  cssHintFor,
   WEIGHTS,
   STROKE_STYLES,
   SIZE_MODES,
@@ -574,6 +575,7 @@ export class Panel {
       const title = document.createElement('div')
       title.className = 'panel-section'
       title.textContent = section.title
+      if (section.hint) title.title = section.hint
       this.sectionsRoot.append(title)
       // Every body element belonging to this section (title + rowWrap + custom body +
       // expandWrap, whichever apply) collects here so refresh() can hide them all together —
@@ -728,6 +730,7 @@ export class Panel {
 
     this.gapField = new NumberField({
       label: 'Gap',
+      hint: cssHintFor(GAP_SPEC),
       min: 0,
       allowAuto: true,
       onInput: commitGap,
@@ -1137,6 +1140,7 @@ export class Panel {
         this.onSizeModeChange(spec, value)
       },
     })
+    select.title = 'Fixed: exact px · Hug: fit-content · Fill: stretch / flex-1'
     row.append(select)
 
     this.sizeModes.push({ select, spec, field: bound.field })
@@ -1271,6 +1275,7 @@ export class Panel {
 
     const field = new NumberField({
       label: spec.label,
+      hint: cssHintFor(spec),
       min: spec.min,
       max: spec.max,
       allowAuto: spec.sizeMode || spec.allowAuto,
