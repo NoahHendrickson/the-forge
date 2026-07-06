@@ -244,4 +244,24 @@ describe('loadLifecycle — per-item boundary validation', () => {
     const loaded = loadLifecycle()
     expect(loaded!.sent).toHaveLength(0)
   })
+
+  it('accepts an optional string prompt and drops a non-string one', () => {
+    const base = validSentElement()
+    sessionStorage.setItem(
+      LIFECYCLE_KEY,
+      JSON.stringify({
+        v: 1,
+        designModeOn: true,
+        selection: [],
+        drafts: [],
+        sent: [
+          { id: 'ok', elements: [{ ...base, prompt: 'hi' }] },
+          { id: 'bad', elements: [{ ...base, prompt: 42 }] },
+        ],
+      })
+    )
+    const loaded = loadLifecycle()!
+    expect(loaded.sent).toHaveLength(1)
+    expect(loaded.sent[0].elements[0].prompt).toBe('hi')
+  })
 })

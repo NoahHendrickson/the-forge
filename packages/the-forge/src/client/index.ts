@@ -4,11 +4,21 @@ import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { Dock } from './dock'
-import { buildChangeRequestWithElements, renderMarkdown, type ChangeRequest, type ElementChange } from './request'
+import {
+  buildChangeRequestWithElements,
+  renderMarkdown,
+  buildPromptRequest,
+  renderPromptMarkdown,
+  rebuildRequestFromSeed,
+  type ChangeRequest,
+  type ElementChange,
+  type PromptRequest,
+} from './request'
 import { LifecycleSession, type SentSeed } from './lifecycle'
+import { PromptBox } from './prompt'
 import { Verifier } from './verifier'
 import { snapshotRects, diffRects } from './ripple'
-import { resetTokensCache, readTheme } from './tokens'
+import { resetTokensCache } from './tokens'
 import { ChangeList } from './changelist'
 import { type AgentName } from './agent'
 import { WatchStatus, sentLabelFor, watchIndicatorFor, type Rung } from './watch'
@@ -57,6 +67,7 @@ export class DesignMode {
   private verifier: Verifier
   private verifierSummary = ''
   private changeList: ChangeList
+  private promptBox = new PromptBox()
   /** Seeds with a re-queue POST currently in flight (R2 F-A). The failed row deliberately
    * survives until the POST resolves (final-review F5) so the Re-send button stays clickable
    * during the round-trip — but that means a double-click before the first POST settles would
@@ -134,6 +145,12 @@ export class DesignMode {
       onResend: (seed) => this.resend(seed),
     })
     this.panel.changesSlot.appendChild(this.changeList.root)
+    overlay.mountPromptBox(this.promptBox.root)
+    this.promptBox.onSend = (text) => this.sendPrompt(text)
+    this.panel.promptButton.addEventListener('click', () => {
+      if (this.promptBox.isOpen()) this.promptBox.close()
+      else if (this.selected) this.promptBox.open(this.selected) // multi-select anchors to the first
+    })
     this.verifier.subscribe((e) => {
       // applyStage returns false for poll re-emissions of an unchanged stage (the verifier
       // ticks every ~2s while a request is pending) — persisting on every tick regardless would
@@ -178,20 +195,7 @@ export class DesignMode {
         this.postDispatch(onDispatchSettled)
       }
       overlay.sendButton.disabled = true
-      // nesting is deliberate: the send test counts microtask ticks — re-check it before flattening to async/await
-      fetch('/__the-forge/queue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
-        body: JSON.stringify({ request, markdown: md }),
-      })
-        .then((res) => {
-          if (!res.ok) return onSendFailed()
-          res
-            .json()
-            .then((body: { id: string }) => onSendOk(body.id))
-            .catch(onSendFailed)
-        })
-        .catch(onSendFailed)
+      this.queueRequest(request, md, onSendOk, onSendFailed)
     })
     overlay.copyButton.addEventListener('click', () => {
       // Same empty guard as Send, but deliberately NOT the in-flight duplicate filter: copying
@@ -307,6 +311,27 @@ export class DesignMode {
     this.persist()
   }
 
+  /** Single POST-to-queue path shared by Send, sendPrompt, and resend() — each built its own
+   * fetch/.then/.catch chain before this extraction, differing only in what happens once an id
+   * comes back (or the POST fails), which is exactly what onOk/onFail are for.
+   * Nesting is deliberate, matching the pre-extraction Send handler: the send tests count
+   * microtask ticks — re-check them before flattening to a flat .then chain or async/await. */
+  private queueRequest(request: ChangeRequest | PromptRequest, markdown: string, onOk: (id: string) => void, onFail: () => void): void {
+    fetch('/__the-forge/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+      body: JSON.stringify({ request, markdown }),
+    })
+      .then((res) => {
+        if (!res.ok) return onFail()
+        res
+          .json()
+          .then((body: { id: string }) => onOk(body.id))
+          .catch(onFail)
+      })
+      .catch(onFail)
+  }
+
   /** Fire-and-forget dispatch POST shared by Send and resend() — a failure here must never
    * undo the send, only downgrade to the manual rung. */
   private postDispatch(onSettled: (rung: Rung | null) => void): void {
@@ -325,6 +350,37 @@ export class DesignMode {
       .catch(() => onSettled(null))
   }
 
+  /** Queues a free-form prompt for the current selection. Independent of draft sends by spec:
+   * reads the selection, never the DraftStore (draftProps: []), and skips isDuplicate — every
+   * typed prompt is intentional. Re-entrancy comes from setBusy: trySend() no-ops while the
+   * queue POST is in flight. On success the box closes (text's job is done — the Changes-list
+   * row takes over); on failure it stays open with the text intact so the user can retry. */
+  private sendPrompt(text: string): void {
+    const { request, pairs } = buildPromptRequest(this.selection, text)
+    if (pairs.length === 0) return
+    const md = renderPromptMarkdown(request)
+    this.promptBox.setBusy(true)
+    this.queueRequest(
+      request,
+      md,
+      (id) => {
+        const seeds: SentSeed[] = pairs.map(([el, change]) => {
+          const dcSource = el.dataset.dcSource ?? null
+          return { el, dcSource, index: dcSource ? sourceIndex(el, dcSource) : 0, draftProps: [], change, prompt: text }
+        })
+        this.promptBox.close()
+        this.registerQueuedSend(id, seeds)
+        this.postDispatch(() => {
+          /* request is safely queued — manual rung, same as Send */
+        })
+      },
+      () => {
+        this.promptBox.setBusy(false)
+        this.flashButton(this.promptBox.sendButton, 'Send failed', 'Send')
+      }
+    )
+  }
+
   /** Re-queues one failed element-change as a fresh request. Safe and unfiltered by design:
    * a failed apply changed no source, and failed items have already left the
    * sent-but-unverified set the duplicate filter checks. Reuses the queue → dispatch path
@@ -332,36 +388,32 @@ export class DesignMode {
   private resend(seed: SentSeed): void {
     if (this.resendsInFlight.has(seed)) return // re-entrancy guard: this seed's re-queue POST is already in flight
     this.resendsInFlight.add(seed)
-    const request: ChangeRequest = {
-      createdAt: new Date().toISOString(),
-      viewport: { width: window.innerWidth, height: window.innerHeight },
-      tailwind: readTheme().spacingBasePx !== null,
-      elements: [seed.change],
-    }
-    const md = renderMarkdown(request)
-    fetch('/__the-forge/queue', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
-      body: JSON.stringify({ request, markdown: md }),
-    })
-      .then((res) => (res.ok ? (res.json() as Promise<{ id: string }>) : Promise.reject(new Error('queue failed'))))
-      .then((body) => {
+    // A failed PROMPT seed re-queues as a fresh prompt request, not a ChangeRequest — its
+    // change.changes is empty, so renderMarkdown would produce a bullet-less no-op request.
+    // rebuildRequestFromSeed is the single place that shapes either request — resend no longer
+    // maintains its own copy of that contract.
+    const { request, markdown } = rebuildRequestFromSeed(seed)
+    this.queueRequest(
+      request,
+      markdown,
+      (id) => {
         // Remove the OLD failed row only once the re-queue actually succeeded (final-review
-        // F5) — a failed POST below (see .catch) leaves the failed row and its note in place
-        // instead of vanishing on click with nothing to show for it.
+        // F5) — a failed POST below (see the failure callback) leaves the failed row and its
+        // note in place instead of vanishing on click with nothing to show for it.
         this.session.removeSeed(seed)
-        this.registerQueuedSend(body.id, [seed])
+        this.registerQueuedSend(id, [seed])
         // Lift the guard only after removeSeed/registerQueuedSend so the new in-flight record
         // (under the fresh id) exists before this seed is eligible for another resend click.
         this.resendsInFlight.delete(seed)
         this.postDispatch(() => {
           /* request is safely queued — manual rung, same as Send */
         })
-      })
-      .catch(() => {
+      },
+      () => {
         this.resendsInFlight.delete(seed)
         this.flashButton(this.overlay.sendButton, 'Send failed', 'Send to agent')
-      })
+      }
+    )
   }
 
   /** First selection member (or null) — kept for single-selection call sites/tests. */
@@ -411,6 +463,7 @@ export class DesignMode {
       this.pendingRestore = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
+      this.promptBox.close()
       this.dock.exit()
       this.verifier.stop()
       this.watch.stop()
@@ -591,6 +644,7 @@ export class DesignMode {
   }
 
   private setSelection(next: TaggedElement[]): void {
+    this.promptBox.close() // any selection change — including deselect — closes and discards
     this.selection = next
     this.clearRippleState()
     if (next.length === 0) {

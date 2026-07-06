@@ -982,6 +982,166 @@ describe('change list wiring', () => {
   })
 })
 
+describe('prompt sends', () => {
+  /** Flushes enough microtasks for the /queue POST *and* the chained /dispatch POST to settle —
+   * same convention as flushSend() elsewhere in this file. */
+  async function flushSend(): Promise<void> {
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+  }
+
+  /** PromptBox mounts as a shadow-root sibling of #panel/#status (overlay.mountPromptBox) —
+   * locate it the same way tests reach into the shadow root for #panel/#status/#outline. */
+  function promptBoxRoot(overlay: Overlay): HTMLElement {
+    return overlay.host.shadowRoot!.querySelector('.prompt-box') as HTMLElement
+  }
+
+  function stubQueueThenDispatch(dispatchResponse: { rung: string; detail: string } = { rung: 'watcher', detail: '' }) {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => dispatchResponse })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('toggles the prompt box from the panel button, anchored to the selection', () => {
+    const { mode, overlay, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')!
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(mode.panelRoot).toBeTruthy()
+
+    panel.promptButton.click()
+    expect(promptBoxRoot(overlay).hidden).toBe(false)
+    panel.promptButton.click()
+    expect(promptBoxRoot(overlay).hidden).toBe(true)
+  })
+
+  it('queues a prompt request and registers prompt seeds on success', async () => {
+    const fetchMock = stubQueueThenDispatch({ rung: 'watcher', detail: '' })
+    const { mode, overlay, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')!
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+
+    panel.promptButton.click()
+    const box = promptBoxRoot(overlay)
+    const textarea = box.querySelector('.prompt-textarea') as HTMLTextAreaElement
+    textarea.value = 'make it pop'
+    textarea.dispatchEvent(new Event('input'))
+    const sendButton = box.querySelector('.prompt-send') as HTMLButtonElement
+    sendButton.click()
+
+    await flushSend()
+
+    const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
+    expect(queueCalls).toHaveLength(1)
+    const body = JSON.parse((queueCalls[0] as unknown as [string, { body: string }])[1].body)
+    expect(body.request.kind).toBe('prompt')
+    expect(body.request.prompt).toBe('make it pop')
+    expect(body.markdown).toContain('# Design prompt')
+
+    expect(mode.session.records()[0].seed.prompt).toBe('make it pop')
+    expect(mode.session.records()[0].seed.draftProps).toEqual([]) // never touches drafts
+    expect(promptBoxRoot(overlay).hidden).toBe(true) // closed on queue success
+  })
+
+  it('keeps the box open with text intact on queue failure', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve({ ok: false, json: async () => ({}) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, overlay, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')!
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+
+    panel.promptButton.click()
+    const box = promptBoxRoot(overlay)
+    const textarea = box.querySelector('.prompt-textarea') as HTMLTextAreaElement
+    textarea.value = 'make it pop'
+    textarea.dispatchEvent(new Event('input'))
+    const sendButton = box.querySelector('.prompt-send') as HTMLButtonElement
+    sendButton.click()
+
+    await flushSend()
+
+    expect(promptBoxRoot(overlay).hidden).toBe(false)
+    expect(textarea.value).toBe('make it pop') // not discarded — user retries
+    expect(textarea.disabled).toBe(false) // busy lifted
+  })
+
+  it('closes the box on selection change and on deactivate', () => {
+    document.body.innerHTML = `
+      <button data-dc-source="src/Button.tsx:42:8" class="btn" id="a">a</button>
+      <button data-dc-source="src/Button2.tsx:1:1" class="btn" id="b">b</button>
+    `
+    const overlay = new Overlay()
+    overlay.mount()
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, () => {})
+    overlay.attachPanel(panel.root)
+    const mode = new DesignMode(overlay, panel, drafts)
+    liveModes.push(mode)
+    mode.setActive(true)
+
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    panel.promptButton.click()
+    expect(promptBoxRoot(overlay).hidden).toBe(false)
+
+    b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(promptBoxRoot(overlay).hidden).toBe(true)
+
+    b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    panel.promptButton.click()
+    expect(promptBoxRoot(overlay).hidden).toBe(false)
+    mode.setActive(false)
+    expect(promptBoxRoot(overlay).hidden).toBe(true)
+  })
+
+  it('re-sends a failed prompt seed as a fresh prompt request', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      if (url === '/__the-forge/status?ids=q1')
+        return Promise.resolve({ ok: true, json: async () => ({ items: [{ id: 'q1', status: 'failed', note: 'oops' }] }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.useFakeTimers()
+    const { mode, overlay, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')!
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+
+    panel.promptButton.click()
+    const box = promptBoxRoot(overlay)
+    const textarea = box.querySelector('.prompt-textarea') as HTMLTextAreaElement
+    textarea.value = 'make it pop'
+    textarea.dispatchEvent(new Event('input'))
+    const sendButton = box.querySelector('.prompt-send') as HTMLButtonElement
+    sendButton.click()
+    await vi.advanceTimersByTimeAsync(0)
+
+    // drive the seed to failed via the verifier's status poll
+    await vi.advanceTimersByTimeAsync(2000)
+    vi.useRealTimers()
+
+    const resendButton = mode.panelRoot.querySelector('.change-row .change-resend') as HTMLButtonElement
+    expect(resendButton).toBeTruthy()
+    fetchMock.mockClear()
+    resendButton.click()
+    await flushSend()
+
+    const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
+    expect(queueCalls).toHaveLength(1)
+    const body = JSON.parse((queueCalls[0] as unknown as [string, { body: string }])[1].body)
+    expect(body.request.kind).toBe('prompt')
+    expect(body.markdown).toContain('## Instruction')
+  })
+})
+
 describe('DesignMode verifier wiring (M4 Task 4)', () => {
   beforeEach(() => {
     vi.useFakeTimers()

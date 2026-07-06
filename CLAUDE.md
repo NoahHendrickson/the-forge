@@ -77,6 +77,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `changelist.ts` | Changes lifecycle list (view over `LifecycleSession` + drafts): per-change rows `draft` → `sent` → `applying` → `done`/`failed`, re-send/dismiss |
 | `lifecycle-store.ts` | sessionStorage persistence + the canonical element resolver (`resolveElement`/`locateBySource`) used by verifier, healing, and restore |
 | `request.ts` | change-request builder: before/after CSS + utility deltas, markdown |
+| `prompt.ts` | `PromptBox` — element-anchored free-form prompt box (panel-header Prompt button); sends ride the same queue/dispatch path with `kind: 'prompt'`, lifecycle rows flip on mark_applied alone |
 | `verifier.ts` | post-send polling, computed-style verification, backoff when server is gone |
 | `watch.ts` | watcher-state poller (design-mode-on only) for the linked-session indicator |
 | `ui/button.ts` | `createButton` — the single place overlay buttons are born |
