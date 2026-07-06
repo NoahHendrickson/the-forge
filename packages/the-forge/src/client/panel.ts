@@ -408,6 +408,8 @@ export class Panel {
     const spaceBetween = justify === 'space-between'
 
     this.directionField?.set(direction)
+    // wrap-reverse deliberately reads as OFF (same as the old Wrap segment) — the toggle is a
+    // two-state wrap/nowrap control; reversal is out of its vocabulary.
     const wrapping = wrap === 'wrap'
     this.wrapToggle?.classList.toggle('seg-active', wrapping)
     this.wrapToggle?.setAttribute('aria-pressed', String(wrapping))
@@ -601,7 +603,7 @@ export class Panel {
         const removeBtn = createButton({ label: '−' })
         removeBtn.setAttribute('data-remove-layout', '')
         removeBtn.setAttribute('aria-label', 'Remove auto layout')
-        removeBtn.title = 'Remove auto layout — the request tells the agent to drop flex/flex-col/gap-*/justify-*/items-* classes'
+        removeBtn.title = 'Remove auto layout — the request tells the agent to drop flex/inline-flex/flex-row/flex-col/flex-wrap/gap-*/justify-*/items-* classes'
         removeBtn.hidden = true
         removeBtn.addEventListener('click', () => {
           if (!this.el) return

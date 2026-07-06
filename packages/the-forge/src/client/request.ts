@@ -278,7 +278,7 @@ export function renderMarkdown(req: ChangeRequest): string {
       // preview of REMOVING auto layout. Spell the intent out so the agent edits classes
       // (removes the flex family) instead of faithfully adding a block utility.
       if (c.property === 'display' && (c.beforeCss === 'flex' || c.beforeCss === 'inline-flex') && c.afterCss === 'block') {
-        line += ' — intent: remove auto layout (flexbox) from this element; remove flex/flex-col/gap-*/justify-*/items-* classes rather than adding `display: block`'
+        line += ' — intent: remove auto layout (flexbox) from this element; remove flex/inline-flex/flex-row/flex-col/flex-wrap/gap-*/justify-*/items-* classes rather than adding `display: block`'
       }
       lines.push(line)
     }

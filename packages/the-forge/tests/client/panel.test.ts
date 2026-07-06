@@ -320,6 +320,18 @@ describe('Panel', () => {
     expect(side.querySelector('.nf')).toBeTruthy() // Gap stays
   })
 
+  it('direction row nests track + wrap toggle in a .seg-cluster (label stays outside)', () => {
+    const { panel } = flexSetup()
+    const dirField = [...panel.root.querySelectorAll('.seg-field')].find(
+      (n) => n.querySelector('.seg-field-label')?.textContent === 'Direction'
+    ) as HTMLElement
+    const cluster = dirField.querySelector('.seg-cluster') as HTMLElement
+    expect(cluster).toBeTruthy()
+    expect(cluster.querySelector('.seg-track')).toBeTruthy()
+    expect(cluster.querySelector('[data-wrap-toggle]')).toBeTruthy()
+    expect(cluster.querySelector('.seg-field-label')).toBeNull()
+  })
+
   it('wrap toggle drafts flex-wrap and reflects state', () => {
     const { el, panel } = flexSetup()
     const wrapBtn = panel.root.querySelector('[data-wrap-toggle]') as HTMLButtonElement
@@ -1144,6 +1156,9 @@ describe('Panel Typography section', () => {
     const { panel } = textSetup()
     expect((panel.root.querySelector('.type-weight') as HTMLElement).title).toBe('font-weight → font-*')
     expect((panel.root.querySelector('.type-family') as HTMLElement).title).toBe('font-family')
+    expect((panel.root.querySelector('.stroke-style') as HTMLElement).title).toBe(
+      'border-style → border-solid / border-dashed / border-dotted'
+    )
   })
 
   it('S field drafts font-size in px', () => {

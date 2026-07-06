@@ -469,6 +469,8 @@ line2 \`code\`</button>`
     store.apply(el, 'display', 'block')
     const md = renderMarkdown(buildChangeRequest(store, PLAIN))
     expect(md).toContain('remove auto layout (flexbox) from this element')
-    expect(md).toContain('remove flex/flex-col/gap-*/justify-*/items-* classes rather than adding `display: block`')
+    expect(md).toContain(
+      'remove flex/inline-flex/flex-row/flex-col/flex-wrap/gap-*/justify-*/items-* classes rather than adding `display: block`'
+    )
   })
 })
