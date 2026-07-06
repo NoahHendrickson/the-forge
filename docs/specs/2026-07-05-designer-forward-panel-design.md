@@ -101,7 +101,12 @@ Four milestones, each its own dated plan in `docs/plans/` and its own feature br
 - **Direction as icons.** The Direction segment becomes Figma's icon pair — `→` (horizontal),
   `↓` (vertical) — with the Wrap toggle joining the same row as an icon toggle (Figma UI3
   grouping). `SegmentField` gains icon-label support; every icon carries `aria-label` + CSS-hint
-  `title`. Existing field classes stay.
+  `title`. Existing field classes stay. Real-browser E2E (M-B Task 5) caught the Direction row's
+  `[data-flex-direction]` column-stacking CSS (label above content, from M-A's clipping fix)
+  also stacking the wrap toggle below the segment track instead of beside it; the fix nests
+  `.seg-track` + the wrap toggle in a `.seg-cluster` row wrapper so the outer field still stacks
+  label-vs-content while the track and toggle stay inline — existing `data-wrap-toggle`/
+  `.seg-track` hooks are unaffected since lookups use `querySelector`, not direct-child.
 - **− Remove auto layout.** Affordance in the Layout section header, visible only when the
   element is flex (`data-remove-layout` hook). Semantics:
   - If `display: flex` was drafted this session (auto layout added via the panel): **discard**
@@ -113,7 +118,11 @@ Four milestones, each its own dated plan in `docs/plans/` and its own feature br
     adding `block`.
 - **Baseline alignment.** A small toggle adjacent to the matrix (`data-align-baseline`) drafting
   `align-items: baseline`. `normalizeAlign` learns to pass `baseline` through; when active, the
-  matrix shows no active vertical dot and the toggle carries the active state.
+  matrix shows no active vertical dot and the toggle carries the active state. Toggling OFF
+  (undefined by the earlier spec text, shipped in Task 4 and E2E-verified in Task 5): if
+  `align-items: baseline` was drafted this session, discard that draft — the matrix returns to
+  whatever alignment its stylesheet/prior draft reality implies; otherwise (baseline comes from
+  the app's own CSS) draft `align-items: flex-start`, the normalize default.
 
 ### M-C — Unified Layout section (the structural move)
 
