@@ -1459,13 +1459,13 @@ describe('Panel Fill section', () => {
   })
 
   it('Text row is hidden for an element with no direct text child', () => {
-    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"><span>x</span></div>`)
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(1, 2, 3);"><span>x</span></div>`)
     const rows = colorRows(panel)
     expect(rows).toHaveLength(1) // only Fill, Text row absent/hidden
   })
 
   it('Text row is visible for an element with direct text', () => {
-    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t">Hello</div>`)
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(1, 2, 3);">Hello</div>`)
     const rows = colorRows(panel)
     expect(rows).toHaveLength(2)
   })
@@ -1513,13 +1513,62 @@ describe('Panel Fill section', () => {
     expect(opts.contrastAgainst).toBe('rgb(20, 20, 20)')
   })
 
-  it('a fully-transparent Fill shows the literal "transparent" label, not a nearest-token guess', () => {
+  it('a fully-transparent background reads as empty — + shown, no Fill row', () => {
     const { panel } = setup(
       `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: transparent;"></div>`
     )
-    const fillRow = colorRows(panel)[0]
-    const valueEl = fillRow.querySelector('.color-value') as HTMLElement
-    expect(valueEl.textContent).toBe('transparent')
+    expect((panel.root.querySelector('[data-add-fill]') as HTMLElement).hidden).toBe(false)
+    expect(colorRows(panel)).toHaveLength(0)
+  })
+
+  it('no background → Fill row hidden, + shown in the title, − hidden', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    const add = panel.root.querySelector('[data-add-fill]') as HTMLElement
+    const remove = panel.root.querySelector('[data-remove-fill]') as HTMLElement
+    expect(add.hidden).toBe(false)
+    expect(remove.hidden).toBe(true)
+    expect(fillSection(panel).contains(add)).toBe(true) // lives in the title row
+    expect(colorRows(panel)).toHaveLength(0) // Fill row hidden (and no direct text → no Text row)
+  })
+
+  it('empty fill leaves the Text row untouched', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t">Hello</div>`)
+    expect(colorRows(panel)).toHaveLength(1) // Text row alone survives the empty fill
+  })
+
+  it('populated fill → row shown, − shown, + hidden', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 0, 0);"></div>`
+    )
+    expect((panel.root.querySelector('[data-add-fill]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-remove-fill]') as HTMLElement).hidden).toBe(false)
+    expect(colorRows(panel)).toHaveLength(1)
+  })
+
+  it('+ drafts the default fill (#D9D9D9) and flips to populated', () => {
+    const { el, panel, drafts } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    ;(panel.root.querySelector('[data-add-fill]') as HTMLElement).click()
+    expect(drafts.current(el, 'background-color')).toBe('#D9D9D9')
+    expect((panel.root.querySelector('[data-add-fill]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-remove-fill]') as HTMLElement).hidden).toBe(false)
+    expect(colorRows(panel)).toHaveLength(1)
+  })
+
+  it('− after + is a pure undo: draft discarded, nothing to send, back to empty', () => {
+    const { el, panel, drafts } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    ;(panel.root.querySelector('[data-add-fill]') as HTMLElement).click()
+    ;(panel.root.querySelector('[data-remove-fill]') as HTMLElement).click()
+    expect(drafts.current(el, 'background-color')).toBe(null)
+    expect((panel.root.querySelector('[data-add-fill]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('− on a stylesheet-real fill drafts transparent as the removal', () => {
+    const { el, panel, drafts } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 0, 0);"></div>`
+    )
+    ;(panel.root.querySelector('[data-remove-fill]') as HTMLElement).click()
+    expect(drafts.current(el, 'background-color')).toBe('transparent')
+    expect((panel.root.querySelector('[data-add-fill]') as HTMLElement).hidden).toBe(false)
   })
 
   it('a semi-transparent Fill shows a hex fallback, not a token name, even if the rgb matches a token', () => {
@@ -2725,7 +2774,7 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
 
   it('Fill and Stroke section titles are hidden in multi-select', () => {
     const { panel } = multiSetup('background-color: red;', 'background-color: blue;')
-    const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Fill')!
+    const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => titleText(n) === 'Fill')!
     const strokeTitleEl = [...panel.root.querySelectorAll('.panel-section')].find(
       (n) => titleText(n) === 'Stroke'
     )!
@@ -2735,7 +2784,7 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
 
   it('Fill and Stroke section BODIES (not just titles) are hidden in multi-select (final review fix #1)', () => {
     const { panel } = multiSetup('background-color: red;', 'background-color: blue;')
-    const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Fill')!
+    const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => titleText(n) === 'Fill')!
     const strokeTitleEl = [...panel.root.querySelectorAll('.panel-section')].find(
       (n) => titleText(n) === 'Stroke'
     )!

@@ -40,6 +40,7 @@ import {
   firstFamily,
   cssFamilyValue,
   documentFontFamilies,
+  fillIsEmpty,
 } from './panel-readers'
 
 export { tokenEntriesFor, colorTokenEntries } from './panel-specs'
@@ -114,6 +115,8 @@ export class Panel {
   private textRow: HTMLElement | null = null
   private strokeStyleSelect: HTMLSelectElement | null = null
   private strokeColorRow: HTMLElement | null = null
+  private fillAddBtn: HTMLButtonElement | null = null
+  private fillRemoveBtn: HTMLButtonElement | null = null
 
   // Selection colors (B6, multi-select only) — section title + rows wrap, rebuilt per show().
   private selectionColorsTitle: HTMLElement | null = null
@@ -422,6 +425,10 @@ export class Panel {
   }
 
   private refreshFillStroke(el: TaggedElement, computed: CSSStyleDeclaration): void {
+    const fillEmpty = fillIsEmpty(this.currentValue(el, 'background-color', computed))
+    if (this.fillRow) this.fillRow.hidden = fillEmpty
+    if (this.fillAddBtn) this.fillAddBtn.hidden = !fillEmpty
+    if (this.fillRemoveBtn) this.fillRemoveBtn.hidden = fillEmpty
     ;(this.fillRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
     if (this.textRow) this.textRow.hidden = !hasDirectText(el)
     ;(this.textRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
@@ -473,6 +480,8 @@ export class Panel {
     this.textRow = null
     this.strokeStyleSelect = null
     this.strokeColorRow = null
+    this.fillAddBtn = null
+    this.fillRemoveBtn = null
     this.selectionColorsTitle = null
     this.selectionColorsRows = null
 
@@ -561,6 +570,9 @@ export class Panel {
         const fillBody = this.buildFillSection()
         this.sectionsRoot.append(fillBody)
         sectionBodyEls.push(fillBody)
+        // − before + (Layout's title glyph order: remove first). Only one is ever visible —
+        // refreshFillStroke flips them on the fill-empty predicate.
+        title.append(this.buildFillRemoveButton(), this.buildFillAddButton())
         this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
       }
@@ -844,6 +856,51 @@ export class Panel {
     this.textRow = textRow
 
     return wrap
+  }
+
+  private buildFillAddButton(): HTMLButtonElement {
+    const btn = createButton({ label: '+' })
+    btn.setAttribute('data-add-fill', '')
+    btn.setAttribute('aria-label', 'Add fill')
+    btn.title = 'Add fill — drafts a default background-color the request turns into a bg-* class'
+    btn.hidden = true
+    btn.addEventListener('click', () => {
+      const el = this.el
+      if (!el) return
+      this.onBeforeEdit(el)
+      // #D9D9D9 is Figma's default fill gray — a deliberately-neutral starting point the
+      // color picker / nearest-token machinery immediately takes over from.
+      this.drafts.apply(el, 'background-color', '#D9D9D9')
+      this.refresh()
+      this.onEdited()
+    })
+    this.fillAddBtn = btn
+    return btn
+  }
+
+  private buildFillRemoveButton(): HTMLButtonElement {
+    const btn = createButton({ label: '−' })
+    btn.setAttribute('data-remove-fill', '')
+    btn.setAttribute('aria-label', 'Remove fill')
+    btn.title = 'Remove fill — the request tells the agent to drop bg-* classes'
+    btn.hidden = true
+    btn.addEventListener('click', () => {
+      const el = this.el
+      if (!el) return
+      this.onBeforeEdit(el)
+      if (this.drafts.current(el, 'background-color') !== null) {
+        // Fill was added (or re-drafted) this session — pure undo, mirroring remove-auto-
+        // layout: targeted discard restores the recorded original; nothing to send.
+        this.drafts.discard(el, ['background-color'])
+      } else {
+        // Fill comes from the app's own CSS: draft transparent as the deterministic removal.
+        this.drafts.apply(el, 'background-color', 'transparent')
+      }
+      this.refresh()
+      this.onEdited()
+    })
+    this.fillRemoveBtn = btn
+    return btn
   }
 
   private buildStrokeSection(): HTMLElement {
