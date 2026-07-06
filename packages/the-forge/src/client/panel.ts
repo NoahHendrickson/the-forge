@@ -495,9 +495,9 @@ export class Panel {
         // strip test convention ('Layout−⋯').
         title.append(this.layoutSection.buildRemoveButton())
 
-        // Unified UI3-style Layout body (spec M-C): W/H rows -> flex-child strip -> auto-
-        // layout cluster -> padding rows, one fixed order, flex or not (the ORDER is the
-        // contract — see panel.test.ts's composition test).
+        // Unified UI3-style Layout body (spec M-C; reordered 2026-07-06 layout-polish spec):
+        // W/H rows -> auto-layout cluster -> padding block -> align block, one fixed order,
+        // flex or not (the ORDER is the contract — see panel.test.ts's composition test).
         const rowWrap = document.createElement('div')
         rowWrap.className = 'panel-rows layout-section'
         for (const row of SIZE_ROWS) {
@@ -517,11 +517,29 @@ export class Panel {
             this.layoutSection.registerMinMaxRow({ rowEl: mmRow, spec: mm, field: mmBound.field })
           }
         }
-        rowWrap.append(this.layoutSection.buildFlexChildControls())
         // buildBodyInto appends the add-button + controls wrap directly onto rowWrap, so the
         // section body stays a single flat .panel-rows (CSS contract) with no carrier to drain.
         this.layoutSection.buildBodyInto(rowWrap)
-        for (const row of PADDING_ROWS) rowWrap.append(this.buildRow(row))
+
+        // Padding block (2026-07-06 layout-polish spec): a "Padding" group label above ONE
+        // line holding the H (left/right) and V (top/bottom) fields side by side — Margin's
+        // H|V shorthand explained by its section title; padding's is explained here.
+        const padBlock = document.createElement('div')
+        padBlock.className = 'padding-block'
+        padBlock.setAttribute('data-padding-row', '')
+        const padLabel = document.createElement('span')
+        padLabel.className = 'group-label'
+        padLabel.textContent = 'Padding'
+        const padFields = document.createElement('div')
+        padFields.className = 'padding-fields'
+        for (const row of PADDING_ROWS) padFields.append(this.buildRow(row))
+        padBlock.append(padLabel, padFields)
+        rowWrap.append(padBlock)
+
+        // Align block LAST (2026-07-06 layout-polish spec): the per-child override is the
+        // exception, not the default surface — designers think container-first (9-dot matrix
+        // on the parent), so align-self sits at the bottom, behind Task 3's toggle.
+        rowWrap.append(this.layoutSection.buildFlexChildControls())
 
         this.sectionsRoot.append(rowWrap)
         sectionBodyEls.push(rowWrap)

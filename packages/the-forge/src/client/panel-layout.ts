@@ -65,6 +65,7 @@ export class LayoutSection {
   private alignSelfField: SegmentField | null = null
   private alignSelfWrap: HTMLElement | null = null
   private flexChildControlsWrap: HTMLElement | null = null
+  private alignToggle: HTMLButtonElement | null = null
   private sizeModes: BoundSizeMode[] = []
 
   // M-D min/max sizing: rows registered per-selection (same lifecycle as sizeModes) plus the
@@ -225,13 +226,30 @@ export class LayoutSection {
     parent.append(controls)
   }
 
-  /** The flex-child Align/size-mode strip (today's buildFlexChildControls). */
+  /** The flex-child align block (2026-07-06 layout-polish spec): "Align" group label + the
+   * disclosure toggle, then the align-self segment strip. Off = follow the parent's 9-dot
+   * alignment; the toggle's behavior lands in onAlignToggle (Task 3). */
   buildFlexChildControls(): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'flex-child-controls'
     this.flexChildControlsWrap = wrap
+
+    const head = document.createElement('div')
+    head.className = 'align-head'
+    const label = document.createElement('span')
+    label.className = 'group-label'
+    label.textContent = 'Align'
+    const toggle = createButton({ label: '' })
+    toggle.classList.add('align-toggle')
+    toggle.setAttribute('data-align-toggle', '')
+    toggle.setAttribute('aria-label', 'Align independently of parent')
+    toggle.title = "align-self — override the parent container's alignment for this element"
+    this.alignToggle = toggle
+    head.append(label, toggle)
+    wrap.append(head)
+
     this.alignSelfField = new SegmentField({
-      label: 'Align',
+      label: '',
       options: [
         { value: 'auto', label: 'Auto' },
         { value: 'flex-start', label: 'Start', title: 'align-self: flex-start → self-start' },
@@ -501,6 +519,7 @@ export class LayoutSection {
     this.alignSelfField = null
     this.alignSelfWrap = null
     this.flexChildControlsWrap = null
+    this.alignToggle = null
     this.sizeModes = []
     this.minMaxRows = []
     this.openedMinMax.clear()

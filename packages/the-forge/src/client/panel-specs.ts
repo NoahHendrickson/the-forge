@@ -191,9 +191,10 @@ const SIZE_ROWS: RowSpec[] = [
   { label: 'H', props: ['height'], min: 0, sizeMode: true },
 ]
 
-// The padding H/V specs — rendered as the last two rows of the unified Layout section
-// body (spec M-C), after the auto-layout cluster. Exported so panel.ts's buildBody
-// layout branch can compose them directly.
+// The padding H/V specs — rendered inside the padding block of the unified Layout section
+// body (spec M-C; reordered 2026-07-06 layout-polish spec), after the auto-layout cluster
+// and before the align block. Exported so panel.ts's buildBody layout branch can compose
+// them directly.
 const PADDING_ROWS: RowSpec[] = [
   { label: 'H', props: ['padding-left', 'padding-right'], min: 0 },
   { label: 'V', props: ['padding-top', 'padding-bottom'], min: 0 },
@@ -225,9 +226,9 @@ const SECTIONS: SectionSpec[] = [
       { label: 'B', props: ['padding-bottom'], min: 0 },
       { label: 'L', props: ['padding-left'], min: 0 },
     ],
-    // Unified UI3 section (spec M-C, re-ratified 2026-07-06): W/H rows -> flex-child strip ->
-    // auto-layout cluster -> padding rows, one fixed order, flex or not. The cluster alone is
-    // single-select-only (B6); rows keep multi relative-delta behavior.
+    // Unified UI3 section (spec M-C; reordered 2026-07-06 layout-polish spec): W/H rows ->
+    // auto-layout cluster -> padding block -> align block, one fixed order, flex or not. The
+    // cluster alone is single-select-only (B6); rows keep multi relative-delta behavior.
   },
   {
     title: 'Margin',

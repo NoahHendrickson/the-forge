@@ -290,7 +290,7 @@ describe('Panel', () => {
     expect((sections[0] as HTMLElement).hidden).toBe(false)
   })
 
-  it('unified Layout body composes W/H, flex-child strip, cluster, padding in order (spec M-C)', () => {
+  it('unified Layout body composes W/H, cluster, padding, align in order (2026-07-06 layout-polish spec)', () => {
     const { panel } = flexSetup()
     const body = panel.root.querySelector('.layout-section') as HTMLElement
     const kinds = [...body.children].map((c) =>
@@ -301,10 +301,10 @@ describe('Panel', () => {
             ? 'minmax-min'
             : 'minmax-max'
           : c.classList.contains('flex-child-controls')
-            ? 'flex-child'
+            ? 'align'
             : c.classList.contains('layout-controls') || c.hasAttribute('data-add-layout')
               ? 'cluster'
-              : (c as HTMLElement).dataset.props?.startsWith('padding')
+              : c.hasAttribute('data-padding-row')
                 ? 'padding'
                 : c.className
     )
@@ -315,12 +315,30 @@ describe('Panel', () => {
       'size',
       'minmax-min',
       'minmax-max',
-      'flex-child',
       'cluster',
       'cluster',
       'padding',
-      'padding',
+      'align',
     ])
+  })
+
+  it('padding block carries a group label and one line with both H/V fields', () => {
+    const { panel } = setup()
+    const block = panel.root.querySelector('[data-padding-row]') as HTMLElement
+    expect(block).toBeTruthy()
+    expect((block.querySelector('.group-label') as HTMLElement).textContent).toBe('Padding')
+    const fields = [...block.querySelectorAll('.padding-fields .nf')] as HTMLElement[]
+    expect(fields.map((f) => f.dataset.props)).toEqual([
+      'padding-left padding-right',
+      'padding-top padding-bottom',
+    ])
+  })
+
+  it('align block carries a group label and the toggle button', () => {
+    const { panel } = setup()
+    const wrap = panel.root.querySelector('.flex-child-controls') as HTMLElement
+    expect((wrap.querySelector('.group-label') as HTMLElement).textContent).toBe('Align')
+    expect(wrap.querySelector('[data-align-toggle]')).toBeTruthy()
   })
 
   it('layout controls compose a layout-grid with a matrix-tile and a layout-side column', () => {
