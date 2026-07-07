@@ -43,6 +43,12 @@ const P = {
   STROKE_W: 'border-top-width border-right-width border-bottom-width border-left-width',
 } as const
 
+// Section title rows carry glyph buttons — '⋯' expand, '−' remove, '+' add (fill/stroke
+// empty states) — strip all of them before comparing the label text.
+function titleText(n: Element): string {
+  return (n.textContent ?? '').replace(/[⋯−+]/g, '').trim()
+}
+
 function fieldInput(panel: Panel, props: string): HTMLInputElement {
   const nf = [...panel.root.querySelectorAll('.nf')].find((n) => (n as HTMLElement).dataset.props === props)
   if (!nf) throw new Error(`no field with data-props ${props}`)
@@ -256,7 +262,7 @@ describe('Panel', () => {
     // also carries the '−' remove-auto-layout button) — compare the leading label text
     // only (title row's first text-bearing segment) rather than exact equality.
     const titles = [...panel.root.querySelectorAll('.panel-section')].map(
-      (n) => n.textContent?.replace('⋯', '').replace('−', '').trim()
+      (n) => titleText(n)
     )
     expect(titles).toEqual(['Layout', 'Margin', 'Typography', 'Fill', 'Stroke', 'Appearance'])
   })
@@ -278,7 +284,7 @@ describe('Panel', () => {
     const sections = [...panel.root.querySelectorAll('.panel-section')]
     // Title row textContent also carries the '−' remove-auto-layout button and (since M-C)
     // the '⋯' padding-expand button — strip both glyphs before comparing the label.
-    expect(sections[0].textContent?.replace('−', '').replace('⋯', '')).toBe('Layout')
+    expect(titleText(sections[0])).toBe('Layout')
     expect((sections[0] as HTMLElement).hidden).toBe(false)
     // the layout CONTROLS (direction/gap/align/wrap) are hidden — only the
     // add-auto-layout button is shown alongside the always-visible title
@@ -298,7 +304,7 @@ describe('Panel', () => {
     const { panel } = flexSetup()
     const sections = [...panel.root.querySelectorAll('.panel-section')]
     // Title row textContent also carries the '−' remove-auto-layout button and '⋯' padding-expand.
-    expect(sections[0].textContent?.replace('−', '').replace('⋯', '')).toBe('Layout')
+    expect(titleText(sections[0])).toBe('Layout')
     expect((sections[0] as HTMLElement).hidden).toBe(false)
   })
 
@@ -1470,7 +1476,7 @@ describe('Panel Typography section', () => {
 
   function typographySection(panel: Panel): HTMLElement {
     return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Typography'
+      (n) => titleText(n) === 'Typography'
     ) as HTMLElement
   }
 
@@ -1496,7 +1502,7 @@ describe('Panel Typography section', () => {
   it('sits between Margin and Fill in stable DOM order', () => {
     const { panel } = textSetup()
     const titles = [...panel.root.querySelectorAll('.panel-section')].map(
-      (n) => n.textContent?.replace('⋯', '').trim()
+      (n) => titleText(n)
     )
     const marginIdx = titles.indexOf('Margin')
     const typographyIdx = titles.indexOf('Typography')
@@ -1608,7 +1614,7 @@ describe('Panel Typography section', () => {
 describe('Panel Fill section', () => {
   function fillSection(panel: Panel): HTMLElement {
     return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Fill'
+      (n) => titleText(n) === 'Fill'
     ) as HTMLElement
   }
 
@@ -1636,13 +1642,13 @@ describe('Panel Fill section', () => {
   })
 
   it('Text row is hidden for an element with no direct text child', () => {
-    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"><span>x</span></div>`)
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(1, 2, 3);"><span>x</span></div>`)
     const rows = colorRows(panel)
     expect(rows).toHaveLength(1) // only Fill, Text row absent/hidden
   })
 
   it('Text row is visible for an element with direct text', () => {
-    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t">Hello</div>`)
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(1, 2, 3);">Hello</div>`)
     const rows = colorRows(panel)
     expect(rows).toHaveLength(2)
   })
@@ -1690,13 +1696,62 @@ describe('Panel Fill section', () => {
     expect(opts.contrastAgainst).toBe('rgb(20, 20, 20)')
   })
 
-  it('a fully-transparent Fill shows the literal "transparent" label, not a nearest-token guess', () => {
+  it('a fully-transparent background reads as empty — + shown, no Fill row', () => {
     const { panel } = setup(
       `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: transparent;"></div>`
     )
-    const fillRow = colorRows(panel)[0]
-    const valueEl = fillRow.querySelector('.color-value') as HTMLElement
-    expect(valueEl.textContent).toBe('transparent')
+    expect((panel.root.querySelector('[data-add-fill]') as HTMLElement).hidden).toBe(false)
+    expect(colorRows(panel)).toHaveLength(0)
+  })
+
+  it('no background → Fill row hidden, + shown in the title, − hidden', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    const add = panel.root.querySelector('[data-add-fill]') as HTMLElement
+    const remove = panel.root.querySelector('[data-remove-fill]') as HTMLElement
+    expect(add.hidden).toBe(false)
+    expect(remove.hidden).toBe(true)
+    expect(fillSection(panel).contains(add)).toBe(true) // lives in the title row
+    expect(colorRows(panel)).toHaveLength(0) // Fill row hidden (and no direct text → no Text row)
+  })
+
+  it('empty fill leaves the Text row untouched', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t">Hello</div>`)
+    expect(colorRows(panel)).toHaveLength(1) // Text row alone survives the empty fill
+  })
+
+  it('populated fill → row shown, − shown, + hidden', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 0, 0);"></div>`
+    )
+    expect((panel.root.querySelector('[data-add-fill]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-remove-fill]') as HTMLElement).hidden).toBe(false)
+    expect(colorRows(panel)).toHaveLength(1)
+  })
+
+  it('+ drafts the default fill (#D9D9D9) and flips to populated', () => {
+    const { el, panel, drafts } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    ;(panel.root.querySelector('[data-add-fill]') as HTMLElement).click()
+    expect(drafts.current(el, 'background-color')).toBe('#D9D9D9')
+    expect((panel.root.querySelector('[data-add-fill]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-remove-fill]') as HTMLElement).hidden).toBe(false)
+    expect(colorRows(panel)).toHaveLength(1)
+  })
+
+  it('− after + is a pure undo: draft discarded, nothing to send, back to empty', () => {
+    const { el, panel, drafts } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    ;(panel.root.querySelector('[data-add-fill]') as HTMLElement).click()
+    ;(panel.root.querySelector('[data-remove-fill]') as HTMLElement).click()
+    expect(drafts.current(el, 'background-color')).toBe(null)
+    expect((panel.root.querySelector('[data-add-fill]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('− on a stylesheet-real fill drafts transparent as the removal', () => {
+    const { el, panel, drafts } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="background-color: rgb(255, 0, 0);"></div>`
+    )
+    ;(panel.root.querySelector('[data-remove-fill]') as HTMLElement).click()
+    expect(drafts.current(el, 'background-color')).toBe('transparent')
+    expect((panel.root.querySelector('[data-add-fill]') as HTMLElement).hidden).toBe(false)
   })
 
   it('a semi-transparent Fill shows a hex fallback, not a token name, even if the rgb matches a token', () => {
@@ -1721,7 +1776,7 @@ describe('Panel Fill section', () => {
 describe('Panel Stroke section', () => {
   function strokeSection(panel: Panel): HTMLElement {
     return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+      (n) => titleText(n) === 'Stroke'
     ) as HTMLElement
   }
 
@@ -1807,12 +1862,113 @@ describe('Panel Stroke section', () => {
       expect(drafts.current(el, `border-${side}-color`)).toBe('rgb(1, 2, 3)')
     }
   })
+
+  it('no painting border → stroke rows and ⋯ hidden, + shown', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    expect((panel.root.querySelector('[data-add-stroke]') as HTMLElement).hidden).toBe(false)
+    expect((panel.root.querySelector('[data-remove-stroke]') as HTMLElement).hidden).toBe(true)
+    // the .stroke-rows wrap is the title's immediate body sibling
+    expect((strokeSection(panel).nextElementSibling as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-expand="stroke"]') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('title glyph order: Fill is − then +; Stroke is − then + then ⋯', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find(
+      (n) => titleText(n) === 'Fill'
+    ) as HTMLElement
+    const fillRemove = fillTitle.querySelector('[data-remove-fill]') as HTMLElement
+    const fillAdd = fillTitle.querySelector('[data-add-fill]') as HTMLElement
+    // DOCUMENT_POSITION_FOLLOWING (4) means fillAdd comes after fillRemove in document order.
+    expect(fillRemove.compareDocumentPosition(fillAdd) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    const strokeTitle = strokeSection(panel)
+    const strokeRemove = strokeTitle.querySelector('[data-remove-stroke]') as HTMLElement
+    const strokeAdd = strokeTitle.querySelector('[data-add-stroke]') as HTMLElement
+    const strokeExpand = strokeTitle.querySelector('[data-expand="stroke"]') as HTMLElement
+    expect(strokeRemove.compareDocumentPosition(strokeAdd) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(strokeAdd.compareDocumentPosition(strokeExpand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('width set but style none still reads empty', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-top-width: 3px;"></div>`
+    )
+    expect((panel.root.querySelector('[data-add-stroke]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('a lone border-bottom counts as a stroke (four-side predicate)', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-bottom-style: solid; border-bottom-width: 1px;"></div>`
+    )
+    expect((panel.root.querySelector('[data-add-stroke]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-remove-stroke]') as HTMLElement).hidden).toBe(false)
+    expect((strokeSection(panel).nextElementSibling as HTMLElement).hidden).toBe(false)
+  })
+
+  it('+ drafts a 1px solid border on all four sides and flips to populated', () => {
+    const { el, panel, drafts } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    ;(panel.root.querySelector('[data-add-stroke]') as HTMLElement).click()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-width`)).toBe('1px')
+      expect(drafts.current(el, `border-${side}-style`)).toBe('solid')
+    }
+    expect((panel.root.querySelector('[data-remove-stroke]') as HTMLElement).hidden).toBe(false)
+    expect((strokeSection(panel).nextElementSibling as HTMLElement).hidden).toBe(false)
+    expect((panel.root.querySelector('[data-expand="stroke"]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('− after + is a pure undo: all border drafts discarded, back to empty', () => {
+    const { el, panel, drafts } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t"></div>`)
+    ;(panel.root.querySelector('[data-add-stroke]') as HTMLElement).click()
+    ;(panel.root.querySelector('[data-remove-stroke]') as HTMLElement).click()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-width`)).toBe(null)
+      expect(drafts.current(el, `border-${side}-style`)).toBe(null)
+    }
+    expect((panel.root.querySelector('[data-add-stroke]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('− on a stylesheet-real border drafts border-style: none on all sides', () => {
+    const { el, panel, drafts } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-style: solid; border-width: 2px;"></div>`
+    )
+    ;(panel.root.querySelector('[data-remove-stroke]') as HTMLElement).click()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-style`)).toBe('none')
+    }
+    expect((panel.root.querySelector('[data-add-stroke]') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('− on a real border with a session width tweak still drafts removal and discards the tweak (style anchor untouched)', () => {
+    const { el, panel, drafts } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-style: solid; border-width: 2px;"></div>`
+    )
+    commit(strokeWidthField(panel), '5') // widths drafted; style stays stylesheet-real (all sides already solid)
+    ;(panel.root.querySelector('[data-remove-stroke]') as HTMLElement).click()
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      expect(drafts.current(el, `border-${side}-style`)).toBe('none')
+      expect(drafts.current(el, `border-${side}-width`)).toBe(null) // tweak discarded, not kept
+    }
+  })
+
+  it('the ⋯ open state survives a remove/add round-trip', () => {
+    const { panel } = setup(
+      `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-style: solid; border-width: 2px;"></div>`
+    )
+    const expandBtn = panel.root.querySelector('[data-expand="stroke"]') as HTMLElement
+    expandBtn.click() // open BT/BR/BB/BL
+    ;(panel.root.querySelector('[data-remove-stroke]') as HTMLElement).click()
+    ;(panel.root.querySelector('[data-add-stroke]') as HTMLElement).click()
+    const expandWrap = expandBtn.closest('.panel-section')!.nextElementSibling!.nextElementSibling as HTMLElement
+    expect(expandWrap.hidden).toBe(false) // restored from expandState, not reset
+  })
 })
 
 describe('Panel color rows + token-btn icon (T5)', () => {
   function fillSection(panel: Panel): HTMLElement {
     return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Fill'
+      (n) => titleText(n) === 'Fill'
     ) as HTMLElement
   }
 
@@ -1825,7 +1981,7 @@ describe('Panel color rows + token-btn icon (T5)', () => {
 
   function strokeSection(panel: Panel): HTMLElement {
     return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+      (n) => titleText(n) === 'Stroke'
     ) as HTMLElement
   }
 
@@ -2802,7 +2958,7 @@ describe('Margin section disclosure', () => {
     // Margin's title row parents the expand button, so textContent includes the '⋯'
     // glyph — strip it before comparing the leading label text.
     return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Margin'
+      (n) => titleText(n) === 'Margin'
     ) as HTMLElement
   }
 
@@ -2897,14 +3053,14 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
   }
 
   function sectionTitles(panel: Panel): string[] {
-    return [...panel.root.querySelectorAll('.panel-section')].map((n) => n.textContent?.replace('⋯', '').trim() ?? '')
+    return [...panel.root.querySelectorAll('.panel-section')].map((n) => titleText(n))
   }
 
   it('Fill and Stroke section titles are hidden in multi-select', () => {
     const { panel } = multiSetup('background-color: red;', 'background-color: blue;')
-    const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Fill')!
+    const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => titleText(n) === 'Fill')!
     const strokeTitleEl = [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+      (n) => titleText(n) === 'Stroke'
     )!
     expect((fillTitle as HTMLElement).hidden).toBe(true)
     expect((strokeTitleEl as HTMLElement).hidden).toBe(true)
@@ -2912,9 +3068,9 @@ describe('Panel multi-select: Fill/Stroke replaced by Selection colors (B6)', ()
 
   it('Fill and Stroke section BODIES (not just titles) are hidden in multi-select (final review fix #1)', () => {
     const { panel } = multiSetup('background-color: red;', 'background-color: blue;')
-    const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent === 'Fill')!
+    const fillTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => titleText(n) === 'Fill')!
     const strokeTitleEl = [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => n.textContent?.replace('⋯', '').trim() === 'Stroke'
+      (n) => titleText(n) === 'Stroke'
     )!
     const fillBody = fillTitle.nextElementSibling as HTMLElement
     expect(fillBody.classList.contains('panel-rows')).toBe(true)

@@ -91,8 +91,15 @@ describe('suggestUtility', () => {
     expect(suggestUtility('border-width', '3px', TW)).toEqual({ utility: 'border-[3px]', tokenExact: false })
   })
 
-  it('border-style has no utility mapping (left as a CSS-only line)', () => {
-    expect(suggestUtility('border-style', 'dashed', TW)).toBeNull()
+  it('maps border-style keywords to the border-<style> utility family (collapsed + longhands)', () => {
+    expect(suggestUtility('border-style', 'none', TW)).toEqual({ utility: 'border-none', tokenExact: true })
+    expect(suggestUtility('border-style', 'solid', TW)).toEqual({ utility: 'border-solid', tokenExact: true })
+    expect(suggestUtility('border-style', 'dashed', TW)).toEqual({ utility: 'border-dashed', tokenExact: true })
+    expect(suggestUtility('border-style', 'dotted', TW)).toEqual({ utility: 'border-dotted', tokenExact: true })
+    // longhands (unequal sides, so request.ts's collapse() leaves them separate) map the same way
+    expect(suggestUtility('border-top-style', 'none', TW)).toEqual({ utility: 'border-none', tokenExact: true })
+    // an unrecognized keyword (not one of Tailwind's four) has no utility mapping
+    expect(suggestUtility('border-style', 'groove', TW)).toBeNull()
   })
 
   it('maps font-size to the nearest text-* token by exact px match, arbitrary otherwise', () => {

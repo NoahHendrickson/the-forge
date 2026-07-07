@@ -10,12 +10,12 @@ import { SegmentField } from './layout-controls'
 import { ColorPicker } from './colorpicker'
 import { PanelTokenUi, colorDisplay } from './panel-token-ui'
 import { LayoutSection } from './panel-layout'
+import { FillStrokeSection } from './panel-fillstroke'
 import { readTokens, readTheme, parseColor as parseColorLocal } from './tokens'
 import {
   type RowSpec,
   type SectionSpec,
   BORDER_WIDTH_PROPS,
-  BORDER_STYLE_PROPS,
   BORDER_COLOR_PROPS,
   GAP_SPEC,
   draftSolidIfNone,
@@ -23,7 +23,6 @@ import {
   colorTokenEntries,
   cssHintFor,
   WEIGHTS,
-  STROKE_STYLES,
   SIZE_ROWS,
   PADDING_ROWS,
   minMaxRowsFor,
@@ -32,7 +31,6 @@ import {
 import {
   px,
   fromPx,
-  effectiveBackground,
   normalizeJustify,
   normalizeAlign,
   hasDirectText,
@@ -109,11 +107,9 @@ export class Panel {
   private typeWeightSelect: HTMLSelectElement | null = null
   private typeAlignField: SegmentField | null = null
 
-  // Fill/Stroke section widgets (rebuilt per show(), re-set() per refresh()).
-  private fillRow: HTMLElement | null = null
-  private textRow: HTMLElement | null = null
-  private strokeStyleSelect: HTMLSelectElement | null = null
-  private strokeColorRow: HTMLElement | null = null
+  // Fill/Stroke section widgets — owned by FillStrokeSection (panel-fillstroke.ts),
+  // rebuilt per show() via its build*() methods, re-set() per refresh().
+  private fillStrokeSection: FillStrokeSection
 
   // Selection colors (B6, multi-select only) — section title + rows wrap, rebuilt per show().
   private selectionColorsTitle: HTMLElement | null = null
@@ -207,6 +203,17 @@ export class Panel {
       refresh: () => this.refresh(),
       tokenUi: this.tokenUi,
       buildGapField: () => this.buildGapField(),
+    })
+    this.fillStrokeSection = new FillStrokeSection({
+      drafts: this.drafts,
+      getEl: () => this.el,
+      currentValue: (el, prop, computed) => this.currentValue(el, prop, computed),
+      onBeforeEdit: (el) => this.onBeforeEdit(el),
+      onEdited: () => this.onEdited(),
+      refresh: () => this.refresh(),
+      buildColorRow: (opts) => this.buildColorRow(opts),
+      buildStrokeWidthField: () => this.buildStrokeWidthField(),
+      expandOpen: (key) => this.expandState.get(key) ?? false,
     })
     // Mutual exclusivity (final review fix #11): opening one popover must close the other —
     // two open at once would overlap/fight for the same anchor-relative position. Wired here
@@ -396,7 +403,7 @@ export class Panel {
       // Family/weight/align selects and Fill/Stroke's single-element swatches are
       // single-selection only (B6 decision).
       this.refreshTypography(el, computed)
-      this.refreshFillStroke(el, computed)
+      this.fillStrokeSection.refresh(el, computed)
     } else {
       this.refreshSelectionColors()
     }
@@ -423,18 +430,6 @@ export class Panel {
     if (this.typeAlignField) {
       const align = this.currentValue(el, 'text-align', computed)
       this.typeAlignField.set(align === 'start' || align === '' ? 'left' : align)
-    }
-  }
-
-  private refreshFillStroke(el: TaggedElement, computed: CSSStyleDeclaration): void {
-    ;(this.fillRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
-    if (this.textRow) this.textRow.hidden = !hasDirectText(el)
-    ;(this.textRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
-    ;(this.strokeColorRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
-
-    if (this.strokeStyleSelect) {
-      const style = this.currentValue(el, 'border-top-style', computed)
-      this.strokeStyleSelect.value = ['none', 'solid', 'dashed', 'dotted'].includes(style) ? style : 'none'
     }
   }
 
@@ -474,10 +469,7 @@ export class Panel {
     this.typeFamilySelect = null
     this.typeWeightSelect = null
     this.typeAlignField = null
-    this.fillRow = null
-    this.textRow = null
-    this.strokeStyleSelect = null
-    this.strokeColorRow = null
+    this.fillStrokeSection.teardown()
     this.selectionColorsTitle = null
     this.selectionColorsRows = null
 
@@ -575,9 +567,12 @@ export class Panel {
       }
 
       if (section.custom === 'fill') {
-        const fillBody = this.buildFillSection()
+        const fillBody = this.fillStrokeSection.buildFillSection()
         this.sectionsRoot.append(fillBody)
         sectionBodyEls.push(fillBody)
+        // − before + (Layout's title glyph order: remove first). Only one is ever visible —
+        // FillStrokeSection.refresh flips them on the fill-empty predicate.
+        title.append(...this.fillStrokeSection.buildFillTitleButtons())
         this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
       }
@@ -588,8 +583,9 @@ export class Panel {
         // .panel-rows sibling — the expand-button logic below appends its own expandWrap
         // (BT/BR/BB/BL) as the next body child after it, same shape as every other
         // expandable section.
-        rowWrap = this.buildStrokeSection()
+        rowWrap = this.fillStrokeSection.buildStrokeSection()
         this.sectionsRoot.append(rowWrap)
+        title.append(...this.fillStrokeSection.buildStrokeTitleButtons())
       } else {
         rowWrap = document.createElement('div')
         rowWrap.className = 'panel-rows'
@@ -598,6 +594,10 @@ export class Panel {
       }
       sectionBodyEls.push(rowWrap)
       this.appendExpandRows(section, title, sectionBodyEls)
+
+      if (section.custom === 'stroke') {
+        this.fillStrokeSection.captureStrokeExpand(title, section.expandKey, sectionBodyEls[sectionBodyEls.length - 1])
+      }
 
       this.sectionEls.push({ spec: section, els: sectionBodyEls })
 
@@ -832,44 +832,15 @@ export class Panel {
     return row
   }
 
-  private buildFillSection(): HTMLElement {
-    const wrap = document.createElement('div')
-    wrap.className = 'panel-rows'
-
-    const fillRow = this.buildColorRow({
-      label: 'Fill',
-      getCss: () => (this.el ? this.currentValue(this.el, 'background-color', getComputedStyle(this.el)) : ''),
-      getContrastAgainst: () => (this.el ? this.currentValue(this.el, 'color', getComputedStyle(this.el)) : null),
-      onPick: (css) => {
-        if (!this.el) return
-        this.drafts.apply(this.el, 'background-color', css)
-      },
-    })
-    wrap.append(fillRow)
-    this.fillRow = fillRow
-
-    const textRow = this.buildColorRow({
-      label: 'Text',
-      getCss: () => (this.el ? this.currentValue(this.el, 'color', getComputedStyle(this.el)) : ''),
-      getContrastAgainst: () => (this.el ? effectiveBackground(this.el, this.drafts) : null),
-      onPick: (css) => {
-        if (!this.el) return
-        this.drafts.apply(this.el, 'color', css)
-      },
-    })
-    wrap.append(textRow)
-    this.textRow = textRow
-
-    return wrap
-  }
-
-  private buildStrokeSection(): HTMLElement {
-    const wrap = document.createElement('div')
-    wrap.className = 'panel-rows stroke-rows'
-
-    const row1 = document.createElement('div')
-    row1.className = 'stroke-row'
-    const widthField = this.buildField({
+  /**
+   * The single field-birth site for the Stroke W NumberField — FillStrokeSection.
+   * buildStrokeSection() calls this via deps.buildStrokeWidthField() rather than
+   * constructing a field itself, so every field in the panel (Stroke W included) is
+   * still born in exactly one place (buildField/this) and destroy()/refresh()
+   * bookkeeping stays in `this.fields` — same contract as buildGapField.
+   */
+  private buildStrokeWidthField(): HTMLElement {
+    return this.buildField({
       label: 'W',
       props: BORDER_WIDTH_PROPS,
       min: 0,
@@ -878,40 +849,7 @@ export class Panel {
         return Number.isFinite(n) ? n : 0
       },
       onBeforeApply: draftSolidIfNone,
-    })
-    row1.append(widthField.field.root)
-
-    const styleSelect = createSelect({
-      className: 'stroke-style',
-      options: STROKE_STYLES.map(([value, label]) => ({ value, label })),
-      onChange: (value) => {
-        if (!this.el) return
-        this.onBeforeEdit(this.el)
-        for (const prop of BORDER_STYLE_PROPS) this.drafts.apply(this.el, prop, value)
-        this.refresh()
-        this.onEdited()
-      },
-    })
-    styleSelect.title = 'border-style → border-solid / border-dashed / border-dotted'
-    this.strokeStyleSelect = styleSelect
-    row1.append(styleSelect)
-
-    const row2 = document.createElement('div')
-    row2.className = 'stroke-row'
-    const colorRow = this.buildColorRow({
-      label: 'Color',
-      getCss: () => (this.el ? this.currentValue(this.el, 'border-top-color', getComputedStyle(this.el)) : ''),
-      getContrastAgainst: () => (this.el ? effectiveBackground(this.el, this.drafts) : null),
-      onPick: (css) => {
-        if (!this.el) return
-        for (const prop of BORDER_COLOR_PROPS) this.drafts.apply(this.el, prop, css)
-      },
-    })
-    row2.append(colorRow)
-    this.strokeColorRow = colorRow
-
-    wrap.append(row1, row2)
-    return wrap
+    }).field.root
   }
 
   /**
