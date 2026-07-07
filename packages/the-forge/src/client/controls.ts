@@ -183,6 +183,35 @@ class ExprParser {
   }
 }
 
+/**
+ * CSS-shorthand expansion for comma-entered per-side values (2026-07-07 panel-input-polish
+ * spec). `count` is the row's prop count (2 or 4). Returns null when the list can't expand:
+ * empty, longer than count, or a 3-value list on a 2-prop row (only 4-prop rows have CSS
+ * 3-value semantics). 4-prop rules match the border-radius shorthand:
+ * [a] → a,a,a,a · [a,b] → a,b,a,b · [a,b,c] → a,b,c,b.
+ */
+export function expandShorthand(values: number[], count: number): number[] | null {
+  if (values.length === 0 || values.length > count) return null
+  if (values.length === count) return [...values]
+  if (values.length === 1) return new Array(count).fill(values[0])
+  if (count === 4 && values.length === 2) return [values[0], values[1], values[0], values[1]]
+  if (count === 4 && values.length === 3) return [values[0], values[1], values[2], values[1]]
+  return null
+}
+
+/**
+ * Shortest round-trippable comma form of per-side values — the display half of the same
+ * grammar (whatever this renders, expandShorthand restores). Drops trailing redundancy in
+ * CSS shorthand order: last==2nd, then 3rd==1st, then 2nd==1st.
+ */
+export function compressShorthand(values: number[]): number[] {
+  const out = [...values]
+  if (out.length === 4 && out[3] === out[1]) out.pop()
+  if (out.length === 3 && out[2] === out[0]) out.pop()
+  if (out.length === 2 && out[1] === out[0]) out.pop()
+  return out
+}
+
 const MIXED_TEXT = 'Mixed'
 const AUTO_TEXT = 'auto'
 

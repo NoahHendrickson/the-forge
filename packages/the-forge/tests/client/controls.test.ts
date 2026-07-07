@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { NumberField, evaluateExpression } from '../../src/client/controls'
+import { NumberField, evaluateExpression, expandShorthand, compressShorthand } from '../../src/client/controls'
 
 beforeEach(() => {
   document.body.innerHTML = ''
@@ -593,5 +593,51 @@ describe('NumberField — setWhisper', () => {
   it('canOpenToken is false when onTokenOpen is not wired', () => {
     const f = new NumberField({ label: 'W', onInput: () => {} })
     expect(f.canOpenToken()).toBe(false)
+  })
+})
+
+describe('expandShorthand', () => {
+  it('fills a single value to the prop count', () => {
+    expect(expandShorthand([16], 2)).toEqual([16, 16])
+    expect(expandShorthand([16], 4)).toEqual([16, 16, 16, 16])
+  })
+
+  it('passes a full-length list through', () => {
+    expect(expandShorthand([16, 8], 2)).toEqual([16, 8])
+    expect(expandShorthand([16, 8, 4, 2], 4)).toEqual([16, 8, 4, 2])
+  })
+
+  it('expands 2 and 3 values on a 4-prop row per CSS shorthand rules', () => {
+    expect(expandShorthand([16, 8], 4)).toEqual([16, 8, 16, 8])
+    expect(expandShorthand([16, 8, 4], 4)).toEqual([16, 8, 4, 8])
+  })
+
+  it('rejects empty, over-length, and 3-on-2 lists', () => {
+    expect(expandShorthand([], 2)).toBeNull()
+    expect(expandShorthand([1, 2, 3], 2)).toBeNull()
+    expect(expandShorthand([1, 2, 3, 4, 5], 4)).toBeNull()
+  })
+})
+
+describe('compressShorthand', () => {
+  it('keeps fully-distinct values', () => {
+    expect(compressShorthand([16, 8, 4, 2])).toEqual([16, 8, 4, 2])
+    expect(compressShorthand([16, 8])).toEqual([16, 8])
+  })
+
+  it('drops trailing redundancy in CSS shorthand order', () => {
+    expect(compressShorthand([16, 8, 4, 8])).toEqual([16, 8, 4])
+    expect(compressShorthand([16, 8, 16, 8])).toEqual([16, 8])
+    expect(compressShorthand([16, 16, 16, 16])).toEqual([16])
+    expect(compressShorthand([16, 16])).toEqual([16])
+  })
+
+  it('round-trips through expandShorthand', () => {
+    for (const v of [[16, 8, 4, 2], [16, 8, 16, 8], [16, 8, 4, 8], [7, 7, 7, 7]]) {
+      expect(expandShorthand(compressShorthand(v), 4)).toEqual(v)
+    }
+    for (const v of [[16, 8], [9, 9]]) {
+      expect(expandShorthand(compressShorthand(v), 2)).toEqual(v)
+    }
   })
 })
