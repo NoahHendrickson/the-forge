@@ -182,11 +182,11 @@ describe('Panel', () => {
     expect(onEdited).toHaveBeenCalled()
   })
 
-  it('shows mixed linked values via setMixed', () => {
+  it('shows differing linked side values as a comma list (2026-07-07: superseded setMixed)', () => {
     const { panel } = setup(
       `<div data-dc-source="src/a.tsx:1:1" id="t" style="padding-left: 4px; padding-right: 12px;"></div>`
     )
-    expect(fieldInput(panel, P.PX).value).toBe('Mixed')
+    expect(fieldInput(panel, P.PX).value).toBe('4,12')
   })
 
   it('expanding padding reveals per-side fields that edit one longhand', () => {
@@ -245,14 +245,45 @@ describe('Panel', () => {
     expect(fieldInput(panel, P.O).value).toBe('0')
   })
 
-  it('mixed detection still works while comparing', () => {
+  it('differing-side comma display still works while comparing (2026-07-07: superseded setMixed)', () => {
     const { panel, drafts, el } = setup(
       `<div data-dc-source="src/a.tsx:1:1" id="t" style="padding-left: 4px; padding-right: 12px;"></div>`
     )
     commit(fieldInput(panel, P.PX), '16')
     drafts.compare(el, true)
     panel.refresh()
-    expect(fieldInput(panel, P.PX).value).toBe('Mixed') // originals differ → mixed again
+    expect(fieldInput(panel, P.PX).value).toBe('4,12') // originals differ → comma display again
+  })
+
+  describe('comma per-side values (2026-07-07 panel-input-polish spec)', () => {
+    it('differing sides display as a comma list, equal sides as one number', () => {
+      const { panel } = setup(
+        `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px 16px 8px 4px; width: 200px;"></div>`
+      )
+      expect(fieldInput(panel, P.PX).value).toBe('4,16') // props order: left, right
+      expect(fieldInput(panel, P.PY).value).toBe('8')
+    })
+
+    it('typing a comma pair drafts each side individually', () => {
+      const { el, panel, drafts } = setup()
+      commit(fieldInput(panel, P.PX), '16,8')
+      expect(drafts.current(el, 'padding-left')).toBe('16px')
+      expect(drafts.current(el, 'padding-right')).toBe('8px')
+      expect(fieldInput(panel, P.PX).value).toBe('16,8')
+    })
+
+    it('radius accepts CSS 3-value shorthand and re-displays compressed', () => {
+      const { el, panel, drafts } = setup()
+      commit(fieldInput(panel, P.R), '16,8,4')
+      expect(drafts.current(el, 'border-top-left-radius')).toBe('16px')
+      expect(drafts.current(el, 'border-top-right-radius')).toBe('8px')
+      expect(drafts.current(el, 'border-bottom-right-radius')).toBe('4px')
+      expect(drafts.current(el, 'border-bottom-left-radius')).toBe('8px')
+      expect(fieldInput(panel, P.R).value).toBe('16,8,4')
+    })
+
+    // Multi-element comma-entry test lives in `describe('Panel multi-select (B6)')` below —
+    // it needs the `multiSetup` helper defined in that block (don't duplicate the helper).
   })
 
   it('section order is Layout, Margin, Typography, Fill, Stroke, Appearance regardless of visibility', () => {
@@ -1800,11 +1831,11 @@ describe('Panel Stroke section', () => {
     }
   })
 
-  it('W field shows Mixed when computed per-side widths differ', () => {
+  it('W field shows a comma list when computed per-side widths differ (2026-07-07: superseded Mixed)', () => {
     const { panel } = setup(
       `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-style: solid; border-top-width: 2px; border-right-width: 4px; border-bottom-width: 2px; border-left-width: 2px;"></div>`
     )
-    expect(strokeWidthField(panel).value).toBe('Mixed')
+    expect(strokeWidthField(panel).value).toBe('2,4,2,2')
   })
 
   it('drafting a width while computed border-style is none also drafts border-style: solid', () => {
@@ -2844,6 +2875,18 @@ describe('Panel multi-select (B6)', () => {
   it('a field with divergent values across the selection shows Mixed', () => {
     const { panel } = multiSetup('padding: 10px;', 'padding: 20px;')
     expect(fieldInput(panel, P.PX).value).toBe('Mixed')
+  })
+
+  // See `describe('comma per-side values (2026-07-07 panel-input-polish spec)')` above —
+  // this test lives here because it needs `multiSetup`, defined in this block.
+  it('multi-element selection keeps Mixed but a typed comma applies per-side to every element', () => {
+    const { a, b, panel, drafts } = multiSetup('padding: 10px;', 'padding: 20px;')
+    expect(fieldInput(panel, P.PX).value).toBe('Mixed')
+    commit(fieldInput(panel, P.PX), '16,8')
+    for (const el of [a, b]) {
+      expect(drafts.current(el, 'padding-left')).toBe('16px')
+      expect(drafts.current(el, 'padding-right')).toBe('8px')
+    }
   })
 
   it('a plain typed number applies the same absolute css to every element', () => {
