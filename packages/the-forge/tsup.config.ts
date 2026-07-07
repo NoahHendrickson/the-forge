@@ -1,5 +1,17 @@
 import { defineConfig } from 'tsup'
 
+// Whitespace/comment-only minification — NOT identifier mangling: stack traces (in-browser
+// bug reports and node-side crashes alike) must keep naming real functions, but shipped
+// bundles have no business carrying source comments and indentation (the why-comments
+// live in src/, which is what people actually read). Sole purpose is the 250KB package
+// budget (check-prod-clean.sh); flipping to full `minify: true` would save more but costs
+// debuggability — don't, without revisiting that trade-off. Originally client-only; applied
+// to every bundle when the budget hit ~249.25/250KB (PR #22) — the node bundles alone were
+// carrying ~21KB of whitespace.
+const stripWhitespace = (options: { minifyWhitespace?: boolean }): void => {
+  options.minifyWhitespace = true
+}
+
 export default defineConfig([
   {
     // `clean` is deliberately NOT set here (see the `build` script in package.json,
@@ -17,26 +29,20 @@ export default defineConfig([
     dts: true,
     platform: 'node',
     external: ['vite'],
+    esbuildOptions: stripWhitespace,
   },
   {
     entry: { client: 'src/client/index.ts' },
     format: ['esm'],
     platform: 'browser',
     define: { 'import.meta.vitest': 'undefined' },
-    // Whitespace/comment-only minification — NOT identifier mangling: in-browser stack
-    // traces from user bug reports must keep naming real functions, but the served dev
-    // bundle has no business carrying source comments and indentation (the why-comments
-    // live in src/, which is what people actually read). Sole purpose is the 250KB
-    // package budget (check-prod-clean.sh); flipping to full `minify: true` would save
-    // more but costs debuggability — don't, without revisiting that trade-off.
-    esbuildOptions(options) {
-      options.minifyWhitespace = true
-    },
+    esbuildOptions: stripWhitespace,
   },
   {
     entry: { mcp: 'src/mcp/index.ts' },
     format: ['esm'],
     platform: 'node',
+    esbuildOptions: stripWhitespace,
   },
   {
     // `platform: 'neutral'` + `external: ['react']`: this is the node-free boundary
@@ -49,6 +55,10 @@ export default defineConfig([
     platform: 'neutral',
     external: ['react'],
     dts: true,
+    // Deliberately NOT stripWhitespace: the node-free boundary test
+    // (tests/next/design-mode.test.ts) audits this bundle's import lines with line-based
+    // parsing, and the file is <1KB — exempting it keeps the load-bearing guard intact
+    // for a negligible byte cost.
   },
   {
     // CJS per the N0 spike findings (docs/research/2026-07-04-next-spike-findings.md):
@@ -72,11 +82,13 @@ export default defineConfig([
     platform: 'node',
     dts: false,
     footer: { js: 'module.exports = module.exports.default;' },
+    esbuildOptions: stripWhitespace,
   },
   {
     entry: { cli: 'src/cli/index.ts' },
     format: ['esm'],
     platform: 'node',
     banner: { js: '#!/usr/bin/env node' },
+    esbuildOptions: stripWhitespace,
   },
 ])
