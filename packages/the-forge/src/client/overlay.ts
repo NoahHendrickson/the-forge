@@ -275,6 +275,7 @@ button {
 }
 .seg:hover { color: var(--text-primary); }
 .seg-active { background: var(--control-active); color: #fff; }
+.seg-disabled .seg-track { opacity: 0.5; pointer-events: none; }
 ` +
 // Wrap toggle sits on the Direction row as a sibling of the exclusive track (Task 2) —
 // a small left margin reads as attached-but-separate rather than a third track option.

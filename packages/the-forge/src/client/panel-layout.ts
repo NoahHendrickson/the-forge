@@ -480,8 +480,24 @@ export class LayoutSection {
     const alignSelf = this.deps.currentValue(el, 'align-self', computed)
     const on = this.alignOn(el, computed)
     this.alignToggle?.setAttribute('aria-pressed', String(on))
-    if (this.alignSelfWrap) this.alignSelfWrap.hidden = !on
-    if (on) this.alignSelfField?.set(alignSelf || 'auto')
+    // Toggle OFF no longer hides the strip (2026-07-07 spec): it shows a DISABLED preview
+    // of the child's effective alignment — the parent's align-items, which is what
+    // align-self: auto resolves to and exactly what the parent's 9-dot matrix sets, so a
+    // matrix edit refreshes this live. normalizeAlign keeps the preview consistent with
+    // the matrix's own active-dot mapping (default/'normal' reads flex-start like the dot,
+    // not CSS's effective stretch). 'baseline' (app-CSS only) matches no segment → null.
+    // The Auto segment lights only when the toggle is ON with a genuine auto value.
+    if (this.alignSelfWrap) this.alignSelfWrap.hidden = false
+    if (on) {
+      this.alignSelfField?.setDisabled(false)
+      this.alignSelfField?.set(alignSelf || 'auto')
+    } else {
+      this.alignSelfField?.setDisabled(true)
+      const parentAlign = normalizeAlign(getComputedStyle(parent as TaggedElement).getPropertyValue('align-items'))
+      this.alignSelfField?.set(
+        ['flex-start', 'center', 'flex-end', 'stretch'].includes(parentAlign) ? parentAlign : null
+      )
+    }
 
     for (const sm of this.sizeModes) {
       this.updateSizeMode(el, sm, main)

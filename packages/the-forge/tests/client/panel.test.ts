@@ -725,7 +725,8 @@ describe('Panel', () => {
     const toggle = panel.root.querySelector('[data-align-toggle]') as HTMLElement
     const strip = panel.root.querySelector('[data-align-self]') as HTMLElement
     expect(toggle.getAttribute('aria-pressed')).toBe('false')
-    expect(strip.hidden).toBe(true)
+    expect(strip.hidden).toBe(false)
+    expect(strip.classList.contains('seg-disabled')).toBe(true)
     // sizing chevrons still shown for flex children — the toggle gates only the strip
     const menus = [...panel.root.querySelectorAll('.size-row .menu-btn')] as HTMLElement[]
     expect(menus.every((m) => !m.hidden)).toBe(true)
@@ -736,9 +737,36 @@ describe('Panel', () => {
     ;(panel.root.querySelector('[data-align-toggle]') as HTMLElement).click()
     const strip = panel.root.querySelector('[data-align-self]') as HTMLElement
     expect(strip.hidden).toBe(false)
+    expect(strip.classList.contains('seg-disabled')).toBe(false)
     expect(drafts.current(el, 'align-self')).toBeNull()
     // nothing to send: opening the row is not an edit (same contract as opening a min/max row)
     expect(buildChangeRequest(drafts).elements.find((e) => e.selector === '#t')).toBeUndefined()
+  })
+
+  it('toggle OFF shows a disabled preview of the parent align-items (2026-07-07 spec)', () => {
+    document.body.innerHTML = `<div id="parent" style="display: flex; align-items: center;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px;"></div>
+    </div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const panel = new Panel(new DraftStore(), vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    const strip = panel.root.querySelector('[data-align-self]') as HTMLElement
+    expect(strip.hidden).toBe(false)
+    expect(strip.classList.contains('seg-disabled')).toBe(true)
+    expect((strip.querySelector('.seg-active') as HTMLElement).dataset.value).toBe('center')
+    // follows the parent live (the 9-dot matrix drafts inline styles → computed changes)
+    document.getElementById('parent')!.style.alignItems = 'flex-end'
+    panel.refresh()
+    expect((strip.querySelector('.seg-active') as HTMLElement).dataset.value).toBe('flex-end')
+  })
+
+  it('disabled preview never lights Auto; default parent reads flex-start (matrix mapping)', () => {
+    const { panel } = childSetup()
+    const strip = panel.root.querySelector('[data-align-self]') as HTMLElement
+    expect(strip.classList.contains('seg-disabled')).toBe(true)
+    const active = strip.querySelector('.seg-active') as HTMLElement
+    expect(active.dataset.value).toBe('flex-start')
   })
 
   it('picking a segment after toggling ON drafts align-self', () => {
@@ -760,7 +788,7 @@ describe('Panel', () => {
     expect(drafts.current(el, 'align-self')).toBe('center')
     toggle.click()
     expect(drafts.current(el, 'align-self')).toBeNull()
-    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).classList.contains('seg-disabled')).toBe(true)
   })
 
   it('auto-ON when the app CSS sets align-self; toggling OFF drafts align-self: auto', () => {
@@ -780,7 +808,7 @@ describe('Panel', () => {
     // The switch must actually turn OFF: a drafted `auto` reads as default (spec: drafted
     // align-self of auto/normal is non-disclosing) — final-review regression.
     expect(toggle.getAttribute('aria-pressed')).toBe('false')
-    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).classList.contains('seg-disabled')).toBe(true)
   })
 
   it('auto-ON for a restored (pre-show) align-self draft', () => {
@@ -811,7 +839,7 @@ describe('Panel', () => {
     // reselect the same element: buildBody rebuilds, latch must not survive
     const el = document.getElementById('t')! as HTMLElement
     panel.show(el, buildInspectorData(el))
-    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).classList.contains('seg-disabled')).toBe(true)
   })
 
   it('W size-mode Fill on a row parent drafts flex-grow and flex-basis (main axis)', () => {
@@ -924,6 +952,9 @@ describe('Panel', () => {
 
   it('cross-axis Fixed preserves a user-drafted align-self (only discards it when Fill wrote "stretch")', () => {
     const { el, panel, drafts } = childSetup()
+    // Segment strip is disabled until the align toggle is ON (2026-07-07 spec) — toggle ON
+    // first, matching every other segment-drafting test in this suite.
+    ;(panel.root.querySelector('[data-align-toggle]') as HTMLElement).click()
     const seg = panel.root.querySelector('[data-align-self]')!
     const startBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Start') as HTMLElement
     startBtn.click()

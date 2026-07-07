@@ -135,6 +135,16 @@ describe('SegmentField', () => {
     expect(f.root.querySelector('.seg-cluster')).toBeNull()
     expect([...f.root.children].map((c) => c.className)).toEqual(['seg-field-label', 'seg-track'])
   })
+
+  it('setDisabled toggles .seg-disabled and disables the track buttons', () => {
+    const field = new SegmentField({ label: 'A', options: [{ value: 'x', label: 'X' }], onInput: vi.fn() })
+    field.setDisabled(true)
+    expect(field.root.classList.contains('seg-disabled')).toBe(true)
+    expect((field.root.querySelector('.seg') as HTMLButtonElement).disabled).toBe(true)
+    field.setDisabled(false)
+    expect(field.root.classList.contains('seg-disabled')).toBe(false)
+    expect((field.root.querySelector('.seg') as HTMLButtonElement).disabled).toBe(false)
+  })
 })
 
 describe('AlignMatrix', () => {
