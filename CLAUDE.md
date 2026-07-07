@@ -61,7 +61,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `overlay.ts` | shadow-DOM host, hover/selection outlines, the whole CSS design system (string const) |
 | `inspector.ts` | reads an element's computed-style snapshot for the panel |
 | `panel.ts` | the properties panel orchestrator (Panel class) |
-| `panel-specs.ts` | RowSpec/SectionSpec types, SECTIONS definition, token-scale helpers (`tokenEntriesFor`) |
+| `panel-specs.ts` | RowSpec/SectionSpec types, SECTIONS definition, token-scale helpers (`tokenEntriesFor`); also hosts `defeatFillIfGrowing`, the shared app-CSS-fill defeat policy |
 | `panel-readers.ts` | pure computed-style readers/normalizers (`isFlex`, `normalizeJustify`, font helpers) |
 | `panel-token-ui.ts` | PanelTokenUi — the token affordance cluster: shared TokenPicker instance, scale-field open path, pill boundTokens bookkeeping (B5/Compare rules), color-row token button; plus pillLabelFor/colorDisplay helpers |
 | `panel-layout.ts` | `LayoutSection` — the auto-layout cluster (add/remove policy + `FLEX_CONTAINER_PROPS`, direction+wrap, gap, matrix, baseline, flex-child controls); covered by the panel suites, no own test file |
@@ -83,6 +83,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `watch.ts` | watcher-state poller (design-mode-on only) for the linked-session indicator |
 | `ui/button.ts` | `createButton` — the single place overlay buttons are born |
 | `ui/select.ts` | `createSelect` — the `.size-mode` dropdown factory |
+| `ui/menu.ts` | `createMenuButton` — chevron + popover menu factory (sizing menu) |
 | `ui/swatch.ts` | `createColorRow` — the `.color-row` swatch/value markup (shared by panel + story) |
 
 ## MCP contract

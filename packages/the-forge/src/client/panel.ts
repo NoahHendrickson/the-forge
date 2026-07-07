@@ -4,6 +4,7 @@ import { DraftStore } from './drafts'
 import { NumberField } from './controls'
 import { createButton } from './ui/button'
 import { createSelect } from './ui/select'
+import { createMenuButton } from './ui/menu'
 import { createColorRow } from './ui/swatch'
 import { SegmentField } from './layout-controls'
 import { ColorPicker } from './colorpicker'
@@ -22,7 +23,6 @@ import {
   colorTokenEntries,
   cssHintFor,
   WEIGHTS,
-  SIZE_MODES,
   SIZE_ROWS,
   PADDING_ROWS,
   minMaxRowsFor,
@@ -275,6 +275,11 @@ export class Panel {
     this.els = []
     this.colorPicker.close()
     this.tokenUi.picker.close()
+    // hide() never calls buildBody()/teardown() (unlike show()), so the sizing menu's
+    // popover — same lifecycle as the two lines above — needs its own explicit close here
+    // or it survives with its onSelect still bound to the just-cleared selection (final-
+    // review fix #2).
+    this.layoutSection.closeSizeMenus()
     this.promptButton.hidden = true
     if (this.docked) {
       // Docked empty state: root stays visible (the dock holds its space), header says
@@ -492,11 +497,23 @@ export class Panel {
         // flex or not (the ORDER is the contract — see panel.test.ts's composition test).
         const rowWrap = document.createElement('div')
         rowWrap.className = 'panel-rows layout-section'
+        // Size block (2026-07-06 size-pair spec): a "Size" group label above ONE line holding
+        // the W and H size-rows side by side — mirrors the padding block's structure below.
+        const sizeBlock = document.createElement('div')
+        sizeBlock.className = 'size-block'
+        sizeBlock.setAttribute('data-size-block', '')
+        const sizeLabel = document.createElement('span')
+        sizeLabel.className = 'group-label'
+        sizeLabel.textContent = 'Size'
+        const sizeFields = document.createElement('div')
+        sizeFields.className = 'size-fields'
+        for (const row of SIZE_ROWS) sizeFields.append(this.buildRow(row))
+        sizeBlock.append(sizeLabel, sizeFields)
+        rowWrap.append(sizeBlock)
+        // Min/max disclosure rows sit BELOW the pair (W's pair then H's) with axis-qualified
+        // labels — they can no longer nest under their own axis row now that W|H share a line.
+        // Hidden until LayoutSection.refresh discloses them (opened / drafted / non-default).
         for (const row of SIZE_ROWS) {
-          rowWrap.append(this.buildRow(row))
-          // Each size row's own min/max pair (min-width/max-width for W, min-height/max-height
-          // for H) — disclosure rows, hidden until LayoutSection.refresh discloses them
-          // (opened / drafted / non-default).
           for (const mm of minMaxRowsFor(row)) {
             const mmBound = this.buildField(mm)
             const mmRow = document.createElement('div')
@@ -935,26 +952,28 @@ export class Panel {
     row.className = 'size-row'
     row.append(bound.field.root)
 
-    const select = createSelect({
-      options: [
-        ...SIZE_MODES.map(([value, label]) => ({ value, label })),
-        // Figma UI3 keeps min/max in the sizing dropdown — action items, not modes. SIZE_MODES
-        // itself stays a pure mode table (stories import it as the canonical catalog).
-        { value: 'add-min', label: 'Add min…' },
-        { value: 'add-max', label: 'Add max…' },
-      ],
-      onChange: (value) => {
+    // Figma UI3 keeps min/max in the sizing dropdown — action items, not modes. SIZE_MODES
+    // itself stays a pure mode table (stories import it as the canonical catalog). The
+    // variable binding also lives here (2026-07-06 size-pair spec) — W/H render no { } button.
+    const menu = createMenuButton({
+      title: 'Sizing — Fixed: exact px · Hug: fit-content · Fill: stretch / flex-1 · min/max · variable',
+      popoverHost: this.body,
+      items: () => this.layoutSection.sizeMenuItems(spec, bound.field.canOpenToken()),
+      onSelect: (value) => {
         if (value === 'add-min' || value === 'add-max') {
           this.layoutSection.openMinMax(spec, value === 'add-min' ? 'min' : 'max')
-          return // refresh() inside openMinMax re-syncs the select to the real mode
+          return
+        }
+        if (value === 'variable') {
+          bound.field.openToken()
+          return
         }
         this.layoutSection.onSizeModeChange(spec, value)
       },
     })
-    select.title = 'Fixed: exact px · Hug: fit-content · Fill: stretch / flex-1'
-    row.append(select)
+    row.append(menu.button)
 
-    this.layoutSection.registerSizeMode({ select, spec, field: bound.field })
+    this.layoutSection.registerSizeMode({ menuBtn: menu.button, close: menu.close, spec, field: bound.field, mode: 'fixed' })
     return row
   }
 
@@ -1033,6 +1052,7 @@ export class Panel {
       min: spec.min,
       max: spec.max,
       allowAuto: spec.sizeMode || spec.allowAuto,
+      noTokenButton: !!spec.sizeMode,
       onInput: commit,
       onRelative: multi
         ? (apply) => {

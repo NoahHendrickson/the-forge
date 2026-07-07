@@ -223,8 +223,11 @@ button {
   width: auto; flex: 0 1 auto; font-size: 10.5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-
-.token-btn {
+` +
+// Whisper label for context (e.g. applied Hug/Fill size mode) — dim, right-aligned, non-interactive.
+`.nf-whisper { color: var(--text-muted); font-size: 10px; flex: none; padding-right: 4px; pointer-events: none; }
+` +
+`.token-btn {
   display: none; flex: none; width: 16px; height: 16px; padding: 0;
   align-items: center; justify-content: center;
   background: transparent; border: none; color: var(--text-muted); cursor: pointer;
@@ -317,6 +320,8 @@ button {
 .size-row { display: flex; gap: 4px; flex: 1 1 40%; min-width: 0; }
 .size-row .nf { flex: 1; }
 .group-label { color: var(--text-muted); font-size: 11px; }
+.size-block { display: flex; flex-direction: column; gap: 4px; }
+.size-fields { display: flex; gap: 6px; }
 .padding-block { display: flex; flex-direction: column; gap: 4px; }
 .padding-fields { display: flex; gap: 6px; }
 .align-head { display: flex; align-items: center; justify-content: space-between; }
@@ -345,8 +350,30 @@ button {
   color: var(--text-secondary); border: 1px solid transparent; border-radius: 6px; height: 24px; padding: 0 18px 0 6px;
   font: 400 10.5px var(--font-ui);
 }
-.size-mode:hover { border-color: var(--control-hover); }
-
+.size-mode:hover { border-color: var(--control-hover); }` +
+`.menu-btn {
+  width: 16px; align-self: stretch; padding: 0; border: none; background: none; flex: none;
+  color: var(--text-muted); font-size: 9px; cursor: pointer; border-radius: 4px;
+}
+.menu-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.08); }` +
+// The menu popover appends to .panel-body (position: relative) — same host and z plane
+// as .token-popover, so it scrolls with the rows and never clips at the panel edge.
+// min-width here must match ui/menu.ts's MENU_WIDTH const, used to clamp the popover's
+// left offset so it never overhangs the panel body's right edge.
+`.menu-popover {
+  position: absolute; z-index: 20; min-width: 120px; padding: 4px;
+  background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px;
+  box-shadow: 0 5px 24px rgba(0,0,0,0.4); display: flex; flex-direction: column;
+}
+.menu-item {
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px; border: none;
+  background: none; color: var(--text-primary); font-size: 11px; text-align: left;
+  cursor: pointer; border-radius: 4px;
+}
+.menu-item:hover { background: rgba(255,255,255,0.08); }
+.menu-check { margin-left: auto; color: var(--accent); }
+.menu-sep { height: 1px; background: var(--border-strong); margin: 3px 0; }` +
+`
 .layout-section, .flex-child-controls { display: flex; flex-direction: column; gap: 6px; width: 100%; align-items: stretch; }
 ` +
 // ^ align-items: stretch overrides .panel-rows's align-items: center, which in THIS column

@@ -2,7 +2,7 @@ import type { TaggedElement } from './source'
 import { DraftStore } from './drafts'
 import { UTILITY_PREFIXES, parseColor, type Theme, type Tokens } from './tokens'
 import type { ColorEntry, ScaleEntry } from './tokenpicker'
-import { hasDirectText, marginSectionVisible } from './panel-readers'
+import { hasDirectText, marginSectionVisible, isFlex, mainAxisProp } from './panel-readers'
 
 export interface RowSpec {
   label: string
@@ -11,7 +11,8 @@ export interface RowSpec {
   max?: number
   toCss?: (n: number) => string
   fromCss?: (css: string) => number
-  /** When true (W/H rows), a sizing-mode <select> (Fixed/Hug/Fill) renders next to the field. */
+  /** When true (W/H rows), a sizing chevron menu button (Fixed/Hug/Fill, ui/menu.ts) renders
+   * next to the field. */
   sizeMode?: boolean
   /** When true (e.g. LH), the field accepts the literal keyword `auto` and displays it via setAuto(). */
   allowAuto?: boolean
@@ -157,6 +158,25 @@ function draftSolidIfNone(el: TaggedElement, widthProp: string, drafts: DraftSto
   if (computedStyle === 'none' || computedStyle === '') drafts.apply(el, styleProp, 'solid')
 }
 
+/**
+ * Typing/scrubbing/token-picking a main-axis size means Fixed intent; on an app-CSS `flex-1`
+ * element the number would otherwise be a silent no-op (basis 0% + grow still win the main-axis
+ * sizing over an authored width). This is the same defeat onSizeModeChange's Fixed/Hug branches
+ * perform (panel-layout.ts) — kept as ONE shared implementation, exported here and called from
+ * both places, rather than two copies that could drift.
+ */
+export function defeatFillIfGrowing(el: TaggedElement, prop: string, drafts: DraftStore): void {
+  const parent = el.parentElement
+  if (!parent || !isFlex(parent as TaggedElement)) return
+  const direction = getComputedStyle(parent).flexDirection.startsWith('column') ? 'column' : 'row'
+  if (prop !== mainAxisProp(direction)) return
+  const grow = Number.parseFloat(drafts.current(el, 'flex-grow') ?? getComputedStyle(el).getPropertyValue('flex-grow') ?? '0')
+  if (grow >= 1) {
+    drafts.apply(el, 'flex-grow', '0')
+    drafts.apply(el, 'flex-basis', 'auto')
+  }
+}
+
 const WEIGHTS: Array<[value: string, label: string]> = [
   ['100', 'Thin'],
   ['200', 'Extra Light'],
@@ -187,8 +207,8 @@ const SIZE_MODES: Array<[value: string, label: string]> = [
 // The W/H specs — rendered as the first two rows of the unified Layout section body
 // (spec M-C). Exported so panel.ts's buildBody layout branch can compose them directly.
 const SIZE_ROWS: RowSpec[] = [
-  { label: 'W', props: ['width'], min: 0, sizeMode: true },
-  { label: 'H', props: ['height'], min: 0, sizeMode: true },
+  { label: 'W', props: ['width'], min: 0, sizeMode: true, onBeforeApply: defeatFillIfGrowing },
+  { label: 'H', props: ['height'], min: 0, sizeMode: true, onBeforeApply: defeatFillIfGrowing },
 ]
 
 // The padding H/V specs — rendered inside the padding block of the unified Layout section
@@ -205,11 +225,13 @@ const PADDING_ROWS: RowSpec[] = [
 // desync from their own min/max pair. Typing `auto` clears the constraint — autoCss carries
 // each property's CSS initial value (min-*: auto, max-*: none), so the request says "remove
 // the constraint" in keywords, never a measured px.
+// Labels are axis-qualified (Min W / Max H) because the rows sit below the side-by-side W|H
+// pair (2026-07-06 size-pair spec), no longer nested under their axis.
 export function minMaxRowsFor(sizeSpec: RowSpec): RowSpec[] {
   const p = sizeSpec.props[0] // 'width' | 'height'
   return [
-    { label: 'Min', props: [`min-${p}`], min: 0, allowAuto: true, autoCss: 'auto' },
-    { label: 'Max', props: [`max-${p}`], min: 0, allowAuto: true, autoCss: 'none' },
+    { label: `Min ${sizeSpec.label}`, props: [`min-${p}`], min: 0, allowAuto: true, autoCss: 'auto' },
+    { label: `Max ${sizeSpec.label}`, props: [`max-${p}`], min: 0, allowAuto: true, autoCss: 'none' },
   ]
 }
 

@@ -55,6 +55,18 @@ function fieldInput(panel: Panel, props: string): HTMLInputElement {
   return nf.querySelector('input')!
 }
 
+function openSizeMenu(panel: Panel, props: string): HTMLElement {
+  const row = fieldInput(panel, props).closest('.size-row')!
+  ;(row.querySelector('.menu-btn') as HTMLElement).click()
+  return panel.root.querySelector('.menu-popover') as HTMLElement
+}
+
+function pickSizeMode(panel: Panel, props: string, label: string): void {
+  const menu = openSizeMenu(panel, props)
+  const item = [...menu.querySelectorAll('.menu-item')].find((b) => b.textContent?.startsWith(label)) as HTMLElement
+  item.click()
+}
+
 // Test-only access to the Panel's private tokenUi.picker (the token-picker/pill cluster now
 // lives in panel-token-ui.ts — see panel.ts's `private tokenUi: PanelTokenUi`).
 function pickerOf(panel: Panel): { root: HTMLElement; open: (opts: unknown) => void } {
@@ -300,12 +312,10 @@ describe('Panel', () => {
     const { panel } = flexSetup()
     const body = panel.root.querySelector('.layout-section') as HTMLElement
     const kinds = [...body.children].map((c) =>
-      c.classList.contains('size-row')
+      c.hasAttribute('data-size-block')
         ? 'size'
         : c.hasAttribute('data-minmax-row')
-          ? (c as HTMLElement).dataset.propsRow?.startsWith('min')
-            ? 'minmax-min'
-            : 'minmax-max'
+          ? ((c as HTMLElement).dataset.propsRow?.startsWith('min') ? 'minmax-min' : 'minmax-max')
           : c.classList.contains('flex-child-controls')
             ? 'align'
             : c.classList.contains('layout-controls') || c.hasAttribute('data-add-layout')
@@ -318,7 +328,6 @@ describe('Panel', () => {
       'size',
       'minmax-min',
       'minmax-max',
-      'size',
       'minmax-min',
       'minmax-max',
       'cluster',
@@ -326,6 +335,21 @@ describe('Panel', () => {
       'padding',
       'align',
     ])
+  })
+
+  it('size block carries a group label and one line with W then H (2026-07-06 size-pair spec)', () => {
+    const { panel } = setup()
+    const block = panel.root.querySelector('[data-size-block]') as HTMLElement
+    expect(block).toBeTruthy()
+    expect((block.querySelector('.group-label') as HTMLElement).textContent).toBe('Size')
+    const fields = [...block.querySelectorAll('.size-fields .nf')] as HTMLElement[]
+    expect(fields.map((f) => f.dataset.props)).toEqual(['width', 'height'])
+  })
+
+  it('min/max rows carry axis-qualified labels below the size pair', () => {
+    const { panel } = setup()
+    const labels = [...panel.root.querySelectorAll('[data-minmax-row] .nf-label')].map((l) => l.textContent)
+    expect(labels).toEqual(['Min W', 'Max W', 'Min H', 'Max H'])
   })
 
   it('padding block carries a group label and one line with both H/V fields', () => {
@@ -637,11 +661,19 @@ describe('Panel', () => {
     expect(wrap.hidden).toBe(true)
     const alignSelf = panel.root.querySelector('[data-align-self]') as HTMLElement
     expect(alignSelf.hidden).toBe(true)
-    // .size-row wraps only the W/H sizing-mode selects (Typography's family/weight selects
-    // reuse the .size-mode chrome class for styling but aren't part of the flex-child registry).
-    const modes = [...panel.root.querySelectorAll('.size-row .size-mode')] as HTMLElement[]
-    expect(modes.length).toBeGreaterThan(0)
-    expect(modes.every((m) => m.hidden)).toBe(true)
+    // The sizing chevron is single-select-universal (min/max/variable apply regardless of
+    // flex) — it does NOT hide for a non-flex parent. Only the flex-child align strip above does.
+    const menus = [...panel.root.querySelectorAll('.size-row .menu-btn')] as HTMLElement[]
+    expect(menus.length).toBeGreaterThan(0)
+    expect(menus.every((m) => !m.hidden)).toBe(true)
+  })
+
+  it('sizing chevron renders for non-flex children with only Min/Max/Variable items', () => {
+    const { panel } = setup() // setup()'s element has a non-flex parent
+    const menu = openSizeMenu(panel, P.W)
+    const labels = [...menu.querySelectorAll('.menu-item')].map((b) => (b as HTMLElement).textContent)
+    expect(labels.some((l) => l?.startsWith('Fixed'))).toBe(false)
+    expect(labels.some((l) => l?.startsWith('Min…'))).toBe(true)
   })
 
   function childSetup() {
@@ -663,9 +695,9 @@ describe('Panel', () => {
     const strip = panel.root.querySelector('[data-align-self]') as HTMLElement
     expect(toggle.getAttribute('aria-pressed')).toBe('false')
     expect(strip.hidden).toBe(true)
-    // size-mode selects still shown for flex children — the toggle gates only the strip
-    const modes = [...panel.root.querySelectorAll('.size-row .size-mode')] as HTMLElement[]
-    expect(modes.every((m) => !m.hidden)).toBe(true)
+    // sizing chevrons still shown for flex children — the toggle gates only the strip
+    const menus = [...panel.root.querySelectorAll('.size-row .menu-btn')] as HTMLElement[]
+    expect(menus.every((m) => !m.hidden)).toBe(true)
   })
 
   it('toggling ON reveals the strip without drafting anything', () => {
@@ -736,10 +768,7 @@ describe('Panel', () => {
 
   it('cross-axis Fill turns the align toggle ON (stretch is real, never masked)', () => {
     const { panel } = childSetup()
-    const hRow = fieldInput(panel, P.H).closest('.nf')!.parentElement!
-    const select = hRow.querySelector('.size-mode') as HTMLSelectElement
-    select.value = 'fill'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.H, 'Fill')
     expect((panel.root.querySelector('[data-align-toggle]') as HTMLElement).getAttribute('aria-pressed')).toBe('true')
     expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(false)
   })
@@ -756,42 +785,28 @@ describe('Panel', () => {
 
   it('W size-mode Fill on a row parent drafts flex-grow and flex-basis (main axis)', () => {
     const { el, panel, drafts } = childSetup()
-    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
-    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
-    select.value = 'fill'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.W, 'Fill')
     expect(drafts.current(el, 'flex-grow')).toBe('1')
     expect(drafts.current(el, 'flex-basis')).toBe('0%')
   })
 
   it('H size-mode Fill on a row parent drafts align-self:stretch (cross axis)', () => {
     const { el, panel, drafts } = childSetup()
-    const hRow = fieldInput(panel, P.H).closest('.nf')!.parentElement!
-    const select = hRow.querySelector('.size-mode') as HTMLSelectElement
-    select.value = 'fill'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.H, 'Fill')
     expect(drafts.current(el, 'align-self')).toBe('stretch')
   })
 
-  it('H size-mode Hug drafts height:auto and the field shows auto', () => {
+  it('H sizing-menu Hug drafts height:auto', () => {
     const { el, panel, drafts } = childSetup()
-    const hRow = fieldInput(panel, P.H).closest('.nf')!.parentElement!
-    const select = hRow.querySelector('.size-mode') as HTMLSelectElement
-    select.value = 'hug'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.H, 'Hug')
     expect(drafts.current(el, 'height')).toBe('auto')
-    expect(fieldInput(panel, P.H).value).toBe('auto')
   })
 
   it('W size-mode Fill then Fixed pins width as a px draft and clears flex-grow/flex-basis', () => {
     const { el, panel, drafts } = childSetup()
-    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
-    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
-    select.value = 'fill'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.W, 'Fill')
     expect(drafts.current(el, 'flex-grow')).toBe('1')
-    select.value = 'fixed'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.W, 'Fixed')
     expect(drafts.current(el, 'width')).toMatch(/^\d+px$/)
     expect(drafts.current(el, 'flex-grow')).toBeNull()
     expect(drafts.current(el, 'flex-basis')).toBeNull()
@@ -799,27 +814,81 @@ describe('Panel', () => {
 
   it('W size-mode Fixed sticks on refresh after Fill then Fixed', () => {
     const { panel } = childSetup()
-    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
-    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
-    select.value = 'fill'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-    select.value = 'fixed'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.W, 'Fill')
+    pickSizeMode(panel, P.W, 'Fixed')
     panel.refresh()
-    expect(select.value).toBe('fixed')
+    const menu = openSizeMenu(panel, P.W)
+    const checked = [...menu.querySelectorAll('.menu-item')].filter((b) => b.querySelector('.menu-check'))
+    expect(checked.length).toBe(1)
+    expect(checked[0].textContent).toContain('Fixed')
   })
 
   it('H size-mode Hug then Fixed pins height as a px draft, not auto', () => {
     const { el, panel, drafts } = childSetup()
-    const hRow = fieldInput(panel, P.H).closest('.nf')!.parentElement!
-    const select = hRow.querySelector('.size-mode') as HTMLSelectElement
-    select.value = 'hug'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.H, 'Hug')
     expect(drafts.current(el, 'height')).toBe('auto')
-    select.value = 'fixed'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.H, 'Fixed')
     expect(drafts.current(el, 'height')).toMatch(/^\d+px$/)
     expect(drafts.current(el, 'height')).not.toBe('auto')
+  })
+
+  it('after picking Hug the menu reads Hug back, not Fixed (auto draft is not an explicit size)', () => {
+    const { panel } = childSetup()
+    pickSizeMode(panel, P.H, 'Hug')
+    const menu = openSizeMenu(panel, P.H)
+    const hugItem = [...menu.querySelectorAll('.menu-item')].find((b) => b.textContent?.startsWith('Hug'))!
+    expect(hugItem.querySelector('.menu-check')).toBeTruthy()
+  })
+
+  it('Fill then Hug retracts the drafted flex-grow/flex-basis (main axis)', () => {
+    const { el, panel, drafts } = childSetup()
+    pickSizeMode(panel, P.W, 'Fill')
+    expect(drafts.current(el, 'flex-grow')).toBe('1')
+    pickSizeMode(panel, P.W, 'Hug')
+    expect(drafts.current(el, 'flex-grow')).toBeNull()
+    expect(drafts.current(el, 'flex-basis')).toBeNull()
+    expect(drafts.current(el, 'width')).toBe('auto')
+  })
+
+  it('Fill then Hug on the cross axis retracts only the stretch Fill wrote', () => {
+    const { el, panel, drafts } = childSetup()
+    pickSizeMode(panel, P.H, 'Fill')
+    expect(drafts.current(el, 'align-self')).toBe('stretch')
+    pickSizeMode(panel, P.H, 'Hug')
+    expect(drafts.current(el, 'align-self')).toBeNull()
+    expect(drafts.current(el, 'height')).toBe('auto')
+  })
+
+  function whisperOf(panel: Panel, props: string): HTMLElement {
+    return fieldInput(panel, props).closest('.nf')!.querySelector('.nf-whisper') as HTMLElement
+  }
+
+  it('picking Hug shows a Hug whisper on the field', () => {
+    const { panel } = childSetup()
+    pickSizeMode(panel, P.H, 'Hug')
+    expect(whisperOf(panel, P.H).hidden).toBe(false)
+    expect(whisperOf(panel, P.H).textContent).toBe('Hug')
+  })
+
+  it('picking Fill shows a Fill whisper; switching to Fixed clears it', () => {
+    const { panel } = childSetup()
+    pickSizeMode(panel, P.W, 'Fill')
+    expect(whisperOf(panel, P.W).textContent).toBe('Fill')
+    pickSizeMode(panel, P.W, 'Fixed')
+    expect(whisperOf(panel, P.W).hidden).toBe(true)
+  })
+
+  it('typing a number into a Hug field flips it to Fixed and clears the whisper', () => {
+    const { el, panel, drafts } = childSetup()
+    pickSizeMode(panel, P.W, 'Hug')
+    commit(fieldInput(panel, P.W), '120')
+    expect(drafts.current(el, 'width')).toBe('120px')
+    expect(whisperOf(panel, P.W).hidden).toBe(true)
+  })
+
+  it('no whisper for non-flex children (mode inference never runs)', () => {
+    const { panel } = setup()
+    expect(whisperOf(panel, P.W).hidden).toBe(true)
   })
 
   it('cross-axis Fixed preserves a user-drafted align-self (only discards it when Fill wrote "stretch")', () => {
@@ -830,10 +899,7 @@ describe('Panel', () => {
     expect(drafts.current(el, 'align-self')).toBe('flex-start')
 
     // Switch H (cross axis on a row parent) to Fixed — must NOT clobber the user's align-self.
-    const hRow = fieldInput(panel, P.H).closest('.nf')!.parentElement!
-    const select = hRow.querySelector('.size-mode') as HTMLSelectElement
-    select.value = 'fixed'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.H, 'Fixed')
 
     expect(drafts.current(el, 'align-self')).toBe('flex-start')
   })
@@ -852,10 +918,7 @@ describe('Panel', () => {
     panel.show(child, buildInspectorData(child))
 
     // Apply Fill mode to width (drafts flex-grow: 1, flex-basis: 0%)
-    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
-    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
-    select.value = 'fill'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.W, 'Fill')
 
     // Stub getComputedStyle to simulate flex layout: while Fill is active, element is 200px;
     // once discarded, it would collapse to 50px
@@ -878,8 +941,7 @@ describe('Panel', () => {
     })
 
     // Switch mode to Fixed: should pin 200px (what user sees), not 50px (post-collapse)
-    select.value = 'fixed'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.W, 'Fixed')
     expect(drafts.current(child, 'width')).toBe('200px')
   })
 
@@ -910,13 +972,74 @@ describe('Panel', () => {
       return cs
     })
 
-    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
-    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
-    select.value = 'fixed'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.W, 'Fixed')
 
     // Pin bailed out entirely — no NaN draft was written (width draft stays whatever it was, i.e. null)
     expect(drafts.current(child, 'width')).toBeNull()
+  })
+
+  it('picking Fixed on an app-CSS-fill element defeats the fill so the pin is real', () => {
+    const { el, panel, drafts } = childSetup()
+    el.style.flexGrow = '1' // app-CSS fill proxy (inline, NOT a draft)
+    panel.refresh()
+    pickSizeMode(panel, P.W, 'Fixed')
+    expect(drafts.current(el, 'width')).toMatch(/^\d+px$/)
+    expect(drafts.current(el, 'flex-grow')).toBe('0')
+    expect(drafts.current(el, 'flex-basis')).toBe('auto')
+    const menu = openSizeMenu(panel, P.W)
+    const checked = [...menu.querySelectorAll('.menu-item')].find((b) => b.querySelector('.menu-check'))!
+    expect(checked.textContent).toContain('Fixed')
+  })
+
+  it('picking Hug on an app-CSS-fill element defeats the fill and reads back Hug', () => {
+    const { el, panel, drafts } = childSetup()
+    el.style.flexGrow = '1'
+    panel.refresh()
+    pickSizeMode(panel, P.W, 'Hug')
+    expect(drafts.current(el, 'width')).toBe('auto')
+    expect(drafts.current(el, 'flex-grow')).toBe('0')
+    expect(drafts.current(el, 'flex-basis')).toBe('auto')
+    const menu = openSizeMenu(panel, P.W)
+    const checked = [...menu.querySelectorAll('.menu-item')].find((b) => b.querySelector('.menu-check'))!
+    expect(checked.textContent).toContain('Hug')
+  })
+
+  it('typing a main-axis size on an app-CSS-fill element defeats the fill (onBeforeApply)', () => {
+    const { el, panel, drafts } = childSetup()
+    el.style.flexGrow = '1'
+    panel.refresh()
+    commit(fieldInput(panel, P.W), '200')
+    expect(drafts.current(el, 'width')).toBe('200px')
+    expect(drafts.current(el, 'flex-grow')).toBe('0')
+    expect(drafts.current(el, 'flex-basis')).toBe('auto')
+  })
+
+  it('typing a cross-axis size never touches flex-grow', () => {
+    const { el, panel, drafts } = childSetup()
+    el.style.flexGrow = '1'
+    panel.refresh()
+    commit(fieldInput(panel, P.H), '80')
+    expect(drafts.current(el, 'height')).toBe('80px')
+    expect(drafts.current(el, 'flex-grow')).toBeNull()
+  })
+
+  it('cross axis reads Fixed when an explicit size defeats app-CSS stretch', () => {
+    const { el, panel } = childSetup()
+    el.style.alignSelf = 'stretch' // app-CSS stretch proxy; child keeps inline height: 50px
+    panel.refresh()
+    const menu = openSizeMenu(panel, P.H)
+    const checked = [...menu.querySelectorAll('.menu-item')].find((b) => b.querySelector('.menu-check'))!
+    expect(checked.textContent).toContain('Fixed')
+  })
+
+  it('picking Fill on the cross axis clears an explicit size so stretch actually applies', () => {
+    const { el, panel, drafts } = childSetup()
+    pickSizeMode(panel, P.H, 'Fill')
+    expect(drafts.current(el, 'align-self')).toBe('stretch')
+    expect(drafts.current(el, 'height')).toBe('auto')
+    const menu = openSizeMenu(panel, P.H)
+    const checked = [...menu.querySelectorAll('.menu-item')].find((b) => b.querySelector('.menu-check'))!
+    expect(checked.textContent).toContain('Fill')
   })
 
   it('W/H shows the auto keyword when the element authored inline style="width: auto" (no draft)', () => {
@@ -924,6 +1047,29 @@ describe('Panel', () => {
       `<div data-dc-source="src/Card.tsx:4:7" id="t" style="width: auto; height: 100px;"></div>`
     )
     expect(fieldInput(panel, P.W).value).toBe('auto')
+  })
+
+  it('W/H fields render no { } token button — variable binding lives in the menu', () => {
+    document.documentElement.style.setProperty('--spacing', '4px')
+    try {
+      const { panel } = childSetup()
+      expect(fieldInput(panel, P.W).closest('.nf')!.querySelector('.token-btn')).toBeNull()
+    } finally {
+      document.documentElement.removeAttribute('style')
+      resetTokensCache()
+    }
+  })
+
+  it('menu Variable… opens the token picker', () => {
+    document.documentElement.style.setProperty('--spacing', '4px')
+    try {
+      const { panel } = childSetup()
+      pickSizeMode(panel, P.W, 'Variable…')
+      expect(pickerOf(panel).root.hidden).toBe(false)
+    } finally {
+      document.documentElement.removeAttribute('style')
+      resetTokensCache()
+    }
   })
 
   it('has a Prompt button in the header, hidden when nothing is selected', () => {
@@ -959,7 +1105,7 @@ describe('min/max sizing disclosure (M-D)', () => {
     expect(minMaxRow(panel, P.MAX_W).hidden).toBe(true) // independent per row
   })
 
-  it('Add min… on the W select opens the min-width row and resets the select to the real mode', () => {
+  it('Min… on the W sizing menu opens the min-width row and the menu still resolves to a real mode', () => {
     document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row;">
       <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px; height: 50px;"></div>
     </div>`
@@ -970,13 +1116,15 @@ describe('min/max sizing disclosure (M-D)', () => {
     document.body.appendChild(panel.root)
     panel.show(el, buildInspectorData(el))
 
-    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
-    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
-    select.value = 'add-min'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.W, 'Min…')
 
     expect(minMaxRow(panel, P.MIN_W).hidden).toBe(false)
-    expect(['fixed', 'hug', 'fill']).toContain(select.value)
+    const menu = openSizeMenu(panel, P.W)
+    const checked = [...menu.querySelectorAll('.menu-item')].filter((b) => b.querySelector('.menu-check'))
+    expect(checked.length).toBe(1)
+    // childSetup's element is deterministically Fixed (inline 50px, grow 0) — assert WHICH
+    // mode it resolves to, not just that exactly one is checked (final-review tightening).
+    expect(checked[0].textContent).toContain('Fixed')
   })
 
   it('typing auto clears: drafts the initial keyword and the row stays while the draft lives', () => {
@@ -1006,6 +1154,44 @@ describe('min/max sizing disclosure (M-D)', () => {
     expect(minMaxRow(panel, P.MAX_W).hidden).toBe(true)
     expect(minMaxRow(panel, P.MIN_H).hidden).toBe(true)
     expect(minMaxRow(panel, P.MAX_H).hidden).toBe(true)
+  })
+})
+
+describe('Sizing menu teardown (final-review fix #2)', () => {
+  // The popover lives on .panel-body (a sibling of sectionsRoot, per the constructor's
+  // why-comment) — sectionsRoot.replaceChildren() does NOT clear it, so an open menu left
+  // behind by a stale registry read/wrote against the WRONG (new) selection.
+  function childSetup() {
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px; height: 50px;"></div>
+      <div data-dc-source="src/Other.tsx:2:2" id="o" style="width: 60px; height: 60px;"></div>
+    </div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const other = document.getElementById('o')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const panel = new Panel(drafts, onEdited)
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    return { el, other, drafts, panel, onEdited }
+  }
+
+  it('a sizing menu left open does not survive panel.show() for a different selection', () => {
+    const { panel, other } = childSetup()
+    openSizeMenu(panel, P.W)
+    expect(panel.root.querySelector('.menu-popover')).not.toBeNull()
+
+    panel.show(other, buildInspectorData(other))
+    expect(panel.root.querySelector('.menu-popover')).toBeNull()
+  })
+
+  it('a sizing menu left open does not survive panel.hide()', () => {
+    const { panel } = childSetup()
+    openSizeMenu(panel, P.W)
+    expect(panel.root.querySelector('.menu-popover')).not.toBeNull()
+
+    panel.hide()
+    expect(panel.root.querySelector('.menu-popover')).toBeNull()
   })
 })
 
@@ -1092,7 +1278,7 @@ describe('Panel onBeforeEdit pre-hook (M2b Task 4)', () => {
     expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
   })
 
-  it('size-mode select change calls onBeforeEdit before onEdited', () => {
+  it('size-mode menu selection calls onBeforeEdit before onEdited', () => {
     document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row;">
       <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px; height: 50px;"></div>
     </div>`
@@ -1104,10 +1290,7 @@ describe('Panel onBeforeEdit pre-hook (M2b Task 4)', () => {
     document.body.appendChild(panel.root)
     panel.show(el, buildInspectorData(el))
 
-    const wRow = fieldInput(panel, P.W).closest('.nf')!.parentElement!
-    const select = wRow.querySelector('.size-mode') as HTMLSelectElement
-    select.value = 'fill'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    pickSizeMode(panel, P.W, 'Fill')
     expect(onBeforeEdit).toHaveBeenCalledWith(el)
     expect(onBeforeEdit.mock.invocationCallOrder[0]).toBeLessThan(onEdited.mock.invocationCallOrder[0])
   })
@@ -2738,11 +2921,11 @@ describe('Panel multi-select (B6)', () => {
     expect(bodyWrap.hidden).toBe(false)
   })
 
-  it('size-mode selects are hidden in multi-select', () => {
+  it('sizing chevrons are hidden in multi-select', () => {
     const { panel } = multiSetup()
-    const selects = [...panel.root.querySelectorAll('.size-row .size-mode')] as HTMLElement[]
-    expect(selects.length).toBeGreaterThan(0)
-    expect(selects.every((s) => s.hidden)).toBe(true)
+    const menus = [...panel.root.querySelectorAll('.size-row .menu-btn')] as HTMLElement[]
+    expect(menus.length).toBeGreaterThan(0)
+    expect(menus.every((m) => m.hidden)).toBe(true)
   })
 
   it('flex-child controls (.flex-child-controls) are hidden in multi-select', () => {

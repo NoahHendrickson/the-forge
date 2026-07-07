@@ -558,3 +558,40 @@ describe('NumberField — onTokenOpen (`{ }` hover icon button)', () => {
     expect(onTokenOpen).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('NumberField — setWhisper', () => {
+  it('setWhisper shows a dim label; null hides it', () => {
+    const f = new NumberField({ label: 'W', onInput: () => {} })
+    f.setWhisper('Hug')
+    const w = f.root.querySelector('.nf-whisper') as HTMLElement
+    expect(w.hidden).toBe(false)
+    expect(w.textContent).toBe('Hug')
+    f.setWhisper(null)
+    expect(w.hidden).toBe(true)
+  })
+
+  it('set/setMixed/setAuto/bindToken each clear an active whisper', () => {
+    const f = new NumberField({ label: 'W', onInput: () => {}, allowAuto: true })
+    const w = () => (f.root.querySelector('.nf-whisper') as HTMLElement).hidden
+    for (const clear of [() => f.set(4), () => f.setMixed(), () => f.setAuto(), () => f.bindToken('w-4')]) {
+      f.setWhisper('Fill')
+      expect(w()).toBe(false)
+      clear()
+      expect(w()).toBe(true)
+    }
+  })
+
+  it('noTokenButton suppresses the { } button but openToken/= still fire onTokenOpen', () => {
+    const onTokenOpen = vi.fn()
+    const f = new NumberField({ label: 'W', onInput: () => {}, onTokenOpen, noTokenButton: true })
+    expect(f.root.querySelector('.token-btn')).toBeNull()
+    expect(f.canOpenToken()).toBe(true)
+    f.openToken()
+    expect(onTokenOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it('canOpenToken is false when onTokenOpen is not wired', () => {
+    const f = new NumberField({ label: 'W', onInput: () => {} })
+    expect(f.canOpenToken()).toBe(false)
+  })
+})

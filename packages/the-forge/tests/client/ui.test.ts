@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createButton } from '../../src/client/ui/button'
 import { createSelect } from '../../src/client/ui/select'
 import { createColorRow } from '../../src/client/ui/swatch'
+import { createMenuButton } from '../../src/client/ui/menu'
 
 beforeEach(() => {
   document.body.innerHTML = ''
@@ -145,5 +146,82 @@ describe('createColorRow', () => {
     valueEl.textContent = '#0D99FF'
     expect((row.querySelector('.swatch-color') as HTMLElement).style.color).toBe('rgb(13, 153, 255)')
     expect(row.querySelector('.color-value')?.textContent).toBe('#0D99FF')
+  })
+})
+
+describe('createMenuButton', () => {
+  function setup(items = () => [
+    { value: 'fixed', label: 'Fixed', checked: true },
+    { value: 'hug', label: 'Hug' },
+    { value: 'add-min', label: 'Min…', separator: true },
+  ]) {
+    document.body.innerHTML = '<div id="host" style="position: relative"></div>'
+    const host = document.getElementById('host')!
+    const onSelect = vi.fn()
+    const mb = createMenuButton({ title: 'Sizing', items, onSelect, popoverHost: host })
+    host.append(mb.button)
+    return { host, onSelect, mb }
+  }
+
+  it('renders a menu-btn chevron and no popover until clicked', () => {
+    const { host, mb } = setup()
+    expect(mb.button.className).toContain('menu-btn')
+    expect(mb.button.title).toBe('Sizing')
+    expect(host.querySelector('.menu-popover')).toBeNull()
+  })
+
+  it('click opens a popover with items, checkmark, and separator', () => {
+    const { host, mb } = setup()
+    mb.button.click()
+    const pop = host.querySelector('.menu-popover') as HTMLElement
+    expect(pop).toBeTruthy()
+    const labels = [...pop.querySelectorAll('.menu-item')].map((b) => (b as HTMLElement).textContent)
+    expect(labels[0]).toContain('Fixed')
+    expect(labels[0]).toContain('✓') // checked item carries the mark
+    expect(labels[1]).toContain('Hug')
+    expect(pop.querySelector('.menu-sep')).toBeTruthy() // separator before Min…
+  })
+
+  it('item click fires onSelect with the value and closes', () => {
+    const { host, onSelect, mb } = setup()
+    mb.button.click()
+    const items = [...host.querySelectorAll('.menu-item')] as HTMLElement[]
+    items[1].click()
+    expect(onSelect).toHaveBeenCalledWith('hug')
+    expect(host.querySelector('.menu-popover')).toBeNull()
+  })
+
+  it('outside mousedown and Escape both close without selecting', () => {
+    const { host, onSelect, mb } = setup()
+    mb.button.click()
+    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    expect(host.querySelector('.menu-popover')).toBeNull()
+
+    mb.button.click()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(host.querySelector('.menu-popover')).toBeNull()
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('items() is re-invoked on every open (dynamic checkmarks)', () => {
+    let mode = 'fixed'
+    const { host, mb } = setup(() => [
+      { value: 'fixed', label: 'Fixed', checked: mode === 'fixed' },
+      { value: 'hug', label: 'Hug', checked: mode === 'hug' },
+    ])
+    mb.button.click()
+    mb.close()
+    mode = 'hug'
+    mb.button.click()
+    const labels = [...host.querySelectorAll('.menu-item')].map((b) => (b as HTMLElement).textContent)
+    expect(labels[1]).toContain('✓')
+    expect(labels[0]).not.toContain('✓')
+  })
+
+  it('reopening the same button while open just closes (toggle)', () => {
+    const { host, mb } = setup()
+    mb.button.click()
+    mb.button.click()
+    expect(host.querySelector('.menu-popover')).toBeNull()
   })
 })

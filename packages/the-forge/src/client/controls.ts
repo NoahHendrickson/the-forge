@@ -27,6 +27,8 @@ export interface NumberFieldOpts {
    * pill-bound (swap tokens); the `=` key fires it only when NOT pill-bound. That gating
    * difference is NumberField's own policy, not the caller's — callers wire ONE callback. */
   onTokenOpen?: () => void
+  /** Suppress the hover `{ }` button while keeping `onTokenOpen` reachable via `=` and `openToken()`. */
+  noTokenButton?: boolean
 }
 
 // Two stroked brace paths in a 12x12 box; `stroke="currentColor"` so panel CSS themes it via
@@ -189,6 +191,7 @@ export class NumberField {
 
   private input = document.createElement('input')
   private labelEl = document.createElement('span')
+  private whisperEl = document.createElement('span')
   private lastValid: number | null = null
   private scrubStartX = 0
   // Scrub anchor is FIXED at mousedown (absolute drag mapping). External set()
@@ -209,10 +212,14 @@ export class NumberField {
     this.input.inputMode = 'numeric'
     this.root.append(this.labelEl, this.input)
 
+    this.whisperEl.className = 'nf-whisper'
+    this.whisperEl.hidden = true
+    this.root.append(this.whisperEl)
+
     // Callers only wire onTokenOpen when the field has token entries to offer — no entries
     // means no button, never a dead one. Deliberately NOT pill-gated (unlike the `=` key):
     // clicking the icon on an already-bound field reopens the picker to swap tokens.
-    if (opts.onTokenOpen) {
+    if (opts.onTokenOpen && !opts.noTokenButton) {
       this.root.append(createTokenButton(() => this.opts.onTokenOpen?.()))
     }
 
@@ -384,12 +391,14 @@ export class NumberField {
   }
 
   set(value: number | null): void {
+    this.setWhisper(null)
     this.unbindPill()
     this.render(value)
   }
 
   /** Displays the literal 'Mixed' text; internal value is null (get() reports null). */
   setMixed(): void {
+    this.setWhisper(null)
     this.unbindPill()
     this.lastValid = null
     this.input.value = MIXED_TEXT
@@ -398,6 +407,7 @@ export class NumberField {
 
   /** Displays the literal 'auto' text; internal value is null (get() reports null). Only meaningful with allowAuto. */
   setAuto(): void {
+    this.setWhisper(null)
     this.unbindPill()
     this.lastValid = null
     this.input.value = AUTO_TEXT
@@ -410,6 +420,7 @@ export class NumberField {
 
   /** Binds the field to a display-only token pill (e.g. a design-token reference). readOnly, does not touch lastValid. */
   bindToken(label: string): void {
+    this.setWhisper(null)
     this.pillBound = true
     this.input.readOnly = true
     this.input.value = label
@@ -427,5 +438,23 @@ export class NumberField {
     this.input.title = ''
     this.root.classList.remove('nf-pill')
     this.render(this.lastValid)
+  }
+
+  /** Dim right-side context label (e.g. the applied Hug/Fill size mode). Any display
+   * mutation (set/setMixed/setAuto/bindToken) clears it — the refresh that changed the
+   * display is responsible for re-asserting it, so a whisper can never outlive its mode. */
+  setWhisper(text: string | null): void {
+    this.whisperEl.textContent = text ?? ''
+    this.whisperEl.hidden = text === null
+  }
+
+  /** Whether onTokenOpen was wired (menu callers gate their Variable… item on this). */
+  canOpenToken(): boolean {
+    return !!this.opts.onTokenOpen
+  }
+
+  /** External trigger for the token picker — the sizing menu's Variable… item. */
+  openToken(): void {
+    this.opts.onTokenOpen?.()
   }
 }

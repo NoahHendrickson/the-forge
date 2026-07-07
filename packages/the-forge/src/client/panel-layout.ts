@@ -13,8 +13,9 @@ import { NumberField } from './controls'
 import { createButton } from './ui/button'
 import { SegmentField, AlignMatrix } from './layout-controls'
 import { PanelTokenUi } from './panel-token-ui'
-import { type RowSpec, GAP_SPEC } from './panel-specs'
+import { type RowSpec, GAP_SPEC, SIZE_MODES, defeatFillIfGrowing } from './panel-specs'
 import { fromPx, isFlex, normalizeJustify, normalizeAlign, mainAxisProp, minMaxRowVisible, alignSelfRowOn } from './panel-readers'
+import type { MenuItem } from './ui/menu'
 
 // The container-side flex props the panel can draft — the set 'remove auto layout' must
 // clean up alongside display (child props like align-self/flex-grow belong to the CHILD's
@@ -22,9 +23,14 @@ import { fromPx, isFlex, normalizeJustify, normalizeAlign, mainAxisProp, minMaxR
 export const FLEX_CONTAINER_PROPS = ['flex-direction', 'gap', 'justify-content', 'align-items', 'flex-wrap']
 
 interface BoundSizeMode {
-  select: HTMLSelectElement
+  menuBtn: HTMLButtonElement
+  /** Closes the menu's popover if open — symmetric with ColorPicker/TokenPicker's own
+   * `close`, so the sizeModes registry reset (and Panel.hide()) can close every open
+   * sizing menu the same way those close their singleton popovers (final-review fix #2). */
+  close: () => void
   spec: RowSpec
   field: NumberField
+  mode: 'fixed' | 'hug' | 'fill'
 }
 
 interface BoundMinMaxRow {
@@ -276,7 +282,7 @@ export class LayoutSection {
     return wrap
   }
 
-  /** Registers a size-mode select bound to a NumberField — called by panel.ts's buildRow
+  /** Registers a size-mode menu button bound to a NumberField — called by panel.ts's buildRow
    * for the Size section rows, so LayoutSection's refresh() can drive their visibility and
    * mode inference the same way it always has (sizeModes was a Panel-private array before
    * the move; it now lives here since only flex-child refresh reads/writes it). The full
@@ -286,6 +292,34 @@ export class LayoutSection {
     this.sizeModes.push(sm)
   }
 
+  /** Closes every registered sizing menu's popover — same symmetric-close contract as
+   * ColorPicker/TokenPicker (panel.ts's show()/hide()). The popover lives on .panel-body,
+   * a sibling of sectionsRoot that buildBody()'s replaceChildren() never touches, so
+   * without this an open menu survives a selection change and its onSelect fires against
+   * the NEW element (final-review fix #2). Called from teardown() (selection change,
+   * multi-select) and directly from Panel.hide() (no teardown() there today).
+   */
+  closeSizeMenus(): void {
+    for (const sm of this.sizeModes) sm.close()
+  }
+
+  /** Items for the sizing chevron menu, computed at open time. Mode items (checkmark on the
+   * inferred current mode) only exist for flex children — Fill/Hug are flex concepts and
+   * updateSizeMode only runs there. Min/Max/Variable are universal. */
+  sizeMenuItems(spec: RowSpec, hasVariable: boolean): MenuItem[] {
+    const items: MenuItem[] = []
+    const el = this.deps.getEl()
+    const parent = el?.parentElement
+    const sm = this.sizeModes.find((s) => s.spec === spec)
+    if (el && parent && isFlex(parent as TaggedElement) && sm) {
+      for (const [value, label] of SIZE_MODES) items.push({ value, label, checked: sm.mode === value })
+    }
+    items.push({ value: 'add-min', label: 'Min…', separator: items.length > 0 })
+    items.push({ value: 'add-max', label: 'Max…' })
+    if (hasVariable) items.push({ value: 'variable', label: 'Variable…', separator: true })
+    return items
+  }
+
   /** Registers a min/max disclosure row bound to a NumberField — called by panel.ts's
    * buildBody layout branch right after each size row (W/H). Mirrors registerSizeMode's
    * per-selection registry lifecycle (populated in buildBody, cleared in teardown). */
@@ -293,11 +327,11 @@ export class LayoutSection {
     this.minMaxRows.push(reg)
   }
 
-  /** "Add min…"/"Add max…" action-item handler (buildRow's select onChange, NOT a size
+  /** "Add min…"/"Add max…" action-item handler (buildRow's menu onSelect, NOT a size
    * mode — SIZE_MODES itself stays a pure mode table). Opening a row mutates no drafts, so
    * this deliberately isn't withEdit-framed: just latch the prop into openedMinMax, refresh
    * (which both discloses the row AND — via updateSizeMode inside refreshFlexChild — resets
-   * the select's value back to the real Fixed/Hug/Fill mode, since 'add-min'/'add-max' were
+   * the menu's checkmark back to the real Fixed/Hug/Fill mode, since 'add-min'/'add-max' were
    * never real modes), then focus the newly-revealed input. */
   openMinMax(sizeSpec: RowSpec, kind: 'min' | 'max'): void {
     const prop = `${kind}-${sizeSpec.props[0]}`
@@ -351,12 +385,23 @@ export class LayoutSection {
       if (this.layoutControlsWrap) this.layoutControlsWrap.hidden = true
       // Flex-child align/size-modes are single-only — DOM stays (stable order) but hidden.
       if (this.flexChildControlsWrap) this.flexChildControlsWrap.hidden = true
-      for (const sm of this.sizeModes) sm.select.hidden = true
+      // Hiding the button must also close any open popover — hiding the button does not
+      // hide its popover (a sibling on .panel-body), and onSelect would still fire against
+      // whatever selection was live when it opened (final-review fix #2).
+      for (const sm of this.sizeModes) {
+        sm.menuBtn.hidden = true
+        sm.close()
+      }
       // Min/max disclosure rows are single-select-only, same rule as the cluster/flex-child
       // strip above — ambiguous across N elements, so all hidden regardless of opened state.
       for (const mm of this.minMaxRows) mm.rowEl.hidden = true
       return
     }
+
+    // The sizing chevron renders for every single-selected element — min/max and variable
+    // apply universally; only the Fixed/Hug/Fill items inside the menu are flex-gated
+    // (sizeMenuItems). Before the menu, the whole select vanished for non-flex children.
+    for (const sm of this.sizeModes) sm.menuBtn.hidden = false
 
     this.refreshLayoutSection(el, computed)
     this.refreshFlexChild(el, computed)
@@ -425,7 +470,6 @@ export class LayoutSection {
     const parent = el.parentElement
     const visible = parent !== null && isFlex(parent as TaggedElement)
     if (this.flexChildControlsWrap) this.flexChildControlsWrap.hidden = !visible
-    for (const sm of this.sizeModes) sm.select.hidden = !visible
     if (!visible) return
 
     const parentDirection = getComputedStyle(parent as TaggedElement).flexDirection.startsWith('column')
@@ -445,43 +489,68 @@ export class LayoutSection {
   }
 
   /**
-   * Mode inference heuristic (kept intentionally simple):
-   * - Fixed: there's an explicit draft OR inline style for this axis's size prop (px value authored).
-   * - Fill: no explicit size draft/inline AND either
-   *     - main axis: computed flex-grow >= 1
-   *     - cross axis: computed align-self is 'stretch'
-   * - Hug: no explicit size draft/inline AND not Fill (default content-based sizing).
+   * Mode inference heuristic (kept intentionally simple), axis-split priority (2026-07-06 E2E
+   * finding — cross axis was regressed by a stretch-first order, see below):
+   * - Main axis: Fill (computed flex-grow >= 1) -> explicit size -> Hug. Fill checked FIRST and
+   *   wins outright — picking Fill only ever drafts flex-grow/flex-basis, never the size prop
+   *   itself, so a stale inline/pre-Fill px would otherwise still read as an explicit size and
+   *   misreport Fixed. Correct because basis 0% + grow genuinely beat an authored width.
+   * - Cross axis: explicit size -> Fill (computed align-self is 'stretch') -> Hug. An explicit
+   *   cross size beats stretch in CSS (stretch only applies when the cross size is auto) — the
+   *   old stretch-first order misreported Fill for an element rendering at a fixed height (T6
+   *   review regression).
+   * - Fixed (either axis): an explicit draft OR inline style for this axis's size prop (px value
+   *   authored — the `auto` keyword is excluded; it reads as Hug/Fill).
+   * - Hug: no explicit size draft/inline and (main axis only) no Fill (default content-based
+   *   sizing). On the cross axis, with app-CSS `align-items: stretch` and no explicit size, Hug
+   *   is unreachable — the mode reads Fill because the element truly stretches. Deliberately out
+   *   of scope: defeating it would mean drafting `align-self: flex-start` and changing alignment.
    */
   // READ half of the size-mode policy — its WRITE half, onSizeModeChange, sits right below.
   private updateSizeMode(el: TaggedElement, sm: BoundSizeMode, main: 'width' | 'height'): void {
     const prop = sm.spec.props[0] as 'width' | 'height'
     const isMain = prop === main
+    const computed = getComputedStyle(el)
+
     const draft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, prop)
     const inline = el.style.getPropertyValue(prop)
-    const hasExplicitSize = !!draft || !!inline
+    // Hug's own `auto` keyword is NOT an explicit size — counting it made the mode read back
+    // Fixed immediately after the user picked Hug (latent select-era quirk, fixed by the
+    // 2026-07-06 size-pair spec: the whisper label sits on this inference).
+    const hasExplicitSize = (!!draft && draft !== 'auto') || (draft === null && !!inline && inline !== 'auto')
 
-    if (hasExplicitSize) {
-      sm.select.value = 'fixed'
-      return
-    }
-
-    const computed = getComputedStyle(el)
+    let isFill: boolean
     if (isMain) {
       const grow = Number.parseFloat(computed.flexGrow || '0')
-      if (grow >= 1) {
-        sm.select.value = 'fill'
-        return
-      }
+      isFill = grow >= 1
     } else {
       const alignSelfDraft = this.deps.drafts.isComparing(el) ? null : this.deps.drafts.current(el, 'align-self')
       const alignSelfCss = alignSelfDraft ?? computed.alignSelf
-      if (alignSelfCss === 'stretch') {
-        sm.select.value = 'fill'
-        return
-      }
+      isFill = alignSelfCss === 'stretch'
     }
 
-    sm.select.value = 'hug'
+    let mode: 'fixed' | 'hug' | 'fill'
+    if (isMain) {
+      mode = isFill ? 'fill' : hasExplicitSize ? 'fixed' : 'hug'
+    } else {
+      mode = hasExplicitSize ? 'fixed' : isFill ? 'fill' : 'hug'
+    }
+
+    sm.mode = mode
+    // Display half (2026-07-06 size-pair spec): Fixed shows a plain number; Hug/Fill show
+    // the MEASURED px with a whisper naming the applied mode — the field's set()-family
+    // clears whispers, so every refresh re-asserts (or drops) it here and staleness is
+    // structurally impossible. jsdom can't compute auto sizes (NaN) — keep the literal
+    // `auto` display the fields loop already rendered and still whisper the mode.
+    if (mode === 'fixed') {
+      sm.field.setWhisper(null)
+      return
+    }
+    // Reuse the computed snapshot taken above instead of a second getComputedStyle(el) call
+    // (approved review nit).
+    const px = Math.round(Number.parseFloat(computed.getPropertyValue(prop)))
+    if (Number.isFinite(px)) sm.field.set(px)
+    sm.field.setWhisper(mode === 'hug' ? 'Hug' : 'Fill')
   }
 
   // WRITE half of the size-mode policy — its READ half, updateSizeMode, sits right above.
@@ -532,14 +601,36 @@ export class LayoutSection {
       if (!Number.isFinite(computedSize)) return
       this.deps.drafts.discard(el, modeProps)
       this.deps.drafts.apply(el, prop, `${computedSize}px`)
+      // A pinned px is moot while flex-basis: 0% + grow still win the main-axis sizing — the
+      // discard above only clears a DRAFTED fill; when the fill comes from the app's own
+      // stylesheet, computed flex-grow is still >= 1 after discard. Figma's Fixed defeats the
+      // fill, it doesn't just record a wish.
+      if (isMain) defeatFillIfGrowing(el, prop, this.deps.drafts)
     } else if (mode === 'hug') {
+      // Leaving Fill must retract what Fill drafted (same cleanup contract as the Fixed
+      // branch) — a retained flex-grow/stretch keeps the element filling, and the inference
+      // would correctly read Fill right back. App-CSS-authored fill (stylesheet flex-grow)
+      // used to be out of scope here too — the whisper then honestly reported Fill — but E2E
+      // showed Hug must also defeat app-CSS fill on the main axis, or the pick visibly no-ops.
+      const modeProps = isMain
+        ? ['flex-grow', 'flex-basis']
+        : this.deps.drafts.current(el, 'align-self') === 'stretch'
+          ? ['align-self']
+          : []
+      this.deps.drafts.discard(el, modeProps)
       this.deps.drafts.apply(el, prop, 'auto')
+      if (isMain) defeatFillIfGrowing(el, prop, this.deps.drafts)
     } else if (mode === 'fill') {
       if (isMain) {
         this.deps.drafts.apply(el, 'flex-grow', '1')
         this.deps.drafts.apply(el, 'flex-basis', '0%')
       } else {
         this.deps.drafts.apply(el, 'align-self', 'stretch')
+        // An explicit cross size defeats align-self: stretch in CSS (stretch only applies
+        // when the cross size is auto) — Fill must remove the fixed size, per Figma semantics.
+        // Main axis needs no equivalent: drafted flex-basis: 0% already beats an explicit width.
+        const current = this.deps.drafts.current(el, prop) ?? el.style.getPropertyValue(prop)
+        if (current && current !== 'auto') this.deps.drafts.apply(el, prop, 'auto')
       }
     }
     this.deps.refresh()
@@ -548,6 +639,9 @@ export class LayoutSection {
 
   /** Null out widget refs (today's teardown lines). */
   teardown(): void {
+    // Close before clearing the registry — same why as closeSizeMenus's own comment: the
+    // popover outlives the registry entry that would otherwise close it (final-review fix #2).
+    this.closeSizeMenus()
     this.directionField = null
     this.gapField = null
     this.alignMatrix = null
