@@ -355,9 +355,11 @@ button {
   width: 16px; align-self: stretch; padding: 0; border: none; background: none; flex: none;
   color: var(--text-muted); font-size: 9px; cursor: pointer; border-radius: 4px;
 }
-.menu-btn:hover { color: var(--text); background: rgba(255,255,255,0.08); }` +
+.menu-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.08); }` +
 // The menu popover appends to .panel-body (position: relative) — same host and z plane
 // as .token-popover, so it scrolls with the rows and never clips at the panel edge.
+// min-width here must match ui/menu.ts's MENU_WIDTH const, used to clamp the popover's
+// left offset so it never overhangs the panel body's right edge.
 `.menu-popover {
   position: absolute; z-index: 20; min-width: 120px; padding: 4px;
   background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px;
@@ -365,7 +367,7 @@ button {
 }
 .menu-item {
   display: flex; align-items: center; gap: 6px; padding: 4px 8px; border: none;
-  background: none; color: var(--text); font-size: 11px; text-align: left;
+  background: none; color: var(--text-primary); font-size: 11px; text-align: left;
   cursor: pointer; border-radius: 4px;
 }
 .menu-item:hover { background: rgba(255,255,255,0.08); }

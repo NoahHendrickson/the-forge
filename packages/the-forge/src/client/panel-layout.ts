@@ -24,6 +24,10 @@ export const FLEX_CONTAINER_PROPS = ['flex-direction', 'gap', 'justify-content',
 
 interface BoundSizeMode {
   menuBtn: HTMLButtonElement
+  /** Closes the menu's popover if open — symmetric with ColorPicker/TokenPicker's own
+   * `close`, so the sizeModes registry reset (and Panel.hide()) can close every open
+   * sizing menu the same way those close their singleton popovers (final-review fix #2). */
+  close: () => void
   spec: RowSpec
   field: NumberField
   mode: 'fixed' | 'hug' | 'fill'
@@ -278,7 +282,7 @@ export class LayoutSection {
     return wrap
   }
 
-  /** Registers a size-mode select bound to a NumberField — called by panel.ts's buildRow
+  /** Registers a size-mode menu button bound to a NumberField — called by panel.ts's buildRow
    * for the Size section rows, so LayoutSection's refresh() can drive their visibility and
    * mode inference the same way it always has (sizeModes was a Panel-private array before
    * the move; it now lives here since only flex-child refresh reads/writes it). The full
@@ -286,6 +290,17 @@ export class LayoutSection {
    * (onSizeModeChange) — lives entirely in LayoutSection. */
   registerSizeMode(sm: BoundSizeMode): void {
     this.sizeModes.push(sm)
+  }
+
+  /** Closes every registered sizing menu's popover — same symmetric-close contract as
+   * ColorPicker/TokenPicker (panel.ts's show()/hide()). The popover lives on .panel-body,
+   * a sibling of sectionsRoot that buildBody()'s replaceChildren() never touches, so
+   * without this an open menu survives a selection change and its onSelect fires against
+   * the NEW element (final-review fix #2). Called from teardown() (selection change,
+   * multi-select) and directly from Panel.hide() (no teardown() there today).
+   */
+  closeSizeMenus(): void {
+    for (const sm of this.sizeModes) sm.close()
   }
 
   /** Items for the sizing chevron menu, computed at open time. Mode items (checkmark on the
@@ -312,11 +327,11 @@ export class LayoutSection {
     this.minMaxRows.push(reg)
   }
 
-  /** "Add min…"/"Add max…" action-item handler (buildRow's select onChange, NOT a size
+  /** "Add min…"/"Add max…" action-item handler (buildRow's menu onSelect, NOT a size
    * mode — SIZE_MODES itself stays a pure mode table). Opening a row mutates no drafts, so
    * this deliberately isn't withEdit-framed: just latch the prop into openedMinMax, refresh
    * (which both discloses the row AND — via updateSizeMode inside refreshFlexChild — resets
-   * the select's value back to the real Fixed/Hug/Fill mode, since 'add-min'/'add-max' were
+   * the menu's checkmark back to the real Fixed/Hug/Fill mode, since 'add-min'/'add-max' were
    * never real modes), then focus the newly-revealed input. */
   openMinMax(sizeSpec: RowSpec, kind: 'min' | 'max'): void {
     const prop = `${kind}-${sizeSpec.props[0]}`
@@ -370,7 +385,13 @@ export class LayoutSection {
       if (this.layoutControlsWrap) this.layoutControlsWrap.hidden = true
       // Flex-child align/size-modes are single-only — DOM stays (stable order) but hidden.
       if (this.flexChildControlsWrap) this.flexChildControlsWrap.hidden = true
-      for (const sm of this.sizeModes) sm.menuBtn.hidden = true
+      // Hiding the button must also close any open popover — hiding the button does not
+      // hide its popover (a sibling on .panel-body), and onSelect would still fire against
+      // whatever selection was live when it opened (final-review fix #2).
+      for (const sm of this.sizeModes) {
+        sm.menuBtn.hidden = true
+        sm.close()
+      }
       // Min/max disclosure rows are single-select-only, same rule as the cluster/flex-child
       // strip above — ambiguous across N elements, so all hidden regardless of opened state.
       for (const mm of this.minMaxRows) mm.rowEl.hidden = true
@@ -618,6 +639,9 @@ export class LayoutSection {
 
   /** Null out widget refs (today's teardown lines). */
   teardown(): void {
+    // Close before clearing the registry — same why as closeSizeMenus's own comment: the
+    // popover outlives the registry entry that would otherwise close it (final-review fix #2).
+    this.closeSizeMenus()
     this.directionField = null
     this.gapField = null
     this.alignMatrix = null

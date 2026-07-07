@@ -161,7 +161,18 @@ The read half (mode inference) is now axis-split instead of Fill-first on both a
 - **Cross axis (fixed regression):** explicit size -> Fill (`align-self: stretch`) -> Hug.
   The old stretch-first order misreported Fill for an element rendering at a fixed height.
 
-The "app-CSS fill out of scope" carve-out now applies only to **cross-axis Hug**: with
-app-CSS `align-items: stretch` and no explicit size, Hug is unreachable (the mode correctly
-reads Fill, since the element truly stretches) — defeating it would mean drafting
+The "app-CSS fill out of scope" carve-out now applies only to **cross-axis Hug**: the code
+reads computed `align-self`, and the stretch detection matches an explicit `align-self:
+stretch` only — a default-stretch parent (`align-items: stretch` with no explicit
+`align-self`) reports computed `auto`/`normal`, which reads as Hug, not Fill. That's a
+pre-existing reader limitation carried over unchanged from the old select, noted here for a
+possible follow-up rather than fixed in this pass; defeating it properly would mean drafting
 `align-self: flex-start`, which changes alignment, not just size.
+
+One exception to "pill wins over whisper" (see the M-D min/max section above): a token-bound
+W or H field that reads back as Hug or Fill shows the measured px alongside the Hug/Fill
+whisper instead of the pill — `updateSizeMode` unconditionally calls `field.set(px)` for
+either mode, which clears the pill display (bookkeeping survives underneath); the pill
+re-binds on the next refresh once that field's mode returns to Fixed. This is a deliberate
+per-axis exception (applies to whichever of W/H is currently Hug/Fill, not just the main
+axis), not a regression of the pill-binding rule.

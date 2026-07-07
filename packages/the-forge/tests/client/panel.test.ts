@@ -1116,6 +1116,9 @@ describe('min/max sizing disclosure (M-D)', () => {
     const menu = openSizeMenu(panel, P.W)
     const checked = [...menu.querySelectorAll('.menu-item')].filter((b) => b.querySelector('.menu-check'))
     expect(checked.length).toBe(1)
+    // childSetup's element is deterministically Fixed (inline 50px, grow 0) — assert WHICH
+    // mode it resolves to, not just that exactly one is checked (final-review tightening).
+    expect(checked[0].textContent).toContain('Fixed')
   })
 
   it('typing auto clears: drafts the initial keyword and the row stays while the draft lives', () => {
@@ -1145,6 +1148,44 @@ describe('min/max sizing disclosure (M-D)', () => {
     expect(minMaxRow(panel, P.MAX_W).hidden).toBe(true)
     expect(minMaxRow(panel, P.MIN_H).hidden).toBe(true)
     expect(minMaxRow(panel, P.MAX_H).hidden).toBe(true)
+  })
+})
+
+describe('Sizing menu teardown (final-review fix #2)', () => {
+  // The popover lives on .panel-body (a sibling of sectionsRoot, per the constructor's
+  // why-comment) — sectionsRoot.replaceChildren() does NOT clear it, so an open menu left
+  // behind by a stale registry read/wrote against the WRONG (new) selection.
+  function childSetup() {
+    document.body.innerHTML = `<div id="parent" style="display: flex; flex-direction: row;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px; height: 50px;"></div>
+      <div data-dc-source="src/Other.tsx:2:2" id="o" style="width: 60px; height: 60px;"></div>
+    </div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const other = document.getElementById('o')! as HTMLElement
+    const drafts = new DraftStore()
+    const onEdited = vi.fn()
+    const panel = new Panel(drafts, onEdited)
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    return { el, other, drafts, panel, onEdited }
+  }
+
+  it('a sizing menu left open does not survive panel.show() for a different selection', () => {
+    const { panel, other } = childSetup()
+    openSizeMenu(panel, P.W)
+    expect(panel.root.querySelector('.menu-popover')).not.toBeNull()
+
+    panel.show(other, buildInspectorData(other))
+    expect(panel.root.querySelector('.menu-popover')).toBeNull()
+  })
+
+  it('a sizing menu left open does not survive panel.hide()', () => {
+    const { panel } = childSetup()
+    openSizeMenu(panel, P.W)
+    expect(panel.root.querySelector('.menu-popover')).not.toBeNull()
+
+    panel.hide()
+    expect(panel.root.querySelector('.menu-popover')).toBeNull()
   })
 })
 

@@ -162,6 +162,27 @@ describe('Overlay CSS design tokens (Task 1)', () => {
     expect(CSS).not.toMatch(/font:\s*[0-9]+\s+[0-9]+(\.[0-9]+)?px\s+ui-monospace/)
   })
 
+  it('every var(--X) in CSS resolves to a real TOKENS key or a known non-token custom property', () => {
+    // Reverse guard (final-review finding): a `var(--text)` typo compiled fine and fell
+    // back to inherited color by accident — nothing caught it because no test walked CSS
+    // looking for var() references that don't name a real token. This ratchets that class
+    // of bug into a test failure instead of a silent inherit-fallback.
+    const NON_TOKEN_VARS = [
+      // Set at runtime by the resize/dock feature (dock.ts), not a design token — has its
+      // own `, <fallback>px` default at every use site, so it's legitimately absent here.
+      'forge-dock-w',
+      // Set at runtime by colorpicker.ts (svArea.style.setProperty) to drive the hue
+      // gradient — not a design token, has its own `, red` fallback at its one use site.
+      'cp-hue',
+    ]
+    const found = new Set([...CSS.matchAll(/var\(--([a-zA-Z0-9-]+)/g)].map((m) => m[1]))
+    const tokenKeys = new Set(Object.keys(TOKENS))
+    for (const name of found) {
+      const known = tokenKeys.has(name) || NON_TOKEN_VARS.includes(name)
+      expect(known, `var(--${name}) is not a TOKENS key or allowlisted non-token`).toBe(true)
+    }
+  })
+
 })
 
 describe('Overlay (M2 additions)', () => {

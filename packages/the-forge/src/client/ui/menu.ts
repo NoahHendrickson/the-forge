@@ -23,6 +23,9 @@ export interface MenuButton {
   close: () => void
 }
 
+// Must match .menu-popover's `min-width: 120px` in overlay.ts — this is only the clamp
+// used to keep the popover from overhanging popoverHost's right edge (line 86 below), so a
+// drift between the two would misposition the popover without erroring.
 const MENU_WIDTH = 120
 
 /**

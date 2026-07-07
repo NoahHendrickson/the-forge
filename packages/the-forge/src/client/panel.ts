@@ -268,6 +268,11 @@ export class Panel {
     this.els = []
     this.colorPicker.close()
     this.tokenUi.picker.close()
+    // hide() never calls buildBody()/teardown() (unlike show()), so the sizing menu's
+    // popover — same lifecycle as the two lines above — needs its own explicit close here
+    // or it survives with its onSelect still bound to the just-cleared selection (final-
+    // review fix #2).
+    this.layoutSection.closeSizeMenus()
     this.promptButton.hidden = true
     if (this.docked) {
       // Docked empty state: root stays visible (the dock holds its space), header says
@@ -1030,7 +1035,7 @@ export class Panel {
     })
     row.append(menu.button)
 
-    this.layoutSection.registerSizeMode({ menuBtn: menu.button, spec, field: bound.field, mode: 'fixed' })
+    this.layoutSection.registerSizeMode({ menuBtn: menu.button, close: menu.close, spec, field: bound.field, mode: 'fixed' })
     return row
   }
 

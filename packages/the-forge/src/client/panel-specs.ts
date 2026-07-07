@@ -11,7 +11,8 @@ export interface RowSpec {
   max?: number
   toCss?: (n: number) => string
   fromCss?: (css: string) => number
-  /** When true (W/H rows), a sizing-mode <select> (Fixed/Hug/Fill) renders next to the field. */
+  /** When true (W/H rows), a sizing chevron menu button (Fixed/Hug/Fill, ui/menu.ts) renders
+   * next to the field. */
   sizeMode?: boolean
   /** When true (e.g. LH), the field accepts the literal keyword `auto` and displays it via setAuto(). */
   allowAuto?: boolean
