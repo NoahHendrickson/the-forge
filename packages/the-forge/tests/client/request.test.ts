@@ -82,7 +82,7 @@ describe('buildChangeRequest', () => {
     }
     const req = buildChangeRequest(store, TW)
     expect(req.elements[0].changes).toEqual([
-      expect.objectContaining({ property: 'border-style', afterCss: 'dashed', afterUtility: null }),
+      expect.objectContaining({ property: 'border-style', afterCss: 'dashed', afterUtility: 'border-dashed' }),
     ])
   })
 

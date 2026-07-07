@@ -40,6 +40,8 @@ import {
   firstFamily,
   cssFamilyValue,
   documentFontFamilies,
+  fillIsEmpty,
+  strokeIsEmpty,
 } from './panel-readers'
 
 export { tokenEntriesFor, colorTokenEntries } from './panel-specs'
@@ -114,6 +116,14 @@ export class Panel {
   private textRow: HTMLElement | null = null
   private strokeStyleSelect: HTMLSelectElement | null = null
   private strokeColorRow: HTMLElement | null = null
+  private fillAddBtn: HTMLButtonElement | null = null
+  private fillRemoveBtn: HTMLButtonElement | null = null
+  private strokeAddBtn: HTMLButtonElement | null = null
+  private strokeRemoveBtn: HTMLButtonElement | null = null
+  private strokeRowsWrap: HTMLElement | null = null
+  private strokeExpandBtn: HTMLElement | null = null
+  private strokeExpandKey: string | null = null
+  private strokeExpandWrap: HTMLElement | null = null
 
   // Selection colors (B6, multi-select only) — section title + rows wrap, rebuilt per show().
   private selectionColorsTitle: HTMLElement | null = null
@@ -422,10 +432,28 @@ export class Panel {
   }
 
   private refreshFillStroke(el: TaggedElement, computed: CSSStyleDeclaration): void {
+    const fillEmpty = fillIsEmpty(this.currentValue(el, 'background-color', computed))
+    if (this.fillRow) this.fillRow.hidden = fillEmpty
+    if (this.fillAddBtn) this.fillAddBtn.hidden = !fillEmpty
+    if (this.fillRemoveBtn) this.fillRemoveBtn.hidden = fillEmpty
     ;(this.fillRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
     if (this.textRow) this.textRow.hidden = !hasDirectText(el)
     ;(this.textRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
     ;(this.strokeColorRow as (HTMLElement & { __refresh?: () => void }) | null)?.__refresh?.()
+
+    const strokeEmpty = strokeIsEmpty((prop) => this.currentValue(el, prop, computed))
+    if (this.strokeRowsWrap) this.strokeRowsWrap.hidden = strokeEmpty
+    if (this.strokeAddBtn) this.strokeAddBtn.hidden = !strokeEmpty
+    if (this.strokeRemoveBtn) this.strokeRemoveBtn.hidden = strokeEmpty
+    if (this.strokeExpandBtn) this.strokeExpandBtn.hidden = strokeEmpty
+    if (this.strokeExpandWrap) {
+      // An empty stroke has nothing to fine-tune: force the BT/BR/BB/BL wrap closed, but
+      // restore the user's sticky expandState when the stroke comes back (remove → add
+      // round-trip must not silently reset an opened ⋯). Keyed by the captured spec
+      // expandKey, never a literal — see the buildBody capture comment.
+      const key = this.strokeExpandKey
+      this.strokeExpandWrap.hidden = strokeEmpty || key === null || !(this.expandState.get(key) ?? false)
+    }
 
     if (this.strokeStyleSelect) {
       const style = this.currentValue(el, 'border-top-style', computed)
@@ -473,6 +501,14 @@ export class Panel {
     this.textRow = null
     this.strokeStyleSelect = null
     this.strokeColorRow = null
+    this.fillAddBtn = null
+    this.fillRemoveBtn = null
+    this.strokeAddBtn = null
+    this.strokeRemoveBtn = null
+    this.strokeRowsWrap = null
+    this.strokeExpandBtn = null
+    this.strokeExpandKey = null
+    this.strokeExpandWrap = null
     this.selectionColorsTitle = null
     this.selectionColorsRows = null
 
@@ -561,6 +597,9 @@ export class Panel {
         const fillBody = this.buildFillSection()
         this.sectionsRoot.append(fillBody)
         sectionBodyEls.push(fillBody)
+        // − before + (Layout's title glyph order: remove first). Only one is ever visible —
+        // refreshFillStroke flips them on the fill-empty predicate.
+        title.append(this.buildFillRemoveButton(), this.buildFillAddButton())
         this.sectionEls.push({ spec: section, els: sectionBodyEls })
         continue
       }
@@ -573,6 +612,8 @@ export class Panel {
         // expandable section.
         rowWrap = this.buildStrokeSection()
         this.sectionsRoot.append(rowWrap)
+        this.strokeRowsWrap = rowWrap
+        title.append(this.buildStrokeRemoveButton(), this.buildStrokeAddButton())
       } else {
         rowWrap = document.createElement('div')
         rowWrap.className = 'panel-rows'
@@ -581,6 +622,16 @@ export class Panel {
       }
       sectionBodyEls.push(rowWrap)
       this.appendExpandRows(section, title, sectionBodyEls)
+
+      if (section.custom === 'stroke') {
+        // appendExpandRows just appended the ⋯ to the title and pushed expandWrap last —
+        // refreshFillStroke needs both to hide the whole fine-tune affordance on an empty stroke.
+        // The key is read off the spec (not a literal) so a spec rename can't silently break
+        // the expand-state restore on a remove→add round-trip (PR #20 review, finding 3).
+        this.strokeExpandKey = section.expandKey ?? null
+        this.strokeExpandBtn = title.querySelector<HTMLButtonElement>(`[data-expand="${section.expandKey}"]`)
+        this.strokeExpandWrap = sectionBodyEls[sectionBodyEls.length - 1]
+      }
 
       this.sectionEls.push({ spec: section, els: sectionBodyEls })
 
@@ -844,6 +895,100 @@ export class Panel {
     this.textRow = textRow
 
     return wrap
+  }
+
+  private buildFillAddButton(): HTMLButtonElement {
+    const btn = createButton({ label: '+' })
+    btn.setAttribute('data-add-fill', '')
+    btn.setAttribute('aria-label', 'Add fill')
+    btn.title = 'Add fill — drafts a default background-color the request turns into a bg-* class'
+    btn.hidden = true
+    btn.addEventListener('click', () => {
+      const el = this.el
+      if (!el) return
+      this.onBeforeEdit(el)
+      // #D9D9D9 is Figma's default fill gray — a deliberately-neutral starting point the
+      // color picker / nearest-token machinery immediately takes over from.
+      this.drafts.apply(el, 'background-color', '#D9D9D9')
+      this.refresh()
+      this.onEdited()
+    })
+    this.fillAddBtn = btn
+    return btn
+  }
+
+  private buildFillRemoveButton(): HTMLButtonElement {
+    const btn = createButton({ label: '−' })
+    btn.setAttribute('data-remove-fill', '')
+    btn.setAttribute('aria-label', 'Remove fill')
+    btn.title = 'Remove fill — the request becomes bg-transparent (background transparent)'
+    btn.hidden = true
+    btn.addEventListener('click', () => {
+      const el = this.el
+      if (!el) return
+      this.onBeforeEdit(el)
+      if (this.drafts.current(el, 'background-color') !== null) {
+        // Fill was added (or re-drafted) this session — pure undo, mirroring remove-auto-
+        // layout: targeted discard restores the recorded original; nothing to send.
+        this.drafts.discard(el, ['background-color'])
+      } else {
+        // Fill comes from the app's own CSS: draft transparent as the deterministic removal.
+        this.drafts.apply(el, 'background-color', 'transparent')
+      }
+      this.refresh()
+      this.onEdited()
+    })
+    this.fillRemoveBtn = btn
+    return btn
+  }
+
+  private buildStrokeAddButton(): HTMLButtonElement {
+    const btn = createButton({ label: '+' })
+    btn.setAttribute('data-add-stroke', '')
+    btn.setAttribute('aria-label', 'Add stroke')
+    btn.title = 'Add stroke — drafts a 1px solid border (border + border-solid)'
+    btn.hidden = true
+    btn.addEventListener('click', () => {
+      const el = this.el
+      if (!el) return
+      this.onBeforeEdit(el)
+      // Width + style only — color is left to compute (usually currentColor), so the new
+      // stroke is immediately visible without guessing at the project's palette.
+      for (const prop of BORDER_WIDTH_PROPS) this.drafts.apply(el, prop, '1px')
+      for (const prop of BORDER_STYLE_PROPS) this.drafts.apply(el, prop, 'solid')
+      this.refresh()
+      this.onEdited()
+    })
+    this.strokeAddBtn = btn
+    return btn
+  }
+
+  private buildStrokeRemoveButton(): HTMLButtonElement {
+    const btn = createButton({ label: '−' })
+    btn.setAttribute('data-remove-stroke', '')
+    btn.setAttribute('aria-label', 'Remove stroke')
+    btn.title = 'Remove stroke — the request tells the agent to drop border classes (border-none)'
+    btn.hidden = true
+    btn.addEventListener('click', () => {
+      const el = this.el
+      if (!el) return
+      this.onBeforeEdit(el)
+      if (BORDER_STYLE_PROPS.some((prop) => this.drafts.current(el, prop) !== null)) {
+        // Style is the anchor: adding a stroke always drafts it (directly or via
+        // draftSolidIfNone), while a width tweak on a fully-bordered element never does.
+        // Anchor drafted this session — pure undo of the whole stroke prop set.
+        this.drafts.discard(el, [...BORDER_WIDTH_PROPS, ...BORDER_STYLE_PROPS, ...BORDER_COLOR_PROPS])
+      } else {
+        // Stroke comes from the app's own CSS: draft border-style none as the removal
+        // (request builder → border-none); width/color drafts would contradict it — discard.
+        this.drafts.discard(el, [...BORDER_WIDTH_PROPS, ...BORDER_COLOR_PROPS])
+        for (const prop of BORDER_STYLE_PROPS) this.drafts.apply(el, prop, 'none')
+      }
+      this.refresh()
+      this.onEdited()
+    })
+    this.strokeRemoveBtn = btn
+    return btn
   }
 
   private buildStrokeSection(): HTMLElement {

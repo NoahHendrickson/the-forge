@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { alignSelfRowOn, marginSectionVisible, minMaxRowVisible, normalizeAlign } from '../../src/client/panel-readers'
+import { alignSelfRowOn, fillIsEmpty, marginSectionVisible, minMaxRowVisible, normalizeAlign, strokeIsEmpty } from '../../src/client/panel-readers'
 import { DraftStore } from '../../src/client/drafts'
 import type { TaggedElement } from '../../src/client/source'
 
@@ -88,5 +88,48 @@ describe('alignSelfRowOn', () => {
   })
   it('opened wins even when the draft would read as default', () => {
     expect(alignSelfRowOn('center', 'auto', true)).toBe(true)
+  })
+})
+
+describe('fillIsEmpty', () => {
+  it('transparent keyword and zero-alpha rgba are empty', () => {
+    expect(fillIsEmpty('transparent')).toBe(true)
+    expect(fillIsEmpty('rgba(0, 0, 0, 0)')).toBe(true)
+  })
+  it('an unset background (jsdom computes the empty string) is empty', () => {
+    expect(fillIsEmpty('')).toBe(true)
+  })
+  it('opaque and semi-transparent colors are not empty', () => {
+    expect(fillIsEmpty('rgb(255, 0, 0)')).toBe(false)
+    expect(fillIsEmpty('rgba(255, 0, 0, 0.5)')).toBe(false)
+  })
+})
+
+describe('strokeIsEmpty', () => {
+  const read = (styles: Record<string, string>) => (prop: string) => styles[prop] ?? ''
+
+  it('nothing authored is empty', () => {
+    expect(strokeIsEmpty(read({}))).toBe(true)
+  })
+  it('width without style is empty (border-style defaults to none)', () => {
+    expect(strokeIsEmpty(read({ 'border-top-width': '3px' }))).toBe(true)
+  })
+  it('style with an explicit zero width is empty', () => {
+    expect(
+      strokeIsEmpty(read({ 'border-top-style': 'solid', 'border-top-width': '0px' }))
+    ).toBe(true)
+  })
+  it('a single painting side (lone border-bottom divider) is NOT empty', () => {
+    expect(
+      strokeIsEmpty(read({ 'border-bottom-style': 'solid', 'border-bottom-width': '1px' }))
+    ).toBe(false)
+  })
+  it('explicit border-style: none on every side is empty regardless of widths', () => {
+    const styles: Record<string, string> = {}
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      styles[`border-${side}-style`] = 'none'
+      styles[`border-${side}-width`] = '2px'
+    }
+    expect(strokeIsEmpty(read(styles))).toBe(true)
   })
 })

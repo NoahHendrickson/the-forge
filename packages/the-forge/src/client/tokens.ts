@@ -362,6 +362,30 @@ const BORDER_WIDTH_SCALE: Record<number, string> = {
   8: 'border-8',
 }
 
+// border-style is a keyword enum (none/solid/dashed/dotted), not a scale or color — a flat
+// name lookup rather than the numeric-scale or color-token machinery below. Drives both the
+// stroke style <select> and the stroke − removal path (Fill/Stroke empty-states spec): the
+// removal drafts `border-style: none` on all four sides, which collapses to this same
+// `border-style` synthetic prop (COLLAPSE in request.ts) and must resolve to `border-none`,
+// not null, for the change request to carry an actual utility hint.
+const BORDER_STYLE_KEYWORDS: Record<string, string> = {
+  none: 'border-none',
+  solid: 'border-solid',
+  dashed: 'border-dashed',
+  dotted: 'border-dotted',
+}
+
+// Props that reach suggestUtility carrying a border-style value: the collapsed synthetic prop
+// (all four sides equal — the common case) plus the four longhands (unequal sides, so
+// request.ts's collapse() leaves them separate — see COLLAPSE in request.ts).
+const BORDER_STYLE_SUGGEST_PROPS = new Set([
+  'border-style',
+  'border-top-style',
+  'border-right-style',
+  'border-bottom-style',
+  'border-left-style',
+])
+
 // color-bearing props → utility prefix (kept separate from UTILITY_PREFIXES so
 // findExistingUtility can apply prop-specific suffix-shape guards for border-color)
 const COLOR_PREFIXES: Record<string, string> = {
@@ -464,6 +488,12 @@ export function suggestUtility(
   if (prop === 'font-weight') {
     if (theme.spacingBasePx === null) return null
     return suggestFontWeightUtility(css)
+  }
+
+  if (BORDER_STYLE_SUGGEST_PROPS.has(prop)) {
+    if (theme.spacingBasePx === null) return null
+    const utility = BORDER_STYLE_KEYWORDS[css.trim().toLowerCase()]
+    return utility ? { utility, tokenExact: true } : null
   }
 
   const prefix = UTILITY_PREFIXES[prop]
