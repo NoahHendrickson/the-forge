@@ -16,6 +16,8 @@ function make(
     onScrubStart: () => void
     onDetach: () => void
     onTokenOpen: () => void
+    valuesCount: number
+    onValuesInput: (values: number[]) => void
   }> = {}
 ) {
   const onInput = vi.fn()
@@ -639,5 +641,114 @@ describe('compressShorthand', () => {
     for (const v of [[16, 8], [9, 9]]) {
       expect(expandShorthand(compressShorthand(v), 2)).toEqual(v)
     }
+  })
+})
+
+describe('NumberField values state (comma per-side)', () => {
+  function makeValues(count: number, extra: Parameters<typeof make>[0] = {}) {
+    const onValuesInput = vi.fn()
+    const made = make({ min: 0, valuesCount: count, onValuesInput, ...extra })
+    return { ...made, onValuesInput }
+  }
+
+  it('setValues renders the compressed comma form and get() reports null', () => {
+    const { nf, input } = makeValues(4)
+    nf.setValues([16, 8, 16, 8])
+    expect(input.value).toBe('16,8')
+    expect(nf.get()).toBeNull()
+  })
+
+  it('typed comma list expands, clamps, re-renders, and fires onValuesInput', () => {
+    const { onValuesInput, onInput, input } = makeValues(4)
+    input.value = '16,8,4'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onValuesInput).toHaveBeenCalledWith([16, 8, 4, 8])
+    expect(onInput).not.toHaveBeenCalled()
+    expect(input.value).toBe('16,8,4')
+  })
+
+  it('clamps each side to min/max', () => {
+    const { onValuesInput, input } = makeValues(2)
+    input.value = '-4,8'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onValuesInput).toHaveBeenCalledWith([0, 8]) // min: 0
+  })
+
+  it('accepts negative literals when min allows (margins)', () => {
+    const onValuesInput = vi.fn()
+    const { input } = make({ valuesCount: 2, onValuesInput })
+    input.value = '-4,8'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onValuesInput).toHaveBeenCalledWith([-4, 8])
+  })
+
+  it('invalid comma entry reverts to the prior comma display', () => {
+    const { nf, onValuesInput, input } = makeValues(2)
+    nf.setValues([16, 8])
+    input.value = '1,2,3' // 3-on-2: invalid
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onValuesInput).not.toHaveBeenCalled()
+    expect(input.value).toBe('16,8')
+    input.value = '16,abc'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(input.value).toBe('16,8')
+  })
+
+  it('expressions are rejected inside comma lists', () => {
+    const { nf, onValuesInput, input } = makeValues(2)
+    nf.setValues([16, 8])
+    input.value = '+4,8'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onValuesInput).not.toHaveBeenCalled()
+    expect(input.value).toBe('16,8')
+  })
+
+  it('a comma in a field without valuesCount stays garbage → revert', () => {
+    const { nf, onInput, input } = make()
+    nf.set(10)
+    input.value = '16,8'
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(onInput).not.toHaveBeenCalled()
+    expect(input.value).toBe('10')
+  })
+
+  it('ArrowUp/ArrowDown step each side independently in values state', () => {
+    const { nf, onValuesInput, input } = makeValues(2)
+    nf.setValues([16, 8])
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+    expect(onValuesInput).toHaveBeenCalledWith([17, 9])
+    expect(input.value).toBe('17,9')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true }))
+    expect(onValuesInput).toHaveBeenLastCalledWith([7, 0]) // 17-10, max(0, 9-10)
+  })
+
+  it('label scrub moves each side by the drag delta from its own start value', () => {
+    const { nf, onValuesInput, label } = makeValues(2)
+    nf.setValues([16, 8])
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 110 }))
+    expect(onValuesInput).toHaveBeenLastCalledWith([26, 18])
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 90 })) // replaces, not accumulates
+    expect(onValuesInput).toHaveBeenLastCalledWith([6, 0])
+    window.dispatchEvent(new MouseEvent('mouseup', {}))
+  })
+
+  it('an unedited blur of the comma text keeps the display', () => {
+    const { nf, onValuesInput, input } = makeValues(2)
+    nf.setValues([16, 8])
+    input.dispatchEvent(new Event('change', { bubbles: true })) // value untouched
+    expect(onValuesInput).not.toHaveBeenCalled()
+    expect(input.value).toBe('16,8')
+  })
+
+  it('set() clears the values state (stale per-side baselines cannot leak)', () => {
+    const { nf, onValuesInput, input, label } = makeValues(2)
+    nf.setValues([16, 8])
+    nf.set(12)
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 105 }))
+    window.dispatchEvent(new MouseEvent('mouseup', {}))
+    expect(onValuesInput).not.toHaveBeenCalled() // absolute scrub path used instead
+    expect(input.value).toBe('17')
   })
 })
