@@ -46,7 +46,7 @@ Body `{ text: string, element?: { source: string, tag: string } }`.
 
 ### 2.4 `POST /__the-forge/session/config` (secret-gated)
 
-`{ model?, permissionMode?, effort? }`. Hard allowlists: `permissionMode ∈ {default, acceptEdits, plan}` — **`bypassPermissions` deliberately excluded** (it would silently disable the overlay approval gate); `effort` from the spike-pinned level set. Success pushes `config-changed` to the ring so every connected panel sees it.
+`{ model?, permissionMode?, effort? }`. Hard allowlists: `permissionMode ∈ {default, acceptEdits, plan}` — **`bypassPermissions` deliberately excluded** (it would silently disable the overlay approval gate); `effort ∈ {low, medium, high, xhigh, max}` (spike-pinned, §6.3 — CLI 2.1.201's `--effort` spawn-flag vocabulary; no `set_effort` control request exists, so an effort change requires `setEffort` to respawn with `--resume <session_id> --effort <level>`, per §2.3). Success pushes `config-changed` to the ring so every connected panel sees it.
 
 ### 2.5 `/status` addition
 
@@ -86,6 +86,42 @@ Cheap piped-turn probes, recorded outputs become adapter fixtures:
 2. `set_model` / `set_permission_mode` control-request + ack wire shapes.
 3. **Effort mechanism:** what the CLI exposes (control request vs. spawn flag) and the level vocabulary; if respawn-only, the picker respawns with `--resume` (session survives).
 4. Second user turn written mid-turn: does the CLI queue it cleanly? (Decides whether the FIFO may ever trust stdin buffering; default remains flush-on-turn-complete.)
+
+### 6.1 Findings — delta shapes (live CLI 2.1.201, 2026-07-09)
+
+Probe: `( echo '<user turn>'; sleep 20 ) | claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages`, asking for a 3-sentence reply. Fixtures: `STREAM_EVENT_*` and `ASSISTANT_*_SNAPSHOT` constants in `claude-chat-ndjson.ts`.
+
+- Envelope confirmed: `{"type":"stream_event","event":{...},"session_id","parent_tool_use_id","uuid"}`. `event.type` is the raw Anthropic-API streaming event name.
+- Order observed: `message_start` → `content_block_start`(index 0, `thinking`) → `content_block_delta`(`signature_delta`) → `content_block_stop`(0) → `content_block_start`(index 1, `text`) → N × `content_block_delta`(`text_delta`, the reply chunked across ~7 deltas) → `content_block_stop`(1) → `message_delta`(stop_reason + usage) → `message_stop`.
+- Text deltas map from `event.type === 'content_block_delta' && event.delta.type === 'text_delta'`, string at `event.delta.text`.
+- **Non-obvious finding:** `assistant` NDJSON lines under `--include-partial-messages` are NOT one cumulative snapshot — one arrives per content block as it finalizes, each carrying only that block's content (a thinking-only snapshot, then later a text-only snapshot with the same `message.id`/`request_id`). The adapter must key off the **last** `assistant` line carrying a `text` content block (immediately before `message_stop`) as the complete reply — not the first `assistant` line seen, and not by concatenating deltas across `assistant` lines.
+- The final complete `assistant` message (matching spec §2.3's existing claim) does still arrive with the full reply text — confirmed byte-identical to the `result` event's `result` field.
+
+### 6.2 Findings — config control requests (live CLI 2.1.201)
+
+Probes: a Node driver (`child_process`) held stdin open and wrote `control_request` lines, sometimes as literally the first stdin write (before any real chat turn) to test zero-cost boot behavior. Fixtures: `CONTROL_REQUEST_*` / `CONTROL_RESPONSE_*` / `SYSTEM_STATUS_*` / `USER_SYNTHETIC_SET_MODEL_ECHO` / `RESULT_AFTER_CONFIG_CHANGE`.
+
+- `set_model` request: `{"type":"control_request","request_id":"<uuid>","request":{"subtype":"set_model","model":"<model-id>"}}`. Ack: `{"type":"control_response","response":{"subtype":"success","request_id":"<uuid>"}}` — **no echo of the applied model** in the ack.
+- `set_permission_mode` request: `{"type":"control_request","request_id":"<uuid>","request":{"subtype":"set_permission_mode","mode":"acceptEdits"}}`. Ack: `{"type":"control_response","response":{"subtype":"success","request_id":"<uuid>","response":{"mode":"acceptEdits"}}}` — **does** echo the applied mode, asymmetric with `set_model`'s ack.
+- A `system`/`status` line (`{"type":"system","subtype":"status","permissionMode":"acceptEdits",...}`) follows a permission-mode change immediately, independent of any turn — confirms `config-changed` is observable without waiting for the next turn.
+- **Subsequent-turn confirmation:** ran both control requests then one real turn (`--model` flag omitted at spawn, so this only succeeds if `set_model` actually took effect) — the resulting `assistant`/`result` events carry `model: "claude-haiku-4-5-20251001"` and the turn completed cleanly under `acceptEdits`. Both control requests are confirmed live, not just acked.
+- **Quirk:** sending `set_model` as literally the first stdin line produces a synthetic `user` line echoing it as a fake slash-command result: `{"type":"user","message":{"role":"user","content":"<local-command-stdout>Set model to <model-id></local-command-stdout>"}}` — note `content` is a bare string here, not the `content: [{type:'text',...}]` array shape real chat turns use. This must never be mapped to a `user-text` ring event. `set_permission_mode` alone produced no such echo — this is `set_model`-specific.
+- **Boot-timing quirk (informational, not load-bearing):** when a `control_request` is the very first stdin write with no real chat turn following, `hook_started`/`init` system lines did not appear within a 12s observation window — they appear to be gated on the first *real* user turn being queued, not on process boot itself. Once a real turn was added afterward, hooks + `init` appeared before that turn's `assistant` output. Adapters should not assume `init` necessarily precedes a bare config-only session.
+
+### 6.3 Findings — effort mechanism (live CLI 2.1.201)
+
+- `claude --help` lists a spawn-time flag: `--effort <level>` — "Effort level for the current session (low, medium, high, xhigh, max)". This is the full level vocabulary, now reflected in §2.4's allowlist.
+- Probed `{"subtype":"set_effort","effort":"high"}` as a `control_request`: response is `{"type":"control_response","response":{"subtype":"error","request_id":"<uuid>","error":"Unsupported control request subtype: set_effort"}}`.
+- Retried with a nonsense subtype (`bogus_probe_subtype`) to check whether the error enumerates valid subtypes: same generic error shape, no enumeration — so no further field-name variants were worth trying (the subtype itself is unrecognized, not a parameter-shape mismatch).
+- **Verdict: no control-request effort mechanism exists in CLI 2.1.201. Effort is spawn-flag-only.** Per the brief's decision rule, `ClaudeAdapter.setEffort(level)` (§2.3) must take the respawn branch: kill and restart the CLI child with `--resume <session_id> --effort <level>`, not a stdin control write. `set_model`/`set_permission_mode` both use the control-request branch (§6.2).
+
+### 6.4 Findings — mid-turn second user turn (live CLI 2.1.201)
+
+Probe: wrote a slow first turn ("Count to 30 slowly, one number per line"), then wrote a second turn ("Reply with exactly: second") ~2s later, into the same held-open stdin, well before the first turn's `result` arrived. Fixtures: `RESULT_FIRST_TURN_BEFORE_SECOND_WRITTEN`, `SYSTEM_INIT_RECURS_BEFORE_SECOND_TURN`, `RESULT_SECOND_TURN_CLEAN`.
+
+- **Verdict: harmless.** The CLI queued the second turn cleanly. No interleaving of the two replies, no error, nothing dropped. The second turn's own `assistant`/`result` events only began after the first turn's `result` event had already been emitted; both `result` events shared the same `session_id`.
+- **Side finding:** a fresh `system`/`init` line recurred immediately before the second turn's output — `init` is **not** a once-per-process event in this CLI version, it recurs per turn. Adapters must treat `init` as idempotent/repeatable, not as a one-time boot signal.
+- This confirms an already-written race (manager writes turn N+1 to stdin slightly before turn N's `result` arrives) is documentation-only, not a guard-required hazard — the CLI's own stdin queuing absorbs it. The manager keeps flush-on-turn-complete as its primary FIFO discipline regardless (§2.2); this finding only means a stray write wouldn't corrupt the stream if the discipline were ever violated.
 
 ## 7. Testing
 
