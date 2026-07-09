@@ -1,7 +1,7 @@
 # Embedded agent sessions — design doc
 
 **Date:** 2026-07-09
-**Status:** Ratified (2026-07-09) — milestone A implemented on `idea/chat`; live-CLI E2E deferred to post-Jul-12 limit reset
+**Status:** Ratified (2026-07-09) — milestone A implemented on `idea/chat`; **live-CLI E2E PASSED 2026-07-09** (limits had headroom before the Jul 12 reset): Send→Implemented zero-terminal, Bash approval round-trip (allow + timeout-deny), mid-turn kill+`--resume` recovery, Next sidecar streaming (23ms latency through the rewrites proxy — no buffering). Three live findings fixed same-day: lazy-boot deadlock (§3.1), stale-resume bricking, user-permission-mode bypass (§3.3).
 **Research:** [docs/research/2026-07-09-embedded-sessions.md](../research/2026-07-09-embedded-sessions.md) (harness survey, wire formats, live smoke test, user-ratified decisions)
 
 ## 1. Overview
@@ -54,11 +54,13 @@ browser overlay ── POST /__the-forge/session/* ──────┐   (X-Fo
 ```
 claude -p --input-format stream-json --output-format stream-json --verbose \
   [--resume <session_id>] \
+  --permission-mode default \
   --permission-prompt-tool mcp__the-forge__approve \
   --allowedTools <edit-tier allow rules>
 ```
 
-  Never `--bare` (it skips auth *and* the harness — smoke-tested). No `--model` in v1 (user's default).
+  Never `--bare` (it skips auth *and* the harness — smoke-tested). No `--model` in v1 (user's default). `--permission-mode default` pins the overlay-gating posture against the user's own global defaultMode (live finding: 'auto' auto-clears Bash before the prompt tool is consulted).
+- **Lazy boot (live finding, 2.1.201):** with stdin open but silent, the CLI emits NOTHING — no hooks, no init — until the first stdin line arrives. The manager therefore writes the pull turn IMMEDIATELY at spawn (the CLI buffers stdin during boot); waiting for init before sending deadlocks. `started` arriving mid-turn is bookkeeping only. Boot chatter (hook lines) maps to a non-rendered `activity` heartbeat so the watchdog doesn't read a slow boot as a stall.
 - **Watchdog:** no stdout event for `WATCHDOG_MS` (120s) while `busy` → kill → respawn with `--resume` → re-send the turn (open CLI hang bug #53584). Crash/EOF mid-turn takes the same path. Feed shows a "session recovered" row. **Approval-aware:** the watchdog is fully suspended while an approval is parked in the overlay (a human deciding is not a hung CLI; the registry's hold timer bounds the wait), and an ALLOW re-arms with the longer `POST_APPROVAL_WATCHDOG_MS` (10 min) leash — an approved build/test emits nothing on stdout until its `tool_result`, and the normal leash would kill it mid-command and re-run it on recovery.
 - **Persistence:** `session_id` (from the `init` event) saved to `.the-forge/session.json`; dev-server restart resumes the same conversation. Kill the child on dev-server close (both frameworks' close hooks already manage endpoint-file lifecycle — same place).
 - **Errors are in-band** (smoke-tested): rate-limit and auth failures arrive as normal `result` events with `is_error: true` + readable text, exit code 0. The manager surfaces them as feed rows (e.g. "Weekly limit reached, resets Jul 12") and parks the session; it does not retry-loop.
@@ -117,7 +119,8 @@ Queue, `mark_applied`, verifier: untouched. The embedded agent is a normal MCP c
 ### 3.6 Security
 
 - All `/session/*` endpoints (including the event stream) require `X-Forge-Secret`; same Origin/Host + DNS-rebinding gates as every existing endpoint.
-- The child process has write access to the repo — the approval gate is the control; Bash is never auto-allowed. Turn text sent to the child is constant (the pull instruction) or, later (milestone B), user-typed chat — never derived from request/DOM content.
+- The child process has write access to the repo — the approval gate is the control; Bash is never auto-allowed *by us* (`--permission-mode default` pins this against the user's own global mode). Nuance (live-verified): the CLI's sandbox tier still runs safe read-only commands (`echo`, `ls`) without prompting in every mode — deliberate CLI behavior, not a gate bypass; anything touching state outside the sandbox (e.g. a write outside the project) reliably hits the overlay Allow/Deny. Turn text sent to the child is constant (the pull instruction) or, later (milestone B), user-typed chat — never derived from request/DOM content.
+- Prompt-injection posture (observed live, unprompted): asked via a design-prompt queue item to run a shell command, the embedded agent refused and marked the item failed — the pull instruction's "apply each request exactly as written" framing plus the agent's own judgment held the line.
 - Interrupt/stop endpoints are mutating → secret-gated like the rest.
 
 ## 4. Milestones

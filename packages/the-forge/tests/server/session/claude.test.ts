@@ -151,6 +151,12 @@ describe('ClaudeAdapter', () => {
       expect(CLAUDE_ARGS).toContain('--verbose')
       expect(CLAUDE_ARGS).toContain('--permission-prompt-tool')
       expect(CLAUDE_ARGS).not.toContain('--bare')
+      // Pins the ratified overlay-gating posture against the user's global defaultMode:
+      // without this, a user-level 'auto'/'bypassPermissions' mode auto-clears Bash
+      // before the permission-prompt-tool is ever consulted (observed live, 2.1.201).
+      const modeIdx = CLAUDE_ARGS.indexOf('--permission-mode')
+      expect(modeIdx).toBeGreaterThan(-1)
+      expect(CLAUDE_ARGS[modeIdx + 1]).toBe('default')
 
       expect(EDIT_TIER_ALLOW).toEqual([
         'Read',

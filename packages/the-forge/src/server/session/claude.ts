@@ -34,6 +34,11 @@ export const EDIT_TIER_ALLOW: string[] = [
 // --bare must NEVER be added: it skips auth AND the stream-json harness, confirmed broken in
 // the live smoke test. --resume is not included here; start() appends it when needed.
 // --model is omitted intentionally: the user's own default model is used, not a pinned one.
+// --permission-mode default pins the ratified overlay-gating posture against the user's own
+// global defaultMode: observed live (2.1.201), a user-level 'auto' mode auto-clears Bash
+// before the permission-prompt-tool is ever consulted — the overlay Allow/Deny would simply
+// never appear. Sandboxed safe commands (echo, ls) still run without prompting in EVERY
+// mode; that's the CLI's own sandbox tier, not a gap in the gate.
 export const CLAUDE_ARGS: string[] = [
   '-p',
   '--input-format',
@@ -41,6 +46,8 @@ export const CLAUDE_ARGS: string[] = [
   '--output-format',
   'stream-json',
   '--verbose',
+  '--permission-mode',
+  'default',
   '--permission-prompt-tool',
   'mcp__the-forge__approve',
   '--allowedTools',
