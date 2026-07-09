@@ -75,8 +75,11 @@ export function createForgeRuntime(resolvedRoot: string, viteRoot?: string): For
   })
   const manager = new SessionManager({
     // Production default: ClaudeAdapter. Task 5 (vite.ts / sidecar.ts) wires this in;
-    // this default is what callers get if they don't override the factory.
-    makeAdapter: () => new ClaudeAdapter(),
+    // this default is what callers get if they don't override the factory. `opts.effort`
+    // (threaded by SessionManager on every spawn) becomes ClaudeAdapter's constructor-time
+    // spawn flag — see ClaudeAdapter's constructor why-comment (spike: spawn-flag-only,
+    // no set_effort control request).
+    makeAdapter: (opts) => new ClaudeAdapter(undefined, opts),
     forgeDir,
     cwd: resolvedRoot,
   })

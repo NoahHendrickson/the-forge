@@ -105,6 +105,12 @@ export class ClaudeAdapter implements SessionAdapter {
   onEvent: (e: SessionEvent) => void = () => {}
 
   private readonly spawnFn: SpawnFn
+  // Spike verdict (Task 1, confirmed live CLI 2.1.201): effort has no set_effort control
+  // request — it's a spawn-flag-only knob (`--effort <level>`). A manager-owned effort
+  // change therefore kills this adapter and constructs a FRESH one via makeAdapter(opts)
+  // (manager.ts's per-spawn factory pattern) rather than mutating a live instance, so the
+  // flag is captured once here at construction time and applied in start()'s args.
+  private readonly effort: string | undefined
   private child: SpawnedChild | null = null
   // closed: set on stop() — prevents processing late stdout events after stop()
   private closed = false
@@ -113,14 +119,18 @@ export class ClaudeAdapter implements SessionAdapter {
   // stderrBuf: last ~500 chars of stderr, included in spawn-error/exit text if nonempty
   private stderrBuf = ''
 
-  constructor(spawnFn: SpawnFn = defaultSpawnFn) {
+  constructor(spawnFn: SpawnFn = defaultSpawnFn, opts?: { effort?: string }) {
     this.spawnFn = spawnFn
+    this.effort = opts?.effort
   }
 
   start(opts: { cwd: string; resumeId?: string }): void {
     const args = [...CLAUDE_ARGS]
     if (opts.resumeId) {
       args.push('--resume', opts.resumeId)
+    }
+    if (this.effort) {
+      args.push('--effort', this.effort)
     }
 
     const child = this.spawnFn('claude', args, { cwd: opts.cwd })

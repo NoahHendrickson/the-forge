@@ -38,9 +38,31 @@ export const MAX_START_FAILURES = 3
 export const PULL_TURN_TEXT: string =
   'New design edits are queued. Call the the-forge MCP tool pull_design_edits, apply each request exactly as written, then call mark_applied. Do not run the app, take screenshots, or preview the result.'
 
+/** Max chat turns parked while busy/starting. A single slot suffices for the pull nudge
+ * (pull claims everything), but chat is free-form user text — unbounded queueing would let
+ * a fast-typing user pile up an unbounded backlog the CLI has to work through one at a time.
+ * 20 is generous headroom for a burst of quick messages without being unbounded. */
+export const CHAT_QUEUE_CAP = 20
+
+/** say() result — queue-full is the only rejection (composing/sending never fails locally). */
+export type SayResult = { ok: true } | { ok: false; reason: 'queue-full' }
+
+/** setConfig() result — effort changes while a turn is live are rejected rather than killing
+ * it; the endpoint turns this into a 409 so the caller can retry once the turn completes. */
+export type SetConfigResult = { ok: true } | { ok: false; reason: 'busy' }
+
+/** Pre-validated by the endpoint — the element the user had selected when they sent a chat
+ * message, rendered as a trailing line in the composed turn text. */
+export interface ElementRef {
+  source: string
+  tag: string
+}
+
 export interface SessionManagerOpts {
-  /** Injectable factory — tests pass a fake, production passes () => new ClaudeAdapter(). */
-  makeAdapter: () => SessionAdapter
+  /** Injectable factory — tests pass a fake, production passes (opts) => new
+   * ClaudeAdapter(undefined, opts). `opts.effort` threads the spike-confirmed spawn-flag-only
+   * effort level (see ClaudeAdapter's constructor why-comment) into each fresh spawn. */
+  makeAdapter: (opts?: { effort?: string }) => SessionAdapter
   /** .the-forge/ dir — session.json home. Created lazily (mkdirSync recursive). */
   forgeDir: string
   /** resolveProjectRoot() — child process cwd. */
@@ -136,6 +158,22 @@ export class SessionManager {
   // at most one follow-up pull turn.
   private _nudgePending = false
 
+  // FIFO of composed chat turns parked while busy/starting (say(), CHAT_QUEUE_CAP-bounded).
+  // A plain field, deliberately untouched by _start()/_respawn() — it survives a respawn
+  // (watchdog fire, ended-while-busy, stale-resume retry); only stop() clears it.
+  private _chatQueue: string[] = []
+
+  // The exact turn text most recently written to the adapter's stdin. Recovery paths
+  // (watchdog fire, ended-while-busy, stale-resume retry) re-send THIS, not always
+  // PULL_TURN_TEXT — a chat turn that dies mid-flight must come back as itself, or a
+  // user's message silently turns into an unrelated pull nudge on the retry.
+  private _inflightTurn: string = PULL_TURN_TEXT
+
+  // The --effort level threaded into every future makeAdapter() call. Set by setConfig();
+  // consumed by _start()/_respawn(). Effort has no control-request on the CLI (spike,
+  // Task 1) — it's spawn-flag-only, so this is the ONLY way an effort change takes hold.
+  private _spawnEffort: string | undefined = undefined
+
   // Ring buffer: fixed-capacity circular store.
   private _ring: FeedEvent[] = []
   private _seq = 0
@@ -180,7 +218,7 @@ export class SessionManager {
         this._start()
         if (this._nudgePending) {
           this._nudgePending = false
-          this._sendTurn()
+          this._sendTurnText(PULL_TURN_TEXT)
         }
         break
       case 'starting':
@@ -188,7 +226,7 @@ export class SessionManager {
         this._nudgePending = true
         break
       case 'ready':
-        this._sendTurn()
+        this._sendTurnText(PULL_TURN_TEXT)
         break
       case 'busy':
         // Park exactly one nudge; extra calls are deduplicated.
@@ -203,6 +241,85 @@ export class SessionManager {
 
   interrupt(): void {
     this._adapter?.interrupt()
+  }
+
+  /** Composes text + an optional element line, rings it as `user-text` immediately (the
+   * message appears in every panel now, whatever the state), then either sends it right
+   * away or parks it in the chat FIFO:
+   * - `ready` → send immediately.
+   * - `busy`/`starting` → cap-checked enqueue in `_chatQueue` (rejected calls ring
+   *   NOTHING — the cap check runs BEFORE the ring push, so a queue-full reply is a true
+   *   no-op from the caller's perspective).
+   * - `idle`/`failed` → auto-start + send immediately, same lazy-boot send-at-spawn
+   *   pattern as notifyDesignEdits (the CLI emits nothing until the first stdin line, so
+   *   writing the turn before `started` arrives is safe). */
+  say(text: string, element?: ElementRef): SayResult {
+    const composed =
+      text + (element ? `\n\n[Selected element: ${element.source} <${element.tag}>]` : '')
+
+    switch (this._state) {
+      case 'busy':
+      case 'starting':
+        if (this._chatQueue.length >= CHAT_QUEUE_CAP) {
+          return { ok: false, reason: 'queue-full' }
+        }
+        this._push({ kind: 'user-text', text, element })
+        this._chatQueue.push(composed)
+        return { ok: true }
+
+      case 'ready':
+        this._push({ kind: 'user-text', text, element })
+        this._sendTurnText(composed)
+        return { ok: true }
+
+      case 'idle':
+      case 'failed':
+        this._push({ kind: 'user-text', text, element })
+        this._start()
+        this._sendTurnText(composed)
+        return { ok: true }
+
+      default: {
+        const _: never = this._state
+        void _
+        return { ok: false, reason: 'queue-full' }
+      }
+    }
+  }
+
+  /** Applies model/permissionMode via live control-request writes (safe mid-turn — the CLI
+   * acks these regardless of busy state) and effort via a respawn-on-next-turn scheme
+   * (spike, Task 1: no set_effort control request exists — it's spawn-flag-only).
+   *
+   * Effort while busy is rejected outright (`{ok:false, reason:'busy'}`, the endpoint's 409)
+   * rather than killing a live turn. Effort while NOT busy does NOT eagerly respawn: the
+   * lazy-boot CLI emits nothing until the first stdin line, so spawning right now would boot
+   * a silently parked child with no turn to send. Instead: stop the live adapter (state ->
+   * idle) if one exists, record the new level in `_spawnEffort`, and let the NEXT say()/
+   * notifyDesignEdits auto-start with `--effort <level>` through the normal send-at-spawn
+   * path — `--resume <id>` (persisted in session.json) keeps the conversation intact. */
+  setConfig(cfg: { model?: string; permissionMode?: string; effort?: string }): SetConfigResult {
+    if (cfg.effort !== undefined && this._state === 'busy') {
+      return { ok: false, reason: 'busy' }
+    }
+
+    if (cfg.model !== undefined) {
+      this._adapter?.setModel(cfg.model)
+    }
+    if (cfg.permissionMode !== undefined) {
+      this._adapter?.setPermissionMode(cfg.permissionMode)
+    }
+    if (cfg.effort !== undefined) {
+      this._spawnEffort = cfg.effort
+      if (this._adapter) {
+        this._cancelWatchdog()
+        this._discardAdapter()?.stop()
+        this._state = 'idle'
+      }
+    }
+
+    this._push({ kind: 'config-changed', ...cfg })
+    return { ok: true }
   }
 
   /** An approval is parked in the overlay — suspend the watchdog entirely. A human
@@ -227,6 +344,13 @@ export class SessionManager {
   stop(): void {
     this._cancelWatchdog()
     this._nudgePending = false
+    // Dev-server close — any chat backlog belongs to the session we're tearing down; a
+    // fresh session must not silently replay a stranger's queued messages.
+    this._chatQueue = []
+    // Reset to the empty string, not PULL_TURN_TEXT — that constant is a specific real turn,
+    // not a "nothing in flight" sentinel; every live path overwrites this before it's ever
+    // read again (the next _sendTurnText call, from whichever send path runs next).
+    this._inflightTurn = ''
     // Outstanding approvals belong to the child we just killed; their eventual registry
     // resolutions must not leave a fresh session's watchdog permanently suspended.
     this._pendingApprovals = 0
@@ -270,7 +394,7 @@ export class SessionManager {
     const resumeId = fresh ? undefined : readSessionFile(this._opts.forgeDir)?.sessionId
     this._lastStartResumeId = resumeId
     this._sawStarted = false
-    const adapter = this._opts.makeAdapter()
+    const adapter = this._opts.makeAdapter({ effort: this._spawnEffort })
     this._adapter = adapter
     adapter.onEvent = (e) => this._onAdapterEvent(e)
     // State before start(): an adapter emitting `started` synchronously inside
@@ -279,8 +403,13 @@ export class SessionManager {
     adapter.start({ cwd: this._opts.cwd, resumeId })
   }
 
-  private _sendTurn(): void {
-    this._adapter?.sendTurn(PULL_TURN_TEXT)
+  /** Generalized send: writes `text` to the adapter, records it as the in-flight turn (so
+   * a recovery respawn re-sends THIS turn, not always the pull nudge — see `_inflightTurn`),
+   * and arms the busy watchdog. The pull path calls this with PULL_TURN_TEXT; say() calls
+   * it with the composed chat turn. */
+  private _sendTurnText(text: string): void {
+    this._adapter?.sendTurn(text)
+    this._inflightTurn = text
     this._state = 'busy'
     this._armWatchdog()
   }
@@ -298,6 +427,18 @@ export class SessionManager {
       return
     }
 
+    if (event.kind === 'assistant-delta') {
+      // Ephemeral token-by-token preview — fans to live subscribers only, seq 0 marks it
+      // as not-ring-backed (never lands in eventsSince()/replay, unlike every other event
+      // kind). Clients must not regress `lastSeq` on a seq-0 event — the final complete
+      // assistant-text still arrives separately with a real seq once the block finishes.
+      const fe: FeedEvent = { seq: 0, at: new Date(this._clock()).toISOString(), event }
+      for (const fn of this._subscribers) {
+        fn(fe)
+      }
+      return
+    }
+
     this._push(event)
 
     switch (event.kind) {
@@ -311,7 +452,7 @@ export class SessionManager {
           this._state = 'ready'
           if (this._nudgePending) {
             this._nudgePending = false
-            this._sendTurn()
+            this._sendTurnText(PULL_TURN_TEXT)
           }
         }
         // While busy (the normal path: pull turn written at spawn, init arrives
@@ -329,9 +470,16 @@ export class SessionManager {
             clearSessionFile(this._opts.forgeDir)
             this._lastSessionId = undefined
             this._push({ kind: 'session-error', text: 'stale session id — starting fresh' })
-            this._nudgePending = false // the recovery pull below supersedes any parked nudge
+            // Same nudge-preservation rule as _respawn(): only a resent PULL turn makes a
+            // separately parked nudge redundant. A resent CHAT turn leaves a real parked
+            // nudge alone — it flushes on this retry's own completion.
+            if (this._inflightTurn === PULL_TURN_TEXT) {
+              this._nudgePending = false
+            }
             this._start(true)
-            this._sendTurn()
+            // Re-send whichever turn actually died (pull OR chat) — not unconditionally
+            // PULL_TURN_TEXT, or a user's chat message would silently turn into a pull nudge.
+            this._sendTurnText(this._inflightTurn)
             break
           }
           // Error turn → failed. A later Send retries via auto-start — no retry loop here
@@ -341,7 +489,13 @@ export class SessionManager {
           this._state = 'ready'
           if (this._nudgePending) {
             this._nudgePending = false
-            this._sendTurn()
+            this._sendTurnText(PULL_TURN_TEXT)
+          } else if (this._chatQueue.length > 0) {
+            // Flush order: the parked pull nudge always wins (pull claims everything, so
+            // it's the time-sensitive one) — only once no nudge is pending does the next
+            // queued chat turn go out. One turn per completion, same as the nudge.
+            const next = this._chatQueue.shift() as string
+            this._sendTurnText(next)
           }
         }
         break
@@ -390,15 +544,20 @@ export class SessionManager {
       case 'assistant-text':
       case 'tool-started':
       case 'tool-finished':
+        // Already pushed to ring above; no state transition needed.
+        break
+
       case 'user-text':
-      case 'assistant-delta':
+        // Defensive only — the manager itself produces every user-text event (say() pushes
+        // it directly), never the adapter. An adapter emitting this would be unexpected
+        // (real adapters only echo assistant/tool output), so this arm exists purely to
+        // keep the switch exhaustive; it's already been pushed to the ring above.
+        break
+
       case 'config-changed':
-        // Events already pushed to ring; no state transition needed. user-text/
-        // assistant-delta/config-changed are new SessionEvent kinds (Task 2 — adapter
-        // deltas/edit payloads/config controls); this arm only keeps the switch exhaustive.
-        // Task 3 owns their real behavior (assistant-delta subscriber-only fan-out without
-        // ringing, user-text produced by the manager itself, config-changed's server
-        // endpoint wiring).
+        // setConfig() pushes this event directly (manager-produced, mirrors user-text) —
+        // an adapter emitting it would be unexpected. Already pushed to the ring above;
+        // this arm only keeps the switch exhaustive.
         break
 
       default: {
@@ -409,9 +568,9 @@ export class SessionManager {
   }
 
   /** Watchdog expiry: kill the stalled adapter, synthesize a recovery row, and respawn.
-   * Re-pulling is safe: unclaimed items and stale-claim items re-deliver, so no edits
-   * are lost. The parked-nudge slot is not checked here — we always re-send PULL_TURN_TEXT
-   * on respawn (the turn that died was itself a pull turn). */
+   * Re-pulling (when the in-flight turn was a pull) is safe: unclaimed items and
+   * stale-claim items re-deliver, so no edits are lost. A stalled CHAT turn re-sends
+   * itself instead — see `_inflightTurn` and `_respawn`. */
   private _onWatchdogFired(): void {
     this._watchdog = null
     // Detach BEFORE stop(): a real process adapter emits `ended` asynchronously
@@ -424,23 +583,30 @@ export class SessionManager {
   }
 
   /** Spawn a fresh adapter (re-using the last sessionId for --resume) and re-send
-   * PULL_TURN_TEXT immediately (lazy-boot CLI — see notifyDesignEdits). Used by both
-   * the watchdog and the ended-while-busy path. The parked nudge is cleared — the
-   * recovery pull supersedes it. */
+   * `_inflightTurn` immediately (lazy-boot CLI — see notifyDesignEdits). Used by both
+   * the watchdog and the ended-while-busy path. */
   private _respawn(): void {
     const resumeId = this._lastSessionId ?? readSessionFile(this._opts.forgeDir)?.sessionId
     this._lastStartResumeId = resumeId
     this._sawStarted = false
-    const adapter = this._opts.makeAdapter()
+    const adapter = this._opts.makeAdapter({ effort: this._spawnEffort })
     this._adapter = adapter
-    this._nudgePending = false
+    // The parked nudge is cleared ONLY when the turn we're about to re-send is itself the
+    // pull turn — a fresh pull already covers everything a nudge would ask for, same as
+    // before Task 3. If the in-flight turn was a CHAT turn (say()) instead, a separately
+    // parked nudge is a distinct, still-legitimate pull request — clearing it here would
+    // silently drop queued design edits; it survives and flushes on the resent turn's own
+    // completion (the normal nudge-before-chat-queue flush order in the turn-complete arm).
+    if (this._inflightTurn === PULL_TURN_TEXT) {
+      this._nudgePending = false
+    }
     adapter.onEvent = (e) => this._onAdapterEvent(e)
     // State before start() — same synchronous-started ordering rule as _start().
     this._state = 'starting'
     adapter.start({ cwd: this._opts.cwd, resumeId })
-    // Recovery pull goes out immediately — the lazy-boot CLI emits nothing until the
+    // Recovery send goes out immediately — the lazy-boot CLI emits nothing until the
     // first stdin line, so waiting for started would deadlock the respawn too.
-    this._sendTurn()
+    this._sendTurnText(this._inflightTurn)
   }
 
   private _push(event: SessionEvent): void {

@@ -158,6 +158,40 @@ describe('ClaudeAdapter', () => {
       expect(args[args.indexOf('--resume') + 1]).toBe('abc-123')
     })
 
+    it('appends --effort <level> when constructed with an effort option (spike: spawn-flag-only)', () => {
+      const { spawnFn, lastArgs } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn, { effort: 'high' })
+      adapter.onEvent = () => {}
+      adapter.start({ cwd: '/my/project' })
+
+      const { args } = lastArgs()
+      expect(args).toContain('--effort')
+      expect(args[args.indexOf('--effort') + 1]).toBe('high')
+    })
+
+    it('does not append --effort when no effort option is given', () => {
+      const { spawnFn, lastArgs } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      adapter.onEvent = () => {}
+      adapter.start({ cwd: '/my/project' })
+
+      const { args } = lastArgs()
+      expect(args).not.toContain('--effort')
+    })
+
+    it('combines --resume and --effort when both are given', () => {
+      const { spawnFn, lastArgs } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn, { effort: 'xhigh' })
+      adapter.onEvent = () => {}
+      adapter.start({ cwd: '/my/project', resumeId: 'abc-123' })
+
+      const { args } = lastArgs()
+      expect(args).toContain('--resume')
+      expect(args[args.indexOf('--resume') + 1]).toBe('abc-123')
+      expect(args).toContain('--effort')
+      expect(args[args.indexOf('--effort') + 1]).toBe('xhigh')
+    })
+
     it('CLAUDE_ARGS includes all required flags and EDIT_TIER_ALLOW is the ratified set', () => {
       expect(CLAUDE_ARGS).toContain('-p')
       expect(CLAUDE_ARGS).toContain('--input-format')
