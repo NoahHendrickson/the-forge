@@ -5,6 +5,7 @@ import { Queue } from './queue'
 import { dispatch as realDispatch, augmentDispatchMarkdown, type DispatchOpts, type DispatchResult } from './dispatch'
 import { WatcherHub } from './watchers'
 import { ensureDevtoolsUuid } from './setup'
+import type { ForgeSessionHandles } from './runtime'
 
 /** Chrome DevTools' Automatic Workspace Folders well-known path (task A5) — served by
  * createForgeMiddleware below and proxied to it by src/next/index.ts's rewrites merge.
@@ -113,6 +114,8 @@ function rejectDisallowedHost(
 
 // Mutating endpoints that require the shared secret when one is configured. GET /status is
 // deliberately excluded: it's read-only and only exposes ids/statuses, which are non-sensitive.
+// GET /session/events is also excluded here (it's not a POST) but is secret-gated explicitly
+// in its own handler — see why-comment there.
 const MUTATING_PATHS = new Set([
   '/__the-forge/queue',
   '/__the-forge/pull',
@@ -120,6 +123,9 @@ const MUTATING_PATHS = new Set([
   '/__the-forge/dispatch',
   '/__the-forge/wait',
   '/__the-forge/unwatch',
+  '/__the-forge/session/interrupt',
+  '/__the-forge/approval',
+  '/__the-forge/approval/decide',
 ])
 
 export interface DispatchConfig {
@@ -134,6 +140,12 @@ export interface DispatchConfig {
   /** Injectable for tests — defaults to the real dispatch ladder (dispatch.ts). Never invokes
    * a real tmux/osascript/open in tests; production callers omit this and get the real thing. */
   dispatchFn?: (opts: DispatchOpts) => Promise<DispatchResult>
+  /** Policy escape hatch (research doc §Billing): `false` disables the embedded-session rung
+   * entirely — Sends use only the watcher/keystroke ladder, and nothing ever spawns a headless
+   * CLI. Default true (embedded is the primary path, ratified 2026-07-09); exists so a consumer
+   * can opt back to terminal-only dispatch without a plugin release if Anthropic's headless
+   * posture flips. */
+  embedded?: boolean
 }
 
 export function createForgeMiddleware(
@@ -141,7 +153,11 @@ export function createForgeMiddleware(
   allowedHosts: string[] = [],
   secret?: string,
   dispatchConfig: DispatchConfig = { agent: 'claude-code', channelsFlag: false },
-  hub?: WatcherHub
+  hub?: WatcherHub,
+  // Optional so existing callers/tests stand unchanged — same pattern as the optional hub
+  // param above. The plugin (src/vite.ts / src/next/sidecar.ts) passes one explicitly once
+  // Task 5 wires it; until then all callers that omit it get 404s on the new session paths.
+  session?: ForgeSessionHandles
 ) {
   // Optional param so existing callers/tests stand unchanged; the plugin (src/index.ts)
   // constructs and passes one explicitly so the wiring is visible at the composition root.
@@ -219,6 +235,56 @@ export function createForgeMiddleware(
       }
     }
 
+    // GET /session/events — secret-gated despite being a GET. Events carry file paths and
+    // command text, making them more sensitive than /status (which only exposes ids/statuses).
+    // Deliberate asymmetry with /status's open GET: the browser client uses fetch() rather than
+    // EventSource precisely so it can attach the X-Forge-Secret header on this request.
+    // MUTATING_PATHS covers POST-only; this GET needs its own explicit gate.
+    if (req.method === 'GET' && pathname === '/__the-forge/session/events') {
+      if (secret) {
+        const provided = req.headers['x-forge-secret']
+        if (provided !== secret) {
+          return send(res, 403, { error: 'missing or invalid X-Forge-Secret' })
+        }
+      }
+      if (!session) return send(res, 404, { error: 'embedded session unavailable' })
+
+      const sinceParam = new URLSearchParams(query).get('since')
+      const since = typeof sinceParam === 'string' && /^\d+$/.test(sinceParam) ? parseInt(sinceParam, 10) : 0
+
+      res.statusCode = 200
+      res.setHeader('Content-Type', 'application/x-ndjson')
+      // Flush headers immediately so the client sees 200 + Content-Type before the first line.
+      ;(res as ServerResponse & { flushHeaders?: () => void }).flushHeaders?.()
+
+      // Replay buffered feed events
+      for (const fe of session.manager.eventsSince(since)) {
+        res.write(JSON.stringify({ type: 'feed', seq: fe.seq, at: fe.at, event: fe.event }) + '\n')
+      }
+      // Replay pending approvals — a late-connecting browser doesn't miss outstanding requests
+      for (const pa of session.approvals.pending()) {
+        res.write(JSON.stringify({ type: 'approval', id: pa.id, toolName: pa.toolName, detail: pa.detail }) + '\n')
+      }
+
+      // Subscribe for live events; unsubscribe on connection close so nothing leaks
+      const unsubManager = session.manager.subscribe((fe) => {
+        res.write(JSON.stringify({ type: 'feed', seq: fe.seq, at: fe.at, event: fe.event }) + '\n')
+      })
+      const unsubApprovals = session.onApproval((e) => {
+        if (e.kind === 'approval-request') {
+          res.write(JSON.stringify({ type: 'approval', id: e.id, toolName: e.toolName, detail: e.detail }) + '\n')
+        } else {
+          res.write(JSON.stringify({ type: 'approval-resolved', id: e.id, allow: e.allow }) + '\n')
+        }
+      })
+
+      res.on('close', () => {
+        unsubManager()
+        unsubApprovals()
+      })
+      return
+    }
+
     if (pathname === '/__the-forge/queue') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
       readBody(req)
@@ -286,6 +352,45 @@ export function createForgeMiddleware(
           if (agent !== undefined && !KNOWN_AGENTS.has(agent)) {
             return send(res, 400, { error: 'unknown agent' })
           }
+          // Resolved BEFORE the embedded + watcher short-circuits so both can key off
+          // the effective agent without re-computing it below.
+          const resolvedAgent = agent ?? dispatchConfig.agent
+
+          // Embedded short-circuit — BEFORE the watcher check and BEFORE the pending-item
+          // check: the queue POST already happened; notifyDesignEdits makes the in-process
+          // session pull everything pending, same "delivered, not manual" logic as watcher.
+          //
+          // Precedence rationale (spec §3.4):
+          //   ready|busy|starting → session is alive; deliver immediately, skip ladder.
+          //   idle|failed + no live watcher → auto-start the session (primary-path semantics);
+          //     an external watcher wins over AUTO-STARTING but never over an already-RUNNING
+          //     embedded session — the user deliberately linked that terminal session, so we
+          //     only prefer the embedded path when there is nobody else to notify.
+          //   idle|failed + live watcher → fall through; the watcher check below takes over.
+          //
+          // Known benign overlap: with BOTH a running embedded session and a live watcher,
+          // the queue POST already notified the watcher's parked /wait while this rung
+          // delivers to the embedded session — both race pull_design_edits, one claims
+          // everything, the loser burns a "No pending design edits" tick. Harmless
+          // (pull is idempotent) but token-wasteful; acceptable for the rare dual setup.
+          //
+          // cursor/codex skip this rung entirely — no embedded adapter yet for those agents
+          // (§3.4). They fall through to their own dispatch paths (deeplink / tmux).
+          // dispatchConfig.embedded === false is the consumer opt-out (see DispatchConfig).
+          if (session && resolvedAgent === 'claude-code' && dispatchConfig.embedded !== false) {
+            const sessionState = session.manager.state()
+            if (sessionState === 'ready' || sessionState === 'busy' || sessionState === 'starting') {
+              session.manager.notifyDesignEdits()
+              return send(res, 200, { rung: 'embedded', detail: 'delivered to the embedded session' })
+            }
+            if (!watcherHub.isLive()) {
+              // idle|failed + no live watcher → auto-start (notifyDesignEdits kicks the start)
+              session.manager.notifyDesignEdits()
+              return send(res, 200, { rung: 'embedded', detail: 'starting embedded session' })
+            }
+            // idle|failed + live watcher → fall through to the watcher short-circuit below
+          }
+
           // Linked-session short-circuit, BEFORE the pending-item check and the ladder: a
           // live watcher already received this Send through its parked /wait (queue →
           // notify), or will claim it within one hold window — so by the time /dispatch
@@ -309,7 +414,6 @@ export function createForgeMiddleware(
           if (!pending && markdown === undefined) {
             return send(res, 200, { rung: 'manual', detail: 'nothing pending' })
           }
-          const resolvedAgent = agent ?? dispatchConfig.agent
           // A caller-posted markdown override is passed through verbatim (there is no queue
           // item to mark); a queue-sourced markdown gets the agent-specific augmentation —
           // see augmentDispatchMarkdown in dispatch.ts for why (Cursor loop closure).
@@ -330,6 +434,47 @@ export function createForgeMiddleware(
       return
     }
 
+    if (pathname === '/__the-forge/session/interrupt') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      if (!session) return send(res, 404, { error: 'embedded session unavailable' })
+      session.manager.interrupt()
+      return send(res, 200, { state: session.manager.state() })
+    }
+
+    if (pathname === '/__the-forge/approval') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      if (!session) return send(res, 404, { error: 'embedded session unavailable' })
+      readBody(req)
+        .then((body) => {
+          const { toolName, detail } = (body ?? {}) as { toolName?: unknown; detail?: unknown }
+          const tn = typeof toolName === 'string' ? toolName : ''
+          const dt = typeof detail === 'string' ? detail : ''
+          const { promise } = session.approvals.request(tn, dt)
+          // Long-poll: hold response open until decided or the registry's hold timer expires.
+          // No res.on('close') → decide wiring: the registry's own APPROVAL_HOLD_MS timer is
+          // the authoritative cleanup — same trust model as /wait's cancel (the MCP bin is not
+          // trusted to report its own disappearance; expiry handles abandonment).
+          promise.then((decision) => send(res, 200, decision))
+        })
+        .catch((e: Error) => send(res, 400, { error: e.message }))
+      return
+    }
+
+    if (pathname === '/__the-forge/approval/decide') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      if (!session) return send(res, 404, { error: 'embedded session unavailable' })
+      readBody(req)
+        .then((body) => {
+          const { id, allow } = (body ?? {}) as { id?: unknown; allow?: unknown }
+          if (typeof id !== 'string' || typeof allow !== 'boolean') {
+            return send(res, 400, { error: 'id (string) and allow (boolean) required' })
+          }
+          send(res, 200, { ok: session.approvals.decide(id, allow) })
+        })
+        .catch((e: Error) => send(res, 400, { error: e.message }))
+      return
+    }
+
     if (req.method === 'GET' && pathname === '/__the-forge/status') {
       // A PRESENT-but-empty ids param (`?ids=`) means "no items, thanks" — it's the watch
       // poller's cheap watcher-state probe. Only an ABSENT param returns everything.
@@ -339,7 +484,7 @@ export function createForgeMiddleware(
         .list()
         .filter((i) => !wanted || wanted.has(i.id))
         .map(({ id, status, note }) => ({ id, status, note }))
-      send(res, 200, { items, watcher: watcherHub.state() })
+      send(res, 200, { items, watcher: watcherHub.state(), session: session ? session.manager.state() : 'unavailable' })
       return
     }
 

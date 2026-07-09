@@ -14,10 +14,21 @@ export type WaitOutcome =
   | { kind: 'stop'; reason: 'idle' | 'replaced' | 'no-server' | 'unlinked' }
   | { kind: 'unreachable' }
 
+/** Decision type for the approve tool — defined locally so the mcp bundle stays decoupled
+ * from server code (same pattern as WAIT_REQUEST_TIMEOUT_MS / WAIT_HOLD_MS decoupling).
+ * Deny carries a reason CODE, never free text: like WaitOutcome above, server response
+ * fields only ever SELECT between the canned deny messages below — they are never spliced
+ * into what the CLI reads. 'unreachable' additionally covers every bin-side transport
+ * failure (fail-closed). */
+export type ApprovalDecision =
+  | { behavior: 'allow' }
+  | { behavior: 'deny'; reason: 'user' | 'timeout' | 'unreachable' }
+
 export interface ForgeBackend {
   pull(): Promise<QueueItemLike[]>
   mark(ids: string[], status: string, note?: string): Promise<string[]>
   wait(): Promise<WaitOutcome>
+  approve(toolName: string, input: unknown): Promise<ApprovalDecision>
 }
 
 export interface JsonRpcMessage {
@@ -34,7 +45,34 @@ export interface JsonRpcResponse {
   error?: { code: number; message: string }
 }
 
+/** Canned approve-tool deny messages — constants by the same rule as the WAIT texts: the
+ * backend's reason code only SELECTS between these; no server data ever reaches the text
+ * the CLI parses. Two distinct local-failure constants because they are different failure
+ * modes: a malformed request from the CLI vs. an unreachable dev server. */
+const APPROVE_DENY_MESSAGES: Record<'user' | 'timeout' | 'unreachable', string> = {
+  user: 'Denied from The Forge overlay.',
+  timeout: 'Denied — approval timed out in The Forge overlay. Re-send the change when ready.',
+  unreachable: 'Denied — The Forge dev server could not be reached.',
+}
+const APPROVE_DENY_MALFORMED = JSON.stringify({
+  behavior: 'deny',
+  message: 'Denied — malformed permission request.',
+})
+
 const TOOLS = [
+  {
+    name: 'approve',
+    description:
+      'Permission gate for The Forge embedded session. Called automatically by the CLI; returns an allow/deny decision made in The Forge overlay.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tool_use_id: { type: 'string' },
+        tool_name: { type: 'string' },
+        input: { type: 'object' },
+      },
+    },
+  },
   {
     name: 'pull_design_edits',
     description:
@@ -95,6 +133,26 @@ function renderItems(items: QueueItemLike[]): { body: string; ids: string } {
 }
 
 async function callTool(name: string, args: Record<string, unknown>, backend: ForgeBackend) {
+  if (name === 'approve') {
+    const toolName = args.tool_name
+    // Missing or non-string tool_name: short-circuit deny — nothing useful to forward.
+    if (typeof toolName !== 'string' || toolName === '') {
+      return textResult(APPROVE_DENY_MALFORMED)
+    }
+    const input = args.input !== undefined ? args.input : {}
+    let decision: ApprovalDecision
+    try {
+      decision = await backend.approve(toolName, input)
+    } catch {
+      // Fail-closed: a throwing backend is a transport-level failure, never an allow.
+      decision = { behavior: 'deny', reason: 'unreachable' }
+    }
+    if (decision.behavior === 'allow') {
+      return textResult(JSON.stringify({ behavior: 'allow', updatedInput: input }))
+    }
+    return textResult(JSON.stringify({ behavior: 'deny', message: APPROVE_DENY_MESSAGES[decision.reason] }))
+  }
+
   if (name === 'pull_design_edits') {
     const items = await backend.pull()
     if (items.length === 0) return textResult('No pending design edits.')

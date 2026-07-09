@@ -14,7 +14,7 @@ npm run storybook -w the-forge        # component catalog (overlay atoms), port 
 npm run dev -w next-demo              # Next demo, App Router + Turbopack (fixtures/next-demo, port 5175)
 npm run dev:webpack -w next-demo      # same fixture, forced webpack dev bundler
 npm run dev -w next-pages             # Next demo, Pages Router (fixtures/next-pages, port 5176)
-./scripts/check-prod-clean.sh         # prod build has zero plugin traces (Vite + Next) + 250KB package budget
+./scripts/check-prod-clean.sh         # prod build has zero plugin traces (Vite + Next) + 280KB package budget
 npx the-forge init                    # (in a host project) detect Vite/Next, install, wire config, mount ForgeDesignMode
 ./scripts/check-init.sh               # real-tarball smoke test of `the-forge init` against bare Vite + Next scaffolds
 ```
@@ -28,7 +28,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 1. `src/transform.ts` — Babel tags every JSX element with `data-dc-source="file:line:col"` (serve mode only; `apply: 'serve'` / dev-phase-only keeps production untouched on both frameworks). On Next this same tagger runs through a loader `src/next/index.ts` registers: Turbopack `turbopack.rules` (no ordering key needed — it's the only transform registered) or a webpack rule with `enforce: 'pre'` (needed — SWC's own loader strips JSX in the normal stage, so ours must run ahead of it).
 2. `src/client/` — shadow-DOM overlay + properties panel. Edits preview as inline-style drafts (`drafts.ts`); React never re-renders while scrubbing. Same client bundle on both frameworks, unmodified.
 3. `src/client/request.ts` — packages drafts into a deterministic change request in the project's own Tailwind vocabulary (`py-2.5 → py-6`), exact file:line targets.
-4. Send → `POST /__the-forge/queue` (`src/server/endpoints.ts` → `queue.ts` → `.the-forge/queue.json` at the resolved project root), then `POST /__the-forge/dispatch` tries the zero-keystroke ladder (`src/server/dispatch.ts`: tmux → AppleScript → deeplink → manual instruction). On Vite this server code runs inside the Vite dev server process; on Next, `withForge()` starts an in-process loopback sidecar (`src/next/sidecar.ts`) hosting the identical `src/server/runtime.ts`, and an async `rewrites()` proxies `/__the-forge/*` to it so the browser talks same-origin either way.
+4. Send → `POST /__the-forge/queue` (`src/server/endpoints.ts` → `queue.ts` → `.the-forge/queue.json` at the resolved project root), then `POST /__the-forge/dispatch` tries the dispatch ladder top-first: **'embedded' rung** — `SessionManager` (`src/server/session/`) spawns `claude -p --input-format stream-json …` at the project root; the agent pulls change requests via MCP as always; `SessionFeed` (`src/client/session-feed.ts`) streams its activity back to the overlay. Watcher and keystroke rungs are fallbacks (`src/server/dispatch.ts`: watcher → tmux → AppleScript → deeplink → manual instruction). On Vite this server code runs inside the Vite dev server process; on Next, `withForge()` starts an in-process loopback sidecar (`src/next/sidecar.ts`) hosting the identical `src/server/runtime.ts`, and an async `rewrites()` proxies `/__the-forge/*` to it so the browser talks same-origin either way.
 5. Agent side: `dist/mcp.js` (`src/mcp/`) discovers the dev server, pulls change requests, the agent applies them to source, then calls `mark_applied` — unchanged by which framework is in front; it only ever reads the endpoint file.
 6. `src/client/verifier.ts` polls `GET /__the-forge/status`, verifies computed styles post-HMR (Vite) or post-Fast-Refresh (Next), and flips matching drafts to **Implemented**.
 
@@ -41,6 +41,15 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `loader.ts` | the actual Turbopack/webpack loader body, built separately to `dist/next-loader.cjs` so bundlers can `require()` it by path |
 
 `the-forge/design-mode` (`src/design-mode/index.ts`) is the one-component subpath mounted in the app: renders a `<script type="module" src="/__the-forge/client.js">` under `next dev`, `null` otherwise. It and everything it imports must stay free of `node:*` imports — the Pages Router compiles `_app.tsx` straight into the browser bundle — enforced by a boundary test.
+
+### src/server/session modules
+
+| Module | Responsibility |
+| --- | --- |
+| `adapter.ts` | `SessionAdapter` interface + `SessionEvent` union — harness-agnostic; Codex/Cursor implement this later |
+| `claude.ts` | `ClaudeAdapter` — stream-json spawn contract, NDJSON parse, `SessionEvent` mapping; `CLAUDE_ARGS` + `EDIT_TIER_ALLOW` constants |
+| `manager.ts` | `SessionManager` — process lifecycle (spawn, interrupt, resume); notifies `ForgeRuntime` on state transitions |
+| `approvals.ts` | `ApprovalsRegistry` — pending tool-approval futures, times out to deny; wired to the `approve` MCP tool |
 
 ### src/cli modules
 
@@ -79,6 +88,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `lifecycle-store.ts` | sessionStorage persistence + the canonical element resolver (`resolveElement`/`locateBySource`) used by verifier, healing, and restore |
 | `request.ts` | change-request builder: before/after CSS + utility deltas, markdown |
 | `prompt.ts` | `PromptBox` — element-anchored free-form prompt box (panel-header Prompt button); sends ride the same queue/dispatch path with `kind: 'prompt'`, lifecycle rows flip on mark_applied alone |
+| `session-feed.ts` | `SessionFeed` — authenticated NDJSON stream consumer for the embedded session (EventSource replacement); approval rows with Allow/Deny; Stop button; reconnects with capped backoff |
 | `verifier.ts` | post-send polling, computed-style verification, backoff when server is gone |
 | `watch.ts` | watcher-state poller (design-mode-on only) for the linked-session indicator |
 | `ui/button.ts` | `createButton` — the single place overlay buttons are born |
@@ -88,12 +98,13 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 
 ## MCP contract
 
-- **Three tools** (server name `the-forge`, bin `dist/mcp.js`):
+- **Four tools** (server name `the-forge`, bin `dist/mcp.js`):
   - `pull_design_edits` — no args; claims all pending items (and re-claims stale ones) and returns their change-request markdown.
   - `mark_applied` — `{ ids: string[], status: 'applied' | 'failed', note? }`.
   - `wait_for_design_edits` — no args; the `/forge-watch` loop (long-poll `POST /__the-forge/wait`, ~20s hold). Lifecycle: wait → apply → mark → re-wait; the server tells the loop to stop after 20 idle minutes (idle auto-stop), on preemption by another watch session, when the user unlinks it from the overlay's watch indicator (`POST /__the-forge/unwatch`), or when no dev server is found. A live watcher makes `/dispatch` return the `watcher` rung and skip the keystroke ladder entirely (`WatcherHub` in `src/server/watchers.ts`).
+  - `approve` — `{ tool_use_id: string, tool_name: string, input: unknown }`; the decision is made in the overlay's approval UI (Allow/Deny buttons); deny-on-timeout/unreachable. The CLI is launched with `--permission-prompt-tool mcp__the-forge__approve`; edit-tier tools are statically allowed and never reach `approve`.
 - **Endpoint discovery:** the plugin resolves the project root by walking up from Vite's (or Next's) root to the nearest `.git` (`resolveProjectRoot` in `src/server/setup.ts`, monorepo-safe) and writes `.the-forge/endpoint-<pid>.json` (`{port, host, pid, secret}`, written by `writeEndpointFile` in `src/server/endpoints.ts`). The bin (`src/mcp/discover.ts`) walks up from `process.cwd()` (max 10 levels) to the nearest `.the-forge/` with a live endpoint; within a directory it filters entries to live pids, newest mtime wins; legacy `endpoint.json` is only used when no per-pid file exists. Identical on Next — the sidecar writes the same file shape, just from a loopback server instead of Vite's own.
-- **Auth:** mutating endpoints (`POST /__the-forge/pull`, `/mark`, `/queue`, `/dispatch`, `/wait`, `/unwatch`) require the `X-Forge-Secret` header from the endpoint file.
+- **Auth:** mutating endpoints (`POST /__the-forge/pull`, `/mark`, `/queue`, `/dispatch`, `/wait`, `/unwatch`, `/session/interrupt`, `/approval`, `/approval/decide`) require the `X-Forge-Secret` header from the endpoint file. `GET /__the-forge/session/events` is also secret-gated (it streams file paths and commands).
 - **Install side-effects (auto, idempotent):** the plugin writes a `the-forge` entry into `.mcp.json` and the `/forge-design` + `/forge-watch` commands at `.claude/commands/`, all at the git root; with `agent: 'cursor'` it also writes the entry into `.cursor/mcp.json` so Cursor can `mark_applied` and close the verification loop; it also writes a `.gitignore` entry for `.the-forge/` at the git root. `.the-forge/` is gitignored runtime state.
 - **Queue lifecycle:** `pending` → `claimed` (stale claims re-queue after 5 min) → `applied`/`failed`; terminal items pruned after 24h, 200-item cap; corrupt `queue.json` is quarantined to `queue.json.corrupt-<ts>`, never silently discarded. An edit needing user confirmation is marked `failed` with note `needs confirmation: <why>` — never left claimed-but-unmarked, or the stale-claim timeout re-delivers it every 5 min.
 - The MCP server is a hand-rolled zero-dependency JSON-RPC subset (`src/mcp/protocol.ts`). **Do not replace it with `@modelcontextprotocol/sdk`** — zero runtime dependencies is a deliberate, headline footprint feature.
@@ -134,6 +145,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 - Fresh git worktrees need their own `npm install` — otherwise Vite silently resolves `the-forge` to the main checkout's stale build.
 - An unignored `.the-forge/` full-reloads Tailwind v4 apps on every Send — the queue markdown is made of class names, so Tailwind's scanner tracks `queue.json`. The plugin now writes the `.gitignore` entry and watcher excludes itself; if a consumer still sees reload-on-send, check that the `.gitignore` write didn't fail.
 - The Chrome DevTools Automatic Workspace Folders well-known path (`/.well-known/appspecific/com.chrome.devtools.json`, `DEVTOOLS_JSON_PATH` in `src/server/endpoints.ts`) lives outside the `/__the-forge/` prefix, so it needs its own routing on each framework: Vite's middleware in `createForgeMiddleware` checks for it before the `/__the-forge/` prefix gate; Next has no equivalent middleware hook, so `src/next/index.ts`'s rewrites merge adds a dedicated rewrite rule alongside the `/__the-forge/*` proxy rule, both pointing at the same sidecar.
+- **In-band CLI errors (rate limit, auth) arrive as `result` events with exit code 0** — the CLI exits cleanly and returns the error text in the `result` message body. Read the event text, not the exit code; mapping these to `session-error` instead of `turn-complete {isError:true}` is wrong.
 
 ## Cursor Cloud specific instructions
 

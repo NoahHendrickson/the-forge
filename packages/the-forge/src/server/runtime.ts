@@ -3,12 +3,25 @@ import { randomUUID } from 'node:crypto'
 import { Queue } from './queue'
 import { WatcherHub } from './watchers'
 import { migrateLegacyForgeDir } from './setup'
+import { SessionManager } from './session/manager'
+import { ApprovalRegistry, type ApprovalFeedItem } from './session/approvals'
+import { ClaudeAdapter } from './session/claude'
+
+/** Per-connection session handles exposed to the middleware. The fan-out broadcaster
+ * (`onApproval`) bridges the registry's single constructor-injected onChange callback
+ * to per-connection subscribers — each stream connection gets its own unsubscribe. */
+export interface ForgeSessionHandles {
+  manager: SessionManager
+  approvals: ApprovalRegistry
+  onApproval: (fn: (e: ApprovalFeedItem) => void) => () => void
+}
 
 export interface ForgeRuntime {
   queue: Queue
   hub: WatcherHub
   secret: string
   forgeDir: string
+  session: ForgeSessionHandles
 }
 
 /**
@@ -39,5 +52,42 @@ export function createForgeRuntime(resolvedRoot: string, viteRoot?: string): For
     claim: () => queue.pull(),
     applying: () => queue.hasFreshClaims(),
   })
-  return { queue, hub, secret, forgeDir }
+
+  // Fan-out broadcaster for approval events. ApprovalRegistry's onChange is a single
+  // constructor-injected callback (one instance, one listener) — we bridge it here to a
+  // Set<listener> so each connected events-stream gets its own per-connection unsubscribe.
+  const approvalListeners = new Set<(e: ApprovalFeedItem) => void>()
+  const approvals = new ApprovalRegistry({
+    onChange: (e) => {
+      // Approval lifecycle → watchdog wiring lives HERE because this is the composition
+      // root where both objects exist (approvals.ts must not import manager.ts): a parked
+      // approval suspends the watchdog (a human deciding is not a hung CLI), and an ALLOW
+      // re-arms with the long post-approval leash so an approved build/test isn't killed
+      // mid-command (it emits nothing on stdout until its tool_result). `manager` is
+      // declared below — safe: onChange only ever fires after construction completes.
+      if (e.kind === 'approval-request') {
+        manager.onApprovalPending()
+      } else {
+        manager.onApprovalResolved(e.allow)
+      }
+      for (const fn of approvalListeners) fn(e)
+    },
+  })
+  const manager = new SessionManager({
+    // Production default: ClaudeAdapter. Task 5 (vite.ts / sidecar.ts) wires this in;
+    // this default is what callers get if they don't override the factory.
+    makeAdapter: () => new ClaudeAdapter(),
+    forgeDir,
+    cwd: resolvedRoot,
+  })
+  const session: ForgeSessionHandles = {
+    manager,
+    approvals,
+    onApproval: (fn) => {
+      approvalListeners.add(fn)
+      return () => approvalListeners.delete(fn)
+    },
+  }
+
+  return { queue, hub, secret, forgeDir, session }
 }

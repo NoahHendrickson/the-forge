@@ -63,6 +63,9 @@ export class Panel {
    * DesignMode, positioned here so it pins between the scrolling sections and the footer
    * and stays visible in the docked no-selection empty state (body hidden, footer kept). */
   changesSlot = document.createElement('div')
+  /** Mount slot for the SessionFeed (session-feed.ts) — sits above the Changes list so live
+   * session activity is the most prominent docked section. Wired by DesignMode (Task 8). */
+  feedSlot = document.createElement('div')
 
   private head = document.createElement('div')
   private headTag = document.createElement('div')
@@ -187,7 +190,7 @@ export class Panel {
     this.headActions.className = 'panel-head-actions'
     this.headActions.append(this.promptButton, this.modeButton)
     this.head.append(this.headActions)
-    this.root.append(this.resizeHandle, this.head, this.actions, this.emptyEl, this.body, this.changesSlot, this.footer)
+    this.root.append(this.resizeHandle, this.head, this.actions, this.emptyEl, this.body, this.feedSlot, this.changesSlot, this.footer)
     // Popovers mount in the BODY (the scroll container), not the root — anchor.offsetTop
     // and the popover's absolute top must share the body's scrolled coordinate space or
     // the popover stops tracking its row the moment the sections scroll (see overlay.ts

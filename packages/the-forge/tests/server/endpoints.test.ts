@@ -6,6 +6,11 @@ import { EventEmitter } from 'node:events'
 import { Queue } from '../../src/server/queue'
 import { WatcherHub } from '../../src/server/watchers'
 import type { DispatchResult } from '../../src/server/dispatch'
+import { SessionManager } from '../../src/server/session/manager'
+import { ApprovalRegistry } from '../../src/server/session/approvals'
+import type { SessionAdapter, SessionEvent } from '../../src/server/session/adapter'
+import type { ApprovalFeedItem } from '../../src/server/session/approvals'
+import type { ForgeSessionHandles } from '../../src/server/runtime'
 
 // The real dispatch ladder (real tmux/osascript) must NEVER run inside this suite — on a Mac
 // with automation permission + iTerm2/Terminal open it would type /forge-design into the developer's
@@ -538,6 +543,201 @@ describe('POST /__the-forge/dispatch', () => {
     expect(res.statusCode).toBe(405)
   })
 
+  // ---------------------------------------------------------------------------
+  // Embedded rung (Task 5)
+  // ---------------------------------------------------------------------------
+
+  /** Minimal fake for the dispatch tests — only state() and notifyDesignEdits() are called
+   * by the /dispatch handler; the rest of SessionManager is irrelevant here. */
+  function fakeDispatchSession(state: string, calls: { notify: number }): ForgeSessionHandles {
+    return {
+      manager: {
+        state: () => state,
+        notifyDesignEdits: () => { calls.notify++ },
+      } as unknown as SessionManager,
+      approvals: {} as ApprovalRegistry,
+      onApproval: () => () => {},
+    }
+  }
+
+  describe('embedded rung (Task 5)', () => {
+    it('ready → rung: embedded + notifyDesignEdits called once', async () => {
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('ready', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code',
+        channelsFlag: false,
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'should never reach ladder' }),
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'embedded', detail: 'delivered to the embedded session' })
+      expect(calls.notify).toBe(1)
+    })
+
+    it('starting → rung: embedded (delivered) + notifyDesignEdits called', async () => {
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('starting', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code', channelsFlag: false,
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'embedded', detail: 'delivered to the embedded session' })
+      expect(calls.notify).toBe(1)
+    })
+
+    it('busy embedded beats live watcher → rung: embedded, notifyDesignEdits called', async () => {
+      const hub = new WatcherHub({ claim: () => queue.pull(), holdMs: 5_000 })
+      const waitRes = fakeRes()
+      void run(
+        createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, hub),
+        fakeReq('POST', '/__the-forge/wait', {}, { host: 'localhost:5173' }),
+        waitRes
+      )
+      await new Promise((r) => setTimeout(r, 10)) // park the watcher so hub.isLive() === true
+
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('busy', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code', channelsFlag: false,
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'should never reach' }),
+      }, hub, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'embedded', detail: 'delivered to the embedded session' })
+      expect(calls.notify).toBe(1)
+      waitRes.emitClose()
+    })
+
+    it('idle + no live watcher → rung: embedded (starting), notifyDesignEdits called', async () => {
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('idle', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code', channelsFlag: false,
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'embedded', detail: 'starting embedded session' })
+      expect(calls.notify).toBe(1)
+    })
+
+    it('failed + no live watcher → auto-start retry (rung: embedded starting)', async () => {
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('failed', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code', channelsFlag: false,
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'embedded', detail: 'starting embedded session' })
+      expect(calls.notify).toBe(1)
+    })
+
+    it('idle + live watcher → watcher rung, notifyDesignEdits NOT called', async () => {
+      // External watcher wins over auto-starting the embedded session — the user deliberately
+      // linked that terminal session, so it takes priority over spawning a headless one.
+      const hub = new WatcherHub({ claim: () => queue.pull(), holdMs: 5_000 })
+      const waitRes = fakeRes()
+      void run(
+        createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, hub),
+        fakeReq('POST', '/__the-forge/wait', {}, { host: 'localhost:5173' }),
+        waitRes
+      )
+      await new Promise((r) => setTimeout(r, 10)) // park the watcher
+
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('idle', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code', channelsFlag: false,
+      }, hub, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'watcher', detail: 'delivered to your linked session' })
+      expect(calls.notify).toBe(0)
+      waitRes.emitClose()
+    })
+
+    it('body agent override to cursor skips the embedded rung even when config agent is claude-code', async () => {
+      // resolvedAgent (body override wins over config) is what gates the embedded rung —
+      // a cursor-targeted Send must never be delivered to the claude-code embedded session.
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('ready', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code',
+        channelsFlag: false,
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'ladder ran for cursor override' }),
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', { agent: 'cursor' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'ladder ran for cursor override' })
+      expect(calls.notify).toBe(0)
+    })
+
+    it('agent=codex skips the embedded rung entirely → falls through to ladder', async () => {
+      // codex has no embedded adapter yet (§3.4) — it uses tmux/manual.
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('ready', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'codex',
+        channelsFlag: false,
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'ladder ran for codex' }),
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'ladder ran for codex' })
+      expect(calls.notify).toBe(0)
+    })
+
+    it('embedded: false disables the rung → ladder runs, session never touched', async () => {
+      // The policy escape hatch (research doc §Billing): a consumer can opt back into
+      // terminal-only dispatch without a plugin release if Anthropic's headless posture flips.
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('ready', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code',
+        channelsFlag: false,
+        embedded: false,
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'ladder ran' }),
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'ladder ran' })
+      expect(calls.notify).toBe(0)
+    })
+
+    it('session not wired → embedded check skipped, existing behavior unchanged', async () => {
+      // Backward compat: callers that omit the session param still hit the ladder.
+      queue.add({}, 'pending markdown')
+      const mwNoSession = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code',
+        channelsFlag: false,
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'normal ladder' }),
+      })
+      const res = fakeRes()
+      await run(mwNoSession, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'normal ladder' })
+    })
+  })
+
   describe('agent allowlist validation', () => {
     it('400s when body.agent is not one of the known agents', async () => {
       const dispatchFn = vi.fn(async () => ({ rung: 'manual' as const, detail: 'x' }))
@@ -955,5 +1155,396 @@ describe('POST /__the-forge/unwatch', () => {
     const statusRes = fakeRes()
     await run(mwWithHub, fakeReq('GET', '/__the-forge/status?ids=', undefined, { host: 'localhost:5173' }), statusRes)
     expect(JSON.parse(statusRes.body).watcher).toBe('none')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Session endpoints (Task 4)
+// ---------------------------------------------------------------------------
+
+/** A fake SessionAdapter that lets tests emit events manually. */
+class FakeAdapter implements SessionAdapter {
+  onEvent: (e: SessionEvent) => void = () => {}
+  start(_opts: { cwd: string; resumeId?: string }) {}
+  sendTurn(_text: string) {}
+  interrupt() {}
+  stop() {}
+  emit(e: SessionEvent) { this.onEvent(e) }
+}
+
+/** Streaming response stub — tracks written NDJSON lines. */
+function fakeStreamRes() {
+  const r = {
+    statusCode: 0,
+    lines: [] as string[],
+    headers: {} as Record<string, string>,
+    listeners: {} as Record<string, () => void>,
+    on(event: string, cb: () => void) { this.listeners[event] = cb },
+    emitClose() { this.listeners['close']?.() },
+    setHeader(k: string, v: string) { this.headers[k] = v },
+    write(s: string) { this.lines.push(...s.split('\n').filter(Boolean)) },
+    flushHeaders() {},
+    end() {},
+  }
+  return r
+}
+
+/** Build a ForgeSessionHandles-compatible test fixture with a fan-out broadcaster
+ * wired to the registry's onChange — mirrors the wiring createForgeRuntime will do. */
+function makeTestSession(manager: SessionManager): { session: ForgeSessionHandles; approvals: ApprovalRegistry } {
+  const listeners = new Set<(e: ApprovalFeedItem) => void>()
+  const approvals = new ApprovalRegistry({
+    onChange: (e) => { for (const fn of listeners) fn(e) },
+  })
+  const session: ForgeSessionHandles = {
+    manager,
+    approvals,
+    onApproval: (fn) => {
+      listeners.add(fn)
+      return () => listeners.delete(fn)
+    },
+  }
+  return { session, approvals }
+}
+
+describe('session endpoints (Task 4)', () => {
+  const SECRET = 'session-secret'
+  let sessionDir: string
+  let adapter: FakeAdapter
+  let manager: SessionManager
+  let session: ForgeSessionHandles
+  let approvals: ApprovalRegistry
+  let mwSession: ReturnType<typeof createForgeMiddleware>
+  let mwSecured: ReturnType<typeof createForgeMiddleware>
+
+  beforeEach(() => {
+    sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-session-'))
+    adapter = new FakeAdapter()
+    manager = new SessionManager({
+      makeAdapter: () => adapter,
+      forgeDir: sessionDir,
+      cwd: sessionDir,
+    })
+    const built = makeTestSession(manager)
+    session = built.session
+    approvals = built.approvals
+
+    mwSession = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, undefined, session)
+    mwSecured = createForgeMiddleware(queue, [], SECRET, { agent: 'claude-code', channelsFlag: false }, undefined, session)
+  })
+
+  describe('absent session → 404 for all new paths', () => {
+    it('GET /session/events 404s when session not wired', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(404)
+      expect(JSON.parse(res.body)).toEqual({ error: 'embedded session unavailable' })
+    })
+
+    it('POST /session/interrupt 404s when session not wired', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('POST', '/__the-forge/session/interrupt', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(404)
+      expect(JSON.parse(res.body)).toEqual({ error: 'embedded session unavailable' })
+    })
+
+    it('POST /approval 404s when session not wired', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('POST', '/__the-forge/approval', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(404)
+      expect(JSON.parse(res.body)).toEqual({ error: 'embedded session unavailable' })
+    })
+
+    it('POST /approval/decide 404s when session not wired', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('POST', '/__the-forge/approval/decide', { id: 'x', allow: true }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(404)
+      expect(JSON.parse(res.body)).toEqual({ error: 'embedded session unavailable' })
+    })
+  })
+
+  describe('secret gating', () => {
+    it('GET /session/events 403s without the secret when one is configured', async () => {
+      const res = fakeRes()
+      await run(mwSecured, fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(403)
+      expect(JSON.parse(res.body)).toEqual({ error: 'missing or invalid X-Forge-Secret' })
+    })
+
+    it('GET /session/events 403s with a wrong secret', async () => {
+      const res = fakeRes()
+      await run(mwSecured, fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173', 'x-forge-secret': 'wrong' }), res)
+      expect(res.statusCode).toBe(403)
+    })
+
+    it('POST /session/interrupt 403s without the secret', async () => {
+      const res = fakeRes()
+      await run(mwSecured, fakeReq('POST', '/__the-forge/session/interrupt', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(403)
+    })
+
+    it('POST /approval 403s without the secret', async () => {
+      const res = fakeRes()
+      await run(mwSecured, fakeReq('POST', '/__the-forge/approval', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(403)
+    })
+
+    it('POST /approval/decide 403s without the secret', async () => {
+      const res = fakeRes()
+      await run(mwSecured, fakeReq('POST', '/__the-forge/approval/decide', { id: 'x', allow: true }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(403)
+    })
+  })
+
+  describe('GET /__the-forge/session/events', () => {
+    it('responds 200 with Content-Type application/x-ndjson', () => {
+      const res = fakeStreamRes()
+      mwSession(fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173' }) as never, res as never, () => {})
+      expect(res.statusCode).toBe(200)
+      expect(res.headers['Content-Type']).toBe('application/x-ndjson')
+    })
+
+    it('replays buffered feed events from eventsSince(since)', () => {
+      // Push an event to the manager's ring first
+      manager.notifyDesignEdits() // spawn + immediate pull turn → busy
+      adapter.emit({ kind: 'started', sessionId: 'sid1', model: 'm1', mcpLoaded: false }) // seq=1
+      adapter.emit({ kind: 'assistant-text', text: 'hello' }) // seq=2
+
+      const res = fakeStreamRes()
+      mwSession(fakeReq('GET', '/__the-forge/session/events?since=0', undefined, { host: 'localhost:5173' }) as never, res as never, () => {})
+
+      expect(res.lines.length).toBeGreaterThanOrEqual(2)
+      const parsed = res.lines.map((l) => JSON.parse(l))
+      expect(parsed.some((p) => p.type === 'feed' && p.event.kind === 'started')).toBe(true)
+      expect(parsed.some((p) => p.type === 'feed' && p.event.kind === 'assistant-text')).toBe(true)
+    })
+
+    it('respects the since parameter (only events strictly after since)', () => {
+      manager.notifyDesignEdits()
+      adapter.emit({ kind: 'started', sessionId: 'sid', model: 'm', mcpLoaded: false }) // seq=1
+      adapter.emit({ kind: 'assistant-text', text: 'old' }) // seq=2
+      adapter.emit({ kind: 'assistant-text', text: 'new' }) // seq=3
+
+      const res = fakeStreamRes()
+      mwSession(fakeReq('GET', '/__the-forge/session/events?since=2', undefined, { host: 'localhost:5173' }) as never, res as never, () => {})
+
+      const parsed = res.lines.map((l) => JSON.parse(l))
+      // Only seq=3 in replay
+      const feedLines = parsed.filter((p) => p.type === 'feed')
+      expect(feedLines).toHaveLength(1)
+      expect(feedLines[0].seq).toBe(3)
+      expect(feedLines[0].event.text).toBe('new')
+    })
+
+    it('replays pending approvals as type=approval rows', () => {
+      approvals.request('bash', 'ls -la')
+
+      const res = fakeStreamRes()
+      mwSession(fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173' }) as never, res as never, () => {})
+
+      const parsed = res.lines.map((l) => JSON.parse(l))
+      const approvalRow = parsed.find((p) => p.type === 'approval')
+      expect(approvalRow).toBeDefined()
+      expect(approvalRow.toolName).toBe('bash')
+      expect(approvalRow.detail).toBe('ls -la')
+    })
+
+    it('pushes live feed events after connection', () => {
+      const res = fakeStreamRes()
+      mwSession(fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173' }) as never, res as never, () => {})
+
+      const before = res.lines.length
+      // Start session then emit a live event
+      manager.notifyDesignEdits()
+      adapter.emit({ kind: 'started', sessionId: 'live-sid', model: 'm', mcpLoaded: false })
+
+      expect(res.lines.length).toBeGreaterThan(before)
+      const newLines = res.lines.slice(before).map((l) => JSON.parse(l))
+      expect(newLines.some((p) => p.type === 'feed' && p.event.kind === 'started')).toBe(true)
+    })
+
+    it('pushes live approval-request events', () => {
+      const res = fakeStreamRes()
+      mwSession(fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173' }) as never, res as never, () => {})
+
+      const before = res.lines.length
+      approvals.request('write', 'src/index.ts')
+
+      const newLines = res.lines.slice(before).map((l) => JSON.parse(l))
+      expect(newLines.some((p) => p.type === 'approval' && p.toolName === 'write')).toBe(true)
+    })
+
+    it('pushes live approval-resolved events when decided', () => {
+      const { id } = approvals.request('bash', 'echo hi')
+      const res = fakeStreamRes()
+      mwSession(fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173' }) as never, res as never, () => {})
+
+      const before = res.lines.length
+      approvals.decide(id, true)
+
+      const newLines = res.lines.slice(before).map((l) => JSON.parse(l))
+      expect(newLines.some((p) => p.type === 'approval-resolved' && p.id === id && p.allow === true)).toBe(true)
+    })
+
+    it('close unsubscribes both manager and approval listeners — no further writes', () => {
+      const res = fakeStreamRes()
+      mwSession(fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173' }) as never, res as never, () => {})
+
+      res.emitClose()
+
+      const before = res.lines.length
+      // Events after close should NOT appear
+      manager.notifyDesignEdits()
+      adapter.emit({ kind: 'started', sessionId: 'post-close', model: 'm', mcpLoaded: false })
+      approvals.request('bash', 'after close')
+
+      expect(res.lines.length).toBe(before) // no new lines written after close
+    })
+
+    it('non-numeric since defaults to 0', () => {
+      manager.notifyDesignEdits()
+      adapter.emit({ kind: 'started', sessionId: 's', model: 'm', mcpLoaded: false }) // seq=1
+
+      const res = fakeStreamRes()
+      mwSession(fakeReq('GET', '/__the-forge/session/events?since=abc', undefined, { host: 'localhost:5173' }) as never, res as never, () => {})
+
+      const parsed = res.lines.map((l) => JSON.parse(l))
+      expect(parsed.some((p) => p.type === 'feed' && p.seq === 1)).toBe(true)
+    })
+  })
+
+  describe('POST /__the-forge/session/interrupt', () => {
+    it('calls manager.interrupt() and responds with {state}', async () => {
+      const interruptSpy = vi.spyOn(manager, 'interrupt')
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/interrupt', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(interruptSpy).toHaveBeenCalledTimes(1)
+      const body = JSON.parse(res.body)
+      expect(body).toHaveProperty('state')
+      expect(body.state).toBe(manager.state())
+    })
+
+    it('responds 405 to GET', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('GET', '/__the-forge/session/interrupt', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(405)
+    })
+  })
+
+  describe('POST /__the-forge/approval', () => {
+    it('long-poll resolves with {behavior:allow} when decided allow', async () => {
+      const approvalRes = fakeRes()
+      const approvalPromise = run(mwSession, fakeReq('POST', '/__the-forge/approval', { toolName: 'bash', detail: 'ls' }, { host: 'localhost:5173' }), approvalRes)
+
+      // Wait for body parsing + approvals.request() to register the approval
+      await new Promise((r) => setTimeout(r, 20))
+
+      const pending = approvals.pending()
+      expect(pending).toHaveLength(1)
+      const { id } = pending[0]
+
+      const decideRes = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/approval/decide', { id, allow: true }, { host: 'localhost:5173' }), decideRes)
+
+      await approvalPromise
+      expect(approvalRes.statusCode).toBe(200)
+      expect(JSON.parse(approvalRes.body)).toEqual({ behavior: 'allow' })
+    })
+
+    it('long-poll resolves with {behavior:deny, reason:user} when decided deny', async () => {
+      const approvalRes = fakeRes()
+      const approvalPromise = run(mwSession, fakeReq('POST', '/__the-forge/approval', { toolName: 'bash', detail: 'rm -rf' }, { host: 'localhost:5173' }), approvalRes)
+
+      await new Promise((r) => setTimeout(r, 20))
+      const { id } = approvals.pending()[0]
+
+      const decideRes = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/approval/decide', { id, allow: false }, { host: 'localhost:5173' }), decideRes)
+
+      await approvalPromise
+      expect(JSON.parse(approvalRes.body)).toEqual({ behavior: 'deny', reason: 'user' })
+    })
+
+    it('treats missing toolName/detail as empty strings', async () => {
+      const approvalRes = fakeRes()
+      const approvalPromise = run(mwSession, fakeReq('POST', '/__the-forge/approval', {}, { host: 'localhost:5173' }), approvalRes)
+
+      await new Promise((r) => setTimeout(r, 20))
+      const pending = approvals.pending()
+      expect(pending).toHaveLength(1)
+      expect(pending[0].toolName).toBe('')
+      expect(pending[0].detail).toBe('')
+
+      approvals.decide(pending[0].id, true)
+      await approvalPromise
+      expect(approvalRes.statusCode).toBe(200)
+    })
+
+    it('405s on GET', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('GET', '/__the-forge/approval', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(405)
+    })
+  })
+
+  describe('POST /__the-forge/approval/decide', () => {
+    it('returns {ok:true} for a known pending approval id', async () => {
+      const { id } = approvals.request('bash', 'test')
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/approval/decide', { id, allow: true }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ ok: true })
+    })
+
+    it('returns {ok:false} for an unknown id', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/approval/decide', { id: 'nonexistent-id', allow: false }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ ok: false })
+    })
+
+    it('400s when id is missing', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/approval/decide', { allow: true }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(400)
+    })
+
+    it('400s when allow is not a boolean', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/approval/decide', { id: 'x', allow: 'yes' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(400)
+    })
+
+    it('405s on GET', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('GET', '/__the-forge/approval/decide', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(405)
+    })
+  })
+
+  describe('GET /__the-forge/status session field', () => {
+    it('includes session=manager.state() when session is wired', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.body)
+      expect(body.session).toBe(manager.state()) // 'idle' initially
+    })
+
+    it('includes session="unavailable" when no session param is wired', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.body)
+      expect(body.session).toBe('unavailable')
+    })
+
+    it('session field reflects live state transitions', async () => {
+      manager.notifyDesignEdits() // spawn + immediate pull turn → busy
+      const res = fakeRes()
+      await run(mwSession, fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }), res)
+      expect(JSON.parse(res.body).session).toBe('busy')
+    })
   })
 })

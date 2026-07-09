@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "demo-app",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "-w", "demo-app"],
+      "port": 5173
+    },
+    {
+      "name": "next-demo",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "-w", "next-demo"],
+      "port": 5175
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import { Panel } from '../../src/client/panel'
 import { readTokens, resetTokensCache } from '../../src/client/tokens'
 import * as tokensModule from '../../src/client/tokens'
 import { loadLifecycle, saveLifecycle } from '../../src/client/lifecycle-store'
+import { SessionFeed } from '../../src/client/session-feed'
 
 // Field identities (data-props) — labels are display text and are free to change.
 const P = {
@@ -497,7 +498,11 @@ describe('DesignMode send-to-agent (M4)', () => {
   }
 
   it('a send where every draft is a no-op does not POST and flashes "No changes"', async () => {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn((url: string) => {
+      // feed start() fetches the events stream — park it, don't throw
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({}) })
+    })
     vi.stubGlobal('fetch', fetchMock)
     const { overlay, mode, drafts } = fullSetup()
     mode.setActive(true)
@@ -507,7 +512,8 @@ describe('DesignMode send-to-agent (M4)', () => {
     drafts.apply(btn, 'border-top-width', '2px')
     overlay.sendButton.click()
     await flushSend()
-    expect(fetchMock).not.toHaveBeenCalled()
+    // After wiring the SessionFeed, start() always fetches /session/events — check no /queue POST
+    expect(fetchMock).not.toHaveBeenCalledWith('/__the-forge/queue', expect.anything())
     expect(overlay.sendButton.textContent).toBe('No changes')
     expect(mode.sent.size()).toBe(0)
   })
@@ -619,6 +625,7 @@ describe('DesignMode send-to-agent (M4)', () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
       if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'tmux', detail: 'x' }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {}) // feed start() parks here
       throw new Error(`unexpected fetch: ${url}`)
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -629,7 +636,8 @@ describe('DesignMode send-to-agent (M4)', () => {
     overlay.sendButton.click()
     await flushSend()
     expect(fetchMock).toHaveBeenCalledWith('/__the-forge/queue', expect.objectContaining({ method: 'POST' }))
-    const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body)
+    const queueCall = fetchMock.mock.calls.find(([url]) => url === '/__the-forge/queue') as unknown as [string, { body: string }]
+    const body = JSON.parse(queueCall[1].body)
     expect(body.markdown).toContain('# Design change request')
     expect(mode.sent.pendingIds()).toEqual(['q1'])
     expect(overlay.sendButton.textContent).toBe('Sent — typed /forge-design into your session')
@@ -640,6 +648,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       const fetchMock = vi.fn((url: string) => {
         if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
         if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => dispatchResponse })
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {}) // feed start() parks here
         throw new Error(`unexpected fetch: ${url}`)
       })
       vi.stubGlobal('fetch', fetchMock)
@@ -746,6 +755,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       const fetchMock = vi.fn((url: string) => {
         if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
         if (url === '/__the-forge/dispatch') return Promise.reject(new Error('dispatch network error'))
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {}) // feed start() parks here
         throw new Error(`unexpected fetch: ${url}`)
       })
       vi.stubGlobal('fetch', fetchMock)
@@ -765,6 +775,7 @@ describe('DesignMode send-to-agent (M4)', () => {
       const fetchMock = vi.fn((url: string) => {
         if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
         if (url === '/__the-forge/dispatch') return new Promise((resolve) => (resolveDispatch = resolve))
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {}) // feed start() parks here
         throw new Error(`unexpected fetch: ${url}`)
       })
       vi.stubGlobal('fetch', fetchMock)
@@ -1190,8 +1201,12 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
   })
 
   it('stops polling on deactivate and resumes on activate while entries remain', async () => {
-    const fetchMock = vi.fn()
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'q1' }) })
+    const fetchMock = vi.fn((url: string) => {
+      // feed start() fetches the events stream — park it so it doesn't consume the queue stub
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
     vi.stubGlobal('fetch', fetchMock)
     const { overlay, mode, drafts } = fullSetup()
     mode.setActive(true)
@@ -1207,7 +1222,7 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
     await vi.advanceTimersByTimeAsync(4000)
     expect(fetchMock).not.toHaveBeenCalled() // stopped: no polling while inactive
 
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ items: [] }) })
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
     mode.setActive(true) // entries remain pending -> polling resumes
     await vi.advanceTimersByTimeAsync(2000)
     expect(fetchMock).toHaveBeenCalledWith('/__the-forge/status?ids=q1')
@@ -1226,7 +1241,8 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
     mode.setActive(true)
     expect(mode.sent.size()).toBe(0)
     return vi.advanceTimersByTimeAsync(4000).then(() => {
-      const urls = fetchMock.mock.calls.map((c) => c[0])
+      // Exclude session/events calls (the feed polls while design mode is on — that's correct)
+      const urls = fetchMock.mock.calls.map((c) => c[0]).filter((u: string) => !u.startsWith('/__the-forge/session/events'))
       expect(urls.length).toBeGreaterThan(0) // the watch probe DID poll…
       expect(urls.every((u) => u === '/__the-forge/status?ids=')).toBe(true) // …and nothing else did
     })
@@ -2509,5 +2525,145 @@ describe('watcher unlink wiring', () => {
     } finally {
       delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SessionFeed wiring (Task 8)
+// ---------------------------------------------------------------------------
+
+describe('SessionFeed wiring', () => {
+  const encoder = new TextEncoder()
+
+  /** Drain microtasks — each round resolves one Promise level.
+   * ReadableStream reads settle as microtasks, so 40 rounds covers startup + a handful of events. */
+  async function flushMicrotasks(rounds = 40): Promise<void> {
+    for (let i = 0; i < rounds; i++) await new Promise<void>((r) => queueMicrotask(r))
+  }
+
+  /** Returns a fetch stub that delivers the given NDJSON lines on the events stream and
+   * keeps the stream open (does not close), so the feed parks at reader.read(). All other
+   * URLs return a benign JSON response so status polls don't throw. */
+  function makeEventsFetch(lines: string[]): ReturnType<typeof vi.fn> {
+    return vi.fn((url: string) => {
+      if (url.startsWith('/__the-forge/session/events')) {
+        return Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                for (const line of lines) controller.enqueue(encoder.encode(line + '\n'))
+                // keep open — feed parks at next reader.read() without triggering reconnect
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } }
+          )
+        )
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+  }
+
+  it('feed starts on setActive(true) and stops on setActive(false)', () => {
+    const startSpy = vi.spyOn(SessionFeed.prototype, 'start')
+    const stopSpy = vi.spyOn(SessionFeed.prototype, 'stop')
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none' }) })
+    }))
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+
+    mode.setActive(true)
+    expect(startSpy).toHaveBeenCalledOnce()
+
+    mode.setActive(false)
+    expect(stopSpy).toHaveBeenCalled()
+  })
+
+  it('Stop button POSTs /session/interrupt with secret header', async () => {
+    const assistantLine = JSON.stringify({
+      type: 'feed', seq: 1, at: new Date().toISOString(),
+      event: { kind: 'assistant-text', text: 'working\u2026' },
+    })
+    const fetchMock = makeEventsFetch([assistantLine])
+    vi.stubGlobal('fetch', fetchMock)
+    ;(globalThis as { __THE_FORGE__?: { secret?: string } }).__THE_FORGE__ = { secret: 'shhh' }
+    try {
+      const overlay = new Overlay()
+      overlay.mount()
+      const mode = new DesignMode(overlay)
+      liveModes.push(mode)
+      overlay.attachPanel(mode.panelRoot)
+      mode.setActive(true)
+
+      await flushMicrotasks()
+
+      // Stop button is visible only while busyish (triggered by assistant-text event)
+      const stopBtn = mode.panelRoot.querySelector('.session-stop') as HTMLButtonElement
+      expect(stopBtn).not.toBeNull()
+      expect(stopBtn.hidden).toBe(false)
+      stopBtn.click()
+
+      const calls = fetchMock.mock.calls.filter(
+        (c: unknown[]) => c[0] === '/__the-forge/session/interrupt'
+      ) as unknown as [string, { method: string; headers: Record<string, string> }][]
+      expect(calls).toHaveLength(1)
+      expect(calls[0][1].method).toBe('POST')
+      expect(calls[0][1].headers['X-Forge-Secret']).toBe('shhh')
+    } finally {
+      delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
+    }
+  })
+
+  it('approval decide POSTs /approval/decide {id, allow} when Allow is clicked', async () => {
+    const approvalLine = JSON.stringify({
+      type: 'approval', id: 'tool-42', toolName: 'Bash', detail: 'rm -rf tmp',
+    })
+    const fetchMock = makeEventsFetch([approvalLine])
+    vi.stubGlobal('fetch', fetchMock)
+    ;(globalThis as { __THE_FORGE__?: { secret?: string } }).__THE_FORGE__ = { secret: 'shhh' }
+    try {
+      const overlay = new Overlay()
+      overlay.mount()
+      const mode = new DesignMode(overlay)
+      liveModes.push(mode)
+      overlay.attachPanel(mode.panelRoot)
+      mode.setActive(true)
+
+      await flushMicrotasks()
+
+      const allowBtn = mode.panelRoot.querySelector('.session-approval-allow') as HTMLButtonElement
+      expect(allowBtn).not.toBeNull()
+      allowBtn.click()
+
+      const calls = fetchMock.mock.calls.filter(
+        (c: unknown[]) => c[0] === '/__the-forge/approval/decide'
+      ) as unknown as [string, { method: string; headers: Record<string, string>; body: string }][]
+      expect(calls).toHaveLength(1)
+      const body = JSON.parse(calls[0][1].body) as unknown
+      expect(body).toEqual({ id: 'tool-42', allow: true })
+      expect(calls[0][1].headers['X-Forge-Secret']).toBe('shhh')
+    } finally {
+      delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
+    }
+  })
+
+  it('send flash shows the embedded copy when /dispatch answers rung "embedded"', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'embedded' }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { overlay, mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    overlay.sendButton.click()
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+    expect(overlay.sendButton.textContent).toBe('Sent — applying in the embedded session')
   })
 })

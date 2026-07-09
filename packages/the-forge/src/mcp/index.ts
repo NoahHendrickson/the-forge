@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import readline from 'node:readline'
 import { randomUUID } from 'node:crypto'
-import { handleMessage, type ForgeBackend, type JsonRpcMessage, type WaitOutcome } from './protocol'
+import { handleMessage, type ForgeBackend, type JsonRpcMessage, type WaitOutcome, type ApprovalDecision } from './protocol'
 import { baseUrl, type ForgeEndpoint } from './url'
 import { discoverEndpointFrom } from './discover'
 
@@ -12,6 +12,17 @@ const NOT_RUNNING_MESSAGE = 'The Forge dev server is not running — start your 
  * mcp bundle stays decoupled from server code) with generous margin, while still bounded:
  * a dead socket must not park the agent's tool call forever. */
 const WAIT_REQUEST_TIMEOUT_MS = 35_000
+
+/** Client-side ceiling on one approval round-trip. A human is deciding, so this must be
+ * much longer than the wait loop's hold. Exceeds the server's APPROVAL_HOLD_MS (110s in
+ * server/session/approvals.ts — kept as an independent constant here so the mcp bundle
+ * stays decoupled from server code) with margin. */
+const APPROVAL_REQUEST_TIMEOUT_MS = 120_000
+
+/** Fail-closed default for the approve backend: every transport failure and every
+ * unrecognized response shape resolves to this — the CLI-facing message text lives in
+ * protocol.ts's constant table, keyed by this reason code. */
+const APPROVAL_UNREACHABLE_DENY: ApprovalDecision = { behavior: 'deny', reason: 'unreachable' }
 
 /** This bin process's watcher identity, sent on every /wait as X-Forge-Watcher. Lets the
  * WatcherHub absorb retries from a session it already told to stop ('replaced') instead
@@ -88,6 +99,32 @@ function makeBackend(): ForgeBackend {
       const data = result.data as { marked: string[] }
       return data.marked
     },
+    /** Permission gate for the embedded Claude session. Never throws — any transport failure
+     * or malformed response resolves to deny so the CLI is never left hanging. The CLI
+     * parses the returned ApprovalDecision JSON; a thrown error here would surface as an
+     * isError MCP result, bypassing the CLI's decision parser. */
+    async approve(toolName: string, input: unknown): Promise<ApprovalDecision> {
+      // Extract a human-readable detail string from the tool input, truncated to 200 chars.
+      const rawDetail =
+        (typeof (input as Record<string, unknown>)?.command === 'string'
+          ? (input as Record<string, unknown>).command
+          : typeof (input as Record<string, unknown>)?.file_path === 'string'
+            ? (input as Record<string, unknown>).file_path
+            : '') as string
+      const detail = rawDetail.slice(0, 200)
+      const result = await post('/__the-forge/approval', { toolName, detail }, APPROVAL_REQUEST_TIMEOUT_MS)
+      if (!result.ok) return APPROVAL_UNREACHABLE_DENY
+      // Expected body: {behavior:'allow'} | {behavior:'deny', reason:'user'|'timeout'}.
+      // The reason is a code, never text — protocol.ts maps it to its constant messages.
+      // Anything unrecognized degrades to the fail-closed 'unreachable' deny.
+      const data = result.data as { behavior?: unknown; reason?: unknown }
+      if (data.behavior === 'allow') return { behavior: 'allow' }
+      if (data.behavior === 'deny' && (data.reason === 'user' || data.reason === 'timeout')) {
+        return { behavior: 'deny', reason: data.reason }
+      }
+      return APPROVAL_UNREACHABLE_DENY
+    },
+
     /** The watch loop's long-poll. Never throws — every failure mode maps to a WaitOutcome
      * whose canned text (protocol.ts) tells the agent exactly whether to retry, re-arm, or
      * stop; a thrown error would surface as a bare isError result with no loop guidance. */

@@ -218,6 +218,15 @@ describe('withForge', () => {
     expect(args.channelsFlag).toBe(true)
   })
 
+  it('threads embedded: false into ensureSidecar args (policy escape hatch)', async () => {
+    const wrapped = withForge({}, { embedded: false })
+    const result: any = await wrapped(PHASE_DEVELOPMENT_SERVER, { defaultConfig: {} })
+    await result.rewrites()
+
+    const args = ensureSidecarMock.mock.calls[0][0]
+    expect(args.embedded).toBe(false)
+  })
+
   it('ensureSidecar rejection -> warns once, returns user rewrites intact, never throws', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     ensureSidecarMock.mockRejectedValue(new Error('EADDRNOTAVAIL boom'))

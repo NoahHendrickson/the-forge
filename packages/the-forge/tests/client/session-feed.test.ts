@@ -1,0 +1,542 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { SessionFeed } from '../../src/client/session-feed'
+
+// Fake timers for all tests — the reconnect loop uses setTimeout, which fake timers
+// control. Microtask-based stream reading is unaffected (microtasks are not timers).
+beforeEach(() => {
+  document.body.innerHTML = ''
+  vi.useFakeTimers()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const encoder = new TextEncoder()
+
+/** Drain pending microtasks — each round resolves one Promise.resolve() level.
+ * ReadableStream with sync-enqueued chunks resolves each read() as a microtask, so
+ * 40 rounds covers startup + up to ~30 NDJSON lines comfortably. */
+async function flush(rounds = 40): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
+    await new Promise<void>((r) => queueMicrotask(r))
+  }
+}
+
+function makeBody(lines: string[]): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const line of lines) {
+        controller.enqueue(encoder.encode(line + '\n'))
+      }
+      controller.close()
+    },
+  })
+}
+
+function feedLine(seq: number, event: object): string {
+  return JSON.stringify({ type: 'feed', seq, at: new Date().toISOString(), event })
+}
+
+/** Returns a fetchFn that yields the given lines as NDJSON and then closes the stream. */
+function makeFetchFn(lines: string[], status = 200): typeof fetch {
+  return ((_url: RequestInfo | URL, _init?: RequestInit) => {
+    if (status !== 200) {
+      return Promise.resolve(new Response(JSON.stringify({ error: 'embedded session unavailable' }), { status }))
+    }
+    return Promise.resolve(
+      new Response(makeBody(lines), {
+        status: 200,
+        headers: { 'Content-Type': 'application/x-ndjson' },
+      }),
+    )
+  }) as typeof fetch
+}
+
+/** fetchFn that never resolves — hangs until the AbortController fires. */
+function hangingFetch(onAbort?: () => void): typeof fetch {
+  return ((_url: RequestInfo | URL, init?: RequestInit) => {
+    return new Promise<Response>((_resolve, _reject) => {
+      const signal = (init as RequestInit | undefined)?.signal as AbortSignal | undefined
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          onAbort?.()
+        })
+      }
+    })
+  }) as typeof fetch
+}
+
+// ---------------------------------------------------------------------------
+// Class shape
+// ---------------------------------------------------------------------------
+
+describe('class shape', () => {
+  it('root has class session-feed and is hidden initially', () => {
+    const feed = new SessionFeed()
+    expect(feed.root.className).toBe('session-feed')
+    expect(feed.root.hidden).toBe(true)
+  })
+
+  it('exposes onInterrupt and onDecide as assignable callbacks', () => {
+    const feed = new SessionFeed()
+    let interruptFired = false
+    feed.onInterrupt = () => { interruptFired = true }
+    let decided: [string, boolean] | null = null
+    feed.onDecide = (id, allow) => { decided = [id, allow] }
+    // callbacks are wired — just verify they're settable and callable
+    feed.onInterrupt()
+    feed.onDecide('x', true)
+    expect(interruptFired).toBe(true)
+    expect(decided).toEqual(['x', true])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Stream consumption — rows rendered from events
+// ---------------------------------------------------------------------------
+
+describe('stream consumption', () => {
+  it('renders a status row from a started event', async () => {
+    const feed = new SessionFeed({
+      fetchFn: makeFetchFn([feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-3-5-sonnet', mcpLoaded: true })]),
+    })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.hidden).toBe(false)
+    const status = feed.root.querySelector('.session-status')
+    expect(status).not.toBeNull()
+    expect(status?.textContent).toContain('claude-3-5-sonnet')
+    feed.stop()
+  })
+
+  it('renders rows from replayed + live events', async () => {
+    const lines = [
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true }),
+      feedLine(2, { kind: 'assistant-text', text: 'Hello from Claude' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const rows = feed.root.querySelectorAll('.session-row')
+    expect(rows.length).toBeGreaterThanOrEqual(2) // status + text row
+    expect(feed.root.textContent).toContain('Hello from Claude')
+    feed.stop()
+  })
+
+  it('renders an assistant-text snippet truncated to ~200 chars', async () => {
+    const longText = 'x'.repeat(300)
+    const feed = new SessionFeed({ fetchFn: makeFetchFn([feedLine(1, { kind: 'assistant-text', text: longText })]) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const textRow = feed.root.querySelector('.session-row:not(.session-status)')
+    expect(textRow?.textContent?.length).toBeLessThanOrEqual(205) // 200 + '…' + some margin
+    feed.stop()
+  })
+
+  it('pairs tool-started spinner with tool-finished check', async () => {
+    const lines = [
+      feedLine(1, { kind: 'tool-started', toolId: 't1', name: 'Read', detail: 'src/App.tsx' }),
+      feedLine(2, { kind: 'tool-finished', toolId: 't1' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const toolRow = feed.root.querySelector('[data-tool-id="t1"]')
+    expect(toolRow).not.toBeNull()
+    expect(toolRow?.querySelector('.session-spinner')?.textContent).toBe('✓')
+    feed.stop()
+  })
+
+  it('unmatched tool-finished (no prior tool-started) does not crash', async () => {
+    const lines = [feedLine(1, { kind: 'tool-finished', toolId: 'ghost' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    expect(() => feed.start()).not.toThrow()
+    await flush()
+    feed.stop()
+  })
+
+  it('in-band error (turn-complete isError) renders a session-error-row, not a crash', async () => {
+    const lines = [feedLine(1, { kind: 'turn-complete', isError: true, errorText: 'Rate limit exceeded' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const errorRow = feed.root.querySelector('.session-error-row')
+    expect(errorRow).not.toBeNull()
+    expect(errorRow?.textContent).toContain('Rate limit exceeded')
+    feed.stop()
+  })
+
+  it('session-error event renders an error row and hides Stop', async () => {
+    const lines = [feedLine(1, { kind: 'session-error', text: 'Spawn failed' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.session-error-row')?.textContent).toContain('Spawn failed')
+    const stop = feed.root.querySelector('.session-stop') as HTMLButtonElement | null
+    expect(stop?.hidden).toBe(true)
+    feed.stop()
+  })
+
+  it('ended event sets status to ended and hides Stop', async () => {
+    const lines = [
+      feedLine(1, { kind: 'assistant-text', text: 'hi' }), // makes busyish=true
+      feedLine(2, { kind: 'ended' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.session-status')?.textContent).toContain('ended')
+    const stop = feed.root.querySelector('.session-stop') as HTMLButtonElement | null
+    expect(stop?.hidden).toBe(true)
+    feed.stop()
+  })
+
+  it('Stop button is visible while busyish (after tool-started, before turn-complete)', async () => {
+    // Only tool-started, no turn-complete → busyish stays true
+    const lines = [feedLine(1, { kind: 'tool-started', toolId: 't1', name: 'Write', detail: 'x.ts' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const stop = feed.root.querySelector('.session-stop') as HTMLButtonElement | null
+    expect(stop?.hidden).toBe(false)
+    feed.stop()
+  })
+
+  it('Stop button fires onInterrupt', async () => {
+    const lines = [feedLine(1, { kind: 'assistant-text', text: 'working…' })]
+    let fired = 0
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    feed.onInterrupt = () => fired++
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const stop = feed.root.querySelector('.session-stop') as HTMLButtonElement
+    stop.click()
+    expect(fired).toBe(1)
+    feed.stop()
+  })
+
+  it('malformed JSON lines are ignored without crashing', async () => {
+    const lines = [
+      'not json at all',
+      feedLine(1, { kind: 'assistant-text', text: 'valid line' }),
+      '{broken',
+      '42', // not an object
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.textContent).toContain('valid line')
+    feed.stop()
+  })
+
+  it('unknown event kinds are ignored without crashing', async () => {
+    const lines = [
+      feedLine(1, { kind: 'future-unknown-event', data: 'whatever' }),
+      feedLine(2, { kind: 'assistant-text', text: 'after unknown' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.textContent).toContain('after unknown')
+    feed.stop()
+  })
+
+  it('unknown stream line types are ignored without crashing', async () => {
+    const lines = [
+      JSON.stringify({ type: 'future-type', payload: 'x' }),
+      feedLine(1, { kind: 'assistant-text', text: 'ok' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.textContent).toContain('ok')
+    feed.stop()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Approval rows
+// ---------------------------------------------------------------------------
+
+describe('approvals', () => {
+  it('approval row has tool name, detail, and Allow/Deny buttons', async () => {
+    const lines = [JSON.stringify({ type: 'approval', id: 'a1', toolName: 'BashTool', detail: 'rm -rf /tmp' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const row = feed.root.querySelector('.session-approval')
+    expect(row).not.toBeNull()
+    expect(row?.textContent).toContain('BashTool')
+    expect(row?.textContent).toContain('rm -rf /tmp')
+    expect(row?.querySelector('.session-approval-allow')).not.toBeNull()
+    expect(row?.querySelector('.session-approval-deny')).not.toBeNull()
+    feed.stop()
+  })
+
+  it('Allow button fires onDecide(id, true)', async () => {
+    const lines = [JSON.stringify({ type: 'approval', id: 'app1', toolName: 'BashTool', detail: 'ls' })]
+    const decided: Array<[string, boolean]> = []
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    feed.onDecide = (id, allow) => decided.push([id, allow])
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const allowBtn = feed.root.querySelector('.session-approval-allow') as HTMLButtonElement
+    allowBtn.click()
+    expect(decided).toEqual([['app1', true]])
+    feed.stop()
+  })
+
+  it('Deny button fires onDecide(id, false)', async () => {
+    const lines = [JSON.stringify({ type: 'approval', id: 'app2', toolName: 'BashTool', detail: 'cat /etc/passwd' })]
+    const decided: Array<[string, boolean]> = []
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    feed.onDecide = (id, allow) => decided.push([id, allow])
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const denyBtn = feed.root.querySelector('.session-approval-deny') as HTMLButtonElement
+    denyBtn.click()
+    expect(decided).toEqual([['app2', false]])
+    feed.stop()
+  })
+
+  it('approval-resolved collapses the row to a resolution line', async () => {
+    const lines = [
+      JSON.stringify({ type: 'approval', id: 'a1', toolName: 'BashTool', detail: 'ls' }),
+      JSON.stringify({ type: 'approval-resolved', id: 'a1', allow: true }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const row = feed.root.querySelector('.session-approval')
+    expect(row?.textContent).toBe('Allowed')
+    // buttons should be gone
+    expect(row?.querySelector('.session-approval-allow')).toBeNull()
+    expect(row?.querySelector('.session-approval-deny')).toBeNull()
+    feed.stop()
+  })
+
+  it('deny resolution shows Denied text', async () => {
+    const lines = [
+      JSON.stringify({ type: 'approval', id: 'a2', toolName: 'Bash', detail: 'x' }),
+      JSON.stringify({ type: 'approval-resolved', id: 'a2', allow: false }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const row = feed.root.querySelector('.session-approval')
+    expect(row?.textContent).toBe('Denied')
+    feed.stop()
+  })
+
+  it('a replayed approval (same id delivered twice) renders exactly one row, still collapsible', async () => {
+    // Approval lines carry no seq, so the server re-emits pending approvals on EVERY
+    // reconnect — a duplicate id must not append a second (ghost) row.
+    const lines = [
+      JSON.stringify({ type: 'approval', id: 'dup1', toolName: 'BashTool', detail: 'ls' }),
+      JSON.stringify({ type: 'approval', id: 'dup1', toolName: 'BashTool', detail: 'ls' }),
+      JSON.stringify({ type: 'approval-resolved', id: 'dup1', allow: true }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const rows = feed.root.querySelectorAll('.session-approval')
+    expect(rows.length).toBe(1)
+    // The one row must be the tracked one — approval-resolved collapses it
+    expect(rows[0].textContent).toBe('Allowed')
+    expect(rows[0].querySelector('.session-approval-allow')).toBeNull()
+    feed.stop()
+  })
+
+  it('approval-resolved for unknown id is a no-op (no crash)', async () => {
+    const lines = [JSON.stringify({ type: 'approval-resolved', id: 'ghost', allow: true })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    expect(() => feed.start()).not.toThrow()
+    await flush()
+    feed.stop()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// stop() idle-zero — no timers or fetches survive stop()
+// ---------------------------------------------------------------------------
+
+describe('stop() idle-zero', () => {
+  it('stop() aborts an in-flight fetch', () => {
+    const aborted: boolean[] = []
+    const feed = new SessionFeed({ fetchFn: hangingFetch(() => aborted.push(true)) })
+    feed.start()
+    feed.stop()
+    expect(aborted).toEqual([true])
+  })
+
+  it('stop() clears a pending reconnect timer', async () => {
+    // Stream closes immediately → scheduleReconnect fires setTimeout
+    const feed = new SessionFeed({ fetchFn: makeFetchFn([]) })
+    feed.start()
+    await flush()
+    // At this point a reconnect timer is pending (backoff 1000ms)
+    expect(vi.getTimerCount()).toBe(1)
+    feed.stop()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('stop() before start() is a no-op', () => {
+    const feed = new SessionFeed()
+    expect(() => feed.stop()).not.toThrow()
+  })
+
+  it('start() during the reconnect-backoff window clears the parked timer (no leak)', async () => {
+    // Stream closes immediately → a reconnect timer parks. A start() in that window
+    // opens a fresh connection and must clear the parked timer, or it outlives stop().
+    let calls = 0
+    const fetchFn: typeof fetch = ((_url: RequestInfo | URL, init?: RequestInit) => {
+      calls++
+      if (calls === 1) return Promise.resolve(new Response(makeBody([]), { status: 200 }))
+      return new Promise<Response>(() => {
+        void (init as RequestInit | undefined)?.signal
+      })
+    }) as typeof fetch
+    const feed = new SessionFeed({ fetchFn })
+    feed.start()
+    await flush()
+    expect(vi.getTimerCount()).toBe(1) // reconnect timer parked
+    feed.start() // re-entry during backoff — must clear the parked timer
+    expect(vi.getTimerCount()).toBe(0)
+    feed.stop()
+    expect(vi.getTimerCount()).toBe(0) // nothing survives stop()
+  })
+
+  it('double start() is idempotent — does not open a second fetch', async () => {
+    let callCount = 0
+    const fetchFn: typeof fetch = hangingFetch(() => { callCount++ })
+    const feed = new SessionFeed({ fetchFn })
+    feed.start()
+    feed.start() // second call must be a no-op
+    expect(callCount).toBe(0) // no aborts yet — just checking only one fetch was opened
+    // stop() to clean up
+    feed.stop()
+    expect(callCount).toBe(1) // only one fetch was aborted
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Reconnect behavior
+// ---------------------------------------------------------------------------
+
+describe('reconnect', () => {
+  it('reconnects with since=<lastSeq> after stream closes', async () => {
+    const urls: string[] = []
+    let call = 0
+    const fetchFn: typeof fetch = ((_url: RequestInfo | URL, _init?: RequestInit) => {
+      urls.push(_url.toString())
+      call++
+      if (call === 1) {
+        return Promise.resolve(
+          new Response(makeBody([feedLine(7, { kind: 'assistant-text', text: 'hi' })]), { status: 200 }),
+        )
+      }
+      return new Promise(() => {}) // hang subsequent calls
+    }) as typeof fetch
+
+    const feed = new SessionFeed({ fetchFn })
+    feed.start()
+    await flush()
+    // Advance past the 1s initial backoff to trigger reconnect
+    vi.advanceTimersByTime(1000)
+    await flush()
+    expect(urls.length).toBeGreaterThanOrEqual(2)
+    expect(urls[1]).toContain('since=7')
+    feed.stop()
+  })
+
+  it('404 parks quietly at cap backoff (no error row rendered)', async () => {
+    const feed = new SessionFeed({ fetchFn: makeFetchFn([], 404) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    // No error row — 404 is silent
+    expect(feed.root.querySelectorAll('.session-error-row').length).toBe(0)
+    // Timer is at cap (30s), not the 1s initial
+    expect(vi.getTimerCount()).toBe(1)
+    // Advance by 29s — still pending (cap is 30s)
+    vi.advanceTimersByTime(29_000)
+    feed.stop()
+  })
+
+  it('resets backoff to 1s on a successful line', async () => {
+    const urls: string[] = []
+    let call = 0
+    const fetchFn: typeof fetch = ((_url: RequestInfo | URL, _init?: RequestInit) => {
+      urls.push(_url.toString())
+      call++
+      if (call === 1) {
+        // return a line → backoff resets to 1s
+        return Promise.resolve(
+          new Response(makeBody([feedLine(1, { kind: 'assistant-text', text: 'hi' })]), { status: 200 }),
+        )
+      }
+      return new Promise(() => {})
+    }) as typeof fetch
+
+    const feed = new SessionFeed({ fetchFn })
+    feed.start()
+    await flush()
+    // If backoff reset, reconnect fires at 1s
+    vi.advanceTimersByTime(1000)
+    await flush()
+    expect(urls.length).toBe(2)
+    feed.stop()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Row cap
+// ---------------------------------------------------------------------------
+
+describe('row cap', () => {
+  it('caps rendered rows at 200, dropping oldest', async () => {
+    const lines: string[] = []
+    for (let i = 1; i <= 205; i++) {
+      lines.push(feedLine(i, { kind: 'assistant-text', text: `line ${i}` }))
+    }
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush(200) // more rounds for 205 lines
+    // Query non-status rows via DOM (not textContent substring — "line 1" matches "line 10" etc.)
+    const rows = [...feed.root.querySelectorAll('.session-row:not(.session-status)')]
+    expect(rows.length).toBeLessThanOrEqual(200)
+    // First 5 rows (line 1–5) were dropped; first remaining is line 6
+    expect(rows[0]?.textContent).toBe('line 6')
+    // Last row is the newest
+    expect(rows[rows.length - 1]?.textContent).toBe('line 205')
+    feed.stop()
+  })
+})

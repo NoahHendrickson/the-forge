@@ -22,6 +22,7 @@ import { resetTokensCache } from './tokens'
 import { ChangeList } from './changelist'
 import { type AgentName } from './agent'
 import { WatchStatus, sentLabelFor, watchIndicatorFor, type Rung } from './watch'
+import { SessionFeed } from './session-feed'
 import { saveLifecycle, loadLifecycle, sourceIndex, locateBySource, type PersistedLifecycle } from './lifecycle-store'
 
 /** Rapid edits (e.g. dragging a number field) within this window reuse the first snapshot. */
@@ -75,8 +76,12 @@ export class DesignMode {
    * record is already resolved, outside the sent-but-unverified duplicate window. */
   private resendsInFlight = new Set<SentSeed>()
   /** Watcher-state poller — runs ONLY while design mode is on (started/stopped in
-   * setActive), so watch mode adds zero idle overhead to the page. */
-  private watch = new WatchStatus(() => this.refreshStatus())
+   * setActive), so watch mode adds zero idle overhead to the page. Session-state
+   * transitions also fire refreshStatus so the embedded-session indicator stays current. */
+  private watch = new WatchStatus(() => this.refreshStatus(), () => this.refreshStatus())
+  /** Live activity stream from the embedded session (Task 7/8) — idle-zero: start/stop
+   * mirror this.watch.start()/stop() in setActive so no fetch or timer survives design mode off. */
+  private feed = new SessionFeed({ headers: forgeSecretHeaders })
   private buttonTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>()
 
   // Layout-ripple state: idle-zero — only populated during the post-edit window.
@@ -145,6 +150,20 @@ export class DesignMode {
       onResend: (seed) => this.resend(seed),
     })
     this.panel.changesSlot.appendChild(this.changeList.root)
+    this.panel.feedSlot.appendChild(this.feed.root)
+    // Fire-and-forget with .catch(() => {}) — same style as the unlink button's fetch;
+    // a failed interrupt just means the session keeps running (degraded, not broken).
+    this.feed.onInterrupt = () => {
+      void fetch('/__the-forge/session/interrupt', { method: 'POST', headers: forgeSecretHeaders() })
+        .catch(() => {})
+    }
+    this.feed.onDecide = (id: string, allow: boolean) => {
+      void fetch('/__the-forge/approval/decide', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+        body: JSON.stringify({ id, allow }),
+      }).catch(() => {})
+    }
     overlay.mountPromptBox(this.promptBox.root)
     this.promptBox.onSend = (text) => this.sendPrompt(text)
     this.panel.promptButton.addEventListener('click', () => {
@@ -440,6 +459,7 @@ export class DesignMode {
       window.addEventListener('resize', this.onReflow, { passive: true })
       if (this.session.size() > 0) this.verifier.start()
       this.watch.start()
+      this.feed.start()
       this.refreshStatus()
       this.persist()
     } else {
@@ -467,6 +487,7 @@ export class DesignMode {
       this.dock.exit()
       this.verifier.stop()
       this.watch.stop()
+      this.feed.stop()
       // A deactivate mid-debounce-window must not leave sessionStorage/the Changes list stale —
       // flush before clear() (R2 F-C), which only visually hides rows without touching state.
       this.flushDraftSync()
@@ -579,7 +600,7 @@ export class DesignMode {
       this.drafts.elementCount(),
       this.drafts.isComparingAll(),
       this.verifierSummary || undefined,
-      watchIndicatorFor(this.watch.current(), agent)
+      watchIndicatorFor(this.watch.current(), agent, this.watch.sessionState())
     )
   }
 

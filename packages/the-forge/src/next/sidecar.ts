@@ -15,6 +15,9 @@ export interface SidecarHandle {
 export interface SidecarOpts {
   agent: DispatchOpts['agent']
   channelsFlag: boolean
+  /** `false` disables the embedded-session dispatch rung — see DispatchConfig.embedded.
+   * Optional: existing callers/tests that omit it keep the rung enabled (default true). */
+  embedded?: boolean
   /** resolveProjectRoot()'d project root. */
   root: string
   /** Injectable for tests; prod impl reads dist/client.js next to this module. Optional —
@@ -70,7 +73,7 @@ async function createSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
   const hintDelayMs = opts.hintDelayMs ?? 60_000
   const clientBundle = opts.clientBundle ?? defaultClientBundle
 
-  const { queue, hub, secret, forgeDir } = createForgeRuntime(opts.root)
+  const { queue, hub, secret, forgeDir, session } = createForgeRuntime(opts.root)
 
   // Next's rewrites proxy presents `Host: 127.0.0.1:<sidecar-port>` to this server (the N0
   // spike) — never the original external host, which only ever shows up in
@@ -81,7 +84,7 @@ async function createSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
   // DNS-rebound origin spoof its way past the Host check — the very attack the check
   // exists to stop. A direct (non-proxied) connection from such an origin still presents
   // the attacker's real Host and is correctly rejected.
-  const middleware = createForgeMiddleware(queue, [], secret, { agent: opts.agent, channelsFlag: opts.channelsFlag, cwd: opts.root }, hub)
+  const middleware = createForgeMiddleware(queue, [], secret, { agent: opts.agent, channelsFlag: opts.channelsFlag, cwd: opts.root, embedded: opts.embedded }, hub, session)
 
   let hintTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
     hintTimer = null
@@ -133,7 +136,10 @@ async function createSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
   const dir = path.dirname(fileURLToPath(import.meta.url))
   setupProjectConfig(opts.root, path.join(dir, 'mcp.js'), opts.root)
 
-  const onExit = () => removeEndpointFile(forgeDir)
+  const onExit = () => {
+    removeEndpointFile(forgeDir)
+    session.manager.stop()
+  }
   process.once('exit', onExit)
 
   const close = (): Promise<void> => {
@@ -143,6 +149,7 @@ async function createSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
     }
     process.removeListener('exit', onExit)
     removeEndpointFile(forgeDir)
+    session.manager.stop()
     singleton = null
     return new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()))
