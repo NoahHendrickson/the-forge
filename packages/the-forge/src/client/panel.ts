@@ -57,7 +57,7 @@ export class Panel {
   modeButton = createButton()
   /** Free-form prompt entry point (prompt-mode spec) — lives in the panel header, hidden
    * whenever there's no live selection (docked "No selection" state included). Panel does
-   * NOT know about PromptBox itself; index.ts wires the click (Task 4). */
+   * NOT know about the chat cluster itself; index.ts wires the click (Task 4/6). */
   promptButton = createButton({ label: 'Prompt', className: 'panel-prompt' })
   /** Mount slot for the Changes lifecycle list (changelist.ts) — owned/populated by
    * DesignMode, positioned here so it pins between the scrolling sections and the footer

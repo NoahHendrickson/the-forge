@@ -694,6 +694,216 @@ describe('config-changed row', () => {
 // Row cap
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Chat input cluster, element chip, config bar pickers (Task 6)
+// ---------------------------------------------------------------------------
+
+describe('chat input cluster', () => {
+  it('send fires onSay with trimmed text + chip element and clears both', () => {
+    const said: Array<[string, { source: string; tag: string } | undefined]> = []
+    const feed = new SessionFeed()
+    feed.onSay = (text, element) => said.push([text, element])
+    document.body.appendChild(feed.root)
+
+    feed.setChip({ source: 'src/App.tsx:12:3', tag: 'div', label: 'div · App.tsx:12' })
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = '  make it bigger  '
+    const sendBtn = feed.root.querySelector('.chat-send') as HTMLButtonElement
+    sendBtn.click()
+
+    expect(said).toEqual([['make it bigger', { source: 'src/App.tsx:12:3', tag: 'div' }]])
+    expect(textarea.value).toBe('')
+    expect((feed.root.querySelector('.chat-chip') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('Cmd-Enter sends', () => {
+    const said: string[] = []
+    const feed = new SessionFeed()
+    feed.onSay = (text) => said.push(text)
+    document.body.appendChild(feed.root)
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'hello'
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, cancelable: true }))
+    expect(said).toEqual(['hello'])
+  })
+
+  it('Ctrl-Enter also sends', () => {
+    const said: string[] = []
+    const feed = new SessionFeed()
+    feed.onSay = (text) => said.push(text)
+    document.body.appendChild(feed.root)
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'hello'
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }))
+    expect(said).toEqual(['hello'])
+  })
+
+  it('plain Enter (no modifier) does not send', () => {
+    const said: string[] = []
+    const feed = new SessionFeed()
+    feed.onSay = (text) => said.push(text)
+    document.body.appendChild(feed.root)
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'hello'
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    expect(said).toEqual([])
+  })
+
+  it('empty (or whitespace-only) text never fires onSay', () => {
+    const said: string[] = []
+    const feed = new SessionFeed()
+    feed.onSay = (text) => said.push(text)
+    document.body.appendChild(feed.root)
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    const sendBtn = feed.root.querySelector('.chat-send') as HTMLButtonElement
+    textarea.value = '   '
+    sendBtn.click()
+    expect(said).toEqual([])
+  })
+
+  it('send with no chip omits element', () => {
+    const said: Array<[string, { source: string; tag: string } | undefined]> = []
+    const feed = new SessionFeed()
+    feed.onSay = (text, element) => said.push([text, element])
+    document.body.appendChild(feed.root)
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'plain message'
+    ;(feed.root.querySelector('.chat-send') as HTMLButtonElement).click()
+    expect(said).toEqual([['plain message', undefined]])
+  })
+
+  it('chip renders label and × clears it', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setChip({ source: 'src/x.tsx:1:1', tag: 'div', label: 'div · x.tsx:1' })
+    const chip = feed.root.querySelector('.chat-chip') as HTMLElement
+    expect(chip.hidden).toBe(false)
+    expect(chip.textContent).toContain('div · x.tsx:1')
+    const clearBtn = chip.querySelector('.chat-chip-clear') as HTMLButtonElement
+    expect(clearBtn).not.toBeNull()
+    clearBtn.click()
+    expect(chip.hidden).toBe(true)
+  })
+
+  it('setChip(null) hides the chip directly', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setChip({ source: 'x:1:1', tag: 'div', label: 'div · x:1' })
+    feed.setChip(null)
+    expect((feed.root.querySelector('.chat-chip') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('setAvailability disables input with reason and unhides the feed root', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    expect(feed.root.hidden).toBe(true)
+
+    feed.setAvailability({ enabled: false, reason: 'Embedded sessions are disabled in config' })
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    const sendBtn = feed.root.querySelector('.chat-send') as HTMLButtonElement
+    const reason = feed.root.querySelector('.chat-disabled-reason') as HTMLElement
+    expect(textarea.disabled).toBe(true)
+    expect(sendBtn.disabled).toBe(true)
+    expect(reason.hidden).toBe(false)
+    expect(reason.textContent).toBe('Embedded sessions are disabled in config')
+    expect(feed.root.hidden).toBe(false)
+
+    feed.setAvailability({ enabled: true })
+    expect(textarea.disabled).toBe(false)
+    expect(sendBtn.disabled).toBe(false)
+    expect(reason.hidden).toBe(true)
+  })
+
+  it('disabled input never fires onSay even if trySend is somehow reached', () => {
+    const said: string[] = []
+    const feed = new SessionFeed()
+    feed.onSay = (text) => said.push(text)
+    document.body.appendChild(feed.root)
+    feed.setAvailability({ enabled: false, reason: 'nope' })
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'hello'
+    ;(feed.root.querySelector('.chat-send') as HTMLButtonElement).click()
+    expect(said).toEqual([])
+  })
+
+  it('renderTransientError renders a session-error-row', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.renderTransientError('chat queue full — wait for the current turn')
+    const row = feed.root.querySelector('.session-error-row')
+    expect(row).not.toBeNull()
+    expect(row?.textContent).toBe('chat queue full — wait for the current turn')
+  })
+})
+
+describe('config bar pickers', () => {
+  it('model display seeds from a started event', async () => {
+    const feed = new SessionFeed({
+      fetchFn: makeFetchFn([feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true })]),
+    })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.session-model')?.textContent).toBe('claude-opus-4-5')
+    feed.stop()
+  })
+
+  it('model display shows a placeholder before any started/config-changed event', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    expect(feed.root.querySelector('.session-model')?.textContent).toBe('model…')
+  })
+
+  it('effort/permission selects seed from config-changed and stay silent (no onConfig fired)', async () => {
+    const lines = [feedLine(1, { kind: 'config-changed', effort: 'high', permissionMode: 'plan' })]
+    const fired: Array<Record<string, string>> = []
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    feed.onConfig = (cfg) => fired.push(cfg)
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const effortSelect = feed.root.querySelector('.session-effort') as HTMLSelectElement
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+    expect(effortSelect.value).toBe('high')
+    expect(permSelect.value).toBe('plan')
+    expect(fired).toEqual([])
+    feed.stop()
+  })
+
+  it('partial config-changed (only effort) leaves the permission picker on its placeholder', async () => {
+    const lines = [feedLine(1, { kind: 'config-changed', effort: 'low' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+    expect(permSelect.value).toBe('')
+    feed.stop()
+  })
+
+  it('changing the effort select fires onConfig with only effort', () => {
+    const fired: Array<Record<string, string>> = []
+    const feed = new SessionFeed()
+    feed.onConfig = (cfg) => fired.push(cfg)
+    document.body.appendChild(feed.root)
+    const effortSelect = feed.root.querySelector('.session-effort') as HTMLSelectElement
+    effortSelect.value = 'xhigh'
+    effortSelect.dispatchEvent(new Event('change'))
+    expect(fired).toEqual([{ effort: 'xhigh' }])
+  })
+
+  it('changing the permission select fires onConfig with only permissionMode', () => {
+    const fired: Array<Record<string, string>> = []
+    const feed = new SessionFeed()
+    feed.onConfig = (cfg) => fired.push(cfg)
+    document.body.appendChild(feed.root)
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+    permSelect.value = 'plan'
+    permSelect.dispatchEvent(new Event('change'))
+    expect(fired).toEqual([{ permissionMode: 'plan' }])
+  })
+})
+
 describe('row cap', () => {
   it('caps rendered rows at 200, dropping oldest', async () => {
     const lines: string[] = []

@@ -26,8 +26,10 @@ function feedLine(seq: number, event: object): string {
   return JSON.stringify({ type: 'feed', seq, at: new Date().toISOString(), event })
 }
 
-/** Creates a SessionFeed with a scripted event script and mounts it. */
-function makeFeed(lines: string[]): HTMLElement {
+/** Builds a SessionFeed with a scripted event script, wired the same way index.ts wires it —
+ * returns both the instance (so a story can drive setChip/setAvailability post-construction)
+ * and the mounted shadow host. */
+function makeFeedInstance(lines: string[]): { feed: SessionFeed; host: HTMLElement } {
   const fetchFn: typeof fetch = ((_url: RequestInfo | URL, _init?: RequestInit) =>
     Promise.resolve(
       new Response(makeBody(lines), {
@@ -39,8 +41,15 @@ function makeFeed(lines: string[]): HTMLElement {
   const feed = new SessionFeed({ fetchFn })
   feed.onInterrupt = () => alert('Stop requested')
   feed.onDecide = (id, allow) => alert(`Decision: ${id} → ${allow ? 'Allow' : 'Deny'}`)
+  feed.onSay = (text, element) => alert(`Say: "${text}"${element ? ` (${element.tag} · ${element.source})` : ''}`)
+  feed.onConfig = (cfg) => alert(`Config: ${JSON.stringify(cfg)}`)
   feed.start()
-  return mountInShadow(feed.root, 'panel')
+  return { feed, host: mountInShadow(feed.root, 'panel') }
+}
+
+/** Creates a SessionFeed with a scripted event script and mounts it. */
+function makeFeed(lines: string[]): HTMLElement {
+  return makeFeedInstance(lines).host
 }
 
 /** Working state — session running, a few tool calls completed. */
@@ -145,4 +154,50 @@ export const ConfigChanged: Story = {
       feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
       feedLine(2, { kind: 'config-changed', model: 'claude-opus-4-5', permissionMode: 'plan', effort: 'high' }),
     ]),
+}
+
+// ---------------------------------------------------------------------------
+// Chat input cluster, element chip, config bar pickers (Task 6)
+// ---------------------------------------------------------------------------
+
+/** Chat input cluster with no chip attached — the config bar's effort/permission pickers
+ * sit on their placeholder option until a started/config-changed event seeds them; the
+ * model display seeds from `started` the same way. */
+export const InputClusterIdle: Story = {
+  render: () =>
+    makeFeed([feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true })]),
+}
+
+/** Chat input cluster with an element chip attached — the state right after clicking the
+ * panel's Prompt button on a selected element (index.ts's setChip + focusInput wiring). */
+export const InputClusterWithChip: Story = {
+  render: () => {
+    const { feed, host } = makeFeedInstance([
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
+    ])
+    feed.setChip({ source: 'src/App.tsx:42:5', tag: 'button', label: 'button · App.tsx:42' })
+    return host
+  },
+}
+
+/** Config bar seeded from config-changed (effort=high, permissionMode=plan) — the pickers
+ * reflect the current values instead of their 'effort…'/'permissions…' placeholders. */
+export const ConfigBarSeeded: Story = {
+  render: () =>
+    makeFeed([
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
+      feedLine(2, { kind: 'config-changed', effort: 'high', permissionMode: 'plan' }),
+    ]),
+}
+
+/** Disabled input — setAvailability(false, reason), as index.ts drives it when the server's
+ * /status reports sessionEnabled: false (DispatchConfig.embedded opted out). */
+export const InputDisabled: Story = {
+  render: () => {
+    const { feed, host } = makeFeedInstance([
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
+    ])
+    feed.setAvailability({ enabled: false, reason: 'Embedded sessions are disabled in config' })
+    return host
+  },
 }

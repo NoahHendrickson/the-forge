@@ -2,6 +2,29 @@
 // requires X-Forge-Secret for auth (same as all mutating endpoints), so we use
 // fetch + ReadableStream + manual NDJSON parsing instead.
 import { createButton } from './ui/button'
+import { createSelect } from './ui/select'
+
+// Fixed vocabularies for the effort/permission pickers — mirrors server/endpoints.ts's
+// EFFORT_LEVELS/PERMISSION_MODES validation sets exactly (task-6 brief). The model
+// "picker" is deliberately NOT a select: the CLI exposes no enumerable model list, so v1
+// renders it as a read-only .session-model span seeded from started/config-changed events
+// instead of offering a fixed (and likely wrong/stale) option list. See task-6 report for
+// the full deviation writeup.
+const EFFORT_OPTIONS = [
+  { value: '', label: 'effort…' },
+  { value: 'low', label: 'low' },
+  { value: 'medium', label: 'medium' },
+  { value: 'high', label: 'high' },
+  { value: 'xhigh', label: 'xhigh' },
+  { value: 'max', label: 'max' },
+] as const
+
+const PERMISSION_OPTIONS = [
+  { value: '', label: 'permissions…' },
+  { value: 'default', label: 'default' },
+  { value: 'acceptEdits', label: 'acceptEdits' },
+  { value: 'plan', label: 'plan' },
+] as const
 
 // ---------------------------------------------------------------------------
 // Stream line types (NDJSON, one object per line)
@@ -54,10 +77,34 @@ export class SessionFeed {
   onInterrupt: () => void = () => {}
   /** Called when user clicks Allow/Deny on an approval row — host wires to the decide endpoint. */
   onDecide: (id: string, allow: boolean) => void = () => {}
+  /** Called on Send (click or Cmd/Ctrl-Enter) with trimmed, non-empty text and the currently
+   * chipped element (if any) — host wires to POST /__the-forge/session/say. */
+  onSay: (text: string, element?: { source: string; tag: string }) => void = () => {}
+  /** Called when the effort or permission picker changes, with ONLY the changed key — host
+   * wires to POST /__the-forge/session/config. */
+  onConfig: (cfg: { model?: string; permissionMode?: string; effort?: string }) => void = () => {}
 
   private readonly statusRow: HTMLElement
   private readonly list: HTMLElement
   private readonly stopBtn: HTMLButtonElement
+
+  // --- config bar (header): model is read-only display, effort/permission are real pickers ---
+  private readonly configBar: HTMLElement
+  private readonly modelDisplay: HTMLElement
+  private readonly effortSelect: HTMLSelectElement
+  private readonly permissionSelect: HTMLSelectElement
+
+  // --- element chip + input cluster (footer) ---
+  private readonly chip: HTMLElement
+  private readonly chipLabel: HTMLElement
+  private readonly inputCluster: HTMLElement
+  private readonly textarea: HTMLTextAreaElement
+  private readonly sendBtn: HTMLButtonElement
+  private readonly disabledReason: HTMLElement
+  /** The element currently attached to a pending message, set via setChip (Prompt button /
+   * host) and cleared on send or the chip's own × — mirrors the old floating prompt popup's
+   * single-anchor model but as host-driven state instead of an open/close popover. */
+  private currentChip: { source: string; tag: string; label: string } | null = null
 
   // --- stream lifecycle (generation-guard pattern from Verifier/WatchStatus) ---
   /** Bumped on every start()/stop(): a fetch/timer chain under an older generation is dead
@@ -114,7 +161,134 @@ export class SessionFeed {
     this.list = document.createElement('div')
     this.list.className = 'session-list'
 
-    this.root.append(this.statusRow, this.stopBtn, this.list)
+    // Config bar (header): model is a read-only display; effort/permission are real pickers
+    // that stay on a placeholder option until a started/config-changed event seeds them —
+    // picking the placeholder itself is a no-op (see the '' guards in the onChange handlers).
+    this.configBar = document.createElement('div')
+    this.configBar.className = 'session-config-bar'
+    this.modelDisplay = document.createElement('span')
+    this.modelDisplay.className = 'session-model'
+    this.modelDisplay.textContent = 'model…'
+    this.effortSelect = createSelect({
+      className: 'session-effort',
+      options: EFFORT_OPTIONS,
+      value: '',
+      onChange: (value) => {
+        if (value === '') return
+        this.onConfig({ effort: value })
+      },
+    })
+    this.permissionSelect = createSelect({
+      className: 'session-permission',
+      options: PERMISSION_OPTIONS,
+      value: '',
+      onChange: (value) => {
+        if (value === '') return
+        this.onConfig({ permissionMode: value })
+      },
+    })
+    this.configBar.append(this.modelDisplay, this.effortSelect, this.permissionSelect)
+
+    // Element chip: Prompt-button / host sets it via setChip(); the × clears it locally
+    // (no host callback — Send/onSay reads currentChip directly, same as the old floating
+    // prompt popup used to read its own anchor).
+    this.chip = document.createElement('div')
+    this.chip.className = 'chat-chip'
+    this.chip.hidden = true
+    this.chipLabel = document.createElement('span')
+    const chipClear = createButton({ label: '×', className: 'chat-chip-clear' })
+    chipClear.type = 'button'
+    chipClear.addEventListener('click', () => this.setChip(null))
+    this.chip.append(this.chipLabel, chipClear)
+
+    // Input cluster: plain createElement for the textarea (no factory exists for it, per
+    // CLAUDE.md's ui/ factory rule — that rule covers buttons/selects), Send via createButton.
+    this.inputCluster = document.createElement('div')
+    this.inputCluster.className = 'chat-input'
+    this.disabledReason = document.createElement('div')
+    this.disabledReason.className = 'chat-disabled-reason'
+    this.disabledReason.hidden = true
+    this.textarea = document.createElement('textarea')
+    this.textarea.className = 'chat-textarea'
+    this.textarea.placeholder = 'Message the session…'
+    this.textarea.rows = 2
+    this.textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault()
+        this.trySend()
+      }
+      // Escape is deliberately NOT stopPropagation'd here (unlike the old floating prompt
+      // popup's local handler): index.ts's onKey already ignores every overlay-internal target via
+      // overlay.contains(e.target) — since this textarea lives inside the panel, which is
+      // itself inside the overlay's shadow host, that guard alone already keeps Escape from
+      // deselecting/deactivating while typing. See design-mode.test.ts for the proof.
+    })
+    this.sendBtn = createButton({ label: 'Send', className: 'chat-send' })
+    this.sendBtn.type = 'button'
+    this.sendBtn.addEventListener('click', () => this.trySend())
+    this.inputCluster.append(this.disabledReason, this.textarea, this.sendBtn)
+
+    this.root.append(this.configBar, this.statusRow, this.stopBtn, this.list, this.chip, this.inputCluster)
+  }
+
+  /** Attaches (or clears, with `null`) the element a pending message will reference — Prompt
+   * button sets this via the host; the chip's own × also routes here. Cleared unconditionally
+   * on send (trySend), matching the contract's "chip cleared on send". */
+  setChip(el: { source: string; tag: string; label: string } | null): void {
+    this.currentChip = el
+    this.chipLabel.textContent = el?.label ?? ''
+    this.chip.hidden = el === null
+  }
+
+  /** Focuses the chat textarea — the Prompt button's new job (index.ts) is setChip + focus,
+   * replacing the old floating prompt popup's open(anchor). */
+  focusInput(): void {
+    this.textarea.focus()
+  }
+
+  /** Enables/disables the input cluster and shows/hides the reason line. Availability
+   * derivation lives in the HOST (index.ts) — this is a dumb setter. Also unhides the feed
+   * root (same as setStatus/addRow) so the input — and any disabled-reason — is visible as
+   * soon as design mode is on, even before the embedded session has emitted its first NDJSON
+   * event (a fresh session may sit at 'idle' until the user's first message auto-starts it). */
+  setAvailability(a: { enabled: boolean; reason?: string }): void {
+    this.root.hidden = false
+    this.textarea.disabled = !a.enabled
+    this.sendBtn.disabled = !a.enabled
+    if (!a.enabled && a.reason) {
+      this.disabledReason.textContent = a.reason
+      this.disabledReason.hidden = false
+    } else {
+      this.disabledReason.hidden = true
+      this.disabledReason.textContent = ''
+    }
+  }
+
+  /** Renders a transient error row using the same styling as in-band session-error rows —
+   * for host-side failures that never arrive over the NDJSON stream (e.g. a 429 from POST
+   * /session/say). Public so index.ts can call it straight from the fetch handler. */
+  renderTransientError(text: string): void {
+    this.addRow(this.makeErrorRow(text))
+  }
+
+  private trySend(): void {
+    if (this.textarea.disabled) return
+    const text = this.textarea.value.trim()
+    if (!text) return
+    const element = this.currentChip ? { source: this.currentChip.source, tag: this.currentChip.tag } : undefined
+    this.onSay(text, element)
+    this.textarea.value = ''
+    this.setChip(null)
+  }
+
+  /** Seeds the config bar from a started/config-changed event — only the keys present in the
+   * event are applied, matching the "each select shows a placeholder until seeded" contract.
+   * Programmatic .value assignment does not fire 'change', so this never loops back into
+   * onConfig. */
+  private seedConfigBar(e: Record<string, unknown>): void {
+    if (typeof e.model === 'string') this.modelDisplay.textContent = e.model
+    if (typeof e.effort === 'string') this.effortSelect.value = e.effort
+    if (typeof e.permissionMode === 'string') this.permissionSelect.value = e.permissionMode
   }
 
   /** Open the NDJSON stream — called when design mode turns on. Re-entrant guard: if a fetch
@@ -266,6 +440,7 @@ export class SessionFeed {
     if (kind === 'started') {
       const model = typeof e.model === 'string' ? e.model : '?'
       this.setStatus(`Session started · ${model}`)
+      this.seedConfigBar(e)
     } else if (kind === 'assistant-text') {
       const text = typeof e.text === 'string' ? e.text : ''
       this.finalizeAssistantText(text)
@@ -293,6 +468,7 @@ export class SessionFeed {
       this.setBusyish(true)
     } else if (kind === 'config-changed') {
       this.addRow(this.makeConfigRow(e))
+      this.seedConfigBar(e)
     } else if (kind === 'tool-finished') {
       const toolId = typeof e.toolId === 'string' ? e.toolId : ''
       const row = this.toolRows.get(toolId)

@@ -426,3 +426,138 @@ describe('WatchStatus — session field parsing', () => {
     watch.stop()
   })
 })
+
+describe('WatchStatus — sessionEnabled parsing (Task 6)', () => {
+  function stubStatusWithEnabled(sessionEnabled: unknown) {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [], watcher: 'none', sessionEnabled }) })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('sessionEnabled undefined before the first poll answers', () => {
+    const watch = new WatchStatus(() => {})
+    expect(watch.sessionEnabled()).toBeUndefined()
+  })
+
+  it('a true sessionEnabled is parsed verbatim', async () => {
+    stubStatusWithEnabled(true)
+    const watch = new WatchStatus(() => {})
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.sessionEnabled()).toBe(true)
+    watch.stop()
+  })
+
+  it('a false sessionEnabled is parsed verbatim', async () => {
+    stubStatusWithEnabled(false)
+    const watch = new WatchStatus(() => {})
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.sessionEnabled()).toBe(false)
+    watch.stop()
+  })
+
+  it('unknown-shape sessionEnabled (absent field, older server) is tolerated without crash — stays undefined', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const watch = new WatchStatus(() => {})
+    expect(() => watch.start()).not.toThrow()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.sessionEnabled()).toBeUndefined()
+    watch.stop()
+  })
+
+  it('unknown-shape sessionEnabled (non-boolean value) is tolerated without crash — stays undefined', async () => {
+    stubStatusWithEnabled('not-a-bool')
+    const watch = new WatchStatus(() => {})
+    expect(() => watch.start()).not.toThrow()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.sessionEnabled()).toBeUndefined()
+    watch.stop()
+  })
+
+  it('a malformed value on a later poll does not clobber a previously known-good flag', async () => {
+    const fetchMock = stubStatusWithEnabled(false)
+    const watch = new WatchStatus(() => {})
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.sessionEnabled()).toBe(false)
+
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ items: [], watcher: 'none', sessionEnabled: 123 }) })
+    await vi.advanceTimersByTimeAsync(WATCH_POLL_MS)
+    expect(watch.sessionEnabled()).toBe(false)
+    watch.stop()
+  })
+
+  it('stop() resets sessionEnabled to undefined', async () => {
+    stubStatusWithEnabled(true)
+    const watch = new WatchStatus(() => {})
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.sessionEnabled()).toBe(true)
+    watch.stop()
+    expect(watch.sessionEnabled()).toBeUndefined()
+  })
+
+  it('sessionEnabled is updated BEFORE onChange/onSessionChange fire, so a callback reading it sees the fresh value', async () => {
+    // Regression guard: this ordering bug shipped once already (index.ts's refreshStatus,
+    // wired to onChange/onSessionChange, read a stale sessionEnabled on the very poll that
+    // changed it) — see the why-comment in watch.ts's poll().
+    stubStatusWithSession('none', 'idle') // 'unavailable' -> 'idle' is a transition, fires onSessionChange
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], watcher: 'none', session: 'idle', sessionEnabled: false }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const seenAtCallback: Array<boolean | undefined> = []
+    const watch = new WatchStatus(
+      () => {},
+      () => seenAtCallback.push(watch.sessionEnabled())
+    )
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(seenAtCallback).toEqual([false])
+    watch.stop()
+  })
+
+  it('onTick fires every poll, even when neither watcher nor session transitions', async () => {
+    stubStatusWithEnabled(false) // watcher 'none' (already default), no session field (stays 'unavailable')
+    const ticks: Array<boolean | undefined> = []
+    const watch = new WatchStatus(
+      () => {},
+      () => {},
+      () => ticks.push(watch.sessionEnabled())
+    )
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(WATCH_POLL_MS)
+    expect(ticks).toEqual([false, false])
+    watch.stop()
+  })
+
+  it('onTick is optional — callers that omit it still work', async () => {
+    stubStatus('none')
+    const watch = new WatchStatus(() => {})
+    expect(() => watch.start()).not.toThrow()
+    await vi.advanceTimersByTimeAsync(0)
+    watch.stop()
+  })
+
+  it('onTick does not fire for a stale generation (stop() during an in-flight poll)', async () => {
+    let resolveFetch: (v: unknown) => void = () => {}
+    const fetchMock = vi.fn(() => new Promise((r) => (resolveFetch = r)))
+    vi.stubGlobal('fetch', fetchMock)
+    const ticks: number[] = []
+    const watch = new WatchStatus(
+      () => {},
+      undefined,
+      () => ticks.push(1)
+    )
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0) // fetch is now in flight
+    watch.stop() // bumps generation while the fetch is still pending
+    resolveFetch({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(ticks).toEqual([])
+  })
+})

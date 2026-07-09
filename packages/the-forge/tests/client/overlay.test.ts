@@ -464,8 +464,8 @@ describe('Overlay.showRipples (M2b Task 4)', () => {
 describe('Dock CSS (docked-panel spec)', () => {
   it('panel width is driven by --forge-dock-w with a 320px default (resize hook)', () => {
     expect(CSS).toContain('width: var(--forge-dock-w, 320px)')
-    // Scoped to #panel's own rule — the prompt box (unrelated floating control) legitimately
-    // has its own fixed 280px width, so a bare substring check would false-positive on it.
+    // Scoped to #panel's own rule, not a bare substring check, in case some other floating
+    // control ever legitimately carries its own fixed width elsewhere in the sheet.
     expect(CSS).toMatch(/#panel\s*{[^}]*width:\s*var\(--forge-dock-w/s)
     expect(CSS).not.toMatch(/#panel\s*{[^}]*width:\s*280px/s)
   })
@@ -505,11 +505,8 @@ describe('Dock polish CSS (PR #2 follow-ups)', () => {
   })
 })
 
-describe('Overlay CSS prompt box (prompt-mode)', () => {
-  it('styles the prompt box', () => {
-    expect(CSS).toContain('.prompt-box')
-    expect(CSS).toContain('.prompt-textarea')
-    expect(CSS).toContain('.prompt-send')
+describe('Overlay CSS panel-prompt anchor (prompt-mode, floating prompt popup retired Task 6)', () => {
+  it('.panel-prompt itself is a layout-only class hook with no CSS rule of its own', () => {
     // .panel-prompt itself is a layout-only class hook with no CSS rule of its own (see
     // panel.ts / the why-comment in overlay.ts source) — its stable-contract status is
     // documented in source comments, not a CSS-embedded rule.
@@ -526,12 +523,32 @@ describe('Overlay CSS prompt box (prompt-mode)', () => {
     expect(CSS).toMatch(/\.panel-head-actions\s*{[^}]*display:\s*flex/s)
     expect(CSS).not.toMatch(/\.panel-prompt\s*{[^}]*margin-left:\s*auto/s)
   })
+})
 
-  // Finding 2 fix: PromptBox mounts outside #panel/#status, so .prompt-send previously
-  // fell back to the light base `button {}` pill. Pin the explicit dark token styling.
-  it('styles .prompt-send with the dark control tokens, not the light base button fallback', () => {
-    expect(CSS).toMatch(/\.prompt-box \.prompt-send\s*{[^}]*background:\s*var\(--control\)/s)
-    expect(CSS).toMatch(/\.prompt-box \.prompt-send:hover\s*{[^}]*background:\s*var\(--control-hover\)/s)
+describe('Overlay CSS chat input cluster / element chip / config bar (Task 6)', () => {
+  it('styles the config bar, model display, chip, and input cluster as test-hook classes', () => {
+    expect(CSS).toContain('.session-config-bar')
+    expect(CSS).toContain('.session-model')
+    expect(CSS).toContain('.chat-chip')
+    expect(CSS).toContain('.chat-input')
+    expect(CSS).toContain('.chat-textarea')
+    expect(CSS).toContain('.chat-disabled-reason')
+  })
+
+  // SessionFeed mounts INSIDE #panel (unlike the old floating prompt popup, which mounted as a shadow-
+  // root sibling) — but there is still no generic `#panel button` dark-token fallback, so
+  // .chat-send needs the same explicit dark styling as .session-stop/.prompt-send used to.
+  it('styles .chat-send with the dark control tokens, not the light base button fallback', () => {
+    expect(CSS).toMatch(/\.chat-send\s*{[^}]*background:\s*var\(--control\)/s)
+    expect(CSS).toMatch(/\.chat-send:hover\s*{[^}]*background:\s*var\(--control-hover\)/s)
+  })
+
+  it('has no CSS-string comments (bundle-byte guard)', () => {
+    // /* */ would parse, but it ships as bundle bytes — the whole point of the migration
+    // (see the identical check earlier in this file).
+    const chatBlockStart = CSS.indexOf('.session-config-bar')
+    expect(chatBlockStart).toBeGreaterThan(-1)
+    expect(CSS.slice(chatBlockStart)).not.toContain('/*')
   })
 })
 
