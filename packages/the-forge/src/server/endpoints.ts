@@ -5,6 +5,7 @@ import { Queue } from './queue'
 import { dispatch as realDispatch, augmentDispatchMarkdown, type DispatchOpts, type DispatchResult } from './dispatch'
 import { WatcherHub } from './watchers'
 import { ensureDevtoolsUuid } from './setup'
+import type { ForgeSessionHandles } from './runtime'
 
 /** Chrome DevTools' Automatic Workspace Folders well-known path (task A5) — served by
  * createForgeMiddleware below and proxied to it by src/next/index.ts's rewrites merge.
@@ -113,6 +114,8 @@ function rejectDisallowedHost(
 
 // Mutating endpoints that require the shared secret when one is configured. GET /status is
 // deliberately excluded: it's read-only and only exposes ids/statuses, which are non-sensitive.
+// GET /session/events is also excluded here (it's not a POST) but is secret-gated explicitly
+// in its own handler — see why-comment there.
 const MUTATING_PATHS = new Set([
   '/__the-forge/queue',
   '/__the-forge/pull',
@@ -120,6 +123,9 @@ const MUTATING_PATHS = new Set([
   '/__the-forge/dispatch',
   '/__the-forge/wait',
   '/__the-forge/unwatch',
+  '/__the-forge/session/interrupt',
+  '/__the-forge/approval',
+  '/__the-forge/approval/decide',
 ])
 
 export interface DispatchConfig {
@@ -141,7 +147,11 @@ export function createForgeMiddleware(
   allowedHosts: string[] = [],
   secret?: string,
   dispatchConfig: DispatchConfig = { agent: 'claude-code', channelsFlag: false },
-  hub?: WatcherHub
+  hub?: WatcherHub,
+  // Optional so existing callers/tests stand unchanged — same pattern as the optional hub
+  // param above. The plugin (src/vite.ts / src/next/sidecar.ts) passes one explicitly once
+  // Task 5 wires it; until then all callers that omit it get 404s on the new session paths.
+  session?: ForgeSessionHandles
 ) {
   // Optional param so existing callers/tests stand unchanged; the plugin (src/index.ts)
   // constructs and passes one explicitly so the wiring is visible at the composition root.
@@ -217,6 +227,56 @@ export function createForgeMiddleware(
       if (provided !== secret) {
         return send(res, 403, { error: 'missing or invalid X-Forge-Secret' })
       }
+    }
+
+    // GET /session/events — secret-gated despite being a GET. Events carry file paths and
+    // command text, making them more sensitive than /status (which only exposes ids/statuses).
+    // Deliberate asymmetry with /status's open GET: the browser client uses fetch() rather than
+    // EventSource precisely so it can attach the X-Forge-Secret header on this request.
+    // MUTATING_PATHS covers POST-only; this GET needs its own explicit gate.
+    if (req.method === 'GET' && pathname === '/__the-forge/session/events') {
+      if (secret) {
+        const provided = req.headers['x-forge-secret']
+        if (provided !== secret) {
+          return send(res, 403, { error: 'missing or invalid X-Forge-Secret' })
+        }
+      }
+      if (!session) return send(res, 404, { error: 'embedded session unavailable' })
+
+      const sinceParam = new URLSearchParams(query).get('since')
+      const since = typeof sinceParam === 'string' && /^\d+$/.test(sinceParam) ? parseInt(sinceParam, 10) : 0
+
+      res.statusCode = 200
+      res.setHeader('Content-Type', 'application/x-ndjson')
+      // Flush headers immediately so the client sees 200 + Content-Type before the first line.
+      ;(res as ServerResponse & { flushHeaders?: () => void }).flushHeaders?.()
+
+      // Replay buffered feed events
+      for (const fe of session.manager.eventsSince(since)) {
+        res.write(JSON.stringify({ type: 'feed', seq: fe.seq, at: fe.at, event: fe.event }) + '\n')
+      }
+      // Replay pending approvals — a late-connecting browser doesn't miss outstanding requests
+      for (const pa of session.approvals.pending()) {
+        res.write(JSON.stringify({ type: 'approval', id: pa.id, toolName: pa.toolName, detail: pa.detail }) + '\n')
+      }
+
+      // Subscribe for live events; unsubscribe on connection close so nothing leaks
+      const unsubManager = session.manager.subscribe((fe) => {
+        res.write(JSON.stringify({ type: 'feed', seq: fe.seq, at: fe.at, event: fe.event }) + '\n')
+      })
+      const unsubApprovals = session.onApproval((e) => {
+        if (e.kind === 'approval-request') {
+          res.write(JSON.stringify({ type: 'approval', id: e.id, toolName: e.toolName, detail: e.detail }) + '\n')
+        } else {
+          res.write(JSON.stringify({ type: 'approval-resolved', id: e.id, allow: e.allow }) + '\n')
+        }
+      })
+
+      res.on('close', () => {
+        unsubManager()
+        unsubApprovals()
+      })
+      return
     }
 
     if (pathname === '/__the-forge/queue') {
@@ -330,6 +390,47 @@ export function createForgeMiddleware(
       return
     }
 
+    if (pathname === '/__the-forge/session/interrupt') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      if (!session) return send(res, 404, { error: 'embedded session unavailable' })
+      session.manager.interrupt()
+      return send(res, 200, { state: session.manager.state() })
+    }
+
+    if (pathname === '/__the-forge/approval') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      if (!session) return send(res, 404, { error: 'embedded session unavailable' })
+      readBody(req)
+        .then((body) => {
+          const { toolName, detail } = (body ?? {}) as { toolName?: unknown; detail?: unknown }
+          const tn = typeof toolName === 'string' ? toolName : ''
+          const dt = typeof detail === 'string' ? detail : ''
+          const { promise } = session.approvals.request(tn, dt)
+          // Long-poll: hold response open until decided or the registry's hold timer expires.
+          // No res.on('close') → decide wiring: the registry's own APPROVAL_HOLD_MS timer is
+          // the authoritative cleanup — same trust model as /wait's cancel (the MCP bin is not
+          // trusted to report its own disappearance; expiry handles abandonment).
+          promise.then((decision) => send(res, 200, decision))
+        })
+        .catch((e: Error) => send(res, 400, { error: e.message }))
+      return
+    }
+
+    if (pathname === '/__the-forge/approval/decide') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      if (!session) return send(res, 404, { error: 'embedded session unavailable' })
+      readBody(req)
+        .then((body) => {
+          const { id, allow } = (body ?? {}) as { id?: unknown; allow?: unknown }
+          if (typeof id !== 'string' || typeof allow !== 'boolean') {
+            return send(res, 400, { error: 'id (string) and allow (boolean) required' })
+          }
+          send(res, 200, { ok: session.approvals.decide(id, allow) })
+        })
+        .catch((e: Error) => send(res, 400, { error: e.message }))
+      return
+    }
+
     if (req.method === 'GET' && pathname === '/__the-forge/status') {
       // A PRESENT-but-empty ids param (`?ids=`) means "no items, thanks" — it's the watch
       // poller's cheap watcher-state probe. Only an ABSENT param returns everything.
@@ -339,7 +440,7 @@ export function createForgeMiddleware(
         .list()
         .filter((i) => !wanted || wanted.has(i.id))
         .map(({ id, status, note }) => ({ id, status, note }))
-      send(res, 200, { items, watcher: watcherHub.state() })
+      send(res, 200, { items, watcher: watcherHub.state(), session: session ? session.manager.state() : 'unavailable' })
       return
     }
 

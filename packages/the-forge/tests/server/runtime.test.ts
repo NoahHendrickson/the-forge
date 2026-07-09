@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { createForgeRuntime } from '../../src/server/runtime'
+import { SessionManager } from '../../src/server/session/manager'
+import { ApprovalRegistry } from '../../src/server/session/approvals'
 
 let root: string
 
@@ -77,5 +79,60 @@ describe('createForgeRuntime', () => {
     expect(runtime.queue.get('legacy-1')?.markdown).toBe('# legacy')
     // Legacy queue.json is removed by the migration once merged.
     expect(fs.existsSync(path.join(legacyDir, 'queue.json'))).toBe(false)
+  })
+})
+
+describe('createForgeRuntime — session group (Task 4)', () => {
+  it('exposes session.manager as a SessionManager instance', () => {
+    const runtime = createForgeRuntime(root)
+    expect(runtime.session.manager).toBeInstanceOf(SessionManager)
+  })
+
+  it('exposes session.approvals as an ApprovalRegistry instance', () => {
+    const runtime = createForgeRuntime(root)
+    expect(runtime.session.approvals).toBeInstanceOf(ApprovalRegistry)
+  })
+
+  it('session.manager starts idle (no processes spawned at construction)', () => {
+    const runtime = createForgeRuntime(root)
+    expect(runtime.session.manager.state()).toBe('idle')
+  })
+
+  it('session.approvals starts with no pending approvals (idle-zero)', () => {
+    const runtime = createForgeRuntime(root)
+    expect(runtime.session.approvals.pending()).toHaveLength(0)
+  })
+
+  it('session.onApproval fan-out: listeners receive approval events from the registry', () => {
+    const runtime = createForgeRuntime(root)
+    const received: unknown[] = []
+    const unsub = runtime.session.onApproval((e) => received.push(e))
+
+    const { id } = runtime.session.approvals.request('bash', 'ls')
+    expect(received).toHaveLength(1)
+    expect((received[0] as { kind: string }).kind).toBe('approval-request')
+
+    runtime.session.approvals.decide(id, true)
+    expect(received).toHaveLength(2)
+    expect((received[1] as { kind: string }).kind).toBe('approval-resolved')
+
+    unsub()
+    runtime.session.approvals.request('write', 'x')
+    expect(received).toHaveLength(2) // no more after unsubscribe
+  })
+
+  it('multiple onApproval subscribers each receive the event (fan-out)', () => {
+    const runtime = createForgeRuntime(root)
+    const a: unknown[] = []
+    const b: unknown[] = []
+    const unsubA = runtime.session.onApproval((e) => a.push(e))
+    const unsubB = runtime.session.onApproval((e) => b.push(e))
+
+    runtime.session.approvals.request('bash', 'test')
+    expect(a).toHaveLength(1)
+    expect(b).toHaveLength(1)
+
+    unsubA()
+    unsubB()
   })
 })
