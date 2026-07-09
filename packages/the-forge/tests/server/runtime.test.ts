@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -134,5 +134,21 @@ describe('createForgeRuntime — session group (Task 4)', () => {
 
     unsubA()
     unsubB()
+  })
+
+  it('wires approval lifecycle into the manager watchdog (suspend on request, resume on decide)', () => {
+    // The watchdog must not count down while a human is deciding an approval, and an
+    // allowed tool gets the longer post-approval leash — that wiring lives HERE, where
+    // both the registry and the manager exist (approvals.ts must not import manager.ts).
+    const runtime = createForgeRuntime(root)
+    const pendingSpy = vi.spyOn(runtime.session.manager, 'onApprovalPending')
+    const resolvedSpy = vi.spyOn(runtime.session.manager, 'onApprovalResolved')
+
+    const { id } = runtime.session.approvals.request('Bash', 'npm test')
+    expect(pendingSpy).toHaveBeenCalledTimes(1)
+
+    runtime.session.approvals.decide(id, true)
+    expect(resolvedSpy).toHaveBeenCalledTimes(1)
+    expect(resolvedSpy).toHaveBeenCalledWith(true)
   })
 })

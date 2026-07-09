@@ -7,6 +7,7 @@ import {
   SessionState,
   FeedEvent,
   WATCHDOG_MS,
+  POST_APPROVAL_WATCHDOG_MS,
   RING_CAPACITY,
   PULL_TURN_TEXT,
   type SessionManagerOpts,
@@ -344,6 +345,45 @@ describe('SessionManager', () => {
       expect(mgr.state()).toBe<SessionState>('starting')
       expect(adapters).toHaveLength(2)
     })
+
+    it('restart after failed stops the previous adapter (no orphaned child)', () => {
+      // An in-band error turn (rate limit, auth) leaves the child ALIVE — exit code 0
+      // only comes if/when it exits on its own. The restart must kill it, or every
+      // failed→restart cycle leaks a live `claude` process.
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: true, errorText: 'rate limit' })
+
+      mgr.notifyDesignEdits()
+      expect(adapters[0]!.stopCalls).toBe(1)
+    })
+
+    it('late ended from the pre-failure adapter cannot disturb the restarted session', () => {
+      // Without detaching on restart, the abandoned child's eventual `ended` would reach
+      // the manager, discard the NEW adapter, and (state=starting) trigger a second
+      // respawn — the same stale-event race the watchdog path already defends against.
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: true, errorText: 'rate limit' })
+      mgr.notifyDesignEdits()
+      expect(adapters).toHaveLength(2)
+
+      // The abandoned child exits later — must be a no-op for the new session.
+      adapters[0]!.emit({ kind: 'ended' })
+      expect(adapters).toHaveLength(2)
+      expect(mgr.state()).toBe<SessionState>('starting')
+
+      // The new adapter is still wired: started flushes the parked nudge.
+      adapters[1]!.emit({ kind: 'started', sessionId: 's2', model: 'claude', mcpLoaded: true })
+      expect(adapters[1]!.sendTurnCalls).toEqual([PULL_TURN_TEXT])
+      expect(mgr.state()).toBe<SessionState>('busy')
+    })
   })
 
   describe('clean ended while ready → idle', () => {
@@ -492,6 +532,98 @@ describe('SessionManager', () => {
         sessionId: string
       }
       expect(json.sessionId).toBe('sess-race-2')
+    })
+  })
+
+  describe('approval-aware watchdog', () => {
+    /** idle → notify (parks nudge) → started (flushes nudge) → busy with watchdog armed. */
+    function toBusy(adapters: FakeAdapter[], mgr: SessionManager): void {
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      expect(mgr.state()).toBe<SessionState>('busy')
+    }
+
+    it('a pending approval suspends the watchdog (a human is deciding)', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      toBusy(adapters, mgr)
+
+      mgr.onApprovalPending()
+      vi.advanceTimersByTime(1_000) // far past the 30ms test watchdog
+
+      expect(adapters).toHaveLength(1) // no kill/respawn
+      expect(mgr.state()).toBe<SessionState>('busy')
+    })
+
+    it('adapter events during a pending approval do not re-arm the watchdog', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      toBusy(adapters, mgr)
+
+      mgr.onApprovalPending()
+      // A stray event mid-approval must not sneak a fresh 30ms timer past the suspension.
+      adapters[0]!.emit({ kind: 'assistant-text', text: 'requesting permission…' })
+      vi.advanceTimersByTime(1_000)
+
+      expect(adapters).toHaveLength(1)
+    })
+
+    it('allow re-arms with the post-approval leash (approved tools emit nothing until tool_result)', () => {
+      const { adapters, opts } = makeHarness(dir, { postApprovalWatchdogMs: 100 })
+      const mgr = new SessionManager(opts)
+      toBusy(adapters, mgr)
+
+      mgr.onApprovalPending()
+      mgr.onApprovalResolved(true)
+
+      vi.advanceTimersByTime(60) // past the normal 30ms watchdog — leash must hold
+      expect(adapters).toHaveLength(1)
+
+      vi.advanceTimersByTime(50) // past the 100ms leash — genuine stall, recover
+      expect(adapters).toHaveLength(2)
+    })
+
+    it('deny re-arms the normal watchdog', () => {
+      const { adapters, opts } = makeHarness(dir, { postApprovalWatchdogMs: 100 })
+      const mgr = new SessionManager(opts)
+      toBusy(adapters, mgr)
+
+      mgr.onApprovalPending()
+      mgr.onApprovalResolved(false)
+
+      vi.advanceTimersByTime(40) // past the normal watchdog — denied tool never runs long
+      expect(adapters).toHaveLength(2)
+    })
+
+    it('stays suspended until the last overlapping approval resolves', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      toBusy(adapters, mgr)
+
+      mgr.onApprovalPending()
+      mgr.onApprovalPending()
+      mgr.onApprovalResolved(false)
+      vi.advanceTimersByTime(1_000) // one still pending — suspension holds
+      expect(adapters).toHaveLength(1)
+
+      mgr.onApprovalResolved(false)
+      vi.advanceTimersByTime(40)
+      expect(adapters).toHaveLength(2)
+    })
+
+    it('stop() clears the suspension — a fresh session gets a live watchdog', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      toBusy(adapters, mgr)
+
+      mgr.onApprovalPending()
+      mgr.stop()
+
+      mgr.notifyDesignEdits()
+      adapters[1]!.emit({ kind: 'started', sessionId: 's2', model: 'claude', mcpLoaded: true })
+      expect(mgr.state()).toBe<SessionState>('busy')
+      vi.advanceTimersByTime(40)
+      expect(adapters).toHaveLength(3) // watchdog fired on the second session
     })
   })
 
@@ -696,6 +828,10 @@ describe('SessionManager', () => {
   describe('constants', () => {
     it('WATCHDOG_MS is 120_000', () => {
       expect(WATCHDOG_MS).toBe(120_000)
+    })
+
+    it('POST_APPROVAL_WATCHDOG_MS is 600_000 (long enough for builds/tests)', () => {
+      expect(POST_APPROVAL_WATCHDOG_MS).toBe(600_000)
     })
 
     it('RING_CAPACITY is 200', () => {

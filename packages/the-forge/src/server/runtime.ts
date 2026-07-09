@@ -59,6 +59,17 @@ export function createForgeRuntime(resolvedRoot: string, viteRoot?: string): For
   const approvalListeners = new Set<(e: ApprovalFeedItem) => void>()
   const approvals = new ApprovalRegistry({
     onChange: (e) => {
+      // Approval lifecycle → watchdog wiring lives HERE because this is the composition
+      // root where both objects exist (approvals.ts must not import manager.ts): a parked
+      // approval suspends the watchdog (a human deciding is not a hung CLI), and an ALLOW
+      // re-arms with the long post-approval leash so an approved build/test isn't killed
+      // mid-command (it emits nothing on stdout until its tool_result). `manager` is
+      // declared below — safe: onChange only ever fires after construction completes.
+      if (e.kind === 'approval-request') {
+        manager.onApprovalPending()
+      } else {
+        manager.onApprovalResolved(e.allow)
+      }
       for (const fn of approvalListeners) fn(e)
     },
   })

@@ -17,6 +17,13 @@ export interface FeedEvent {
 /** No stdout event for this long while busy → kill + respawn + re-pull. */
 export const WATCHDOG_MS = 120_000
 
+/** Watchdog leash used right after the user ALLOWS a gated tool. An approved Bash command
+ * (build, test suite) emits nothing on stdout until its tool_result, so the normal leash
+ * would kill the session mid-command and the recovery pull would re-run the same command —
+ * an approval → kill → re-approve loop. Ten minutes covers realistic builds while still
+ * catching a genuinely hung CLI (#53584). */
+export const POST_APPROVAL_WATCHDOG_MS = 600_000
+
 /** Max events retained in the ring buffer. */
 export const RING_CAPACITY = 200
 
@@ -37,6 +44,8 @@ export interface SessionManagerOpts {
   now?: () => number
   /** Watchdog timeout override for tests (real default: WATCHDOG_MS). */
   watchdogMs?: number
+  /** Post-approval leash override for tests (real default: POST_APPROVAL_WATCHDOG_MS). */
+  postApprovalWatchdogMs?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +95,12 @@ export class SessionManager {
   private _opts: SessionManagerOpts
   private _clock: () => number
   private _watchdogMs: number
+  private _postApprovalWatchdogMs: number
+
+  // Count of approvals parked in the overlay. While > 0 the watchdog is fully suspended —
+  // a human deciding is not a hung CLI. The ApprovalRegistry's own hold timer guarantees
+  // every request eventually resolves (allow/deny/timeout), so the count always converges.
+  private _pendingApprovals = 0
 
   // The live adapter (non-null while starting/ready/busy).
   private _adapter: SessionAdapter | null = null
@@ -112,6 +127,7 @@ export class SessionManager {
     this._opts = opts
     this._clock = opts.now ?? (() => Date.now())
     this._watchdogMs = opts.watchdogMs ?? WATCHDOG_MS
+    this._postApprovalWatchdogMs = opts.postApprovalWatchdogMs ?? POST_APPROVAL_WATCHDOG_MS
   }
 
   // ---------------------------------------------------------------------------
@@ -159,9 +175,31 @@ export class SessionManager {
     this._adapter?.interrupt()
   }
 
+  /** An approval is parked in the overlay — suspend the watchdog entirely. A human
+   * deciding is not a hung CLI; the registry's hold timer bounds how long this lasts.
+   * Wired from the ApprovalRegistry's onChange in src/server/runtime.ts (the registry
+   * must not import this module). */
+  onApprovalPending(): void {
+    this._pendingApprovals++
+    this._cancelWatchdog()
+  }
+
+  /** The parked approval resolved. Once none remain, re-arm: an ALLOWED tool gets the
+   * long post-approval leash (builds/tests emit nothing until tool_result); a denied
+   * one resumes the normal leash — the turn continues without a long-running tool. */
+  onApprovalResolved(allow: boolean): void {
+    this._pendingApprovals = Math.max(0, this._pendingApprovals - 1)
+    if (this._pendingApprovals === 0 && this._state === 'busy') {
+      this._armWatchdog(allow ? this._postApprovalWatchdogMs : this._watchdogMs)
+    }
+  }
+
   stop(): void {
     this._cancelWatchdog()
     this._nudgePending = false
+    // Outstanding approvals belong to the child we just killed; their eventual registry
+    // resolutions must not leave a fresh session's watchdog permanently suspended.
+    this._pendingApprovals = 0
     this._discardAdapter()?.stop()
     this._state = 'idle'
   }
@@ -193,6 +231,12 @@ export class SessionManager {
   }
 
   private _start(): void {
+    // A restart from `failed` reaches here with the previous adapter still attached AND
+    // its child possibly alive — in-band error turns (rate limit, auth) end with exit
+    // code 0 *later*, if ever. Detach + kill it first, or every failed→restart cycle
+    // leaks a live child whose stray `ended` would discard the new adapter (the same
+    // stale-event race _onWatchdogFired defends against).
+    this._discardAdapter()?.stop()
     const resumeId = readSessionFile(this._opts.forgeDir)?.sessionId
     const adapter = this._opts.makeAdapter()
     this._adapter = adapter
@@ -326,9 +370,12 @@ export class SessionManager {
     }
   }
 
-  private _armWatchdog(): void {
+  private _armWatchdog(ms: number = this._watchdogMs): void {
+    // Suspended while any approval is parked — a stray adapter event mid-approval must
+    // not sneak a normal-leash timer past onApprovalPending's cancellation.
+    if (this._pendingApprovals > 0) return
     this._cancelWatchdog()
-    this._watchdog = setTimeout(() => this._onWatchdogFired(), this._watchdogMs)
+    this._watchdog = setTimeout(() => this._onWatchdogFired(), ms)
   }
 
   private _cancelWatchdog(): void {
