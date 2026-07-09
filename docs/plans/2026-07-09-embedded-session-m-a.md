@@ -90,7 +90,7 @@ Event mapping (fixture-pinned):
 - Partial stdout lines buffered until `\n` (NDJSON splitter); unparseable lines ignored.
 - child `exit`/`error` → `ended` / `session-error` then `ended`.
 
-- [ ] **Step 1: failing tests** — `claude.test.ts` with a fake `SpawnFn` (in-memory PassThrough streams). Sketch:
+- [x] **Step 1: failing tests** — `claude.test.ts` with a fake `SpawnFn` (in-memory PassThrough streams). Sketch:
   - `spawns claude with the exact contract args and cwd` (assert argv incl. `--permission-prompt-tool mcp__the-forge__approve`, no `--bare`; `--resume x` appended when `resumeId` given)
   - `maps init → started with mcpLoaded true/false` (two fixture variants)
   - `maps assistant text and tool_use → assistant-text / tool-started with path detail`
@@ -101,11 +101,11 @@ Event mapping (fixture-pinned):
   - `ignores unknown event types and unparseable lines`
   - `sendTurn/interrupt write exact stdin lines`
   - `child exit → ended; spawn error → session-error then ended`
-- [ ] **Step 2: run to verify failure** — `npx vitest run tests/server/session/claude.test.ts` → FAIL (module not found).
-- [ ] **Step 3: implement** `adapter.ts` + `claude.ts` per the contract above. `claude.ts` imports `spawn` from `node:child_process` at top (default `SpawnFn` wraps it); adapters never read `process.*` directly.
-- [ ] **Step 4: verify** — task tests PASS.
-- [ ] **Step 5: root gate** — `npm test` → green.
-- [ ] **Step 6: commit** — `feat(server): SessionAdapter contract + Claude stream-json adapter`
+- [x] **Step 2: run to verify failure** — `npx vitest run tests/server/session/claude.test.ts` → FAIL (module not found).
+- [x] **Step 3: implement** `adapter.ts` + `claude.ts` per the contract above. `claude.ts` imports `spawn` from `node:child_process` at top (default `SpawnFn` wraps it); adapters never read `process.*` directly.
+- [x] **Step 4: verify** — task tests PASS.
+- [x] **Step 5: root gate** — `npm test` → green.
+- [x] **Step 6: commit** — `feat(server): SessionAdapter contract + Claude stream-json adapter`
 
 ---
 
@@ -153,7 +153,7 @@ Behavior contract:
 - `ended` while `ready` (clean exit between turns) → `idle`, no respawn.
 - Every adapter event lands in the ring buffer (seq monotonically increasing, capacity 200) and fans out to subscribers. Buffer exists only after first start — idle-zero.
 
-- [ ] **Step 1: failing tests** — fake adapter (records calls, exposes `emit(e)`), fake clock. Sketch:
+- [x] **Step 1: failing tests** — fake adapter (records calls, exposes `emit(e)`), fake clock. Sketch:
   - `starts idle; notifyDesignEdits spawns, parks nudge, sends turn on started, writes session.json`
   - `resumes with the persisted session id on later starts`
   - `busy: second notifyDesignEdits parks exactly one nudge, flushed once on turn-complete`
@@ -163,10 +163,10 @@ Behavior contract:
   - `ended while ready → idle without respawn`
   - `ring buffer caps at RING_CAPACITY, eventsSince(seq) returns the tail, subscribe fans out`
   - `stop kills the child and unsubscribes nothing else` (close-hook semantics)
-- [ ] **Step 2: verify failure.**
-- [ ] **Step 3: implement `manager.ts`.** `session.json` read/write with `unknown` + manual checks (corrupt file → ignore, start fresh — never throw).
-- [ ] **Step 4–5: verify + root gate.**
-- [ ] **Step 6: commit** — `feat(server): SessionManager — lifecycle, watchdog-resume, event ring buffer`
+- [x] **Step 2: verify failure.**
+- [x] **Step 3: implement `manager.ts`.** `session.json` read/write with `unknown` + manual checks (corrupt file → ignore, start fresh — never throw).
+- [x] **Step 4–5: verify + root gate.**
+- [x] **Step 6: commit** — `feat(server): SessionManager — lifecycle, watchdog-resume, event ring buffer`
 
 ---
 
@@ -198,11 +198,11 @@ approve(toolName: string, input: unknown): Promise<ApprovalDecision>
 
 MCP tool (name `approve` — the CLI invokes it as `mcp__the-forge__approve`): inputSchema `{tool_use_id, tool_name, input}` (all optional-tolerant; `unknown` + manual checks). callTool returns the decision **as JSON text** — the CLI parses the text content: allow → `{"behavior":"allow","updatedInput":<the original input, echoed verbatim>}` (empty-object fallback is mobile-client behavior we don't rely on); deny → `{"behavior":"deny","message":"Denied from The Forge overlay"}` / `"…timed out — re-send from The Forge when ready"`. The bin's backend POSTs `/__the-forge/approval` `{toolName, detail}` with a 120s timeout (a human is deciding — hold is server-side); `detail` extracted bin-side from `input.command ?? input.file_path ?? ''`, truncated. Any transport failure → deny (never allow on error, never leave the CLI hanging).
 
-- [ ] **Step 1: failing tests.** Registry (fake clock): `parks until decide → allow`, `deny`, `hold expiry → deny with timeout message`, `decide on expired id returns false`, `pending() lists undecided`. Protocol: `approve tool listed with schema`, `allow decision echoes original input as updatedInput JSON`, `deny/timeout text shapes`, `backend transport failure → deny`.
-- [ ] **Step 2: verify failure.**
-- [ ] **Step 3: implement.** protocol.ts's approve texts are constants (no server data interpolated into agent-visible text — the decision JSON is machine-parsed by the CLI, not agent instructions, but keep `message` constant anyway).
-- [ ] **Step 4–5: verify + root gate.**
-- [ ] **Step 6: commit** — `feat(mcp): approve tool + ApprovalRegistry (overlay-gated permissions)`
+- [x] **Step 1: failing tests.** Registry (fake clock): `parks until decide → allow`, `deny`, `hold expiry → deny with timeout message`, `decide on expired id returns false`, `pending() lists undecided`. Protocol: `approve tool listed with schema`, `allow decision echoes original input as updatedInput JSON`, `deny/timeout text shapes`, `backend transport failure → deny`.
+- [x] **Step 2: verify failure.**
+- [x] **Step 3: implement.** protocol.ts's approve texts are constants (no server data interpolated into agent-visible text — the decision JSON is machine-parsed by the CLI, not agent instructions, but keep `message` constant anyway).
+- [x] **Step 4–5: verify + root gate.**
+- [x] **Step 6: commit** — `feat(mcp): approve tool + ApprovalRegistry (overlay-gated permissions)`
 
 ---
 
@@ -220,11 +220,11 @@ MCP tool (name `approve` — the CLI invokes it as `mcp__the-forge__approve`): i
 - `POST /__the-forge/approval/decide` (the browser) `{id, allow}` → `approvals.decide()`, 200 `{ok}`. Add to MUTATING_PATHS.
 - `GET /__the-forge/status` response gains `session: manager.state() | 'unavailable'` — the watch poller picks it up for free.
 
-- [ ] **Step 1: failing tests** (existing endpoint-test harness with fake req/res): secret enforcement on all four new paths (including the GET), events replay + live push + close-unsubscribes, approval long-poll resolves on decide, decide on unknown id → `{ok:false}`, status carries session state, absent-session 404s.
-- [ ] **Step 2: verify failure.**
-- [ ] **Step 3: implement.**
-- [ ] **Step 4–5: verify + root gate.**
-- [ ] **Step 6: commit** — `feat(server): session endpoints (events stream, interrupt, approval round-trip)`
+- [x] **Step 1: failing tests** (existing endpoint-test harness with fake req/res): secret enforcement on all four new paths (including the GET), events replay + live push + close-unsubscribes, approval long-poll resolves on decide, decide on unknown id → `{ok:false}`, status carries session state, absent-session 404s.
+- [x] **Step 2: verify failure.**
+- [x] **Step 3: implement.**
+- [x] **Step 4–5: verify + root gate.**
+- [x] **Step 6: commit** — `feat(server): session endpoints (events stream, interrupt, approval round-trip)`
 
 ---
 
@@ -254,11 +254,11 @@ in /dispatch, BEFORE the watcher short-circuit:
 - `Rung` union gains `'embedded'` with a doc comment mirroring `'watcher'`'s (produced by the endpoint short-circuit, never by the ladder).
 - vite.ts / sidecar.ts: pass `{manager, approvals}` from the runtime into `createForgeMiddleware`; wire `manager.stop()` into the existing close hooks (beside `removeEndpointFile`).
 
-- [ ] **Step 1: failing tests** — dispatch handler with fake manager: `ready → embedded + notify`, `idle + no watcher → embedded (starting)`, `idle + live watcher → watcher rung, no auto-start`, `busy embedded beats live watcher`, `agent codex skips to ladder`, `failed + no watcher → auto-start retry`.
-- [ ] **Step 2: verify failure.**
-- [ ] **Step 3: implement + wire both frameworks.**
-- [ ] **Step 4–5: verify + root gate.**
-- [ ] **Step 6: commit** — `feat(server): 'embedded' dispatch rung with auto-start; framework wiring`
+- [x] **Step 1: failing tests** — dispatch handler with fake manager: `ready → embedded + notify`, `idle + no watcher → embedded (starting)`, `idle + live watcher → watcher rung, no auto-start`, `busy embedded beats live watcher`, `agent codex skips to ladder`, `failed + no watcher → auto-start retry`.
+- [x] **Step 2: verify failure.**
+- [x] **Step 3: implement + wire both frameworks.**
+- [x] **Step 4–5: verify + root gate.**
+- [x] **Step 6: commit** — `feat(server): 'embedded' dispatch rung with auto-start; framework wiring`
 
 ---
 
@@ -270,7 +270,7 @@ in /dispatch, BEFORE the watcher short-circuit:
 
 **Contract:** `Rung` gains `'embedded'`; `sentLabelFor('embedded', …)` → `'Sent — applying in the embedded session'` (allowlisted explicitly — the unrecognized-value default stays manual). `WatchStatus` also parses the new `session` field from `/status` (same untyped-JSON guards) and exposes `sessionState()`; `watchIndicatorFor` gains the embedded state (session ready/busy/starting): `'● Embedded session active'`, live, unlinkable:false (Stop lives in the feed, not the strip). `queuedLineFor` with an active session → `'N queued — applying in the embedded session…'`. Precedence: active embedded session > watcher states (mirrors the dispatch rung order).
 
-- [ ] Steps: failing tests (copy matrix + precedence + poll parsing with unknown values degrading) → implement → verify → root gate → commit `feat(client): embedded-session copy + status plumbing`.
+- [x] Steps: failing tests (copy matrix + precedence + poll parsing with unknown values degrading) → implement → verify → root gate → commit `feat(client): embedded-session copy + status plumbing`.
 
 ---
 
@@ -298,11 +298,11 @@ export class SessionFeed {
 - Rendering: status row (state/model/limit-error text from `turn-complete isError` and `session-error`), per-event rows — `assistant-text` (snippet), `tool-started` spinner → `tool-finished` check by toolId, recovery rows; `approval-request` renders `.session-approval` with tool name + detail and Allow/Deny buttons (via `createButton`); Stop button (`.session-stop`) visible while busy.
 - Feed lives in the docked panel as a section beside the Changes list (extend `changesSlot`-style mounting; do NOT touch ChangeList internals).
 
-- [ ] **Step 1: failing tests** — jsdom with a scripted async-iterable fetch stub: `renders rows from replayed + live events`, `pairs tool start/finish`, `approval row buttons fire onDecide with id`, `decided approval row collapses to a resolution line`, `stop() aborts and kills reconnect timers (idle-zero, spy pattern from prompt.test.ts)`, `reconnects with since=<lastSeq>`, `in-band error renders a limit row, not a crash`. Overlay: CSS hooks present.
-- [ ] **Step 2: verify failure.**
-- [ ] **Step 3: implement + story** (feed with canned event script: working / approval-pending / limit-hit states).
-- [ ] **Step 4–5: verify (incl. Storybook spot-check) + root gate.**
-- [ ] **Step 6: commit** — `feat(client): SessionFeed — activity stream, approvals UI, Stop`
+- [x] **Step 1: failing tests** — jsdom with a scripted async-iterable fetch stub: `renders rows from replayed + live events`, `pairs tool start/finish`, `approval row buttons fire onDecide with id`, `decided approval row collapses to a resolution line`, `stop() aborts and kills reconnect timers (idle-zero, spy pattern from prompt.test.ts)`, `reconnects with since=<lastSeq>`, `in-band error renders a limit row, not a crash`. Overlay: CSS hooks present.
+- [x] **Step 2: verify failure.**
+- [x] **Step 3: implement + story** (feed with canned event script: working / approval-pending / limit-hit states).
+- [x] **Step 4–5: verify (incl. Storybook spot-check) + root gate.**
+- [x] **Step 6: commit** — `feat(client): SessionFeed — activity stream, approvals UI, Stop`
 
 ---
 
@@ -312,12 +312,12 @@ export class SessionFeed {
 - Modify: `packages/the-forge/src/client/index.ts`, `CLAUDE.md`, `AGENTS.md`
 - Test: `packages/the-forge/tests/client/design-mode.test.ts` (extend)
 
-- [ ] **Step 1: failing tests** — `feed starts on setActive(true) and stops on setActive(false)`, `Stop button POSTs /session/interrupt with secret`, `approval decide POSTs /approval/decide {id, allow}`, `send flash shows the embedded copy when /dispatch answers rung 'embedded'`.
-- [ ] **Step 2: verify failure.**
-- [ ] **Step 3: implement** — construct `SessionFeed`, mount via overlay, wire `onInterrupt`/`onDecide` to secret-header fetches, start/stop beside `this.watch.start()/stop()` in `setActive`.
-- [ ] **Step 4: docs** — CLAUDE.md + AGENTS.md (keep byte-identical): architecture-loop step for the embedded path, `src/server/session/` + `session-feed.ts` module-table rows, MCP contract now **four** tools (approve + its endpoint), new endpoints in the auth list, gotcha: "in-band CLI errors (rate limit/auth) arrive as result events with exit 0 — read the event, not the exit code".
-- [ ] **Step 5–6: verify + root gate.**
-- [ ] **Step 7: commit** — `feat(client): wire SessionFeed through DesignMode; docs`
+- [x] **Step 1: failing tests** — `feed starts on setActive(true) and stops on setActive(false)`, `Stop button POSTs /session/interrupt with secret`, `approval decide POSTs /approval/decide {id, allow}`, `send flash shows the embedded copy when /dispatch answers rung 'embedded'`.
+- [x] **Step 2: verify failure.**
+- [x] **Step 3: implement** — construct `SessionFeed`, mount via overlay, wire `onInterrupt`/`onDecide` to secret-header fetches, start/stop beside `this.watch.start()/stop()` in `setActive`.
+- [x] **Step 4: docs** — CLAUDE.md + AGENTS.md (keep byte-identical): architecture-loop step for the embedded path, `src/server/session/` + `session-feed.ts` module-table rows, MCP contract now **four** tools (approve + its endpoint), new endpoints in the auth list, gotcha: "in-band CLI errors (rate limit/auth) arrive as result events with exit 0 — read the event, not the exit code".
+- [x] **Step 5–6: verify + root gate.**
+- [x] **Step 7: commit** — `feat(client): wire SessionFeed through DesignMode; docs`
 
 ---
 
@@ -325,11 +325,11 @@ export class SessionFeed {
 
 **Files:** none (verification only; fix-forward commits).
 
-- [ ] **Step 1: build + fresh server** — `npm run build`; kill stale dev servers (`lsof -iTCP:5173`, often `[::1]`); `npm run dev -w demo-app`. (Restart mandatory — Vite caches the old client bundle.)
-- [ ] **Step 2: feed E2E without the live CLI** (works pre-Jul-12): a tiny fake-`claude` script (echoes scripted NDJSON, reads stdin) pointed at via the manager's injectable adapter factory in a dev-only knob — validates spawn plumbing, stream, feed rendering, Stop, approval round-trip (fake emits a Bash tool_use; MCP `approve` path exercised via the real bin against the dev server).
+- [x] **Step 1: build + fresh server** — `npm run build`; kill stale dev servers (`lsof -iTCP:5173`, often `[::1]`); `npm run dev -w demo-app`. (Restart mandatory — Vite caches the old client bundle.)
+- [x] **Step 2: feed E2E without the live CLI** (works pre-Jul-12): a tiny fake-`claude` script (echoes scripted NDJSON, reads stdin) pointed at via the manager's injectable adapter factory in a dev-only knob — validates spawn plumbing, stream, feed rendering, Stop, approval round-trip (fake emits a Bash tool_use; MCP `approve` path exercised via the real bin against the dev server).
 - [ ] **Step 3: live-CLI E2E (after Jul 12 limit reset):** toggle design mode → edit padding → Send with NO terminal session anywhere → feed shows "starting…" → agent pulls, edits, marks → verifier flips row to Implemented; approval prompt appears for a Bash-requiring prompt request and Allow/Deny both behave; kill the child mid-turn → recovery row + successful resume; dev-server restart resumes the same `session_id`; Next fixture smoke (`npm run dev -w next-demo`) — sidecar path identical.
-- [ ] **Step 4: prod gate** — `./scripts/check-prod-clean.sh` (session module must leave zero trace in prod output).
-- [ ] **Step 5: final root gate** — `npm test` → green. Hand the branch to the user for the merge decision.
+- [x] **Step 4: prod gate** — `./scripts/check-prod-clean.sh` (session module must leave zero trace in prod output).
+- [x] **Step 5: final root gate** — `npm test` → green. Hand the branch to the user for the merge decision.
 
 ---
 

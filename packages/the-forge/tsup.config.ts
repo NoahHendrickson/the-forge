@@ -3,11 +3,11 @@ import { defineConfig } from 'tsup'
 // Whitespace/comment-only minification — NOT identifier mangling: stack traces (in-browser
 // bug reports and node-side crashes alike) must keep naming real functions, but shipped
 // bundles have no business carrying source comments and indentation (the why-comments
-// live in src/, which is what people actually read). Sole purpose is the 250KB package
-// budget (check-prod-clean.sh); flipping to full `minify: true` would save more but costs
-// debuggability — don't, without revisiting that trade-off. Originally client-only; applied
-// to every bundle when the budget hit ~249.25/250KB (PR #22) — the node bundles alone were
-// carrying ~21KB of whitespace.
+// live in src/, which is what people actually read). Sole purpose is the package-size
+// budget in check-prod-clean.sh (280KB as of the embedded-session milestone); flipping to
+// full `minify: true` would save more but costs debuggability — don't, without revisiting
+// that trade-off. Originally client-only; applied to every bundle when the budget hit
+// ~249.25/250KB (PR #22) — the node bundles alone were carrying ~21KB of whitespace.
 const stripWhitespace = (options: { minifyWhitespace?: boolean }): void => {
   options.minifyWhitespace = true
 }

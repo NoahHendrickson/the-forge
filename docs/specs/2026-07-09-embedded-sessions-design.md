@@ -1,7 +1,7 @@
 # Embedded agent sessions — design doc
 
 **Date:** 2026-07-09
-**Status:** Draft for review
+**Status:** Ratified (2026-07-09) — milestone A implemented on `idea/chat`; live-CLI E2E deferred to post-Jul-12 limit reset
 **Research:** [docs/research/2026-07-09-embedded-sessions.md](../research/2026-07-09-embedded-sessions.md) (harness survey, wire formats, live smoke test, user-ratified decisions)
 
 ## 1. Overview

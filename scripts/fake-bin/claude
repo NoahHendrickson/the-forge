@@ -1,0 +1,156 @@
+#!/usr/bin/env node
+/**
+ * Fake `claude` binary for Task 9 Step 2 (embedded-session feed E2E without a live CLI).
+ * Drop this directory at the front of PATH so ClaudeAdapter's spawn('claude', …) finds us.
+ *
+ * Protocol: NDJSON on stdin/stdout, matching the stream-json shapes pinned in
+ * packages/the-forge/tests/server/session/fixtures/claude-ndjson.ts.
+ *
+ * Scenarios (FORGE_FAKE_CLAUDE_SCENARIO):
+ *   default (or unset) — init → on user turn: text + Edit tool_use + tool_result + success
+ *   rate-limit         — init → on user turn: in-band rate-limit result (is_error:true)
+ *
+ * Stays alive until SIGTERM/SIGINT (SessionManager.stop / process exit).
+ */
+'use strict'
+
+const { randomUUID } = require('node:crypto')
+const readline = require('node:readline')
+
+const SESSION_ID = process.env.FORGE_FAKE_SESSION_ID || 'fake-session-e2e-0001'
+const SCENARIO = process.env.FORGE_FAKE_CLAUDE_SCENARIO || 'default'
+
+function emit(obj) {
+  process.stdout.write(JSON.stringify(obj) + '\n')
+}
+
+function emitInit() {
+  emit({
+    type: 'system',
+    subtype: 'init',
+    cwd: process.cwd(),
+    session_id: SESSION_ID,
+    tools: ['Bash', 'Edit', 'Read', 'Write', 'Grep', 'Glob'],
+    mcp_servers: [{ name: 'the-forge', status: 'connected' }],
+    model: 'fake-claude-e2e',
+    permissionMode: 'default',
+    apiKeySource: 'none',
+  })
+}
+
+function emitDefaultTurn() {
+  const toolId = 'toolu_fake_edit_1'
+  emit({
+    type: 'assistant',
+    session_id: SESSION_ID,
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Applying the queued design edits.' }],
+    },
+  })
+  emit({
+    type: 'assistant',
+    session_id: SESSION_ID,
+    message: {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: toolId,
+          name: 'Edit',
+          input: { file_path: 'src/App.tsx' },
+        },
+      ],
+    },
+  })
+  // Brief pause so the feed can render the in-flight tool row before finish.
+  setTimeout(() => {
+    emit({
+      type: 'user',
+      session_id: SESSION_ID,
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: toolId, content: 'ok' }],
+      },
+    })
+    emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      num_turns: 1,
+      result: 'done',
+      session_id: SESSION_ID,
+      total_cost_usd: 0.001,
+    })
+  }, 50)
+}
+
+function emitRateLimitTurn() {
+  emit({
+    type: 'assistant',
+    session_id: SESSION_ID,
+    message: {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: "You've hit your weekly limit · resets Jul 12 at 12am (America/New_York)",
+        },
+      ],
+    },
+  })
+  emit({
+    type: 'result',
+    subtype: 'success',
+    is_error: true,
+    api_error_status: 429,
+    num_turns: 1,
+    result: "You've hit your weekly limit · resets Jul 12 at 12am (America/New_York)",
+    session_id: SESSION_ID,
+    total_cost_usd: 0,
+  })
+}
+
+function handleUserTurn() {
+  if (SCENARIO === 'rate-limit') emitRateLimitTurn()
+  else emitDefaultTurn()
+}
+
+emitInit()
+
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
+rl.on('line', (line) => {
+  const trimmed = line.trim()
+  if (!trimmed) return
+  let msg
+  try {
+    msg = JSON.parse(trimmed)
+  } catch {
+    return
+  }
+  if (msg && msg.type === 'user') {
+    handleUserTurn()
+    return
+  }
+  // Interrupt is acknowledged by staying alive; the manager doesn't require a reply.
+  if (msg && msg.type === 'control_request' && msg.request && msg.request.subtype === 'interrupt') {
+    emit({
+      type: 'control_response',
+      response: { subtype: 'success', request_id: msg.request_id || randomUUID() },
+    })
+  }
+})
+
+function shutdown() {
+  try {
+    rl.close()
+  } catch {
+    /* ignore */
+  }
+  process.exit(0)
+}
+process.on('SIGTERM', shutdown)
+process.on('SIGINT', shutdown)
+
+// Keep the event loop alive even if stdin closes unexpectedly.
+setInterval(() => {}, 60_000)

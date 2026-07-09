@@ -14,7 +14,7 @@ npm run storybook -w the-forge        # component catalog (overlay atoms), port 
 npm run dev -w next-demo              # Next demo, App Router + Turbopack (fixtures/next-demo, port 5175)
 npm run dev:webpack -w next-demo      # same fixture, forced webpack dev bundler
 npm run dev -w next-pages             # Next demo, Pages Router (fixtures/next-pages, port 5176)
-./scripts/check-prod-clean.sh         # prod build has zero plugin traces (Vite + Next) + 250KB package budget
+./scripts/check-prod-clean.sh         # prod build has zero plugin traces (Vite + Next) + 280KB package budget
 npx the-forge init                    # (in a host project) detect Vite/Next, install, wire config, mount ForgeDesignMode
 ./scripts/check-init.sh               # real-tarball smoke test of `the-forge init` against bare Vite + Next scaffolds
 ```
