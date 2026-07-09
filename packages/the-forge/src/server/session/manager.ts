@@ -27,6 +27,11 @@ export const POST_APPROVAL_WATCHDOG_MS = 600_000
 /** Max events retained in the ring buffer. */
 export const RING_CAPACITY = 200
 
+/** Consecutive ended-before-started crashes tolerated before giving up (state → failed).
+ * A child that keeps dying pre-init (broken install, corrupted state) must not respawn
+ * forever; a later Send retries with a fresh budget. Reset on every successful `started`. */
+export const MAX_START_FAILURES = 3
+
 /** The one constant turn ever sent in milestone A. Per-tick token-cost rule: terse, zero
  * interpolation — request content never travels through the turn text (same rule as the
  * canned watch texts in src/mcp/protocol.ts). */
@@ -75,6 +80,14 @@ function readSessionFile(forgeDir: string): SessionFile | undefined {
   }
 }
 
+function clearSessionFile(forgeDir: string): void {
+  try {
+    fs.rmSync(path.join(forgeDir, 'session.json'), { force: true })
+  } catch {
+    // Best-effort — a stale file that survives only re-triggers the fresh-retry path.
+  }
+}
+
 function writeSessionFile(forgeDir: string, sessionId: string, updatedAt: string): void {
   try {
     // forgeDir may not exist yet (mirrors writeEndpointFile in src/server/endpoints.ts).
@@ -106,6 +119,12 @@ export class SessionManager {
   private _adapter: SessionAdapter | null = null
   // Last sessionId seen from the adapter (persisted to session.json).
   private _lastSessionId: string | undefined = undefined
+  // The resumeId the CURRENT start attempt was launched with (undefined = fresh start).
+  // Distinguishes "stale resume id rejected in-band" (retry fresh) from a fresh start
+  // failing the same way (park in failed — retrying fresh again would loop).
+  private _lastStartResumeId: string | undefined = undefined
+  // Consecutive ended-before-started crashes; reset on started, capped by MAX_START_FAILURES.
+  private _startFailures = 0
 
   // Single-slot pending nudge. True = one PULL_TURN_TEXT is queued to be
   // sent on the next turn-complete or on started. A single slot is sufficient
@@ -230,14 +249,15 @@ export class SessionManager {
     return old
   }
 
-  private _start(): void {
+  private _start(fresh = false): void {
     // A restart from `failed` reaches here with the previous adapter still attached AND
     // its child possibly alive — in-band error turns (rate limit, auth) end with exit
     // code 0 *later*, if ever. Detach + kill it first, or every failed→restart cycle
     // leaks a live child whose stray `ended` would discard the new adapter (the same
     // stale-event race _onWatchdogFired defends against).
     this._discardAdapter()?.stop()
-    const resumeId = readSessionFile(this._opts.forgeDir)?.sessionId
+    const resumeId = fresh ? undefined : readSessionFile(this._opts.forgeDir)?.sessionId
+    this._lastStartResumeId = resumeId
     const adapter = this._opts.makeAdapter()
     this._adapter = adapter
     adapter.onEvent = (e) => this._onAdapterEvent(e)
@@ -265,6 +285,7 @@ export class SessionManager {
     switch (event.kind) {
       case 'started':
         this._lastSessionId = event.sessionId
+        this._startFailures = 0
         writeSessionFile(this._opts.forgeDir, event.sessionId, new Date(this._clock()).toISOString())
         this._state = 'ready'
         if (this._nudgePending) {
@@ -276,6 +297,17 @@ export class SessionManager {
       case 'turn-complete':
         this._cancelWatchdog()
         if (event.isError) {
+          if (this._state === 'starting' && this._lastStartResumeId !== undefined) {
+            // Stale resume id (observed live, CLI 2.1.201): `--resume <unknown-id>` emits
+            // result/error_during_execution BEFORE any init event — session.json goes stale
+            // legitimately (CLI session store pruned, project moved). Clear it and retry
+            // fresh ONCE; the retry has no resumeId, so a second failure parks in `failed`.
+            clearSessionFile(this._opts.forgeDir)
+            this._lastSessionId = undefined
+            this._push({ kind: 'session-error', text: 'stale session id — starting fresh' })
+            this._start(true)
+            break
+          }
           // Error turn → failed. A later Send retries via auto-start — no retry loop here
           // (retrying automatically on error could thrash under rate limits or auth failure).
           this._state = 'failed'
@@ -302,8 +334,21 @@ export class SessionManager {
         // The adapter that just ended is dead either way — detach it so any
         // further stray events from it can't reach the manager.
         this._discardAdapter()
-        if (this._state === 'busy' || this._state === 'starting') {
-          // Unexpected exit during a live turn or during spawn → recover.
+        if (this._state === 'starting') {
+          // Died before ever emitting started — a pre-init crash. Bounded: a child that
+          // keeps dying pre-init (broken install, corrupted state) must not respawn forever.
+          this._startFailures++
+          if (this._startFailures >= MAX_START_FAILURES) {
+            this._startFailures = 0 // a later Send retries with a fresh budget
+            this._push({ kind: 'session-error', text: 'session failed to start repeatedly — giving up until the next Send' })
+            this._state = 'failed'
+          } else {
+            this._respawn()
+          }
+        } else if (this._state === 'busy') {
+          // Unexpected exit during a live turn → recover (unbounded on purpose: each
+          // cycle passed init and burned a real turn, so this is genuine recovery, not
+          // a tight crash loop; the watchdog path is the same).
           this._respawn()
         } else if (this._state === 'failed') {
           // session-error already drove us to failed; ended is just the adapter
@@ -347,6 +392,7 @@ export class SessionManager {
    * while-busy path. The parked nudge is cleared — the recovery pull supersedes it. */
   private _respawn(): void {
     const resumeId = this._lastSessionId ?? readSessionFile(this._opts.forgeDir)?.sessionId
+    this._lastStartResumeId = resumeId
     const adapter = this._opts.makeAdapter()
     this._adapter = adapter
     // Park the recovery pull; it will flush when the new adapter emits started.

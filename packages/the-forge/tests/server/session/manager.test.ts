@@ -8,6 +8,7 @@ import {
   FeedEvent,
   WATCHDOG_MS,
   POST_APPROVAL_WATCHDOG_MS,
+  MAX_START_FAILURES,
   RING_CAPACITY,
   PULL_TURN_TEXT,
   type SessionManagerOpts,
@@ -383,6 +384,93 @@ describe('SessionManager', () => {
       adapters[1]!.emit({ kind: 'started', sessionId: 's2', model: 'claude', mcpLoaded: true })
       expect(adapters[1]!.sendTurnCalls).toEqual([PULL_TURN_TEXT])
       expect(mgr.state()).toBe<SessionState>('busy')
+    })
+  })
+
+  describe('stale resume id recovery', () => {
+    // Observed live (CLI 2.1.201): `--resume <unknown-id>` emits `result` with
+    // subtype error_during_execution / is_error:true BEFORE any init event, exit 0.
+    // session.json goes stale legitimately — CLI session store pruned, project moved.
+
+    it('resume failure (error turn before started) clears session.json and retries fresh once', () => {
+      fs.writeFileSync(
+        path.join(dir, 'session.json'),
+        JSON.stringify({ sessionId: 'stale-id', updatedAt: 'x' }),
+      )
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      expect(adapters[0]!.startCalls[0]!.resumeId).toBe('stale-id')
+      // CLI rejects the resume id in-band, before ever emitting init/started.
+      adapters[0]!.emit({ kind: 'turn-complete', isError: true, errorText: 'not a UUID' })
+
+      // Dead resume child is stopped; a fresh (no-resume) start is underway.
+      expect(adapters[0]!.stopCalls).toBe(1)
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.startCalls[0]!.resumeId).toBeUndefined()
+      expect(mgr.state()).toBe<SessionState>('starting')
+      expect(fs.existsSync(path.join(dir, 'session.json'))).toBe(false)
+
+      // The parked pull still flushes on the fresh session's started.
+      adapters[1]!.emit({ kind: 'started', sessionId: 'fresh-1', model: 'claude', mcpLoaded: true })
+      expect(adapters[1]!.sendTurnCalls).toEqual([PULL_TURN_TEXT])
+      expect(mgr.state()).toBe<SessionState>('busy')
+    })
+
+    it('fresh-start error turn before started → failed, no retry loop', () => {
+      const { adapters, opts } = makeHarness(dir) // no session.json → fresh start
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      expect(adapters[0]!.startCalls[0]!.resumeId).toBeUndefined()
+      adapters[0]!.emit({ kind: 'turn-complete', isError: true, errorText: 'not logged in' })
+
+      expect(mgr.state()).toBe<SessionState>('failed')
+      expect(adapters).toHaveLength(1) // fresh start failing again would loop — never retry
+    })
+  })
+
+  describe('start-crash respawn cap', () => {
+    it('repeated ended-before-started gives up after MAX_START_FAILURES with a feed row', () => {
+      // A child that keeps dying pre-init (broken install, corrupted state) must not
+      // respawn forever — ended-while-starting is otherwise an unbounded recovery loop.
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      const events: FeedEvent[] = []
+      mgr.subscribe((e) => events.push(e))
+
+      mgr.notifyDesignEdits()
+      for (let i = 0; i < MAX_START_FAILURES; i++) {
+        adapters[adapters.length - 1]!.emit({ kind: 'ended' })
+      }
+
+      expect(adapters).toHaveLength(MAX_START_FAILURES) // no further respawn after the cap
+      expect(mgr.state()).toBe<SessionState>('failed')
+      const gaveUp = events.find(
+        (fe) => fe.event.kind === 'session-error' && fe.event.text.includes('failed to start'),
+      )
+      expect(gaveUp).toBeDefined()
+    })
+
+    it('a successful started resets the failure count', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'ended' }) // one start crash → respawn
+      expect(adapters).toHaveLength(2)
+      adapters[1]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[1]!.emit({ kind: 'turn-complete', isError: false })
+
+      // Later crash-recovery cycles get the full budget again.
+      adapters[1]!.emit({ kind: 'ended' }) // clean ended while ready → idle, no respawn
+      mgr.notifyDesignEdits()
+      for (let i = 0; i < MAX_START_FAILURES - 1; i++) {
+        adapters[adapters.length - 1]!.emit({ kind: 'ended' })
+      }
+      // budget not exhausted (count reset earlier) → still respawning, not failed
+      expect(mgr.state()).toBe<SessionState>('starting')
     })
   })
 
