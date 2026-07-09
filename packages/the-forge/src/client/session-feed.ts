@@ -15,9 +15,14 @@ type StreamLine =
 type SessionEvent =
   | { kind: 'started'; sessionId: string; model: string; mcpLoaded: boolean }
   | { kind: 'assistant-text'; text: string }
-  | { kind: 'tool-started'; toolId: string; name: string; detail: string }
+  | { kind: 'user-text'; text: string; element?: { source: string; tag: string } }
+  // assistant-delta always arrives with seq 0 — ephemeral, subscriber-only, never ringed
+  // (see parseLine's seq-tracking below).
+  | { kind: 'assistant-delta'; text: string }
+  | { kind: 'tool-started'; toolId: string; name: string; detail: string; edit?: { file: string; before: string; after: string } }
   | { kind: 'tool-finished'; toolId: string }
   | { kind: 'turn-complete'; isError: boolean; errorText?: string; costUsd?: number }
+  | { kind: 'config-changed'; model?: string; permissionMode?: string; effort?: string }
   | { kind: 'session-error'; text: string }
   | { kind: 'ended' }
 
@@ -74,6 +79,13 @@ export class SessionFeed {
   private readonly approvalRows = new Map<string, HTMLElement>()
   /** All rows appended to this.list, in insertion order; capped at MAX_ROWS (oldest removed). */
   private readonly rowList: HTMLElement[] = []
+  /** The single in-progress .chat-streaming bubble, if any — the first seq-0 delta after a
+   * non-delta event creates it; subsequent deltas append to it; the next final assistant-text
+   * replaces its content and clears this back to null (no duplicate bubble). */
+  private streamingBubble: HTMLElement | null = null
+  /** Accumulated text of the current streaming bubble — tracked separately from the DOM node's
+   * textContent so appends are O(1) string concat rather than re-reading the DOM each delta. */
+  private streamingText = ''
   /** True after any tool-started/assistant-text, cleared on turn-complete/ended/session-error.
    * Controls Stop button visibility: visible while a turn is in flight ("busyish" state). */
   private busyish = false
@@ -226,6 +238,9 @@ export class SessionFeed {
     const o = obj as Record<string, unknown>
     if (o.type === 'feed') {
       const seq = typeof o.seq === 'number' ? o.seq : null
+      // assistant-delta lines always carry seq 0 (ephemeral, never ringed server-side) — the
+      // `seq > this.lastSeq` comparison already excludes 0 from ever bumping lastSeq, so a
+      // burst of deltas between real events can never move the reconnect ?since= cursor.
       if (seq !== null && seq > this.lastSeq) this.lastSeq = seq
       const event = o.event
       if (typeof event !== 'object' || event === null) return
@@ -253,16 +268,31 @@ export class SessionFeed {
       this.setStatus(`Session started · ${model}`)
     } else if (kind === 'assistant-text') {
       const text = typeof e.text === 'string' ? e.text : ''
-      this.addRow(this.makeTextRow(text))
+      this.finalizeAssistantText(text)
+      this.setBusyish(true)
+    } else if (kind === 'user-text') {
+      const text = typeof e.text === 'string' ? e.text : ''
+      const element = typeof e.element === 'object' && e.element !== null ? (e.element as Record<string, unknown>) : undefined
+      this.addRow(this.makeUserBubble(text, element))
+    } else if (kind === 'assistant-delta') {
+      const text = typeof e.text === 'string' ? e.text : ''
+      this.appendDelta(text)
       this.setBusyish(true)
     } else if (kind === 'tool-started') {
       const toolId = typeof e.toolId === 'string' ? e.toolId : ''
       const name = typeof e.name === 'string' ? e.name : ''
       const detail = typeof e.detail === 'string' ? e.detail : ''
-      const row = this.makeToolRow(toolId, name, detail)
+      const editRaw = typeof e.edit === 'object' && e.edit !== null ? (e.edit as Record<string, unknown>) : null
+      const edit =
+        editRaw && typeof editRaw.file === 'string' && typeof editRaw.before === 'string' && typeof editRaw.after === 'string'
+          ? { file: editRaw.file, before: editRaw.before, after: editRaw.after }
+          : undefined
+      const row = this.makeToolRow(toolId, name, detail, edit)
       this.toolRows.set(toolId, row)
       this.addRow(row)
       this.setBusyish(true)
+    } else if (kind === 'config-changed') {
+      this.addRow(this.makeConfigRow(e))
     } else if (kind === 'tool-finished') {
       const toolId = typeof e.toolId === 'string' ? e.toolId : ''
       const row = this.toolRows.get(toolId)
@@ -302,17 +332,68 @@ export class SessionFeed {
     this.stopBtn.hidden = !on
   }
 
-  private makeTextRow(text: string): HTMLElement {
+  /** Final assistant-text lands here (never the raw addRow path) so it can replace an
+   * in-progress streaming bubble instead of duplicating it. Reconnect case (a final text
+   * with no preceding streaming bubble — the deltas that built it were never seen this
+   * connection) falls through to a fresh bubble. */
+  private finalizeAssistantText(text: string): void {
+    if (this.streamingBubble) {
+      this.streamingBubble.textContent = text
+      this.streamingBubble.classList.remove('chat-streaming')
+      this.streamingBubble = null
+      this.streamingText = ''
+      return
+    }
+    this.addRow(this.makeAssistantBubble(text))
+  }
+
+  /** First delta after a non-delta event (or after the prior stream finalized) creates the
+   * bubble via addRow (so MAX_ROWS cap applies once, at creation); every later delta in the
+   * same run just mutates its textContent in place — no repeated addRow/cap bookkeeping. */
+  private appendDelta(text: string): void {
+    if (!this.streamingBubble) {
+      this.streamingText = ''
+      const bubble = this.makeAssistantBubble('')
+      bubble.classList.add('chat-streaming')
+      this.streamingBubble = bubble
+      this.addRow(bubble)
+    }
+    this.streamingText += text
+    this.streamingBubble.textContent = this.streamingText
+  }
+
+  private makeAssistantBubble(text: string): HTMLElement {
+    // Full text, no truncation — unlike the old snippet row, chat bubbles show the whole
+    // message (the panel scrolls instead).
     const row = document.createElement('div')
-    row.className = 'session-row'
-    // Truncate to ~200 chars to keep the panel scannable; full text in tooltip
-    const snippet = text.length > 200 ? `${text.slice(0, 200)}\u2026` : text
-    row.textContent = snippet
-    row.title = text
+    row.className = 'session-row chat-msg chat-assistant'
+    row.textContent = text
     return row
   }
 
-  private makeToolRow(toolId: string, name: string, detail: string): HTMLElement {
+  private makeUserBubble(text: string, element?: Record<string, unknown>): HTMLElement {
+    const row = document.createElement('div')
+    row.className = 'session-row chat-msg chat-user'
+    row.append(document.createTextNode(text))
+    if (element) {
+      const source = typeof element.source === 'string' ? element.source : ''
+      const tag = typeof element.tag === 'string' ? element.tag : ''
+      if (source || tag) {
+        const ref = document.createElement('div')
+        ref.className = 'chat-msg-ref'
+        ref.textContent = [tag, source].filter(Boolean).join(' · ')
+        row.append(ref)
+      }
+    }
+    return row
+  }
+
+  private makeToolRow(
+    toolId: string,
+    name: string,
+    detail: string,
+    edit?: { file: string; before: string; after: string },
+  ): HTMLElement {
     const row = document.createElement('div')
     row.className = 'session-row session-tool-row'
     row.dataset.toolId = toolId
@@ -323,6 +404,34 @@ export class SessionFeed {
     const label = document.createElement('span')
     label.textContent = ` ${name} ${detail}`.trimEnd()
     row.append(spinner, label)
+    if (edit) {
+      // Hand-rolled before/after disclosure — no diff library. Collapsed by default (native
+      // <details> behavior); summary is just the basename so long paths don't blow out the row.
+      const details = document.createElement('details')
+      details.className = 'session-diff'
+      const summary = document.createElement('summary')
+      const slash = edit.file.lastIndexOf('/')
+      summary.textContent = slash === -1 ? edit.file : edit.file.slice(slash + 1)
+      const before = document.createElement('pre')
+      before.className = 'diff-before'
+      before.textContent = edit.before
+      const after = document.createElement('pre')
+      after.className = 'diff-after'
+      after.textContent = edit.after
+      details.append(summary, before, after)
+      row.append(details)
+    }
+    return row
+  }
+
+  private makeConfigRow(e: Record<string, unknown>): HTMLElement {
+    const parts: string[] = []
+    if (typeof e.model === 'string') parts.push(`model → ${e.model}`)
+    if (typeof e.permissionMode === 'string') parts.push(`permissions → ${e.permissionMode}`)
+    if (typeof e.effort === 'string') parts.push(`effort → ${e.effort}`)
+    const row = document.createElement('div')
+    row.className = 'session-row session-config'
+    row.textContent = parts.join(' · ')
     return row
   }
 

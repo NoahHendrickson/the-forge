@@ -599,6 +599,26 @@ button {
   color: #F87171; border: 1px solid rgba(248,113,113,0.3);
 }
 .session-stop:hover { background: rgba(248,113,113,0.25); }
+` +
+// Chat rendering (Task 5) — bubbles, delta streaming, diff disclosures, config rows.
+// .chat-msg: bubble base (extends .session-row); .chat-user / .chat-assistant: sender variant.
+// .chat-streaming: the single in-progress delta bubble. .chat-msg-ref: element chip echo line.
+// .session-diff / .diff-before / .diff-after: collapsed <details> tool-edit disclosure.
+// .session-config: the config-changed summary line.
+// CSS class names here are test hooks — extend, don't rename.
+`.chat-msg { flex-direction: column; align-items: flex-start; gap: 2px; white-space: pre-wrap; }
+.chat-user { background: rgba(255,255,255,0.05); }
+.chat-assistant { background: rgba(255,255,255,0.03); }
+.chat-streaming { border: 1px dashed var(--border-strong); }
+.chat-msg-ref { color: var(--text-faint); font: 400 var(--text-xs) var(--font-mono); }
+.session-diff { flex-basis: 100%; margin-top: 2px; font: 400 var(--text-xs) var(--font-mono); }
+.session-diff summary { cursor: pointer; color: var(--text-muted); }
+.diff-before, .diff-after {
+  white-space: pre-wrap; word-break: break-word; margin: 2px 0; padding: 4px 6px; border-radius: 4px;
+}
+.diff-before { background: rgba(248,113,113,0.08); }
+.diff-after { background: rgba(74,222,128,0.08); }
+.session-config { color: var(--text-faint); }
 `
 
 export class Overlay {

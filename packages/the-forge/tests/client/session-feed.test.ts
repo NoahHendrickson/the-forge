@@ -132,14 +132,14 @@ describe('stream consumption', () => {
     feed.stop()
   })
 
-  it('renders an assistant-text snippet truncated to ~200 chars', async () => {
+  it('renders an assistant-text bubble with the FULL text, no truncation (chat bubbles, unlike the old snippet row)', async () => {
     const longText = 'x'.repeat(300)
     const feed = new SessionFeed({ fetchFn: makeFetchFn([feedLine(1, { kind: 'assistant-text', text: longText })]) })
     document.body.appendChild(feed.root)
     feed.start()
     await flush()
-    const textRow = feed.root.querySelector('.session-row:not(.session-status)')
-    expect(textRow?.textContent?.length).toBeLessThanOrEqual(205) // 200 + '…' + some margin
+    const bubble = feed.root.querySelector('.chat-msg.chat-assistant')
+    expect(bubble?.textContent).toBe(longText)
     feed.stop()
   })
 
@@ -512,6 +512,180 @@ describe('reconnect', () => {
     vi.advanceTimersByTime(1000)
     await flush()
     expect(urls.length).toBe(2)
+    feed.stop()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Chat rendering (Task 5): bubbles, delta streaming, diff disclosures, config rows
+// ---------------------------------------------------------------------------
+
+describe('chat bubbles', () => {
+  it('user-text renders a user bubble, with a ref line when an element is attached', async () => {
+    const lines = [
+      feedLine(1, {
+        kind: 'user-text',
+        text: 'Make this bigger',
+        element: { source: 'src/App.tsx:12:3', tag: 'div' },
+      }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const bubble = feed.root.querySelector('.chat-msg.chat-user')
+    expect(bubble).not.toBeNull()
+    expect(bubble?.textContent).toContain('Make this bigger')
+    const ref = bubble?.querySelector('.chat-msg-ref')
+    expect(ref).not.toBeNull()
+    expect(ref?.textContent).toContain('src/App.tsx:12:3')
+    feed.stop()
+  })
+
+  it('user-text without an element renders no ref line', async () => {
+    const lines = [feedLine(1, { kind: 'user-text', text: 'plain message' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const bubble = feed.root.querySelector('.chat-msg.chat-user')
+    expect(bubble?.textContent).toBe('plain message')
+    expect(bubble?.querySelector('.chat-msg-ref')).toBeNull()
+    feed.stop()
+  })
+})
+
+describe('delta streaming', () => {
+  it('deltas accumulate in one streaming bubble', async () => {
+    const lines = [feedLine(0, { kind: 'assistant-delta', text: 'Hel' }), feedLine(0, { kind: 'assistant-delta', text: 'lo' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const bubbles = feed.root.querySelectorAll('.chat-msg.chat-assistant.chat-streaming')
+    expect(bubbles.length).toBe(1)
+    expect(bubbles[0].textContent).toBe('Hello')
+    feed.stop()
+  })
+
+  it('final assistant-text replaces the streaming bubble (no duplicate)', async () => {
+    const lines = [
+      feedLine(0, { kind: 'assistant-delta', text: 'Wor' }),
+      feedLine(0, { kind: 'assistant-delta', text: 'king...' }),
+      feedLine(1, { kind: 'assistant-text', text: 'Working on it now.' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const bubbles = feed.root.querySelectorAll('.chat-msg.chat-assistant')
+    expect(bubbles.length).toBe(1)
+    expect(bubbles[0].textContent).toBe('Working on it now.')
+    expect(bubbles[0].className).not.toContain('chat-streaming')
+    feed.stop()
+  })
+
+  it('reconnect mid-stream (no deltas) still renders the final text as a fresh bubble', async () => {
+    const lines = [feedLine(1, { kind: 'assistant-text', text: 'Reconnected, here is the answer.' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const bubbles = feed.root.querySelectorAll('.chat-msg.chat-assistant')
+    expect(bubbles.length).toBe(1)
+    expect(bubbles[0].textContent).toBe('Reconnected, here is the answer.')
+    feed.stop()
+  })
+
+  it('seq-0 delta lines do not advance the reconnect cursor (next connect uses prior since)', async () => {
+    // The ring never stores deltas — parseLine's seq-tracking already ignores seq 0
+    // (`seq > this.lastSeq` is false at seq 0), so a burst of ephemeral deltas between
+    // real feed events must not move ?since= past the last real seq on reconnect.
+    const urls: string[] = []
+    let call = 0
+    const fetchFn: typeof fetch = ((_url: RequestInfo | URL, _init?: RequestInit) => {
+      urls.push(_url.toString())
+      call++
+      if (call === 1) {
+        return Promise.resolve(
+          new Response(
+            makeBody([
+              feedLine(5, { kind: 'assistant-text', text: 'hi' }),
+              feedLine(0, { kind: 'assistant-delta', text: ' there' }),
+            ]),
+            { status: 200 },
+          ),
+        )
+      }
+      return new Promise(() => {})
+    }) as typeof fetch
+
+    const feed = new SessionFeed({ fetchFn })
+    feed.start()
+    await flush()
+    vi.advanceTimersByTime(1000)
+    await flush()
+    expect(urls[1]).toContain('since=5')
+    feed.stop()
+  })
+})
+
+describe('diff disclosure', () => {
+  it('tool-started with an edit payload renders a collapsed diff disclosure', async () => {
+    const lines = [
+      feedLine(1, {
+        kind: 'tool-started',
+        toolId: 't1',
+        name: 'Edit',
+        detail: 'src/App.tsx',
+        edit: { file: 'src/App.tsx', before: 'py-2.5', after: 'py-6' },
+      }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const details = feed.root.querySelector('.session-diff') as HTMLDetailsElement | null
+    expect(details).not.toBeNull()
+    expect(details?.tagName).toBe('DETAILS')
+    expect(details?.open).toBe(false) // collapsed by default
+    expect(details?.querySelector('summary')?.textContent).toBe('App.tsx')
+    expect(details?.querySelector('.diff-before')?.textContent).toBe('py-2.5')
+    expect(details?.querySelector('.diff-after')?.textContent).toBe('py-6')
+    feed.stop()
+  })
+
+  it('tool-started without an edit payload renders no diff disclosure', async () => {
+    const lines = [feedLine(1, { kind: 'tool-started', toolId: 't1', name: 'Read', detail: 'x.ts' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.session-diff')).toBeNull()
+    feed.stop()
+  })
+})
+
+describe('config-changed row', () => {
+  it('renders a config row joining only the provided keys', async () => {
+    const lines = [feedLine(1, { kind: 'config-changed', model: 'claude-opus-4-5', permissionMode: 'plan' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const row = feed.root.querySelector('.session-row.session-config')
+    expect(row).not.toBeNull()
+    expect(row?.textContent).toBe('model → claude-opus-4-5 · permissions → plan')
+    feed.stop()
+  })
+
+  it('renders just effort when only effort is provided', async () => {
+    const lines = [feedLine(1, { kind: 'config-changed', effort: 'high' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.session-row.session-config')?.textContent).toBe('effort → high')
     feed.stop()
   })
 })

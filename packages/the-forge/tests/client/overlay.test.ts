@@ -583,3 +583,42 @@ describe('SessionFeed CSS hooks (Task 7)', () => {
     expect(CSS).toContain('.session-error-row')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Chat rendering CSS hooks (Task 5) — test hooks that must not be renamed
+// ---------------------------------------------------------------------------
+
+describe('SessionFeed chat CSS hooks (Task 5)', () => {
+  it('CSS declares .chat-msg as the bubble base class', () => {
+    expect(CSS).toContain('.chat-msg')
+  })
+
+  it('CSS declares .chat-user for user bubbles', () => {
+    expect(CSS).toContain('.chat-user')
+  })
+
+  it('CSS declares .chat-assistant for assistant bubbles', () => {
+    expect(CSS).toContain('.chat-assistant')
+  })
+
+  it('CSS declares .chat-streaming for the in-progress delta bubble', () => {
+    expect(CSS).toContain('.chat-streaming')
+  })
+
+  it('CSS declares .chat-msg-ref for the element chip echo line', () => {
+    expect(CSS).toContain('.chat-msg-ref')
+  })
+
+  it('CSS declares .session-diff for the diff disclosure', () => {
+    expect(CSS).toContain('.session-diff')
+  })
+
+  it('CSS declares .diff-before and .diff-after for the diff bodies', () => {
+    expect(CSS).toContain('.diff-before')
+    expect(CSS).toContain('.diff-after')
+  })
+
+  it('CSS declares .session-config for the config-changed row', () => {
+    expect(CSS).toContain('.session-config')
+  })
+})

@@ -90,3 +90,59 @@ export const SessionError: Story = {
       feedLine(1, { kind: 'session-error', text: 'Could not spawn claude: command not found in PATH' }),
     ]),
 }
+
+/** Streaming mid-delta — a user bubble with an element ref, followed by an in-progress
+ * .chat-streaming assistant bubble built from several assistant-delta events (seq 0). */
+export const StreamingMidDelta: Story = {
+  render: () =>
+    makeFeed([
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
+      feedLine(2, {
+        kind: 'user-text',
+        text: 'Make this button bigger',
+        element: { source: 'src/App.tsx:42:5', tag: 'button' },
+      }),
+      feedLine(0, { kind: 'assistant-delta', text: "I'll bump the padding " }),
+      feedLine(0, { kind: 'assistant-delta', text: 'from py-2.5 to py-6 ' }),
+      feedLine(0, { kind: 'assistant-delta', text: 'on that button now.' }),
+    ]),
+}
+
+/** Finalized conversation — user bubble, then a completed assistant bubble (the streaming
+ * bubble was replaced in place by the final assistant-text, no duplicate). */
+export const FinalizedConversation: Story = {
+  render: () =>
+    makeFeed([
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
+      feedLine(2, { kind: 'user-text', text: 'Make this button bigger' }),
+      feedLine(0, { kind: 'assistant-delta', text: "I'll bump the padding" }),
+      feedLine(3, { kind: 'assistant-text', text: "I'll bump the padding from py-2.5 to py-6 on that button now." }),
+      feedLine(4, { kind: 'turn-complete', isError: false, costUsd: 0.0021 }),
+    ]),
+}
+
+/** Diff-open — a tool-started edit with before/after; the story leaves the <details> collapsed
+ * (matching the real default) so the spot-check confirms the summary/basename rendering. */
+export const DiffDisclosure: Story = {
+  render: () =>
+    makeFeed([
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
+      feedLine(2, {
+        kind: 'tool-started',
+        toolId: 't1',
+        name: 'Edit',
+        detail: 'src/App.tsx',
+        edit: { file: 'src/App.tsx', before: '  <button className="px-4 py-2.5">', after: '  <button className="px-4 py-6">' },
+      }),
+      feedLine(3, { kind: 'tool-finished', toolId: 't1' }),
+    ]),
+}
+
+/** Config row — a config-changed event showing model/permissions/effort joined into one line. */
+export const ConfigChanged: Story = {
+  render: () =>
+    makeFeed([
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
+      feedLine(2, { kind: 'config-changed', model: 'claude-opus-4-5', permissionMode: 'plan', effort: 'high' }),
+    ]),
+}
