@@ -15,6 +15,10 @@ import type { SessionAdapter, SessionEvent } from '../../../src/server/session/a
 
 // ---------------------------------------------------------------------------
 // Fake adapter — records calls, exposes emit(e) to simulate adapter events.
+// makeAdapter() returns a FRESH instance per call (mirroring production, where
+// every respawn spawns a new child) — a shared instance would let a stale
+// onEvent closure on the "old" adapter silently alias the new one and mask
+// double-respawn bugs.
 // ---------------------------------------------------------------------------
 
 interface FakeAdapter extends SessionAdapter {
@@ -52,23 +56,29 @@ function makeFakeAdapter(): FakeAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// Build opts factory — injects fake adapter, temp forgeDir, fake clock.
+// Harness — fresh adapter per makeAdapter() call; `adapters` addresses
+// instance #1 vs #2 across respawns.
 // ---------------------------------------------------------------------------
 
-function makeOpts(
-  dir: string,
-  adapter: FakeAdapter,
+function makeHarness(
+  dirArg: string,
   overrides?: Partial<SessionManagerOpts>,
-): SessionManagerOpts {
+): { adapters: FakeAdapter[]; opts: SessionManagerOpts } {
+  const adapters: FakeAdapter[] = []
   let t = 0
-  return {
-    makeAdapter: () => adapter,
-    forgeDir: dir,
+  const opts: SessionManagerOpts = {
+    makeAdapter: () => {
+      const a = makeFakeAdapter()
+      adapters.push(a)
+      return a
+    },
+    forgeDir: dirArg,
     cwd: '/fake/cwd',
     now: () => t++,
     watchdogMs: 30,
     ...overrides,
   }
+  return { adapters, opts }
 }
 
 // ---------------------------------------------------------------------------
@@ -89,105 +99,122 @@ afterEach(() => {
 describe('SessionManager', () => {
   describe('initial state', () => {
     it('starts idle', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
       expect(mgr.state()).toBe<SessionState>('idle')
     })
 
     it('does not spawn adapter until notifyDesignEdits()', () => {
-      const adapter = makeFakeAdapter()
-      new SessionManager(makeOpts(dir, adapter))
-      expect(adapter.startCalls).toHaveLength(0)
+      const { adapters, opts } = makeHarness(dir)
+      new SessionManager(opts)
+      expect(adapters).toHaveLength(0)
     })
   })
 
   describe('notifyDesignEdits() — idle → starting → ready → busy', () => {
     it('transitions to starting and calls adapter.start with cwd', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
 
       expect(mgr.state()).toBe<SessionState>('starting')
-      expect(adapter.startCalls).toHaveLength(1)
-      expect(adapter.startCalls[0]!.cwd).toBe('/fake/cwd')
+      expect(adapters).toHaveLength(1)
+      expect(adapters[0]!.startCalls).toHaveLength(1)
+      expect(adapters[0]!.startCalls[0]!.cwd).toBe('/fake/cwd')
     })
 
     it('on started event → state ready, writes session.json, flushes nudge → busy', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 'sess-1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 'sess-1', model: 'claude', mcpLoaded: true })
 
       expect(mgr.state()).toBe<SessionState>('busy')
       // nudge flushed: sendTurn called once with PULL_TURN_TEXT
-      expect(adapter.sendTurnCalls).toHaveLength(1)
-      expect(adapter.sendTurnCalls[0]).toBe(PULL_TURN_TEXT)
+      expect(adapters[0]!.sendTurnCalls).toHaveLength(1)
+      expect(adapters[0]!.sendTurnCalls[0]).toBe(PULL_TURN_TEXT)
       // session.json written
       const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as unknown
       expect(json).toMatchObject({ sessionId: 'sess-1' })
       expect(typeof (json as Record<string, unknown>).updatedAt).toBe('string')
     })
 
-    it('on turn-complete (no error) → state ready', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+    it('session.json updatedAt comes from the injectable clock', () => {
+      // Harness clock starts at 0 and ticks by 1 per call — real Date.now would
+      // produce a 2026 timestamp, the injected clock the 1970 epoch.
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 'sess-1', model: 'claude', mcpLoaded: true })
-      adapter.emit({ kind: 'turn-complete', isError: false, costUsd: 0.001 })
+      adapters[0]!.emit({ kind: 'started', sessionId: 'sess-1', model: 'claude', mcpLoaded: true })
+
+      const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
+        updatedAt: string
+      }
+      expect(json.updatedAt).toMatch(/^1970-01-01T/)
+    })
+
+    it('on turn-complete (no error) → state ready', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 'sess-1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false, costUsd: 0.001 })
 
       expect(mgr.state()).toBe<SessionState>('ready')
     })
   })
 
   describe('session.json resume', () => {
-    it('resumes with persisted sessionId on second start', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+    it('resumes with the persisted session id on later starts', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 'sess-abc', model: 'claude', mcpLoaded: true })
-      adapter.emit({ kind: 'turn-complete', isError: false })
-      adapter.emit({ kind: 'ended' }) // clean exit → idle
+      adapters[0]!.emit({ kind: 'started', sessionId: 'sess-abc', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
+      adapters[0]!.emit({ kind: 'ended' }) // clean exit → idle
 
-      // Second start should resume
-      const adapter2 = makeFakeAdapter()
-      const mgr2 = new SessionManager({ ...makeOpts(dir, adapter2), makeAdapter: () => adapter2 })
+      // Second start (fresh manager, same forgeDir) should resume
+      const second = makeHarness(dir)
+      const mgr2 = new SessionManager(second.opts)
       mgr2.notifyDesignEdits()
 
-      expect(adapter2.startCalls[0]!.resumeId).toBe('sess-abc')
+      expect(second.adapters[0]!.startCalls[0]!.resumeId).toBe('sess-abc')
+      void mgr
     })
 
     it('starts fresh if session.json is corrupt (unknown/missing)', () => {
       fs.writeFileSync(path.join(dir, 'session.json'), 'NOT JSON {{{')
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
 
-      expect(adapter.startCalls).toHaveLength(1)
-      expect(adapter.startCalls[0]!.resumeId).toBeUndefined()
+      expect(adapters[0]!.startCalls).toHaveLength(1)
+      expect(adapters[0]!.startCalls[0]!.resumeId).toBeUndefined()
     })
 
     it('starts fresh if session.json is missing', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
 
-      expect(adapter.startCalls[0]!.resumeId).toBeUndefined()
+      expect(adapters[0]!.startCalls[0]!.resumeId).toBeUndefined()
     })
   })
 
   describe('busy: single-slot pending nudge', () => {
     it('parks exactly one nudge when busy, flushed once on turn-complete', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
       // state is now busy, sendTurnCalls has 1 (the flush)
 
       // Multiple notifyDesignEdits while busy → only one nudge parked
@@ -196,148 +223,177 @@ describe('SessionManager', () => {
       mgr.notifyDesignEdits()
 
       // No additional sendTurn yet
-      expect(adapter.sendTurnCalls).toHaveLength(1)
+      expect(adapters[0]!.sendTurnCalls).toHaveLength(1)
 
       // turn-complete → flush the single parked nudge
-      adapter.emit({ kind: 'turn-complete', isError: false })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
 
-      expect(adapter.sendTurnCalls).toHaveLength(2)
-      expect(adapter.sendTurnCalls[1]).toBe(PULL_TURN_TEXT)
+      expect(adapters[0]!.sendTurnCalls).toHaveLength(2)
+      expect(adapters[0]!.sendTurnCalls[1]).toBe(PULL_TURN_TEXT)
       expect(mgr.state()).toBe<SessionState>('busy')
     })
 
     it('no nudge parked → ready on turn-complete', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
-      adapter.emit({ kind: 'turn-complete', isError: false })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
 
       expect(mgr.state()).toBe<SessionState>('ready')
     })
 
     it('notifyDesignEdits while starting also parks nudge, flushed on started', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits() // first notify → starting
       // second notify while still starting
       mgr.notifyDesignEdits()
       // state: starting, nudge parked
 
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
       // started event: flushes nudge, calls sendTurn ONCE (the first notify set the nudge, the second was deduplicated)
-      expect(adapter.sendTurnCalls).toHaveLength(1)
+      expect(adapters[0]!.sendTurnCalls).toHaveLength(1)
+      expect(mgr.state()).toBe<SessionState>('busy')
+    })
+
+    it('nudge survives an adapter that emits started synchronously inside start()', () => {
+      // The nudge must be parked BEFORE _start() runs — an adapter that resolves
+      // synchronously (started emitted inside start()) would otherwise flush nothing
+      // and the parked-after nudge would sit forever.
+      const adapters: FakeAdapter[] = []
+      const { opts } = makeHarness(dir, {
+        makeAdapter: () => {
+          const a = makeFakeAdapter()
+          const origStart = a.start.bind(a)
+          a.start = (o) => {
+            origStart(o)
+            a.emit({ kind: 'started', sessionId: 'sync-1', model: 'claude', mcpLoaded: true })
+          }
+          adapters.push(a)
+          return a
+        },
+      })
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+
+      expect(adapters[0]!.sendTurnCalls).toHaveLength(1)
+      expect(adapters[0]!.sendTurnCalls[0]).toBe(PULL_TURN_TEXT)
       expect(mgr.state()).toBe<SessionState>('busy')
     })
 
     it('notifyDesignEdits while ready → sendTurn immediately', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
-      adapter.emit({ kind: 'turn-complete', isError: false })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
 
       // now ready, call again
       mgr.notifyDesignEdits()
 
-      expect(adapter.sendTurnCalls).toHaveLength(2)
+      expect(adapters[0]!.sendTurnCalls).toHaveLength(2)
       expect(mgr.state()).toBe<SessionState>('busy')
     })
   })
 
   describe('failed state', () => {
     it('turn-complete isError → failed', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
-      adapter.emit({ kind: 'turn-complete', isError: true, errorText: 'rate limit' })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: true, errorText: 'rate limit' })
 
       expect(mgr.state()).toBe<SessionState>('failed')
     })
 
     it('next notifyDesignEdits after failed → restarts (auto-start)', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
-      adapter.emit({ kind: 'turn-complete', isError: true, errorText: 'rate limit' })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: true, errorText: 'rate limit' })
 
       expect(mgr.state()).toBe<SessionState>('failed')
       mgr.notifyDesignEdits()
 
-      // should restart
-      expect(adapter.startCalls).toHaveLength(2)
+      // should restart with a fresh adapter
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.startCalls).toHaveLength(1)
       expect(mgr.state()).toBe<SessionState>('starting')
     })
 
     it('session-error while starting → failed, then notifyDesignEdits restarts', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
       // simulate spawn failure path: session-error then ended
-      adapter.emit({ kind: 'session-error', text: 'ENOENT spawn failed' })
-      adapter.emit({ kind: 'ended' })
+      adapters[0]!.emit({ kind: 'session-error', text: 'ENOENT spawn failed' })
+      adapters[0]!.emit({ kind: 'ended' })
 
       expect(mgr.state()).toBe<SessionState>('failed')
       mgr.notifyDesignEdits()
       expect(mgr.state()).toBe<SessionState>('starting')
+      expect(adapters).toHaveLength(2)
     })
   })
 
   describe('clean ended while ready → idle', () => {
     it('ended while ready → idle without respawn', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
-      adapter.emit({ kind: 'turn-complete', isError: false })
-      adapter.emit({ kind: 'ended' })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
+      adapters[0]!.emit({ kind: 'ended' })
 
       expect(mgr.state()).toBe<SessionState>('idle')
-      expect(adapter.startCalls).toHaveLength(1)
+      expect(adapters).toHaveLength(1)
     })
   })
 
   describe('watchdog', () => {
     it('fires while busy and respawns with resumeId, re-sends PULL_TURN_TEXT', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 'sess-wdog', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 'sess-wdog', model: 'claude', mcpLoaded: true })
       // state: busy
 
       // Advance timer past watchdog (30ms in test opts)
       vi.advanceTimersByTime(35)
 
-      // Should have killed and respawned
-      expect(adapter.stopCalls).toBeGreaterThanOrEqual(1)
-      expect(adapter.startCalls).toHaveLength(2)
-      expect(adapter.startCalls[1]!.resumeId).toBe('sess-wdog')
+      // Should have killed adapter #1 and respawned adapter #2
+      expect(adapters[0]!.stopCalls).toBeGreaterThanOrEqual(1)
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.startCalls[0]!.resumeId).toBe('sess-wdog')
       expect(mgr.state()).toBe<SessionState>('starting')
 
       // Complete the respawn
-      adapter.emit({ kind: 'started', sessionId: 'sess-wdog-2', model: 'claude', mcpLoaded: true })
-      expect(adapter.sendTurnCalls).toHaveLength(2) // initial + recovery
-      expect(adapter.sendTurnCalls[1]).toBe(PULL_TURN_TEXT)
+      adapters[1]!.emit({ kind: 'started', sessionId: 'sess-wdog-2', model: 'claude', mcpLoaded: true })
+      expect(adapters[0]!.sendTurnCalls).toHaveLength(1) // the original pull
+      expect(adapters[1]!.sendTurnCalls).toHaveLength(1) // the recovery pull
+      expect(adapters[1]!.sendTurnCalls[0]).toBe(PULL_TURN_TEXT)
     })
 
     it('emits recovery session-error feed row on watchdog fire', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
       const events: FeedEvent[] = []
       mgr.subscribe((e) => events.push(e))
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 'sess-wdog', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 'sess-wdog', model: 'claude', mcpLoaded: true })
 
       vi.advanceTimersByTime(35)
 
@@ -348,74 +404,108 @@ describe('SessionManager', () => {
     })
 
     it('adapter events re-arm the watchdog (no expiry if events keep arriving)', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
 
       // Advance 25ms (just under 30ms watchdog), emit an event, advance another 25ms
       vi.advanceTimersByTime(25)
-      adapter.emit({ kind: 'assistant-text', text: 'working...' })
+      adapters[0]!.emit({ kind: 'assistant-text', text: 'working...' })
       vi.advanceTimersByTime(25)
 
       // Should NOT have respawned — event re-armed the watchdog
-      expect(adapter.startCalls).toHaveLength(1)
+      expect(adapters).toHaveLength(1)
 
       // Now advance past watchdog without events
       vi.advanceTimersByTime(35)
-      expect(adapter.startCalls).toHaveLength(2) // now respawned
+      expect(adapters).toHaveLength(2) // now respawned
     })
 
     it('watchdog does not fire when not busy (ready state)', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
-      adapter.emit({ kind: 'turn-complete', isError: false }) // → ready
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // → ready
       vi.advanceTimersByTime(100)
 
-      expect(adapter.startCalls).toHaveLength(1)
+      expect(adapters).toHaveLength(1)
     })
 
     it('ended while busy → same respawn path as watchdog', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 'sess-ended', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 'sess-ended', model: 'claude', mcpLoaded: true })
       // busy now, simulate unexpected exit
-      adapter.emit({ kind: 'ended' })
+      adapters[0]!.emit({ kind: 'ended' })
 
-      expect(adapter.startCalls).toHaveLength(2)
-      expect(adapter.startCalls[1]!.resumeId).toBe('sess-ended')
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.startCalls[0]!.resumeId).toBe('sess-ended')
     })
 
     it('ended while starting → same respawn path as busy (brief: "Same path for ended while busy/starting")', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'ended' }) // ended before started
+      adapters[0]!.emit({ kind: 'ended' }) // ended before started
 
       // Brief: same respawn path as ended-while-busy → respawns immediately
-      expect(adapter.startCalls).toHaveLength(2)
+      expect(adapters).toHaveLength(2)
       expect(mgr.state()).toBe<SessionState>('starting')
+    })
+
+    it('late ended from the discarded adapter after watchdog fire does NOT trigger a second respawn', () => {
+      // A real process adapter emits `ended` asynchronously after kill(). If the old
+      // adapter's onEvent closure were still attached, that late `ended` would land
+      // while state is 'starting' and trigger a SECOND _respawn(), orphaning the
+      // first respawned child. The manager must detach the old adapter before stop().
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 'sess-race', model: 'claude', mcpLoaded: true })
+      // state: busy — let the watchdog fire
+      vi.advanceTimersByTime(35)
+      expect(adapters).toHaveLength(2) // one respawn so far
+
+      // The killed child's exit arrives late, from the OLD adapter
+      adapters[0]!.emit({ kind: 'ended' })
+
+      // Exactly ONE respawn total — makeAdapter called exactly twice
+      expect(adapters).toHaveLength(2)
+      expect(mgr.state()).toBe<SessionState>('starting')
+
+      // The respawned adapter completes startup and gets the recovery pull;
+      // no stale-closure effects (single sendTurn on the new adapter, none extra)
+      adapters[1]!.emit({ kind: 'started', sessionId: 'sess-race-2', model: 'claude', mcpLoaded: true })
+      expect(mgr.state()).toBe<SessionState>('busy')
+      expect(adapters[1]!.sendTurnCalls).toHaveLength(1)
+      // A further stale event from the old adapter must not overwrite the live session id
+      adapters[0]!.emit({ kind: 'started', sessionId: 'STALE', model: 'claude', mcpLoaded: true })
+      const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
+        sessionId: string
+      }
+      expect(json.sessionId).toBe('sess-race-2')
     })
   })
 
   describe('ring buffer and event streaming', () => {
     it('seq starts at 1 and increments monotonically', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
       const events: FeedEvent[] = []
       mgr.subscribe((e) => events.push(e))
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
-      adapter.emit({ kind: 'assistant-text', text: 'hello' })
-      adapter.emit({ kind: 'turn-complete', isError: false })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'assistant-text', text: 'hello' })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
 
       expect(events[0]!.seq).toBe(1)
       expect(events[1]!.seq).toBe(2)
@@ -423,13 +513,13 @@ describe('SessionManager', () => {
     })
 
     it('eventsSince(seq) returns events strictly after that seq', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
-      adapter.emit({ kind: 'assistant-text', text: 'a' })
-      adapter.emit({ kind: 'turn-complete', isError: false })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'assistant-text', text: 'a' })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
 
       const all = mgr.eventsSince(0)
       expect(all).toHaveLength(3)
@@ -440,26 +530,26 @@ describe('SessionManager', () => {
     })
 
     it('eventsSince returns [] when seq is at or beyond last event', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
 
       const none = mgr.eventsSince(1)
       expect(none).toHaveLength(0)
     })
 
     it('ring buffer caps at RING_CAPACITY, tail is preserved', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
 
       // Emit RING_CAPACITY + 10 additional events beyond started
       for (let i = 0; i < RING_CAPACITY + 10; i++) {
-        adapter.emit({ kind: 'assistant-text', text: `msg-${i}` })
+        adapters[0]!.emit({ kind: 'assistant-text', text: `msg-${i}` })
       }
 
       const all = mgr.eventsSince(0)
@@ -471,8 +561,8 @@ describe('SessionManager', () => {
     })
 
     it('subscribe fans out to multiple subscribers', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
       const a: FeedEvent[] = []
       const b: FeedEvent[] = []
 
@@ -480,50 +570,50 @@ describe('SessionManager', () => {
       mgr.subscribe((e) => b.push(e))
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
 
       expect(a).toHaveLength(1)
       expect(b).toHaveLength(1)
     })
 
     it('unsubscribe removes subscriber', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
       const events: FeedEvent[] = []
       const unsub = mgr.subscribe((e) => events.push(e))
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
       expect(events).toHaveLength(1)
 
       unsub()
-      adapter.emit({ kind: 'assistant-text', text: 'after unsub' })
+      adapters[0]!.emit({ kind: 'assistant-text', text: 'after unsub' })
       expect(events).toHaveLength(1) // no new events after unsub
     })
 
     it('subscribe receives only events emitted after subscription (no replay)', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
       // subscribe AFTER the started event
       const events: FeedEvent[] = []
       mgr.subscribe((e) => events.push(e))
 
-      adapter.emit({ kind: 'assistant-text', text: 'post-sub' })
+      adapters[0]!.emit({ kind: 'assistant-text', text: 'post-sub' })
       expect(events).toHaveLength(1)
       expect(events[0]!.event).toMatchObject({ kind: 'assistant-text', text: 'post-sub' })
     })
 
     it('at includes an ISO timestamp string', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
       const events: FeedEvent[] = []
       mgr.subscribe((e) => events.push(e))
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
 
       expect(events[0]!.at).toMatch(/^\d{4}-\d{2}-\d{2}T/)
     })
@@ -531,48 +621,49 @@ describe('SessionManager', () => {
 
   describe('stop()', () => {
     it('kills adapter and transitions to idle', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
 
       mgr.stop()
 
-      expect(adapter.stopCalls).toBeGreaterThanOrEqual(1)
+      expect(adapters[0]!.stopCalls).toBeGreaterThanOrEqual(1)
       expect(mgr.state()).toBe<SessionState>('idle')
     })
 
-    it('clears parked nudge on stop()', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+    it('clears parked nudge on stop(); stale events from the old adapter mutate nothing', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
       // park a nudge
       mgr.notifyDesignEdits()
 
       mgr.stop()
 
       // After stop, a started event (from a stale adapter) should not flush the nudge
-      adapter.emit({ kind: 'started', sessionId: 's2', model: 'claude', mcpLoaded: true })
-      // Only the initial sendTurn (1), no second flush
-      expect(adapter.sendTurnCalls).toHaveLength(1)
+      adapters[0]!.emit({ kind: 'started', sessionId: 's2', model: 'claude', mcpLoaded: true })
+      // Only the initial sendTurn (1), no second flush — and state stays idle
+      expect(adapters[0]!.sendTurnCalls).toHaveLength(1)
+      expect(mgr.state()).toBe<SessionState>('idle')
     })
 
     it('stop() is safe when idle (no-op)', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       expect(() => mgr.stop()).not.toThrow()
     })
 
     it('stop() does not delete session.json', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
 
       mgr.stop()
 
@@ -582,23 +673,23 @@ describe('SessionManager', () => {
 
   describe('interrupt()', () => {
     it('delegates to adapter.interrupt when busy', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
 
       mgr.interrupt()
 
-      expect(adapter.interruptCalls).toBe(1)
+      expect(adapters[0]!.interruptCalls).toBe(1)
     })
 
     it('interrupt is no-op when idle', () => {
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(dir, adapter))
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
 
       expect(() => mgr.interrupt()).not.toThrow()
-      expect(adapter.interruptCalls).toBe(0)
+      expect(adapters).toHaveLength(0)
     })
   })
 
@@ -609,6 +700,12 @@ describe('SessionManager', () => {
 
     it('RING_CAPACITY is 200', () => {
       expect(RING_CAPACITY).toBe(200)
+    })
+
+    it('PULL_TURN_TEXT is the exact ratified constant', () => {
+      expect(PULL_TURN_TEXT).toBe(
+        'New design edits are queued. Call the the-forge MCP tool pull_design_edits, apply each request exactly as written, then call mark_applied. Do not run the app, take screenshots, or preview the result.',
+      )
     })
 
     it('PULL_TURN_TEXT contains required keywords and is a constant (no interpolation)', () => {
@@ -624,11 +721,11 @@ describe('SessionManager', () => {
   describe('forgeDir creation', () => {
     it('creates forgeDir if it does not exist before writing session.json', () => {
       const nonExistentDir = path.join(dir, 'nested', 'forge')
-      const adapter = makeFakeAdapter()
-      const mgr = new SessionManager(makeOpts(nonExistentDir, adapter))
+      const { adapters, opts } = makeHarness(nonExistentDir)
+      const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapter.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
 
       expect(fs.existsSync(path.join(nonExistentDir, 'session.json'))).toBe(true)
     })

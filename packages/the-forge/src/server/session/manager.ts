@@ -66,11 +66,11 @@ function readSessionFile(forgeDir: string): SessionFile | undefined {
   }
 }
 
-function writeSessionFile(forgeDir: string, sessionId: string): void {
+function writeSessionFile(forgeDir: string, sessionId: string, updatedAt: string): void {
   try {
     // forgeDir may not exist yet (mirrors writeEndpointFile in src/server/endpoints.ts).
     fs.mkdirSync(forgeDir, { recursive: true })
-    const data: SessionFile = { sessionId, updatedAt: new Date().toISOString() }
+    const data: SessionFile = { sessionId, updatedAt }
     fs.writeFileSync(path.join(forgeDir, 'session.json'), JSON.stringify(data), 'utf8')
   } catch {
     // I/O failure is non-fatal — resume just won't work next time.
@@ -131,8 +131,11 @@ export class SessionManager {
     switch (this._state) {
       case 'idle':
       case 'failed':
-        this._start()
+        // Park the nudge BEFORE starting — an adapter that emits `started`
+        // synchronously inside start() would otherwise flush an empty slot and
+        // the nudge parked afterwards would sit forever.
         this._nudgePending = true
+        this._start()
         break
       case 'starting':
         // Already starting — park the nudge; it will flush on started.
@@ -159,10 +162,7 @@ export class SessionManager {
   stop(): void {
     this._cancelWatchdog()
     this._nudgePending = false
-    if (this._adapter) {
-      this._adapter.stop()
-      this._adapter = null
-    }
+    this._discardAdapter()?.stop()
     this._state = 'idle'
   }
 
@@ -179,13 +179,28 @@ export class SessionManager {
   // Private helpers
   // ---------------------------------------------------------------------------
 
+  /** Detach the current adapter's onEvent and drop the reference, so a discarded
+   * adapter can never re-enter the state machine (stale started/ended events from
+   * a killed child are the double-respawn race). Returns the old adapter so callers
+   * that also need to kill the process can chain `.stop()`. */
+  private _discardAdapter(): SessionAdapter | null {
+    const old = this._adapter
+    if (old) {
+      old.onEvent = () => {}
+      this._adapter = null
+    }
+    return old
+  }
+
   private _start(): void {
     const resumeId = readSessionFile(this._opts.forgeDir)?.sessionId
     const adapter = this._opts.makeAdapter()
     this._adapter = adapter
     adapter.onEvent = (e) => this._onAdapterEvent(e)
-    adapter.start({ cwd: this._opts.cwd, resumeId })
+    // State before start(): an adapter emitting `started` synchronously inside
+    // start() must not have its ready/busy transition clobbered afterwards.
     this._state = 'starting'
+    adapter.start({ cwd: this._opts.cwd, resumeId })
   }
 
   private _sendTurn(): void {
@@ -206,7 +221,7 @@ export class SessionManager {
     switch (event.kind) {
       case 'started':
         this._lastSessionId = event.sessionId
-        writeSessionFile(this._opts.forgeDir, event.sessionId)
+        writeSessionFile(this._opts.forgeDir, event.sessionId, new Date(this._clock()).toISOString())
         this._state = 'ready'
         if (this._nudgePending) {
           this._nudgePending = false
@@ -240,16 +255,17 @@ export class SessionManager {
 
       case 'ended':
         this._cancelWatchdog()
+        // The adapter that just ended is dead either way — detach it so any
+        // further stray events from it can't reach the manager.
+        this._discardAdapter()
         if (this._state === 'busy' || this._state === 'starting') {
           // Unexpected exit during a live turn or during spawn → recover.
           this._respawn()
         } else if (this._state === 'failed') {
           // session-error already drove us to failed; ended is just the adapter
           // signalling the process is gone — don't overwrite the failed state.
-          this._adapter = null
         } else {
           // Clean exit between turns (ready) → idle, no respawn.
-          this._adapter = null
           this._state = 'idle'
         }
         break
@@ -273,9 +289,11 @@ export class SessionManager {
    * on respawn (the turn that died was itself a pull turn). */
   private _onWatchdogFired(): void {
     this._watchdog = null
-    if (this._adapter) {
-      this._adapter.stop()
-    }
+    // Detach BEFORE stop(): a real process adapter emits `ended` asynchronously
+    // after kill; with the closure still attached that late `ended` would land
+    // while state is 'starting' and trigger a second respawn, orphaning the
+    // child we're about to spawn.
+    this._discardAdapter()?.stop()
     this._push({ kind: 'session-error', text: 'session recovered after stall' })
     this._respawn()
   }
@@ -290,8 +308,9 @@ export class SessionManager {
     // Park the recovery pull; it will flush when the new adapter emits started.
     this._nudgePending = true
     adapter.onEvent = (e) => this._onAdapterEvent(e)
-    adapter.start({ cwd: this._opts.cwd, resumeId })
+    // State before start() — same synchronous-started ordering rule as _start().
     this._state = 'starting'
+    adapter.start({ cwd: this._opts.cwd, resumeId })
   }
 
   private _push(event: SessionEvent): void {
