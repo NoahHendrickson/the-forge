@@ -11,16 +11,14 @@ export interface PendingApproval {
   detail: string
 }
 
-export type ApprovalDecision = { behavior: 'allow' } | { behavior: 'deny'; message: string }
+/** Deny carries a reason CODE, not free text — the CLI-facing message strings live only
+ * in mcp/protocol.ts, where they are selected between as constants (the WAIT texts
+ * pattern). The server never authors text that reaches the agent. */
+export type ApprovalDecision = { behavior: 'allow' } | { behavior: 'deny'; reason: 'user' | 'timeout' }
 
 export type ApprovalFeedItem =
   | { kind: 'approval-request'; id: string; toolName: string; detail: string }
   | { kind: 'approval-resolved'; id: string; allow: boolean }
-
-/** Canned denial messages — constants so agent-visible text is never dynamic. */
-const TIMEOUT_MESSAGE =
-  'Denied — approval timed out in The Forge overlay. Re-send the change when ready.'
-const BROWSER_DENY_MESSAGE = 'Denied from The Forge overlay.'
 
 interface RegistryEntry {
   approval: PendingApproval
@@ -31,7 +29,7 @@ interface RegistryEntry {
 /**
  * Single-project pending-approval registry. Parks approval requests until the user clicks
  * Allow/Deny in the overlay, or the hold expires (auto-deny). Modelled on WatcherHub:
- * injectable clock + holdMs for tests, onChange hook so callers (Task 4's HTTP feed) get
+ * injectable holdMs for tests, onChange hook so callers (Task 4's HTTP feed) get
  * events without this module importing SessionManager.
  *
  * Idle-zero guarantee: an empty registry holds zero timers (each timer is cleared on
@@ -40,12 +38,10 @@ interface RegistryEntry {
 export class ApprovalRegistry {
   private entries = new Map<string, RegistryEntry>()
   private holdMs: number
-  private now: () => number
   private onChange?: (e: ApprovalFeedItem) => void
 
-  constructor(opts?: { holdMs?: number; now?: () => number; onChange?: (e: ApprovalFeedItem) => void }) {
+  constructor(opts?: { holdMs?: number; onChange?: (e: ApprovalFeedItem) => void }) {
     this.holdMs = opts?.holdMs ?? APPROVAL_HOLD_MS
-    this.now = opts?.now ?? (() => Date.now())
     this.onChange = opts?.onChange
   }
 
@@ -64,7 +60,7 @@ export class ApprovalRegistry {
       if (!this.entries.has(id)) return
       this.entries.delete(id)
       this.onChange?.({ kind: 'approval-resolved', id, allow: false })
-      resolve({ behavior: 'deny', message: TIMEOUT_MESSAGE })
+      resolve({ behavior: 'deny', reason: 'timeout' })
     }, this.holdMs)
 
     this.entries.set(id, { approval: { id, toolName, detail }, resolve, timer })
@@ -82,7 +78,7 @@ export class ApprovalRegistry {
     if (allow) {
       entry.resolve({ behavior: 'allow' })
     } else {
-      entry.resolve({ behavior: 'deny', message: BROWSER_DENY_MESSAGE })
+      entry.resolve({ behavior: 'deny', reason: 'user' })
     }
     return true
   }

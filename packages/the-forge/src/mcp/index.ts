@@ -19,10 +19,10 @@ const WAIT_REQUEST_TIMEOUT_MS = 35_000
  * stays decoupled from server code) with margin. */
 const APPROVAL_REQUEST_TIMEOUT_MS = 120_000
 
-const APPROVAL_UNREACHABLE_DENY: ApprovalDecision = {
-  behavior: 'deny',
-  message: 'Denied — The Forge dev server could not be reached.',
-}
+/** Fail-closed default for the approve backend: every transport failure and every
+ * unrecognized response shape resolves to this — the CLI-facing message text lives in
+ * protocol.ts's constant table, keyed by this reason code. */
+const APPROVAL_UNREACHABLE_DENY: ApprovalDecision = { behavior: 'deny', reason: 'unreachable' }
 
 /** This bin process's watcher identity, sent on every /wait as X-Forge-Watcher. Lets the
  * WatcherHub absorb retries from a session it already told to stop ('replaced') instead
@@ -114,10 +114,13 @@ function makeBackend(): ForgeBackend {
       const detail = rawDetail.slice(0, 200)
       const result = await post('/__the-forge/approval', { toolName, detail }, APPROVAL_REQUEST_TIMEOUT_MS)
       if (!result.ok) return APPROVAL_UNREACHABLE_DENY
-      const data = result.data as { behavior?: unknown; message?: unknown }
+      // Expected body: {behavior:'allow'} | {behavior:'deny', reason:'user'|'timeout'}.
+      // The reason is a code, never text — protocol.ts maps it to its constant messages.
+      // Anything unrecognized degrades to the fail-closed 'unreachable' deny.
+      const data = result.data as { behavior?: unknown; reason?: unknown }
       if (data.behavior === 'allow') return { behavior: 'allow' }
-      if (data.behavior === 'deny' && typeof data.message === 'string') {
-        return { behavior: 'deny', message: data.message }
+      if (data.behavior === 'deny' && (data.reason === 'user' || data.reason === 'timeout')) {
+        return { behavior: 'deny', reason: data.reason }
       }
       return APPROVAL_UNREACHABLE_DENY
     },

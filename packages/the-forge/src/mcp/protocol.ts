@@ -16,8 +16,13 @@ export type WaitOutcome =
 
 /** Decision type for the approve tool — defined locally so the mcp bundle stays decoupled
  * from server code (same pattern as WAIT_REQUEST_TIMEOUT_MS / WAIT_HOLD_MS decoupling).
- * Server-side ApprovalDecision in src/server/session/approvals.ts is the same shape. */
-export type ApprovalDecision = { behavior: 'allow' } | { behavior: 'deny'; message: string }
+ * Deny carries a reason CODE, never free text: like WaitOutcome above, server response
+ * fields only ever SELECT between the canned deny messages below — they are never spliced
+ * into what the CLI reads. 'unreachable' additionally covers every bin-side transport
+ * failure (fail-closed). */
+export type ApprovalDecision =
+  | { behavior: 'allow' }
+  | { behavior: 'deny'; reason: 'user' | 'timeout' | 'unreachable' }
 
 export interface ForgeBackend {
   pull(): Promise<QueueItemLike[]>
@@ -40,11 +45,18 @@ export interface JsonRpcResponse {
   error?: { code: number; message: string }
 }
 
-/** Canned approve-tool texts — constants; no server data interpolated into agent-visible
- * text. The JSON returned is machine-parsed by the CLI, but message is kept constant too. */
-const APPROVE_DENY_NO_TOOL_NAME = JSON.stringify({
+/** Canned approve-tool deny messages — constants by the same rule as the WAIT texts: the
+ * backend's reason code only SELECTS between these; no server data ever reaches the text
+ * the CLI parses. Two distinct local-failure constants because they are different failure
+ * modes: a malformed request from the CLI vs. an unreachable dev server. */
+const APPROVE_DENY_MESSAGES: Record<'user' | 'timeout' | 'unreachable', string> = {
+  user: 'Denied from The Forge overlay.',
+  timeout: 'Denied — approval timed out in The Forge overlay. Re-send the change when ready.',
+  unreachable: 'Denied — The Forge dev server could not be reached.',
+}
+const APPROVE_DENY_MALFORMED = JSON.stringify({
   behavior: 'deny',
-  message: 'Denied — The Forge dev server could not be reached.',
+  message: 'Denied — malformed permission request.',
 })
 
 const TOOLS = [
@@ -125,19 +137,20 @@ async function callTool(name: string, args: Record<string, unknown>, backend: Fo
     const toolName = args.tool_name
     // Missing or non-string tool_name: short-circuit deny — nothing useful to forward.
     if (typeof toolName !== 'string' || toolName === '') {
-      return textResult(APPROVE_DENY_NO_TOOL_NAME)
+      return textResult(APPROVE_DENY_MALFORMED)
     }
     const input = args.input !== undefined ? args.input : {}
     let decision: ApprovalDecision
     try {
       decision = await backend.approve(toolName, input)
     } catch {
-      return textResult(APPROVE_DENY_NO_TOOL_NAME)
+      // Fail-closed: a throwing backend is a transport-level failure, never an allow.
+      decision = { behavior: 'deny', reason: 'unreachable' }
     }
     if (decision.behavior === 'allow') {
       return textResult(JSON.stringify({ behavior: 'allow', updatedInput: input }))
     }
-    return textResult(JSON.stringify({ behavior: 'deny', message: decision.message }))
+    return textResult(JSON.stringify({ behavior: 'deny', message: APPROVE_DENY_MESSAGES[decision.reason] }))
   }
 
   if (name === 'pull_design_edits') {

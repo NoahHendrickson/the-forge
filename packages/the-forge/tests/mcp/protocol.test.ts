@@ -237,21 +237,41 @@ describe('handleMessage', () => {
       expect(parsed).toMatchObject({ behavior: 'allow', updatedInput: {} })
     })
 
-    it('deny decision returns JSON with behavior and message', async () => {
-      const be = backend({ approve: async () => ({ behavior: 'deny', message: 'Denied from The Forge overlay.' }) })
+    it('allow echoes a nested input structure deep-equal as updatedInput', async () => {
+      const input = { nested: { arr: [1, 2] }, flag: true }
+      const be = backend({ approve: async () => ({ behavior: 'allow' }) })
+      const { text } = await approveCall({ tool_name: 'Bash', input }, be)
+      const parsed = JSON.parse(text) as { behavior: string; updatedInput: unknown }
+      expect(parsed.behavior).toBe('allow')
+      expect(parsed.updatedInput).toEqual(input)
+    })
+
+    it("deny reason 'user' maps to the constant overlay-deny message", async () => {
+      const be = backend({ approve: async () => ({ behavior: 'deny', reason: 'user' }) })
       const { text, isError } = await approveCall({ tool_name: 'Bash', input: {} }, be)
       expect(isError).toBeUndefined()
       const parsed = JSON.parse(text) as unknown
-      expect(parsed).toMatchObject({ behavior: 'deny', message: 'Denied from The Forge overlay.' })
+      expect(parsed).toEqual({ behavior: 'deny', message: 'Denied from The Forge overlay.' })
     })
 
-    it('timeout deny message shape', async () => {
-      const msg = 'Denied — approval timed out in The Forge overlay. Re-send the change when ready.'
-      const be = backend({ approve: async () => ({ behavior: 'deny', message: msg }) })
+    it("deny reason 'timeout' maps to the constant timed-out message", async () => {
+      const be = backend({ approve: async () => ({ behavior: 'deny', reason: 'timeout' }) })
       const { text } = await approveCall({ tool_name: 'Bash', input: {} }, be)
-      const parsed = JSON.parse(text) as { behavior: string; message: string }
-      expect(parsed.behavior).toBe('deny')
-      expect(parsed.message).toBe(msg)
+      const parsed = JSON.parse(text) as unknown
+      expect(parsed).toEqual({
+        behavior: 'deny',
+        message: 'Denied — approval timed out in The Forge overlay. Re-send the change when ready.',
+      })
+    })
+
+    it("deny reason 'unreachable' maps to the constant no-server message", async () => {
+      const be = backend({ approve: async () => ({ behavior: 'deny', reason: 'unreachable' }) })
+      const { text } = await approveCall({ tool_name: 'Bash', input: {} }, be)
+      const parsed = JSON.parse(text) as unknown
+      expect(parsed).toEqual({
+        behavior: 'deny',
+        message: 'Denied — The Forge dev server could not be reached.',
+      })
     })
 
     it('missing tool_name short-circuits to deny without calling backend', async () => {
@@ -264,8 +284,8 @@ describe('handleMessage', () => {
       })
       const { text } = await approveCall({}, be)
       expect(called).toBe(false)
-      const parsed = JSON.parse(text) as { behavior: string }
-      expect(parsed.behavior).toBe('deny')
+      const parsed = JSON.parse(text) as unknown
+      expect(parsed).toEqual({ behavior: 'deny', message: 'Denied — malformed permission request.' })
     })
 
     it('non-string tool_name short-circuits to deny without calling backend', async () => {
@@ -278,27 +298,24 @@ describe('handleMessage', () => {
       })
       const { text } = await approveCall({ tool_name: 42 }, be)
       expect(called).toBe(false)
-      const parsed = JSON.parse(text) as { behavior: string }
-      expect(parsed.behavior).toBe('deny')
+      const parsed = JSON.parse(text) as unknown
+      expect(parsed).toEqual({ behavior: 'deny', message: 'Denied — malformed permission request.' })
     })
 
-    it('backend transport failure → deny (never allow on error)', async () => {
+    it('backend transport failure → deny (never allow on error, never isError)', async () => {
       const be = backend({
         approve: async () => {
           throw new Error('network error')
         },
       })
-      // Should NOT throw — the tool call catches and returns deny
+      // Fail-closed, unconditionally: the approve branch's own catch must turn a throwing
+      // backend into a parseable deny — an isError result here would mean the CLI gets no
+      // decision JSON at all.
       const { text, isError } = await approveCall({ tool_name: 'Bash', input: {} }, be)
-      // Either the catch in callTool wraps it, or we handle it in the approve branch
-      // Either way, the parsed JSON behavior must be deny OR it's an isError result
-      if (isError) {
-        // acceptable — the outer catch in handleMessage surfaces it as isError
-        expect(text).toBeTruthy()
-      } else {
-        const parsed = JSON.parse(text) as { behavior: string }
-        expect(parsed.behavior).toBe('deny')
-      }
+      expect(isError).toBeUndefined()
+      const parsed = JSON.parse(text) as { behavior: string; message: string }
+      expect(parsed.behavior).toBe('deny')
+      expect(parsed.message).toBe('Denied — The Forge dev server could not be reached.')
     })
   })
 

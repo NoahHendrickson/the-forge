@@ -1,22 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ApprovalRegistry, type ApprovalFeedItem, APPROVAL_HOLD_MS } from '../../../src/server/session/approvals'
 
-/** Build a registry with an injectable clock and tiny holdMs so tests never wait. */
+/** Build a registry with a tiny holdMs so tests never wait (fake timers drive expiry). */
 function makeRegistry(opts: { holdMs?: number } = {}) {
-  let nowMs = 1_000_000
   const events: ApprovalFeedItem[] = []
   const registry = new ApprovalRegistry({
     holdMs: opts.holdMs ?? 50,
-    now: () => nowMs,
     onChange: (e) => events.push(e),
   })
-  return {
-    registry,
-    events,
-    advance: (ms: number) => {
-      nowMs += ms
-    },
-  }
+  return { registry, events }
 }
 
 describe('ApprovalRegistry', () => {
@@ -38,24 +30,18 @@ describe('ApprovalRegistry', () => {
     await expect(promise).resolves.toEqual({ behavior: 'allow' })
   })
 
-  it('parks until decide → deny resolves with browser-deny message', async () => {
+  it('parks until decide → deny resolves with the user reason code', async () => {
     const { registry } = makeRegistry()
     const { id, promise } = registry.request('Bash', 'rm -rf')
     registry.decide(id, false)
-    await expect(promise).resolves.toEqual({
-      behavior: 'deny',
-      message: 'Denied from The Forge overlay.',
-    })
+    await expect(promise).resolves.toEqual({ behavior: 'deny', reason: 'user' })
   })
 
-  it('hold expiry → deny with timeout message', async () => {
+  it('hold expiry → deny with the timeout reason code', async () => {
     const { registry } = makeRegistry({ holdMs: 10 })
     const { promise } = registry.request('Bash', 'ls')
     vi.advanceTimersByTime(15)
-    await expect(promise).resolves.toEqual({
-      behavior: 'deny',
-      message: 'Denied — approval timed out in The Forge overlay. Re-send the change when ready.',
-    })
+    await expect(promise).resolves.toEqual({ behavior: 'deny', reason: 'timeout' })
   })
 
   it('decide on expired id returns false', async () => {
@@ -109,7 +95,7 @@ describe('ApprovalRegistry', () => {
     vi.advanceTimersByTime(100) // if timer wasn't cleared, a second resolution would fire
     const result = await promise
     // Only one resolution — the decide one
-    expect(result).toEqual({ behavior: 'deny', message: 'Denied from The Forge overlay.' })
+    expect(result).toEqual({ behavior: 'deny', reason: 'user' })
   })
 
   describe('onChange feed events', () => {
