@@ -113,20 +113,25 @@ describe('SessionManager', () => {
     })
   })
 
-  describe('notifyDesignEdits() — idle → starting → ready → busy', () => {
-    it('transitions to starting and calls adapter.start with cwd', () => {
+  describe('notifyDesignEdits() — spawn + send-immediately (CLI boots lazily)', () => {
+    it('spawns the adapter AND writes the pull turn immediately — never waits for started', () => {
+      // Verified live (CLI 2.1.201): `claude -p --input-format stream-json` emits NOTHING —
+      // not even init — until the first stdin line arrives. Waiting for `started` before
+      // sendTurn deadlocks: the manager waits for init, the CLI waits for input. The CLI
+      // buffers stdin during boot, so writing the turn first is safe and breaks the cycle.
       const { adapters, opts } = makeHarness(dir)
       const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
 
-      expect(mgr.state()).toBe<SessionState>('starting')
+      expect(mgr.state()).toBe<SessionState>('busy')
       expect(adapters).toHaveLength(1)
       expect(adapters[0]!.startCalls).toHaveLength(1)
       expect(adapters[0]!.startCalls[0]!.cwd).toBe('/fake/cwd')
+      expect(adapters[0]!.sendTurnCalls).toEqual([PULL_TURN_TEXT])
     })
 
-    it('on started event → state ready, writes session.json, flushes nudge → busy', () => {
+    it('started mid-turn is bookkeeping only: writes session.json, no state change, no second send', () => {
       const { adapters, opts } = makeHarness(dir)
       const mgr = new SessionManager(opts)
 
@@ -134,7 +139,7 @@ describe('SessionManager', () => {
       adapters[0]!.emit({ kind: 'started', sessionId: 'sess-1', model: 'claude', mcpLoaded: true })
 
       expect(mgr.state()).toBe<SessionState>('busy')
-      // nudge flushed: sendTurn called once with PULL_TURN_TEXT
+      // the pull turn was already written at spawn; started must not re-send or flush anything
       expect(adapters[0]!.sendTurnCalls).toHaveLength(1)
       expect(adapters[0]!.sendTurnCalls[0]).toBe(PULL_TURN_TEXT)
       // session.json written
@@ -246,18 +251,20 @@ describe('SessionManager', () => {
       expect(mgr.state()).toBe<SessionState>('ready')
     })
 
-    it('notifyDesignEdits while starting also parks nudge, flushed on started', () => {
+    it('notifyDesignEdits during boot (busy, pre-started) parks one nudge, flushed on turn-complete', () => {
       const { adapters, opts } = makeHarness(dir)
       const mgr = new SessionManager(opts)
 
-      mgr.notifyDesignEdits() // first notify → starting
-      // second notify while still starting
+      mgr.notifyDesignEdits() // spawn + immediate pull turn → busy
+      // second notify while the child is still booting (no started yet)
       mgr.notifyDesignEdits()
-      // state: starting, nudge parked
 
       adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
-      // started event: flushes nudge, calls sendTurn ONCE (the first notify set the nudge, the second was deduplicated)
+      // started must not flush the parked nudge mid-turn
       expect(adapters[0]!.sendTurnCalls).toHaveLength(1)
+
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
+      expect(adapters[0]!.sendTurnCalls).toHaveLength(2)
       expect(mgr.state()).toBe<SessionState>('busy')
     })
 
@@ -329,7 +336,7 @@ describe('SessionManager', () => {
       // should restart with a fresh adapter
       expect(adapters).toHaveLength(2)
       expect(adapters[1]!.startCalls).toHaveLength(1)
-      expect(mgr.state()).toBe<SessionState>('starting')
+      expect(mgr.state()).toBe<SessionState>('busy')
     })
 
     it('session-error while starting → failed, then notifyDesignEdits restarts', () => {
@@ -343,7 +350,7 @@ describe('SessionManager', () => {
 
       expect(mgr.state()).toBe<SessionState>('failed')
       mgr.notifyDesignEdits()
-      expect(mgr.state()).toBe<SessionState>('starting')
+      expect(mgr.state()).toBe<SessionState>('busy')
       expect(adapters).toHaveLength(2)
     })
 
@@ -378,7 +385,7 @@ describe('SessionManager', () => {
       // The abandoned child exits later — must be a no-op for the new session.
       adapters[0]!.emit({ kind: 'ended' })
       expect(adapters).toHaveLength(2)
-      expect(mgr.state()).toBe<SessionState>('starting')
+      expect(mgr.state()).toBe<SessionState>('busy')
 
       // The new adapter is still wired: started flushes the parked nudge.
       adapters[1]!.emit({ kind: 'started', sessionId: 's2', model: 'claude', mcpLoaded: true })
@@ -409,7 +416,7 @@ describe('SessionManager', () => {
       expect(adapters[0]!.stopCalls).toBe(1)
       expect(adapters).toHaveLength(2)
       expect(adapters[1]!.startCalls[0]!.resumeId).toBeUndefined()
-      expect(mgr.state()).toBe<SessionState>('starting')
+      expect(mgr.state()).toBe<SessionState>('busy')
       expect(fs.existsSync(path.join(dir, 'session.json'))).toBe(false)
 
       // The parked pull still flushes on the fresh session's started.
@@ -470,7 +477,7 @@ describe('SessionManager', () => {
         adapters[adapters.length - 1]!.emit({ kind: 'ended' })
       }
       // budget not exhausted (count reset earlier) → still respawning, not failed
-      expect(mgr.state()).toBe<SessionState>('starting')
+      expect(mgr.state()).toBe<SessionState>('busy')
     })
   })
 
@@ -505,7 +512,7 @@ describe('SessionManager', () => {
       expect(adapters[0]!.stopCalls).toBeGreaterThanOrEqual(1)
       expect(adapters).toHaveLength(2)
       expect(adapters[1]!.startCalls[0]!.resumeId).toBe('sess-wdog')
-      expect(mgr.state()).toBe<SessionState>('starting')
+      expect(mgr.state()).toBe<SessionState>('busy')
 
       // Complete the respawn
       adapters[1]!.emit({ kind: 'started', sessionId: 'sess-wdog-2', model: 'claude', mcpLoaded: true })
@@ -546,8 +553,10 @@ describe('SessionManager', () => {
       // Should NOT have respawned — event re-armed the watchdog
       expect(adapters).toHaveLength(1)
 
-      // Now advance past watchdog without events
-      vi.advanceTimersByTime(35)
+      // Now advance past watchdog without events (32ms: enough for exactly ONE expiry —
+      // the respawn re-arms immediately since it also re-sends immediately, so a longer
+      // advance would count a second, unrelated expiry)
+      vi.advanceTimersByTime(32)
       expect(adapters).toHaveLength(2) // now respawned
     })
 
@@ -585,7 +594,7 @@ describe('SessionManager', () => {
 
       // Brief: same respawn path as ended-while-busy → respawns immediately
       expect(adapters).toHaveLength(2)
-      expect(mgr.state()).toBe<SessionState>('starting')
+      expect(mgr.state()).toBe<SessionState>('busy')
     })
 
     it('late ended from the discarded adapter after watchdog fire does NOT trigger a second respawn', () => {
@@ -607,7 +616,7 @@ describe('SessionManager', () => {
 
       // Exactly ONE respawn total — makeAdapter called exactly twice
       expect(adapters).toHaveLength(2)
-      expect(mgr.state()).toBe<SessionState>('starting')
+      expect(mgr.state()).toBe<SessionState>('busy')
 
       // The respawned adapter completes startup and gets the recovery pull;
       // no stale-closure effects (single sendTurn on the new adapter, none extra)
@@ -712,6 +721,24 @@ describe('SessionManager', () => {
       expect(mgr.state()).toBe<SessionState>('busy')
       vi.advanceTimersByTime(40)
       expect(adapters).toHaveLength(3) // watchdog fired on the second session
+    })
+  })
+
+  describe('activity heartbeat', () => {
+    it('activity re-arms the watchdog while busy but is NOT pushed to the ring', () => {
+      // Boot emits only system/hook lines for tens of seconds (verified live) — the
+      // adapter maps them to `activity` so a slow boot doesn't read as a stall, without
+      // spamming the feed ring.
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits() // busy, watchdog armed (30ms)
+      vi.advanceTimersByTime(25)
+      adapters[0]!.emit({ kind: 'activity' })
+      vi.advanceTimersByTime(25)
+      expect(adapters).toHaveLength(1) // re-armed — no watchdog fire
+
+      expect(mgr.eventsSince(0).some((fe) => fe.event.kind === 'activity')).toBe(false)
     })
   })
 

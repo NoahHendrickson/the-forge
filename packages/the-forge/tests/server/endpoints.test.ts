@@ -1306,7 +1306,7 @@ describe('session endpoints (Task 4)', () => {
 
     it('replays buffered feed events from eventsSince(since)', () => {
       // Push an event to the manager's ring first
-      manager.notifyDesignEdits() // transitions to starting
+      manager.notifyDesignEdits() // spawn + immediate pull turn → busy
       adapter.emit({ kind: 'started', sessionId: 'sid1', model: 'm1', mcpLoaded: false }) // seq=1
       adapter.emit({ kind: 'assistant-text', text: 'hello' }) // seq=2
 
@@ -1541,10 +1541,10 @@ describe('session endpoints (Task 4)', () => {
     })
 
     it('session field reflects live state transitions', async () => {
-      manager.notifyDesignEdits() // transitions to starting
+      manager.notifyDesignEdits() // spawn + immediate pull turn → busy
       const res = fakeRes()
       await run(mwSession, fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }), res)
-      expect(JSON.parse(res.body).session).toBe('starting')
+      expect(JSON.parse(res.body).session).toBe('busy')
     })
   })
 })

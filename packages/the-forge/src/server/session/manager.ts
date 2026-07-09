@@ -123,6 +123,10 @@ export class SessionManager {
   // Distinguishes "stale resume id rejected in-band" (retry fresh) from a fresh start
   // failing the same way (park in failed — retrying fresh again would loop).
   private _lastStartResumeId: string | undefined = undefined
+  // Whether the CURRENT spawn ever emitted `started`. The turn is written before init
+  // arrives (lazy-boot CLI), so state alone can't distinguish "failed during boot" from
+  // "failed mid-turn" — error/crash handling keys on this instead of state==='starting'.
+  private _sawStarted = false
   // Consecutive ended-before-started crashes; reset on started, capped by MAX_START_FAILURES.
   private _startFailures = 0
 
@@ -158,8 +162,11 @@ export class SessionManager {
   }
 
   /** Auto-start + deliver: the /dispatch 'embedded' rung.
-   * - idle/failed → start adapter (with resumeId from session.json) and park nudge.
-   * - starting → park nudge (single slot; already starting).
+   * - idle/failed → start adapter (with resumeId from session.json) and send the pull
+   *   turn IMMEDIATELY. Verified live (CLI 2.1.201): `claude -p --input-format
+   *   stream-json` emits NOTHING — not even init — until the first stdin line arrives,
+   *   so waiting for `started` before sending deadlocks (manager waits for init, CLI
+   *   waits for input). The CLI buffers stdin during boot; sending first is safe.
    * - ready → sendTurn immediately.
    * - busy → park nudge (single slot; pull claims everything, so N Sends need ≤1 follow-up). */
   notifyDesignEdits(): void {
@@ -167,13 +174,17 @@ export class SessionManager {
       case 'idle':
       case 'failed':
         // Park the nudge BEFORE starting — an adapter that emits `started`
-        // synchronously inside start() would otherwise flush an empty slot and
-        // the nudge parked afterwards would sit forever.
+        // synchronously inside start() flushes it there (ready branch); the guard
+        // below then finds an empty slot and skips the duplicate send.
         this._nudgePending = true
         this._start()
+        if (this._nudgePending) {
+          this._nudgePending = false
+          this._sendTurn()
+        }
         break
       case 'starting':
-        // Already starting — park the nudge; it will flush on started.
+        // Transient (only observable if start() re-enters) — park; flushes on started.
         this._nudgePending = true
         break
       case 'ready':
@@ -258,6 +269,7 @@ export class SessionManager {
     this._discardAdapter()?.stop()
     const resumeId = fresh ? undefined : readSessionFile(this._opts.forgeDir)?.sessionId
     this._lastStartResumeId = resumeId
+    this._sawStarted = false
     const adapter = this._opts.makeAdapter()
     this._adapter = adapter
     adapter.onEvent = (e) => this._onAdapterEvent(e)
@@ -280,24 +292,36 @@ export class SessionManager {
       this._armWatchdog()
     }
 
+    if (event.kind === 'activity') {
+      // Pure liveness (hook/system chatter during boot) — the watchdog re-arm above is
+      // the whole point; never pushed to the ring, never rendered.
+      return
+    }
+
     this._push(event)
 
     switch (event.kind) {
       case 'started':
         this._lastSessionId = event.sessionId
+        this._sawStarted = true
         this._startFailures = 0
         writeSessionFile(this._opts.forgeDir, event.sessionId, new Date(this._clock()).toISOString())
-        this._state = 'ready'
-        if (this._nudgePending) {
-          this._nudgePending = false
-          this._sendTurn()
+        if (this._state === 'starting') {
+          // Explicit-start path (no turn written yet) — become ready and flush.
+          this._state = 'ready'
+          if (this._nudgePending) {
+            this._nudgePending = false
+            this._sendTurn()
+          }
         }
+        // While busy (the normal path: pull turn written at spawn, init arrives
+        // mid-turn): bookkeeping only — no state change, no flush.
         break
 
       case 'turn-complete':
         this._cancelWatchdog()
         if (event.isError) {
-          if (this._state === 'starting' && this._lastStartResumeId !== undefined) {
+          if (!this._sawStarted && this._lastStartResumeId !== undefined) {
             // Stale resume id (observed live, CLI 2.1.201): `--resume <unknown-id>` emits
             // result/error_during_execution BEFORE any init event — session.json goes stale
             // legitimately (CLI session store pruned, project moved). Clear it and retry
@@ -305,7 +329,9 @@ export class SessionManager {
             clearSessionFile(this._opts.forgeDir)
             this._lastSessionId = undefined
             this._push({ kind: 'session-error', text: 'stale session id — starting fresh' })
+            this._nudgePending = false // the recovery pull below supersedes any parked nudge
             this._start(true)
+            this._sendTurn()
             break
           }
           // Error turn → failed. A later Send retries via auto-start — no retry loop here
@@ -321,11 +347,13 @@ export class SessionManager {
         break
 
       case 'session-error':
-        if (this._state === 'starting') {
-          // Spawn failure path: session-error while starting → failed.
+        if (!this._sawStarted) {
+          // Spawn failure path (child 'error' event before any init) → failed; the
+          // trailing `ended` sees failed and keeps it — no pointless respawn of a
+          // binary that isn't there / can't start.
           this._state = 'failed'
         }
-        // While busy: the watchdog or ended handler manages recovery; let this
+        // While mid-turn: the watchdog or ended handler manages recovery; let this
         // event through to the ring (already pushed above) without state change here.
         break
 
@@ -334,7 +362,10 @@ export class SessionManager {
         // The adapter that just ended is dead either way — detach it so any
         // further stray events from it can't reach the manager.
         this._discardAdapter()
-        if (this._state === 'starting') {
+        if (this._state === 'failed') {
+          // session-error already drove us to failed; ended is just the adapter
+          // signalling the process is gone — don't overwrite the failed state.
+        } else if (!this._sawStarted) {
           // Died before ever emitting started — a pre-init crash. Bounded: a child that
           // keeps dying pre-init (broken install, corrupted state) must not respawn forever.
           this._startFailures++
@@ -350,9 +381,6 @@ export class SessionManager {
           // cycle passed init and burned a real turn, so this is genuine recovery, not
           // a tight crash loop; the watchdog path is the same).
           this._respawn()
-        } else if (this._state === 'failed') {
-          // session-error already drove us to failed; ended is just the adapter
-          // signalling the process is gone — don't overwrite the failed state.
         } else {
           // Clean exit between turns (ready) → idle, no respawn.
           this._state = 'idle'
@@ -388,19 +416,23 @@ export class SessionManager {
   }
 
   /** Spawn a fresh adapter (re-using the last sessionId for --resume) and re-send
-   * PULL_TURN_TEXT once it emits started.  Used by both the watchdog and the ended-
-   * while-busy path. The parked nudge is cleared — the recovery pull supersedes it. */
+   * PULL_TURN_TEXT immediately (lazy-boot CLI — see notifyDesignEdits). Used by both
+   * the watchdog and the ended-while-busy path. The parked nudge is cleared — the
+   * recovery pull supersedes it. */
   private _respawn(): void {
     const resumeId = this._lastSessionId ?? readSessionFile(this._opts.forgeDir)?.sessionId
     this._lastStartResumeId = resumeId
+    this._sawStarted = false
     const adapter = this._opts.makeAdapter()
     this._adapter = adapter
-    // Park the recovery pull; it will flush when the new adapter emits started.
-    this._nudgePending = true
+    this._nudgePending = false
     adapter.onEvent = (e) => this._onAdapterEvent(e)
     // State before start() — same synchronous-started ordering rule as _start().
     this._state = 'starting'
     adapter.start({ cwd: this._opts.cwd, resumeId })
+    // Recovery pull goes out immediately — the lazy-boot CLI emits nothing until the
+    // first stdin line, so waiting for started would deadlock the respawn too.
+    this._sendTurn()
   }
 
   private _push(event: SessionEvent): void {

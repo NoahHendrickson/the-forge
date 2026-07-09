@@ -160,7 +160,13 @@ export class ClaudeAdapter implements SessionAdapter {
 
     switch (type) {
       case 'system': {
-        if (obj['subtype'] !== 'init') return
+        if (obj['subtype'] !== 'init') {
+          // hook_started/hook_response/etc. — boot emits ONLY these for tens of seconds
+          // (verified live); surface as liveness so the watchdog doesn't read a slow
+          // boot as a stall. Never rendered.
+          this.onEvent({ kind: 'activity' })
+          return
+        }
         const sessionId = typeof obj['session_id'] === 'string' ? obj['session_id'] : ''
         const model = typeof obj['model'] === 'string' ? obj['model'] : ''
         const servers = Array.isArray(obj['mcp_servers']) ? obj['mcp_servers'] : []
@@ -243,8 +249,10 @@ export class ClaudeAdapter implements SessionAdapter {
       }
 
       default:
-        // Unknown types (stream_event, etc.) are ignored for forward-compatibility,
-        // same posture as the client's untyped-JSON guards.
+        // Unknown types (stream_event, control_response, etc.) — not rendered, but any
+        // parsed protocol line proves the child is alive: emit liveness for the watchdog.
+        // Same forward-compat posture as the client's untyped-JSON guards.
+        this.onEvent({ kind: 'activity' })
         return
     }
   }

@@ -116,7 +116,12 @@ function handleUserTurn() {
   else emitDefaultTurn()
 }
 
-emitInit()
+// LAZY BOOT — matches the real CLI (verified live, 2.1.201): with stdin open but silent,
+// `claude -p --input-format stream-json` emits NOTHING — no hooks, no init — until the
+// first input line arrives. Emitting init eagerly here masked a real deadlock (manager
+// waited for init, CLI waited for input); init now fires only on first message, plus a
+// hook_started line first, mirroring the real boot chatter (mapped to `activity`).
+let booted = false
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on('line', (line) => {
@@ -127,6 +132,11 @@ rl.on('line', (line) => {
     msg = JSON.parse(trimmed)
   } catch {
     return
+  }
+  if (!booted) {
+    booted = true
+    emit({ type: 'system', subtype: 'hook_started', hook_id: 'fake-hook-1', hook_name: 'SessionStart:startup' })
+    emitInit()
   }
   if (msg && msg.type === 'user') {
     handleUserTurn()

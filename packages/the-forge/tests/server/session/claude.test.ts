@@ -168,6 +168,21 @@ describe('ClaudeAdapter', () => {
   })
 
   describe('event mapping', () => {
+    it('maps non-init system lines (hook chatter) and unknown types to activity heartbeats', () => {
+      // Verified live (CLI 2.1.201): boot emits ONLY system/hook_started lines for tens
+      // of seconds. Without a liveness signal the watchdog would read a slow boot as a
+      // stall and kill the child mid-boot.
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/p' })
+
+      pushLine(lastChild(), JSON.stringify({ type: 'system', subtype: 'hook_started', hook_id: 'h1' }))
+      pushLine(lastChild(), JSON.stringify({ type: 'stream_event', event: {} }))
+
+      expect(events).toEqual([{ kind: 'activity' }, { kind: 'activity' }])
+    })
+
     it('maps init → started with mcpLoaded false when mcp_servers is empty', () => {
       const { spawnFn, lastChild } = makeFakeSpawn()
       const adapter = new ClaudeAdapter(spawnFn)
@@ -348,14 +363,16 @@ describe('ClaudeAdapter', () => {
   })
 
   describe('unknown / unparseable lines', () => {
-    it('ignores unknown event types (forward-compat)', () => {
+    it('maps unknown event types to activity, never rendered kinds (forward-compat)', () => {
       const { spawnFn, lastChild } = makeFakeSpawn()
       const adapter = new ClaudeAdapter(spawnFn)
       const events = collectEvents(adapter)
       adapter.start({ cwd: '/p' })
 
       pushLine(lastChild(), UNKNOWN_TYPE)
-      expect(events).toHaveLength(0)
+      // A parsed-but-unknown protocol line proves the child is alive (watchdog liveness)
+      // without leaking unknown shapes into the feed.
+      expect(events).toEqual([{ kind: 'activity' }])
     })
 
     it('ignores unparseable lines silently', () => {

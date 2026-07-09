@@ -8,6 +8,7 @@ export type SessionEvent =
   | { kind: 'turn-complete'; isError: boolean; errorText?: string; costUsd?: number }
   | { kind: 'session-error'; text: string } // spawn failure, stderr chatter, unparseable protocol state
   | { kind: 'ended' } // child exited (any reason)
+  | { kind: 'activity' } // liveness heartbeat (hook/system chatter) — re-arms the watchdog, never rendered
 
 export interface SessionAdapter {
   start(opts: { cwd: string; resumeId?: string }): void
