@@ -1285,6 +1285,67 @@ describe('SessionManager', () => {
       expect(adapters[1]!.sendTurnCalls).toEqual(['chat while starting from resume'])
     })
 
+    it('watchdog respawn of a CHAT turn preserves a separately parked nudge (flushes as a pull afterward)', () => {
+      // The pre-Task-3 respawn unconditionally cleared the parked nudge — correct only
+      // because the resent turn was always PULL_TURN_TEXT (a fresh pull covers everything
+      // a nudge asks for). With chat turns in flight, that unconditional clear would
+      // silently drop a legitimately queued design-edit pull parked behind a dying chat
+      // turn. Pins the conditional: clear only when the resent turn IS the pull turn.
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // → ready
+
+      mgr.say('a chat turn') // busy — the in-flight turn is now a CHAT turn
+      mgr.notifyDesignEdits() // parks a pull nudge behind it
+
+      vi.advanceTimersByTime(35) // watchdog fires — kill + respawn
+
+      // Recovery re-sends the chat turn itself, never PULL_TURN_TEXT...
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.sendTurnCalls).toEqual(['a chat turn'])
+
+      // ...and the parked nudge SURVIVED the respawn: it flushes a pull turn on the
+      // resent chat turn's own completion (normal nudge-before-chat-queue flush order).
+      adapters[1]!.emit({ kind: 'started', sessionId: 's2', model: 'claude', mcpLoaded: true })
+      adapters[1]!.emit({ kind: 'turn-complete', isError: false })
+      expect(adapters[1]!.sendTurnCalls).toEqual(['a chat turn', PULL_TURN_TEXT])
+      expect(mgr.state()).toBe<SessionState>('busy')
+    })
+
+    it('stale-resume retry of a CHAT turn preserves a nudge parked during boot (flushes as a pull afterward)', () => {
+      // Same nudge-preservation rule on the stale-resume branch: an in-band error before
+      // started while a CHAT turn (not a pull) is in flight must retry the chat turn fresh
+      // WITHOUT dropping a pull nudge that arrived while the doomed resume child booted.
+      fs.writeFileSync(
+        path.join(dir, 'session.json'),
+        JSON.stringify({ sessionId: 'stale-id', updatedAt: 'x' }),
+      )
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.say('chat from idle') // auto-start with --resume stale-id, chat turn sent at spawn
+      expect(adapters[0]!.startCalls[0]!.resumeId).toBe('stale-id')
+      mgr.notifyDesignEdits() // design edit lands while the resume child boots — parks a nudge
+
+      // CLI rejects the resume id in-band, before ever emitting init/started.
+      adapters[0]!.emit({ kind: 'turn-complete', isError: true, errorText: 'not a UUID' })
+
+      // Fresh retry re-sends the chat turn itself...
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.startCalls[0]!.resumeId).toBeUndefined()
+      expect(adapters[1]!.sendTurnCalls).toEqual(['chat from idle'])
+
+      // ...and the nudge survived: it still flushes a pull turn once the retried chat
+      // turn completes.
+      adapters[1]!.emit({ kind: 'started', sessionId: 'fresh-1', model: 'claude', mcpLoaded: true })
+      adapters[1]!.emit({ kind: 'turn-complete', isError: false })
+      expect(adapters[1]!.sendTurnCalls).toEqual(['chat from idle', PULL_TURN_TEXT])
+      expect(mgr.state()).toBe<SessionState>('busy')
+    })
+
     it('chat queue survives a watchdog respawn — the still-queued item flushes after recovery', () => {
       const { adapters, opts } = makeHarness(dir)
       const mgr = new SessionManager(opts)
