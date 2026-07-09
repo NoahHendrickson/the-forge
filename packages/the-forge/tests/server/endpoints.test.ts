@@ -543,6 +543,164 @@ describe('POST /__the-forge/dispatch', () => {
     expect(res.statusCode).toBe(405)
   })
 
+  // ---------------------------------------------------------------------------
+  // Embedded rung (Task 5)
+  // ---------------------------------------------------------------------------
+
+  /** Minimal fake for the dispatch tests — only state() and notifyDesignEdits() are called
+   * by the /dispatch handler; the rest of SessionManager is irrelevant here. */
+  function fakeDispatchSession(state: string, calls: { notify: number }): ForgeSessionHandles {
+    return {
+      manager: {
+        state: () => state,
+        notifyDesignEdits: () => { calls.notify++ },
+      } as unknown as SessionManager,
+      approvals: {} as ApprovalRegistry,
+      onApproval: () => () => {},
+    }
+  }
+
+  describe('embedded rung (Task 5)', () => {
+    it('ready → rung: embedded + notifyDesignEdits called once', async () => {
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('ready', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code',
+        channelsFlag: false,
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'should never reach ladder' }),
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'embedded', detail: 'delivered to the embedded session' })
+      expect(calls.notify).toBe(1)
+    })
+
+    it('starting → rung: embedded (delivered) + notifyDesignEdits called', async () => {
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('starting', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code', channelsFlag: false,
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'embedded', detail: 'delivered to the embedded session' })
+      expect(calls.notify).toBe(1)
+    })
+
+    it('busy embedded beats live watcher → rung: embedded, notifyDesignEdits called', async () => {
+      const hub = new WatcherHub({ claim: () => queue.pull(), holdMs: 5_000 })
+      const waitRes = fakeRes()
+      void run(
+        createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, hub),
+        fakeReq('POST', '/__the-forge/wait', {}, { host: 'localhost:5173' }),
+        waitRes
+      )
+      await new Promise((r) => setTimeout(r, 10)) // park the watcher so hub.isLive() === true
+
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('busy', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code', channelsFlag: false,
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'should never reach' }),
+      }, hub, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'embedded', detail: 'delivered to the embedded session' })
+      expect(calls.notify).toBe(1)
+      waitRes.emitClose()
+    })
+
+    it('idle + no live watcher → rung: embedded (starting), notifyDesignEdits called', async () => {
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('idle', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code', channelsFlag: false,
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'embedded', detail: 'starting embedded session' })
+      expect(calls.notify).toBe(1)
+    })
+
+    it('failed + no live watcher → auto-start retry (rung: embedded starting)', async () => {
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('failed', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code', channelsFlag: false,
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'embedded', detail: 'starting embedded session' })
+      expect(calls.notify).toBe(1)
+    })
+
+    it('idle + live watcher → watcher rung, notifyDesignEdits NOT called', async () => {
+      // External watcher wins over auto-starting the embedded session — the user deliberately
+      // linked that terminal session, so it takes priority over spawning a headless one.
+      const hub = new WatcherHub({ claim: () => queue.pull(), holdMs: 5_000 })
+      const waitRes = fakeRes()
+      void run(
+        createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, hub),
+        fakeReq('POST', '/__the-forge/wait', {}, { host: 'localhost:5173' }),
+        waitRes
+      )
+      await new Promise((r) => setTimeout(r, 10)) // park the watcher
+
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('idle', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code', channelsFlag: false,
+      }, hub, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'watcher', detail: 'delivered to your linked session' })
+      expect(calls.notify).toBe(0)
+      waitRes.emitClose()
+    })
+
+    it('agent=codex skips the embedded rung entirely → falls through to ladder', async () => {
+      // codex has no embedded adapter yet (§3.4) — it uses tmux/manual.
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('ready', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'codex',
+        channelsFlag: false,
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'ladder ran for codex' }),
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'ladder ran for codex' })
+      expect(calls.notify).toBe(0)
+    })
+
+    it('session not wired → embedded check skipped, existing behavior unchanged', async () => {
+      // Backward compat: callers that omit the session param still hit the ladder.
+      queue.add({}, 'pending markdown')
+      const mwNoSession = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code',
+        channelsFlag: false,
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'normal ladder' }),
+      })
+      const res = fakeRes()
+      await run(mwNoSession, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'normal ladder' })
+    })
+  })
+
   describe('agent allowlist validation', () => {
     it('400s when body.agent is not one of the known agents', async () => {
       const dispatchFn = vi.fn(async () => ({ rung: 'manual' as const, detail: 'x' }))

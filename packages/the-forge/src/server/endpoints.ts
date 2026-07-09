@@ -346,6 +346,38 @@ export function createForgeMiddleware(
           if (agent !== undefined && !KNOWN_AGENTS.has(agent)) {
             return send(res, 400, { error: 'unknown agent' })
           }
+          // Resolved BEFORE the embedded + watcher short-circuits so both can key off
+          // the effective agent without re-computing it below.
+          const resolvedAgent = agent ?? dispatchConfig.agent
+
+          // Embedded short-circuit — BEFORE the watcher check and BEFORE the pending-item
+          // check: the queue POST already happened; notifyDesignEdits makes the in-process
+          // session pull everything pending, same "delivered, not manual" logic as watcher.
+          //
+          // Precedence rationale (spec §3.4):
+          //   ready|busy|starting → session is alive; deliver immediately, skip ladder.
+          //   idle|failed + no live watcher → auto-start the session (primary-path semantics);
+          //     an external watcher wins over AUTO-STARTING but never over an already-RUNNING
+          //     embedded session — the user deliberately linked that terminal session, so we
+          //     only prefer the embedded path when there is nobody else to notify.
+          //   idle|failed + live watcher → fall through; the watcher check below takes over.
+          //
+          // cursor/codex skip this rung entirely — no embedded adapter yet for those agents
+          // (§3.4). They fall through to their own dispatch paths (deeplink / tmux).
+          if (session && resolvedAgent === 'claude-code') {
+            const sessionState = session.manager.state()
+            if (sessionState === 'ready' || sessionState === 'busy' || sessionState === 'starting') {
+              session.manager.notifyDesignEdits()
+              return send(res, 200, { rung: 'embedded', detail: 'delivered to the embedded session' })
+            }
+            if (!watcherHub.isLive()) {
+              // idle|failed + no live watcher → auto-start (notifyDesignEdits kicks the start)
+              session.manager.notifyDesignEdits()
+              return send(res, 200, { rung: 'embedded', detail: 'starting embedded session' })
+            }
+            // idle|failed + live watcher → fall through to the watcher short-circuit below
+          }
+
           // Linked-session short-circuit, BEFORE the pending-item check and the ladder: a
           // live watcher already received this Send through its parked /wait (queue →
           // notify), or will claim it within one hold window — so by the time /dispatch
@@ -369,7 +401,6 @@ export function createForgeMiddleware(
           if (!pending && markdown === undefined) {
             return send(res, 200, { rung: 'manual', detail: 'nothing pending' })
           }
-          const resolvedAgent = agent ?? dispatchConfig.agent
           // A caller-posted markdown override is passed through verbatim (there is no queue
           // item to mark); a queue-sourced markdown gets the agent-specific augmentation —
           // see augmentDispatchMarkdown in dispatch.ts for why (Cursor loop closure).

@@ -2,11 +2,11 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
-/** 'watcher' is produced by the /dispatch endpoint's linked-session short-circuit (see
- * endpoints.ts + server/watchers.ts), never by the ladder below — a live watcher means the
- * change request is delivered over the authenticated wait channel, so no keystroke rung
- * (nor this module) is ever consulted. */
-export type Rung = 'watcher' | 'channels' | 'tmux' | 'applescript' | 'deeplink' | 'manual'
+/** 'embedded' and 'watcher' are produced by the /dispatch endpoint's short-circuits (see
+ * endpoints.ts + server/watchers.ts), never by the ladder below. 'embedded' means the change
+ * request was delivered to the in-process headless session (notifyDesignEdits), and 'watcher'
+ * means it was delivered over the authenticated /wait channel of a linked terminal session. */
+export type Rung = 'embedded' | 'watcher' | 'channels' | 'tmux' | 'applescript' | 'deeplink' | 'manual'
 
 export interface DispatchResult {
   rung: Rung

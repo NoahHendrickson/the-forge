@@ -59,18 +59,24 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       // the root cause of "dev server not running": the plugin wrote the endpoint file (and its
       // shared secret) at the vite root while the MCP bin only ever looked at the resolved root.
       const resolvedRoot = resolveProjectRoot(root)
-      const { queue, hub, secret: runtimeSecret, forgeDir } = createForgeRuntime(resolvedRoot, root)
+      const { queue, hub, secret: runtimeSecret, forgeDir, session } = createForgeRuntime(resolvedRoot, root)
       secret = runtimeSecret
       const allowedHosts = Array.isArray(server.config.server.allowedHosts) ? server.config.server.allowedHosts : []
       server.middlewares.use(
-        createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels, cwd: resolvedRoot }, hub)
+        createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels, cwd: resolvedRoot }, hub, session)
       )
       server.httpServer?.once('listening', () => {
         const address = server.httpServer?.address()
         if (address && typeof address === 'object') writeEndpointFile(forgeDir, address.port, address.address, secret)
       })
-      server.httpServer?.once('close', () => removeEndpointFile(forgeDir))
-      process.once('exit', () => removeEndpointFile(forgeDir))
+      server.httpServer?.once('close', () => {
+        removeEndpointFile(forgeDir)
+        session.manager.stop()
+      })
+      process.once('exit', () => {
+        removeEndpointFile(forgeDir)
+        session.manager.stop()
+      })
       const dir = path.dirname(fileURLToPath(import.meta.url))
       setupProjectConfig(resolvedRoot, path.join(dir, 'mcp.js'), root, agent)
     },
