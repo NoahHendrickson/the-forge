@@ -669,6 +669,24 @@ describe('POST /__the-forge/dispatch', () => {
       waitRes.emitClose()
     })
 
+    it('body agent override to cursor skips the embedded rung even when config agent is claude-code', async () => {
+      // resolvedAgent (body override wins over config) is what gates the embedded rung —
+      // a cursor-targeted Send must never be delivered to the claude-code embedded session.
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('ready', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code',
+        channelsFlag: false,
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'ladder ran for cursor override' }),
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', { agent: 'cursor' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'ladder ran for cursor override' })
+      expect(calls.notify).toBe(0)
+    })
+
     it('agent=codex skips the embedded rung entirely → falls through to ladder', async () => {
       // codex has no embedded adapter yet (§3.4) — it uses tmux/manual.
       queue.add({}, 'pending markdown')

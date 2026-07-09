@@ -133,7 +133,10 @@ async function createSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
   const dir = path.dirname(fileURLToPath(import.meta.url))
   setupProjectConfig(opts.root, path.join(dir, 'mcp.js'), opts.root)
 
-  const onExit = () => removeEndpointFile(forgeDir)
+  const onExit = () => {
+    removeEndpointFile(forgeDir)
+    session.manager.stop()
+  }
   process.once('exit', onExit)
 
   const close = (): Promise<void> => {
