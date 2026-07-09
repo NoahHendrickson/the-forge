@@ -11,6 +11,7 @@ import type { SessionEvent } from '../../../src/server/session/adapter'
 import {
   INIT_NO_MCP,
   INIT_WITH_MCP,
+  INIT_MCP_ERROR,
   ASSISTANT_TEXT,
   ASSISTANT_TOOL_USE,
   ASSISTANT_MULTI_BLOCK,
@@ -123,6 +124,9 @@ describe('ClaudeAdapter', () => {
       // --bare must NEVER appear (it skips auth AND the harness, verified live 2026-07-09)
       expect(args).not.toContain('--bare')
 
+      // --model must never be pinned — the user's own default model is used
+      expect(args).not.toContain('--model')
+
       // No --resume when not given
       expect(args).not.toContain('--resume')
 
@@ -148,11 +152,16 @@ describe('ClaudeAdapter', () => {
       expect(CLAUDE_ARGS).toContain('--permission-prompt-tool')
       expect(CLAUDE_ARGS).not.toContain('--bare')
 
-      expect(EDIT_TIER_ALLOW).toContain('Read')
-      expect(EDIT_TIER_ALLOW).toContain('Edit')
-      expect(EDIT_TIER_ALLOW).toContain('Write')
-      expect(EDIT_TIER_ALLOW).toContain('mcp__the-forge__pull_design_edits')
-      expect(EDIT_TIER_ALLOW).toContain('mcp__the-forge__mark_applied')
+      expect(EDIT_TIER_ALLOW).toEqual([
+        'Read',
+        'Grep',
+        'Glob',
+        'Edit',
+        'Write',
+        'MultiEdit',
+        'mcp__the-forge__pull_design_edits',
+        'mcp__the-forge__mark_applied',
+      ])
     })
   })
 
@@ -184,6 +193,18 @@ describe('ClaudeAdapter', () => {
 
       expect(events).toHaveLength(1)
       expect(events[0]).toMatchObject({ kind: 'started', mcpLoaded: true })
+    })
+
+    it('maps init → started with mcpLoaded false when the-forge entry has an error status', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/p' })
+
+      pushLine(lastChild(), INIT_MCP_ERROR)
+
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({ kind: 'started', mcpLoaded: false })
     })
 
     it('maps assistant text block → assistant-text event', () => {
@@ -384,6 +405,22 @@ describe('ClaudeAdapter', () => {
       // request_id must be a non-empty string (uuid)
       expect(typeof parsed.request_id).toBe('string')
       expect(parsed.request_id.length).toBeGreaterThan(0)
+    })
+
+    it('after stop(), sendTurn and interrupt write nothing to stdin', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      adapter.onEvent = () => {}
+      adapter.start({ cwd: '/p' })
+
+      const written: string[] = []
+      lastChild().stdin.on('data', (chunk: Buffer) => written.push(chunk.toString()))
+
+      adapter.stop()
+      adapter.sendTurn('too late')
+      adapter.interrupt()
+
+      expect(written).toHaveLength(0)
     })
   })
 

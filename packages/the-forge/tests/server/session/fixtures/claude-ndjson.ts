@@ -25,6 +25,18 @@ export const INIT_WITH_MCP = JSON.stringify({
   apiKeySource: 'none',
 })
 
+export const INIT_MCP_ERROR = JSON.stringify({
+  type: 'system',
+  subtype: 'init',
+  cwd: '/Users/noey/Developer/the-forge',
+  session_id: '84e31d6e-e76c-42f8-afdc-c92a91baa3dc',
+  tools: ['Bash', 'Edit', 'Read'],
+  mcp_servers: [{ name: 'the-forge', status: 'error' }],
+  model: 'claude-haiku-4-5-20251001',
+  permissionMode: 'default',
+  apiKeySource: 'none',
+})
+
 export const ASSISTANT_TEXT = JSON.stringify({
   type: 'assistant',
   session_id: '84e31d6e-e76c-42f8-afdc-c92a91baa3dc',

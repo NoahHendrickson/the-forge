@@ -109,7 +109,9 @@ export class ClaudeAdapter implements SessionAdapter {
   }
 
   sendTurn(text: string): void {
-    if (!this.child) return
+    // closed guard: stop() has SIGTERM'd the child — writing to its stdin would be a no-op
+    // at best and an EPIPE at worst.
+    if (!this.child || this.closed) return
     const msg = {
       type: 'user',
       message: { role: 'user', content: [{ type: 'text', text }] },
@@ -118,7 +120,7 @@ export class ClaudeAdapter implements SessionAdapter {
   }
 
   interrupt(): void {
-    if (!this.child) return
+    if (!this.child || this.closed) return
     const msg = {
       type: 'control_request',
       request_id: randomUUID(),
@@ -157,12 +159,16 @@ export class ClaudeAdapter implements SessionAdapter {
         const sessionId = typeof obj['session_id'] === 'string' ? obj['session_id'] : ''
         const model = typeof obj['model'] === 'string' ? obj['model'] : ''
         const servers = Array.isArray(obj['mcp_servers']) ? obj['mcp_servers'] : []
-        const mcpLoaded = servers.some(
-          (s: unknown) =>
-            typeof s === 'object' &&
-            s !== null &&
-            (s as Record<string, unknown>)['name'] === 'the-forge',
-        )
+        // Health check by unhealthy-exclusion rather than a healthy allowlist: the CLI's
+        // status vocabulary isn't pinned in docs, so an allowlist ('connected') would wrongly
+        // report false on a new-but-healthy value; 'error'/'disconnected' are the known
+        // definitively-broken states.
+        const mcpLoaded = servers.some((s: unknown) => {
+          if (typeof s !== 'object' || s === null) return false
+          const entry = s as Record<string, unknown>
+          if (entry['name'] !== 'the-forge') return false
+          return entry['status'] !== 'error' && entry['status'] !== 'disconnected'
+        })
         this.onEvent({ kind: 'started', sessionId, model, mcpLoaded })
         return
       }
