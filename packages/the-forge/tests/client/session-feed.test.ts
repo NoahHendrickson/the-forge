@@ -353,6 +353,26 @@ describe('approvals', () => {
     feed.stop()
   })
 
+  it('a replayed approval (same id delivered twice) renders exactly one row, still collapsible', async () => {
+    // Approval lines carry no seq, so the server re-emits pending approvals on EVERY
+    // reconnect — a duplicate id must not append a second (ghost) row.
+    const lines = [
+      JSON.stringify({ type: 'approval', id: 'dup1', toolName: 'BashTool', detail: 'ls' }),
+      JSON.stringify({ type: 'approval', id: 'dup1', toolName: 'BashTool', detail: 'ls' }),
+      JSON.stringify({ type: 'approval-resolved', id: 'dup1', allow: true }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const rows = feed.root.querySelectorAll('.session-approval')
+    expect(rows.length).toBe(1)
+    // The one row must be the tracked one — approval-resolved collapses it
+    expect(rows[0].textContent).toBe('Allowed')
+    expect(rows[0].querySelector('.session-approval-allow')).toBeNull()
+    feed.stop()
+  })
+
   it('approval-resolved for unknown id is a no-op (no crash)', async () => {
     const lines = [JSON.stringify({ type: 'approval-resolved', id: 'ghost', allow: true })]
     const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
@@ -390,6 +410,27 @@ describe('stop() idle-zero', () => {
   it('stop() before start() is a no-op', () => {
     const feed = new SessionFeed()
     expect(() => feed.stop()).not.toThrow()
+  })
+
+  it('start() during the reconnect-backoff window clears the parked timer (no leak)', async () => {
+    // Stream closes immediately → a reconnect timer parks. A start() in that window
+    // opens a fresh connection and must clear the parked timer, or it outlives stop().
+    let calls = 0
+    const fetchFn: typeof fetch = ((_url: RequestInfo | URL, init?: RequestInit) => {
+      calls++
+      if (calls === 1) return Promise.resolve(new Response(makeBody([]), { status: 200 }))
+      return new Promise<Response>(() => {
+        void (init as RequestInit | undefined)?.signal
+      })
+    }) as typeof fetch
+    const feed = new SessionFeed({ fetchFn })
+    feed.start()
+    await flush()
+    expect(vi.getTimerCount()).toBe(1) // reconnect timer parked
+    feed.start() // re-entry during backoff — must clear the parked timer
+    expect(vi.getTimerCount()).toBe(0)
+    feed.stop()
+    expect(vi.getTimerCount()).toBe(0) // nothing survives stop()
   })
 
   it('double start() is idempotent — does not open a second fetch', async () => {

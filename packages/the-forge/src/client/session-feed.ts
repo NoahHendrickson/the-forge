@@ -95,6 +95,7 @@ export class SessionFeed {
 
     // Stop button: fires onInterrupt while a turn is in flight
     this.stopBtn = createButton({ label: 'Stop', className: 'session-stop' })
+    this.stopBtn.type = 'button'
     this.stopBtn.hidden = true
     this.stopBtn.addEventListener('click', () => this.onInterrupt())
 
@@ -108,6 +109,14 @@ export class SessionFeed {
    * is already live (controller set), does nothing — stop() + start() for a forced reconnect. */
   start(): void {
     if (this.controller !== null) return
+    // A start() can land during the reconnect-backoff window (no live fetch, timer
+    // parked) — the controller guard above doesn't cover that state. Clear the parked
+    // timer before opening a fresh connection, or the stale (generation-guarded, so
+    // harmless-but-alive) timer would outlive this start() and only die at the NEXT stop().
+    if (this.timer !== null) {
+      clearTimeout(this.timer)
+      this.timer = null
+    }
     this.generation++
     this.connect(this.generation)
   }
@@ -325,6 +334,11 @@ export class SessionFeed {
   }
 
   private renderApproval(id: string, toolName: string, detail: string): void {
+    // Approval lines carry no seq, so ?since= can't filter them — the server re-emits
+    // every still-pending approval on each reconnect. A duplicate id must be a no-op:
+    // appending again would overwrite the approvalRows entry and leave a ghost row
+    // (with live buttons) that approval-resolved could no longer collapse.
+    if (this.approvalRows.has(id)) return
     const row = document.createElement('div')
     row.className = 'session-row session-approval'
     row.dataset.approvalId = id
@@ -333,9 +347,11 @@ export class SessionFeed {
     label.textContent = `${toolName}: ${detail}`
 
     const allowBtn = createButton({ label: 'Allow', className: 'session-approval-allow' })
+    allowBtn.type = 'button'
     allowBtn.addEventListener('click', () => this.onDecide(id, true))
 
     const denyBtn = createButton({ label: 'Deny', className: 'session-approval-deny' })
+    denyBtn.type = 'button'
     denyBtn.addEventListener('click', () => this.onDecide(id, false))
 
     row.append(label, allowBtn, denyBtn)
