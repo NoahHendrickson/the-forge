@@ -390,7 +390,15 @@ export class SessionManager {
       case 'assistant-text':
       case 'tool-started':
       case 'tool-finished':
-        // Events already pushed to ring; no state transition needed.
+      case 'user-text':
+      case 'assistant-delta':
+      case 'config-changed':
+        // Events already pushed to ring; no state transition needed. user-text/
+        // assistant-delta/config-changed are new SessionEvent kinds (Task 2 — adapter
+        // deltas/edit payloads/config controls); this arm only keeps the switch exhaustive.
+        // Task 3 owns their real behavior (assistant-delta subscriber-only fan-out without
+        // ringing, user-text produced by the manager itself, config-changed's server
+        // endpoint wiring).
         break
 
       default: {

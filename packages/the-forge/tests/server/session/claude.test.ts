@@ -4,6 +4,7 @@ import {
   ClaudeAdapter,
   CLAUDE_ARGS,
   EDIT_TIER_ALLOW,
+  EDIT_PAYLOAD_CAP,
   type SpawnFn,
   type SpawnedChild,
 } from '../../../src/server/session/claude'
@@ -22,6 +23,19 @@ import {
   UNKNOWN_TYPE,
   UNPARSEABLE_LINE,
 } from './fixtures/claude-ndjson'
+import {
+  STREAM_EVENT_MESSAGE_START,
+  STREAM_EVENT_CONTENT_BLOCK_START_THINKING,
+  STREAM_EVENT_CONTENT_BLOCK_DELTA_SIGNATURE,
+  STREAM_EVENT_CONTENT_BLOCK_STOP_THINKING,
+  STREAM_EVENT_CONTENT_BLOCK_START_TEXT,
+  STREAM_EVENT_CONTENT_BLOCK_DELTA_TEXT,
+  STREAM_EVENT_CONTENT_BLOCK_STOP_TEXT,
+  STREAM_EVENT_MESSAGE_DELTA,
+  STREAM_EVENT_MESSAGE_STOP,
+  CONTROL_REQUEST_SET_MODEL,
+  CONTROL_REQUEST_SET_PERMISSION_MODE,
+} from './fixtures/claude-chat-ndjson'
 
 // ---------------------------------------------------------------------------
 // Fake SpawnFn — in-memory PassThrough streams; never spawns a real process.
@@ -151,6 +165,9 @@ describe('ClaudeAdapter', () => {
       expect(CLAUDE_ARGS).toContain('--verbose')
       expect(CLAUDE_ARGS).toContain('--permission-prompt-tool')
       expect(CLAUDE_ARGS).not.toContain('--bare')
+      // Required for stream_event text deltas (chat surface milestone B) — without this flag
+      // the CLI never emits partial-message stream_event lines at all.
+      expect(CLAUDE_ARGS).toContain('--include-partial-messages')
       // Pins the ratified overlay-gating posture against the user's global defaultMode:
       // without this, a user-level 'auto'/'bypassPermissions' mode auto-clears Bash
       // before the permission-prompt-tool is ever consulted (observed live, 2.1.201).
@@ -334,6 +351,263 @@ describe('ClaudeAdapter', () => {
         expect(ev.isError).toBe(true)
         expect(ev.errorText).toContain('Not logged in')
       }
+    })
+  })
+
+  describe('stream_event deltas (--include-partial-messages)', () => {
+    it('maps stream_event text delta → assistant-delta (fixture)', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/p' })
+
+      pushLine(lastChild(), STREAM_EVENT_CONTENT_BLOCK_DELTA_TEXT)
+
+      expect(events).toEqual([{ kind: 'assistant-delta', text: 'Octopuses have three h' }])
+    })
+
+    it('maps every other stream_event in a full turn envelope to activity (fixture)', () => {
+      // Full observed envelope (fixtures/claude-chat-ndjson.ts) minus the one text_delta
+      // line — message_start, thinking block open/delta/close, text block open/close,
+      // message_delta, message_stop. None of these carry chat text; all must fall to the
+      // same liveness heartbeat as an unrecognized top-level type.
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/p' })
+
+      const lines = [
+        STREAM_EVENT_MESSAGE_START,
+        STREAM_EVENT_CONTENT_BLOCK_START_THINKING,
+        STREAM_EVENT_CONTENT_BLOCK_DELTA_SIGNATURE,
+        STREAM_EVENT_CONTENT_BLOCK_STOP_THINKING,
+        STREAM_EVENT_CONTENT_BLOCK_START_TEXT,
+        STREAM_EVENT_CONTENT_BLOCK_STOP_TEXT,
+        STREAM_EVENT_MESSAGE_DELTA,
+        STREAM_EVENT_MESSAGE_STOP,
+      ]
+      for (const line of lines) pushLine(lastChild(), line)
+
+      expect(events).toEqual(lines.map(() => ({ kind: 'activity' })))
+    })
+  })
+
+  describe('tool_use edit payloads', () => {
+    it('Edit tool_use → edit payload, each side truncated at EDIT_PAYLOAD_CAP', () => {
+      const before = 'b'.repeat(EDIT_PAYLOAD_CAP + 50)
+      const after = 'a'.repeat(EDIT_PAYLOAD_CAP + 50)
+      const line = JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_e1',
+              name: 'Edit',
+              input: { file_path: 'src/App.tsx', old_string: before, new_string: after },
+            },
+          ],
+        },
+      })
+
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/p' })
+      pushLine(lastChild(), line)
+
+      expect(events).toHaveLength(1)
+      const ev = events[0]
+      expect(ev.kind).toBe('tool-started')
+      if (ev.kind === 'tool-started') {
+        expect(ev.edit).toBeDefined()
+        expect(ev.edit?.file).toBe('src/App.tsx')
+        expect(ev.edit?.before.length).toBe(EDIT_PAYLOAD_CAP + 1)
+        expect(ev.edit?.before.endsWith('…')).toBe(true)
+        expect(ev.edit?.after.length).toBe(EDIT_PAYLOAD_CAP + 1)
+        expect(ev.edit?.after.endsWith('…')).toBe(true)
+      }
+    })
+
+    it('MultiEdit tool_use → edit payload (same old_string/new_string mapping as Edit)', () => {
+      const line = JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_m1',
+              name: 'MultiEdit',
+              input: { file_path: 'src/App.tsx', old_string: 'old', new_string: 'new' },
+            },
+          ],
+        },
+      })
+
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/p' })
+      pushLine(lastChild(), line)
+
+      expect(events).toHaveLength(1)
+      const ev = events[0]
+      expect(ev.kind).toBe('tool-started')
+      if (ev.kind === 'tool-started') {
+        expect(ev.edit).toEqual({ file: 'src/App.tsx', before: 'old', after: 'new' })
+      }
+    })
+
+    it('Write tool_use → edit payload with before empty, after from content', () => {
+      const line = JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_w1',
+              name: 'Write',
+              input: { file_path: 'src/new.ts', content: 'export const x = 1\n' },
+            },
+          ],
+        },
+      })
+
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/p' })
+      pushLine(lastChild(), line)
+
+      expect(events).toHaveLength(1)
+      const ev = events[0]
+      expect(ev.kind).toBe('tool-started')
+      if (ev.kind === 'tool-started') {
+        expect(ev.edit).toEqual({ file: 'src/new.ts', before: '', after: 'export const x = 1\n' })
+      }
+    })
+
+    it('Edit tool_use missing old_string/new_string → no edit field (never throws)', () => {
+      const line = JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'toolu_e2', name: 'Edit', input: { file_path: 'src/App.tsx' } },
+          ],
+        },
+      })
+
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/p' })
+      expect(() => pushLine(lastChild(), line)).not.toThrow()
+
+      expect(events).toHaveLength(1)
+      const ev = events[0]
+      expect(ev.kind).toBe('tool-started')
+      if (ev.kind === 'tool-started') {
+        expect(ev.edit).toBeUndefined()
+      }
+    })
+
+    it('Write tool_use missing content → no edit field (never throws)', () => {
+      const line = JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'toolu_w2', name: 'Write', input: { file_path: 'src/new.ts' } },
+          ],
+        },
+      })
+
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/p' })
+      pushLine(lastChild(), line)
+
+      expect(events).toHaveLength(1)
+      const ev = events[0]
+      expect(ev.kind).toBe('tool-started')
+      if (ev.kind === 'tool-started') {
+        expect(ev.edit).toBeUndefined()
+      }
+    })
+  })
+
+  describe('config control requests (setModel / setPermissionMode / setEffort)', () => {
+    it('setModel writes the CLI control-request shape (fixture) with a fresh request_id', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      adapter.onEvent = () => {}
+      adapter.start({ cwd: '/p' })
+
+      const written: string[] = []
+      lastChild().stdin.on('data', (chunk: Buffer) => written.push(chunk.toString()))
+
+      adapter.setModel('claude-haiku-4-5-20251001')
+
+      const parsed = JSON.parse(written.join('').trim())
+      const fixture = JSON.parse(CONTROL_REQUEST_SET_MODEL)
+      expect(parsed.type).toBe(fixture.type)
+      expect(parsed.request).toEqual(fixture.request)
+      // request_id is generated per-call (uuid), not the fixture's recorded value.
+      expect(typeof parsed.request_id).toBe('string')
+      expect(parsed.request_id.length).toBeGreaterThan(0)
+    })
+
+    it('setPermissionMode writes the CLI control-request shape (fixture) with a fresh request_id', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      adapter.onEvent = () => {}
+      adapter.start({ cwd: '/p' })
+
+      const written: string[] = []
+      lastChild().stdin.on('data', (chunk: Buffer) => written.push(chunk.toString()))
+
+      adapter.setPermissionMode('acceptEdits')
+
+      const parsed = JSON.parse(written.join('').trim())
+      const fixture = JSON.parse(CONTROL_REQUEST_SET_PERMISSION_MODE)
+      expect(parsed.type).toBe(fixture.type)
+      expect(parsed.request).toEqual(fixture.request)
+      expect(typeof parsed.request_id).toBe('string')
+      expect(parsed.request_id.length).toBeGreaterThan(0)
+    })
+
+    it('after stop(), setModel and setPermissionMode write nothing to stdin', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      adapter.onEvent = () => {}
+      adapter.start({ cwd: '/p' })
+
+      const written: string[] = []
+      lastChild().stdin.on('data', (chunk: Buffer) => written.push(chunk.toString()))
+
+      adapter.stop()
+      adapter.setModel('claude-haiku-4-5-20251001')
+      adapter.setPermissionMode('acceptEdits')
+
+      expect(written).toHaveLength(0)
+    })
+
+    it('setEffort is a no-op — no control request exists (spike-confirmed); respawn is manager-owned', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      adapter.onEvent = () => {}
+      adapter.start({ cwd: '/p' })
+
+      const written: string[] = []
+      lastChild().stdin.on('data', (chunk: Buffer) => written.push(chunk.toString()))
+
+      expect(() => adapter.setEffort('high')).not.toThrow()
+      expect(written).toHaveLength(0)
     })
   })
 

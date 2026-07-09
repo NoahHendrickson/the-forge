@@ -1169,6 +1169,11 @@ class FakeAdapter implements SessionAdapter {
   sendTurn(_text: string) {}
   interrupt() {}
   stop() {}
+  // no-op stubs — Task 2 added these to the SessionAdapter interface; this fake only needs
+  // to satisfy the type here, not exercise them (Task 3 wires real config-endpoint calls).
+  setModel(_model: string) {}
+  setPermissionMode(_mode: string) {}
+  setEffort(_level: string) {}
   emit(e: SessionEvent) { this.onEvent(e) }
 }
 

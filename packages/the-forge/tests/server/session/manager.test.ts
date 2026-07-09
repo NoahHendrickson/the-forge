@@ -50,6 +50,12 @@ function makeFakeAdapter(): FakeAdapter {
     stop() {
       fa.stopCalls++
     },
+    // setModel/setPermissionMode/setEffort: no-op stubs — Task 2 added these to the
+    // SessionAdapter interface, but manager.ts doesn't call them yet (Task 3's config
+    // endpoint wiring does). Present only so this fake satisfies the interface.
+    setModel() {},
+    setPermissionMode() {},
+    setEffort() {},
     emit(e) {
       fa.onEvent(e)
     },
