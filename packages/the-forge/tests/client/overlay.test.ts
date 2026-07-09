@@ -553,3 +553,33 @@ describe('Overlay (watch-unlink — Task 2)', () => {
     expect(overlay.unlinkButton.hidden).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Session feed CSS hooks (Task 7) — test hooks that must not be renamed
+// ---------------------------------------------------------------------------
+
+describe('SessionFeed CSS hooks (Task 7)', () => {
+  it('CSS declares .session-feed as a test hook class', () => {
+    expect(CSS).toContain('.session-feed')
+  })
+
+  it('CSS declares .session-row as a test hook class', () => {
+    expect(CSS).toContain('.session-row')
+  })
+
+  it('CSS declares .session-approval as a test hook class', () => {
+    expect(CSS).toContain('.session-approval')
+  })
+
+  it('CSS declares .session-stop as a test hook class', () => {
+    expect(CSS).toContain('.session-stop')
+  })
+
+  it('CSS declares .session-status for the status row', () => {
+    expect(CSS).toContain('.session-status')
+  })
+
+  it('CSS declares .session-error-row for error rows', () => {
+    expect(CSS).toContain('.session-error-row')
+  })
+})

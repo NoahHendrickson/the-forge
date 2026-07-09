@@ -565,6 +565,40 @@ button {
 // .panel-head-actions flex wrapper it's placed in (panel.ts); no rule needed here, but the
 // selector name stays a stable test contract (see panel.test.ts / overlay.test.ts).
 `
+` +
+// Session feed — live activity stream from the embedded session (Task 7).
+// .session-feed: the section container, mirrors .changes-section structure.
+// .session-row: individual event rows (text snippets, tool rows, error rows, approvals).
+// .session-approval: a pending tool-approval row — has Allow/Deny buttons.
+// .session-stop: Stop button, visible while a turn is in flight (busyish state).
+// CSS class names here are test hooks — extend, don't rename.
+`.session-feed {
+  flex: none; display: flex; flex-direction: column; max-height: 220px;
+  border-top: 1px solid var(--separator);
+}
+.session-list { overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+.session-list::-webkit-scrollbar { width: 8px; }
+.session-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+.session-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 3px 6px; border-radius: 6px; font: 400 var(--text-sm) var(--font-ui);
+  color: var(--text-secondary); word-break: break-word;
+}
+.session-status {
+  padding: 6px 12px 2px; color: var(--text-faint); font: 500 var(--text-xs) var(--font-ui);
+}
+.session-error-row { color: #F87171; }
+.session-tool-row { color: var(--text-muted); }
+.session-spinner { flex: none; color: var(--accent-soft); font-size: 10px; }
+.session-approval {
+  border: 1px solid rgba(255,255,255,0.1); padding: 4px 6px; border-radius: 6px;
+}
+.session-approval-resolved { color: var(--text-muted); font-style: italic; border: none; }
+.session-stop {
+  align-self: flex-end; margin: 2px 8px 4px; background: rgba(248,113,113,0.15);
+  color: #F87171; border: 1px solid rgba(248,113,113,0.3);
+}
+.session-stop:hover { background: rgba(248,113,113,0.25); }
 `
 
 export class Overlay {
