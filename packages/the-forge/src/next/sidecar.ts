@@ -15,6 +15,9 @@ export interface SidecarHandle {
 export interface SidecarOpts {
   agent: DispatchOpts['agent']
   channelsFlag: boolean
+  /** `false` disables the embedded-session dispatch rung — see DispatchConfig.embedded.
+   * Optional: existing callers/tests that omit it keep the rung enabled (default true). */
+  embedded?: boolean
   /** resolveProjectRoot()'d project root. */
   root: string
   /** Injectable for tests; prod impl reads dist/client.js next to this module. Optional —
@@ -81,7 +84,7 @@ async function createSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
   // DNS-rebound origin spoof its way past the Host check — the very attack the check
   // exists to stop. A direct (non-proxied) connection from such an origin still presents
   // the attacker's real Host and is correctly rejected.
-  const middleware = createForgeMiddleware(queue, [], secret, { agent: opts.agent, channelsFlag: opts.channelsFlag, cwd: opts.root }, hub, session)
+  const middleware = createForgeMiddleware(queue, [], secret, { agent: opts.agent, channelsFlag: opts.channelsFlag, cwd: opts.root, embedded: opts.embedded }, hub, session)
 
   let hintTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
     hintTimer = null

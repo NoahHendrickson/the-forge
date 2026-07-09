@@ -704,6 +704,25 @@ describe('POST /__the-forge/dispatch', () => {
       expect(calls.notify).toBe(0)
     })
 
+    it('embedded: false disables the rung → ladder runs, session never touched', async () => {
+      // The policy escape hatch (research doc §Billing): a consumer can opt back into
+      // terminal-only dispatch without a plugin release if Anthropic's headless posture flips.
+      queue.add({}, 'pending markdown')
+      const calls = { notify: 0 }
+      const session = fakeDispatchSession('ready', calls)
+      const mwEmbed = createForgeMiddleware(queue, [], undefined, {
+        agent: 'claude-code',
+        channelsFlag: false,
+        embedded: false,
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'ladder ran' }),
+      }, undefined, session)
+      const res = fakeRes()
+      await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'ladder ran' })
+      expect(calls.notify).toBe(0)
+    })
+
     it('session not wired → embedded check skipped, existing behavior unchanged', async () => {
       // Backward compat: callers that omit the session param still hit the ladder.
       queue.add({}, 'pending markdown')

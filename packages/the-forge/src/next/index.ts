@@ -50,6 +50,10 @@ export interface WithForgeOptions {
   agent?: DispatchOpts['agent']
   /** Opt-in to the experimental Channels rung (claude-code only). Defaults to false. */
   experimentalChannels?: boolean
+  /** Set false to disable the embedded-session dispatch rung entirely (terminal-only dispatch,
+   * nothing ever spawns a headless CLI). Default true — see DispatchConfig.embedded for why
+   * this escape hatch exists. */
+  embedded?: boolean
 }
 
 // Module-level flag: at most one "could not start" warning per process, matching the
@@ -122,6 +126,7 @@ function chainWebpack(
 export function withForge(nextConfig?: NextConfig | NextConfigFn, options: WithForgeOptions = {}): NextConfigFn {
   const agent = options.agent ?? 'claude-code'
   const channelsFlag = options.experimentalChannels ?? false
+  const embedded = options.embedded ?? true
 
   return async (phase, ctx) => {
     const resolved: NextConfig = typeof nextConfig === 'function' ? await nextConfig(phase, ctx) : (nextConfig ?? {})
@@ -155,7 +160,7 @@ export function withForge(nextConfig?: NextConfig | NextConfigFn, options: WithF
         },
       },
       webpack: chainWebpack(resolved.webpack, loaderRule),
-      rewrites: mergeRewritesWithSidecar(resolved.rewrites, agent, channelsFlag, root),
+      rewrites: mergeRewritesWithSidecar(resolved.rewrites, agent, channelsFlag, embedded, root),
     }
 
     return config
@@ -166,6 +171,7 @@ function mergeRewritesWithSidecar(
   userRewrites: (() => Promise<NextRewrites>) | undefined,
   agent: DispatchOpts['agent'],
   channelsFlag: boolean,
+  embedded: boolean,
   root: string
 ): () => Promise<NextRewrites> {
   // Two rules from the same ensureSidecar result: the existing catch-all proxy for the
@@ -173,7 +179,7 @@ function mergeRewritesWithSidecar(
   // sidecar already serves DEVTOOLS_JSON_PATH through the identical createForgeMiddleware, so
   // this is one more rewrite rule, not a new server/code path.
   const withSidecar = async (): Promise<NextRewriteRule[]> => {
-    const { port } = await ensureSidecar({ agent, channelsFlag, root })
+    const { port } = await ensureSidecar({ agent, channelsFlag, embedded, root })
     return [
       { source: '/__the-forge/:path*', destination: `http://127.0.0.1:${port}/__the-forge/:path*` },
       { source: DEVTOOLS_JSON_PATH, destination: `http://127.0.0.1:${port}${DEVTOOLS_JSON_PATH}` },

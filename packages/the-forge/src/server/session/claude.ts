@@ -21,6 +21,11 @@ export const EDIT_TIER_ALLOW: string[] = [
   'Edit',
   'Write',
   'MultiEdit',
+  // NotebookEdit is the same tier as Edit/Write (a project-scoped file edit). TodoWrite is
+  // the CLI's own scratchpad, used habitually in headless turns — prompting a designer with
+  // Allow/Deny for it would be pure noise (and each prompt parks up to 110s in the overlay).
+  'NotebookEdit',
+  'TodoWrite',
   'mcp__the-forge__pull_design_edits',
   'mcp__the-forge__mark_applied',
 ]

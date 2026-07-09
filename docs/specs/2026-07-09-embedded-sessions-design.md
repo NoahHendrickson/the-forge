@@ -59,7 +59,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose \
 ```
 
   Never `--bare` (it skips auth *and* the harness — smoke-tested). No `--model` in v1 (user's default).
-- **Watchdog:** no stdout event for `WATCHDOG_MS` while `busy` → kill → respawn with `--resume` → re-send the turn (open CLI hang bug #53584). Crash/EOF mid-turn takes the same path. Feed shows a "session recovered" row.
+- **Watchdog:** no stdout event for `WATCHDOG_MS` (120s) while `busy` → kill → respawn with `--resume` → re-send the turn (open CLI hang bug #53584). Crash/EOF mid-turn takes the same path. Feed shows a "session recovered" row. **Approval-aware:** the watchdog is fully suspended while an approval is parked in the overlay (a human deciding is not a hung CLI; the registry's hold timer bounds the wait), and an ALLOW re-arms with the longer `POST_APPROVAL_WATCHDOG_MS` (10 min) leash — an approved build/test emits nothing on stdout until its `tool_result`, and the normal leash would kill it mid-command and re-run it on recovery.
 - **Persistence:** `session_id` (from the `init` event) saved to `.the-forge/session.json`; dev-server restart resumes the same conversation. Kill the child on dev-server close (both frameworks' close hooks already manage endpoint-file lifecycle — same place).
 - **Errors are in-band** (smoke-tested): rate-limit and auth failures arrive as normal `result` events with `is_error: true` + readable text, exit code 0. The manager surfaces them as feed rows (e.g. "Weekly limit reached, resets Jul 12") and parks the session; it does not retry-loop.
 
@@ -92,7 +92,7 @@ The working mechanism is `--permission-prompt-tool` (the SDK-style `can_use_tool
 1. New tool `approve` on the `the-forge` MCP server, `{tool_use_id, tool_name, input}`. The bin POSTs `/__the-forge/approval` and long-polls the decision (same hold pattern as `/wait`; generous timeout — a human is deciding).
 2. Runtime pushes an `approval-request` over the session event stream; overlay renders tool name + detail (command text for Bash) with **Allow / Deny**.
 3. Decision returns through the bin as `{"behavior":"allow","updatedInput":<original input>}` or `{"behavior":"deny","message":"denied from The Forge overlay"}`. `updatedInput` must echo the original input verbatim (empty object is only a fallback).
-4. **Static rules short-circuit the prompt tool** — that's how the ratified posture is expressed: `--allowedTools "Edit" "Write" "MultiEdit" "Read" "Grep" "Glob"` (project-scoped edit tier auto-allowed), everything else (Bash, WebFetch, arbitrary MCP tools) hits `approve`.
+4. **Static rules short-circuit the prompt tool** — that's how the ratified posture is expressed: `--allowedTools "Edit" "Write" "MultiEdit" "NotebookEdit" "Read" "Grep" "Glob" "TodoWrite"` (project-scoped edit tier auto-allowed; NotebookEdit is the same tier as Edit/Write, and TodoWrite is the CLI's own scratchpad — prompting a designer for it would be pure noise), everything else (Bash, WebFetch, arbitrary MCP tools) hits `approve`.
 5. Safety valve: an approval nobody answers within the hold resolves **deny** with a "timed out — re-send when ready" note; never leave the child blocked forever.
 
 ### 3.4 Dispatch integration — the new primary path
@@ -103,6 +103,7 @@ New rung `'embedded'` at the **top** of the ladder (above `'watcher'`):
 - Embedded session `idle` → **auto-start it** (primary-path semantics), then deliver. Feed shows "starting session…".
 - Spawn fails (no `claude` binary, not logged in) → fall through to the existing ladder unchanged (`watcher` → tmux → AppleScript → deeplink → manual). The failure reason lands in the feed once, not on every Send.
 - A live **external** watcher takes precedence over *auto-starting* a new embedded session (the user deliberately linked that terminal session; don't shadow it) — but never over an embedded session that is already running.
+- **Opt-out escape hatch:** `embedded: false` on `theForge()` / `withForge()` disables the rung entirely (terminal-only dispatch; nothing ever spawns a headless CLI). Default true. Exists for the Anthropic policy/billing risk (§5): a consumer can flip back without waiting on a plugin release.
 
 Queue, `mark_applied`, verifier: untouched. The embedded agent is a normal MCP consumer.
 
@@ -130,7 +131,7 @@ Queue, `mark_applied`, verifier: untouched. The embedded agent is a normal MCP c
 - **Anthropic policy/billing** (research doc §Billing): headless-vs-interactive billing separation announced then paused; OAuth-for-native-apps legal language. Accepted with eyes open for the primary path; the ladder fallback keeps the product functional if the posture must flip back. Re-check before each release.
 - **Weekly/session limits surface mid-flow** (observed live during the smoke test): the feed must render limit errors as first-class states, with "resume via terminal dispatch" as the suggested fallback.
 - **CLI churn:** stream-json is stable-ish but underdocumented; pin known-good event shapes in adapter tests with recorded fixtures from the real CLI (the smoke-test transcripts are the first fixtures).
-- Open (A): exact `WATCHDOG_MS`; whether the auto-started session announces itself in the feed with a permission-posture summary (leaning yes, one row).
+- ~~Open (A): exact `WATCHDOG_MS`~~ — resolved: 120s normal, suspended while an approval is parked, 10-min post-allow leash (§3.1). Still open (A): whether the auto-started session announces itself in the feed with a permission-posture summary (leaning yes, one row).
 - Open (B): does chat share the Send queue's lifecycle rows or stay purely in the feed?
 
 ## 6. Testing approach

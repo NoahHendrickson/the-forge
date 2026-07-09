@@ -159,6 +159,8 @@ describe('ClaudeAdapter', () => {
         'Edit',
         'Write',
         'MultiEdit',
+        'NotebookEdit',
+        'TodoWrite',
         'mcp__the-forge__pull_design_edits',
         'mcp__the-forge__mark_applied',
       ])

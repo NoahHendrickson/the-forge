@@ -140,6 +140,12 @@ export interface DispatchConfig {
   /** Injectable for tests — defaults to the real dispatch ladder (dispatch.ts). Never invokes
    * a real tmux/osascript/open in tests; production callers omit this and get the real thing. */
   dispatchFn?: (opts: DispatchOpts) => Promise<DispatchResult>
+  /** Policy escape hatch (research doc §Billing): `false` disables the embedded-session rung
+   * entirely — Sends use only the watcher/keystroke ladder, and nothing ever spawns a headless
+   * CLI. Default true (embedded is the primary path, ratified 2026-07-09); exists so a consumer
+   * can opt back to terminal-only dispatch without a plugin release if Anthropic's headless
+   * posture flips. */
+  embedded?: boolean
 }
 
 export function createForgeMiddleware(
@@ -362,9 +368,16 @@ export function createForgeMiddleware(
           //     only prefer the embedded path when there is nobody else to notify.
           //   idle|failed + live watcher → fall through; the watcher check below takes over.
           //
+          // Known benign overlap: with BOTH a running embedded session and a live watcher,
+          // the queue POST already notified the watcher's parked /wait while this rung
+          // delivers to the embedded session — both race pull_design_edits, one claims
+          // everything, the loser burns a "No pending design edits" tick. Harmless
+          // (pull is idempotent) but token-wasteful; acceptable for the rare dual setup.
+          //
           // cursor/codex skip this rung entirely — no embedded adapter yet for those agents
           // (§3.4). They fall through to their own dispatch paths (deeplink / tmux).
-          if (session && resolvedAgent === 'claude-code') {
+          // dispatchConfig.embedded === false is the consumer opt-out (see DispatchConfig).
+          if (session && resolvedAgent === 'claude-code' && dispatchConfig.embedded !== false) {
             const sessionState = session.manager.state()
             if (sessionState === 'ready' || sessionState === 'busy' || sessionState === 'starting') {
               session.manager.notifyDesignEdits()

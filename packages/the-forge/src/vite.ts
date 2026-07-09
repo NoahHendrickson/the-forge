@@ -17,11 +17,16 @@ export interface TheForgeOptions {
   /** Opt-in to the experimental Channels rung (claude-code only). Tonight this rung is a stub
    * that always falls through — see server/dispatch.ts. Defaults to false. */
   experimentalChannels?: boolean
+  /** Set false to disable the embedded-session dispatch rung entirely (terminal-only dispatch,
+   * nothing ever spawns a headless CLI). Default true — see DispatchConfig.embedded for why
+   * this escape hatch exists. */
+  embedded?: boolean
 }
 
 export function theForge(options: TheForgeOptions = {}): Plugin {
   const agent = options.agent ?? 'claude-code'
   const experimentalChannels = options.experimentalChannels ?? false
+  const embedded = options.embedded ?? true
   let root = process.cwd()
   // Generated once per server start — belt-and-braces against cross-origin/DNS-rebinding
   // bypasses of the Origin/Host checks in the middleware; same-origin page scripts are the
@@ -63,7 +68,7 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       secret = runtimeSecret
       const allowedHosts = Array.isArray(server.config.server.allowedHosts) ? server.config.server.allowedHosts : []
       server.middlewares.use(
-        createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels, cwd: resolvedRoot }, hub, session)
+        createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels, cwd: resolvedRoot, embedded }, hub, session)
       )
       server.httpServer?.once('listening', () => {
         const address = server.httpServer?.address()
