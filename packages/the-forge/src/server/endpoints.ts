@@ -16,6 +16,15 @@ const MAX_BODY = 1024 * 1024
 
 const KNOWN_AGENTS = new Set<DispatchOpts['agent']>(['claude-code', 'cursor', 'codex'])
 
+// /session/say + /session/config validation constants (Task 4). Regexes and the effort
+// allowlist are spike-pinned (spec §2.4) — verbatim, not derived.
+const CHAT_TEXT_MAX = 4000
+const CHAT_SOURCE_RE = /^[\w./-]+:\d+:\d+$/
+const CHAT_TAG_RE = /^[a-z][a-z0-9-]*$/
+const CONFIG_MODEL_MAX = 100
+const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan'])
+const EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
+
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
@@ -126,6 +135,8 @@ const MUTATING_PATHS = new Set([
   '/__the-forge/session/interrupt',
   '/__the-forge/approval',
   '/__the-forge/approval/decide',
+  '/__the-forge/session/say',
+  '/__the-forge/session/config',
 ])
 
 export interface DispatchConfig {
@@ -441,6 +452,77 @@ export function createForgeMiddleware(
       return send(res, 200, { state: session.manager.state() })
     }
 
+    if (pathname === '/__the-forge/session/say') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      if (!session) return send(res, 404, { error: 'embedded session unavailable' })
+      readBody(req)
+        .then((body) => {
+          const { text, element } = (body ?? {}) as { text?: unknown; element?: unknown }
+          // Validation order (brief, binding): text first — an invalid element must never
+          // partially forward alongside a rejected text, and a rejected text must never
+          // even look at element.
+          if (typeof text !== 'string' || text.length === 0 || text.length > CHAT_TEXT_MAX) {
+            return send(res, 400, { error: `text must be a non-empty string of at most ${CHAT_TEXT_MAX} characters` })
+          }
+          let parsedElement: { source: string; tag: string } | undefined
+          if (element !== undefined) {
+            const { source, tag } = (element ?? {}) as { source?: unknown; tag?: unknown }
+            if (
+              typeof source !== 'string' ||
+              typeof tag !== 'string' ||
+              !CHAT_SOURCE_RE.test(source) ||
+              !CHAT_TAG_RE.test(tag)
+            ) {
+              return send(res, 400, { error: 'element.source/tag invalid' })
+            }
+            parsedElement = { source, tag }
+          }
+          const result = session.manager.say(text, parsedElement)
+          if (!result.ok) {
+            return send(res, 429, { error: 'chat queue full' })
+          }
+          return send(res, 200, { ok: true })
+        })
+        .catch((e: Error) => send(res, 400, { error: e.message }))
+      return
+    }
+
+    if (pathname === '/__the-forge/session/config') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      if (!session) return send(res, 404, { error: 'embedded session unavailable' })
+      readBody(req)
+        .then((body) => {
+          const { model, permissionMode, effort } = (body ?? {}) as {
+            model?: unknown
+            permissionMode?: unknown
+            effort?: unknown
+          }
+          if (model === undefined && permissionMode === undefined && effort === undefined) {
+            return send(res, 400, { error: 'at least one of model, permissionMode, effort required' })
+          }
+          if (model !== undefined && (typeof model !== 'string' || model.length === 0 || model.length > CONFIG_MODEL_MAX)) {
+            return send(res, 400, { error: `model must be a non-empty string of at most ${CONFIG_MODEL_MAX} characters` })
+          }
+          if (permissionMode !== undefined && (typeof permissionMode !== 'string' || !PERMISSION_MODES.has(permissionMode))) {
+            return send(res, 400, { error: 'permissionMode must be one of default, acceptEdits, plan' })
+          }
+          if (effort !== undefined && (typeof effort !== 'string' || !EFFORT_LEVELS.has(effort))) {
+            return send(res, 400, { error: 'effort must be one of low, medium, high, xhigh, max' })
+          }
+          const cfg: { model?: string; permissionMode?: string; effort?: string } = {}
+          if (typeof model === 'string') cfg.model = model
+          if (typeof permissionMode === 'string') cfg.permissionMode = permissionMode
+          if (typeof effort === 'string') cfg.effort = effort
+          const result = session.manager.setConfig(cfg)
+          if (!result.ok) {
+            return send(res, 409, { error: 'session is busy' })
+          }
+          return send(res, 200, { ok: true })
+        })
+        .catch((e: Error) => send(res, 400, { error: e.message }))
+      return
+    }
+
     if (pathname === '/__the-forge/approval') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
       if (!session) return send(res, 404, { error: 'embedded session unavailable' })
@@ -484,7 +566,15 @@ export function createForgeMiddleware(
         .list()
         .filter((i) => !wanted || wanted.has(i.id))
         .map(({ id, status, note }) => ({ id, status, note }))
-      send(res, 200, { items, watcher: watcherHub.state(), session: session ? session.manager.state() : 'unavailable' })
+      send(res, 200, {
+        items,
+        watcher: watcherHub.state(),
+        session: session ? session.manager.state() : 'unavailable',
+        // The client-side chat surface (Task 6) uses this to decide whether to render at
+        // all — distinct from `session` (which reports the live adapter state) because it
+        // reflects the DispatchConfig.embedded opt-out, not runtime session health.
+        sessionEnabled: dispatchConfig.embedded !== false,
+      })
       return
     }
 
