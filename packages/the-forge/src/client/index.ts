@@ -231,13 +231,17 @@ export class DesignMode {
     // sendDrafts' /queue leg is awaited here, not its /dispatch leg (which it kicks off and lets
     // run to completion on its own) — dispatch is a best-effort delivery hint, not a
     // precondition for the chat turn to proceed. Drafts alone or text alone just run their own
-    // leg; getText() is read BEFORE sendDrafts (which does not touch the textarea) so the
-    // decision of whether to chat at all is stable regardless of how long the queue POST takes.
+    // leg. The two legs are INDEPENDENT (review fix 1's pinned semantics): a failed queue POST
+    // renders its own error row (see sendDrafts) but never swallows the typed message — the
+    // chat leg still fires after the queue attempt settles. The trimmed text is captured ONCE,
+    // here at gesture time, and passed through to sendChat (review fix 2): re-reading the
+    // textarea after the awaited queue POST would send whatever the user edited it to during
+    // that async gap — pinned semantics are "send what the user had at click time".
     this.feed.onSend = () => {
       const hasDrafts = this.drafts.elementCount() > 0
       const text = this.feed.getText()
       const proceedWithChat = (): void => {
-        if (text) void this.sendChat()
+        if (text) void this.sendChat(text)
       }
       if (hasDrafts) this.sendDrafts().then(proceedWithChat)
       else proceedWithChat()
@@ -452,6 +456,11 @@ export class DesignMode {
     this.draftsInFlight = true
     return new Promise<void>((resolveQueueLeg) => {
       const onSendFailed = (): void => {
+        // The old button flashed 'Send failed' here — with the button retired, the same
+        // transient-error row the chat leg already uses is the surviving failure surface
+        // (review fix 1): a silently-dropped queue POST would leave the user believing their
+        // edits were sent.
+        this.feed.renderTransientError('failed to queue changes — try again')
         this.draftsInFlight = false
         resolveQueueLeg()
       }
@@ -475,13 +484,16 @@ export class DesignMode {
   }
 
   /** The chat leg of the send-everything verb — extracted from the Task-1 shim (see git
-   * history), unchanged: reads the composer's typed text + attached chip, POSTs via onSay, and
-   * — only on a true (ok) resolution — clears both. A falsy resolution (network failure, 429,
-   * any non-ok response) already rendered its own explanation via onSay's renderTransientError
-   * call and must leave the typed text/chip untouched (final-review fix 3 — never silently
-   * discard what the user typed). */
-  private sendChat(): Promise<void> {
-    const text = this.feed.getText()
+   * history): POSTs the given text + the attached chip via onSay, and — only on a true (ok)
+   * resolution — clears both. A falsy resolution (network failure, 429, any non-ok response)
+   * already rendered its own explanation via onSay's renderTransientError call and must leave
+   * the typed text/chip untouched (final-review fix 3 — never silently discard what the user
+   * typed). `text` is a PARAMETER, not re-read from feed.getText() here (review fix 2): onSend
+   * awaits the drafts leg's /queue POST before calling this, and the textarea can change during
+   * that gap — the pinned semantics send what the user had at click time. Guards non-empty
+   * itself so no caller can POST a blank turn. */
+  private sendChat(text: string): Promise<void> {
+    if (!text.trim()) return Promise.resolve()
     const chip = this.feed.getChip()
     return Promise.resolve(this.feed.onSay(text, chip ?? undefined)).then((ok) => {
       if (ok) {

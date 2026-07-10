@@ -881,6 +881,107 @@ describe('composer send-everything verb + watch strip gating (Task 3)', () => {
     expect(textarea.value).toBe('') // the chat leg still ran its own clear-on-success
   })
 
+  // Review fix 1 (Important): the old button flashed 'Send failed' on a failed /queue POST —
+  // with the button retired, the drafts leg must surface its failure through the same
+  // transient-error mechanism the chat leg already uses (renderTransientError), or a failed
+  // queue POST is completely invisible.
+  it('a network-failed /queue POST renders the transient queue-failure row', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.reject(new Error('network down'))
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    clickSend(panel.root)
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    const errorRow = panel.root.querySelector('.session-error-row')
+    expect(errorRow).not.toBeNull()
+    expect(errorRow?.textContent).toBe('failed to queue changes — try again')
+    expect(mode.sent.size()).toBe(0)
+  })
+
+  it('a non-2xx /queue response also renders the transient queue-failure row', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: false, status: 500, json: async () => ({ error: 'boom' }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    clickSend(panel.root)
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    const errorRow = panel.root.querySelector('.session-error-row')
+    expect(errorRow).not.toBeNull()
+    expect(errorRow?.textContent).toBe('failed to queue changes — try again')
+  })
+
+  // Pinned semantics (review fix 1): the two legs are independent by design — a failed queue
+  // POST must not swallow the typed message; the chat leg still fires, after the queue attempt.
+  it('queue failure with text present: error row renders AND the chat leg still fires, after the queue attempt', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.reject(new Error('network down'))
+      if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'still say this'
+    clickSend(panel.root)
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    const errorRow = panel.root.querySelector('.session-error-row')
+    expect(errorRow?.textContent).toBe('failed to queue changes — try again')
+    const urls = fetchMock.mock.calls.map(([url]) => url)
+    const queueIndex = urls.indexOf('/__the-forge/queue')
+    const sayIndex = urls.indexOf('/__the-forge/session/say')
+    expect(queueIndex).toBeGreaterThanOrEqual(0)
+    expect(sayIndex).toBeGreaterThan(queueIndex) // chat still after the queue attempt — ordering holds even on failure
+    expect(textarea.value).toBe('') // the chat leg itself succeeded, so its clear-on-success ran
+  })
+
+  // Review fix 2 (Minor): the chat text is captured ONCE at onSend entry — a user clearing (or
+  // re-editing) the textarea while the awaited /queue POST is in flight must not change what
+  // the chat leg sends. Pinned semantics: send what the user had at click time.
+  it('clearing the textarea while the queue POST is in flight still says the ORIGINAL click-time text', async () => {
+    let resolveQueue!: (v: { ok: boolean; json: () => Promise<{ id: string }> }) => void
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return new Promise((resolve) => (resolveQueue = resolve))
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'original message'
+    clickSend(panel.root)
+    await Promise.resolve() // /queue POST now in flight, unresolved
+
+    textarea.value = '' // user clears (or rewrites) mid-gap — must not affect what gets said
+    resolveQueue({ ok: true, json: async () => ({ id: 'q1' }) })
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+
+    const sayCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/session/say')
+    expect(sayCalls).toHaveLength(1)
+    const body = JSON.parse((sayCalls[0] as unknown as [string, { body: string }])[1].body)
+    expect(body.text).toBe('original message')
+  })
+
   describe('watch strip gating', () => {
     beforeEach(() => vi.useFakeTimers())
     afterEach(() => vi.useRealTimers())
