@@ -6,6 +6,7 @@ import { dispatch as realDispatch, augmentDispatchMarkdown, type DispatchOpts, t
 import { WatcherHub } from './watchers'
 import { ensureDevtoolsUuid } from './setup'
 import type { ForgeSessionHandles } from './runtime'
+import { EFFORT_LEVELS, PERMISSION_MODES, CHAT_TEXT_MAX } from '../shared/chat-constants'
 
 /** Chrome DevTools' Automatic Workspace Folders well-known path (task A5) — served by
  * createForgeMiddleware below and proxied to it by src/next/index.ts's rewrites merge.
@@ -16,9 +17,11 @@ const MAX_BODY = 1024 * 1024
 
 const KNOWN_AGENTS = new Set<DispatchOpts['agent']>(['claude-code', 'cursor', 'codex'])
 
-// /session/say + /session/config validation constants (Task 4). Regexes and the effort
-// allowlist are spike-pinned (spec §2.4) — verbatim, not derived.
-const CHAT_TEXT_MAX = 4000
+// /session/say + /session/config validation constants (Task 4). Regexes are spike-pinned
+// (spec §2.4) — verbatim, not derived. CHAT_TEXT_MAX, PERMISSION_MODES and EFFORT_LEVELS
+// now live in src/shared/chat-constants.ts (the single source of truth shared with the
+// browser client's session-feed.ts pickers) — the arrays there are the shared truth; these
+// Sets are just this module's own lookup wrappers.
 // Length caps checked BEFORE the regexes below (cheaper) — CHAT_SOURCE_RE/CHAT_TAG_RE are
 // anchored but have unbounded quantifiers, so a well-shaped-but-huge string (e.g. ~1MB of
 // "a/") would otherwise pass the regex and ride the composed turn straight past the
@@ -28,8 +31,8 @@ const CHAT_TAG_MAX = 64
 const CHAT_SOURCE_RE = /^[\w./-]+:\d+:\d+$/
 const CHAT_TAG_RE = /^[a-z][a-z0-9-]*$/
 const CONFIG_MODEL_MAX = 100
-const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan'])
-const EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
+const PERMISSION_MODES_SET = new Set<string>(PERMISSION_MODES)
+const EFFORT_LEVELS_SET = new Set<string>(EFFORT_LEVELS)
 
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -520,10 +523,10 @@ export function createForgeMiddleware(
           if (model !== undefined && (typeof model !== 'string' || model.length === 0 || model.length > CONFIG_MODEL_MAX)) {
             return send(res, 400, { error: `model must be a non-empty string of at most ${CONFIG_MODEL_MAX} characters` })
           }
-          if (permissionMode !== undefined && (typeof permissionMode !== 'string' || !PERMISSION_MODES.has(permissionMode))) {
+          if (permissionMode !== undefined && (typeof permissionMode !== 'string' || !PERMISSION_MODES_SET.has(permissionMode))) {
             return send(res, 400, { error: 'permissionMode must be one of default, acceptEdits, plan' })
           }
-          if (effort !== undefined && (typeof effort !== 'string' || !EFFORT_LEVELS.has(effort))) {
+          if (effort !== undefined && (typeof effort !== 'string' || !EFFORT_LEVELS_SET.has(effort))) {
             return send(res, 400, { error: 'effort must be one of low, medium, high, xhigh, max' })
           }
           const cfg: { model?: string; permissionMode?: string; effort?: string } = {}

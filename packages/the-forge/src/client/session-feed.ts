@@ -3,23 +3,17 @@
 // fetch + ReadableStream + manual NDJSON parsing instead.
 import { createButton } from './ui/button'
 import { createSelect } from './ui/select'
+import { basename } from './source'
+import { EFFORT_LEVELS, PERMISSION_MODES, CHAT_TEXT_MAX } from '../shared/chat-constants'
 
-// Fixed vocabularies for the effort/permission pickers — mirrors server/endpoints.ts's
-// EFFORT_LEVELS/PERMISSION_MODES validation sets exactly (task-6 brief).
-const EFFORT_OPTIONS = [
-  { value: '', label: 'effort…' },
-  { value: 'low', label: 'low' },
-  { value: 'medium', label: 'medium' },
-  { value: 'high', label: 'high' },
-  { value: 'xhigh', label: 'xhigh' },
-  { value: 'max', label: 'max' },
-] as const
+// Fixed vocabularies for the effort/permission pickers — built from the shared
+// EFFORT_LEVELS/PERMISSION_MODES arrays (src/shared/chat-constants.ts), the single source of
+// truth also consumed by server/endpoints.ts's validation sets (task-6 brief).
+const EFFORT_OPTIONS = [{ value: '', label: 'effort…' }, ...EFFORT_LEVELS.map((v) => ({ value: v, label: v }))] as const
 
 const PERMISSION_OPTIONS = [
   { value: '', label: 'permissions…' },
-  { value: 'default', label: 'default' },
-  { value: 'acceptEdits', label: 'acceptEdits' },
-  { value: 'plan', label: 'plan' },
+  ...PERMISSION_MODES.map((v) => ({ value: v, label: v })),
 ] as const
 
 // The model picker's option set is NOT a fixed vocabulary like effort/permissions: the CLI
@@ -237,9 +231,10 @@ export class SessionFeed {
     this.textarea.className = 'chat-textarea'
     this.textarea.placeholder = 'Message the session…'
     this.textarea.rows = 2
-    // Mirrors CHAT_TEXT_MAX (server/endpoints.ts) — the server 400s past this length anyway;
-    // capping client-side stops the user from typing a message the send can never succeed at.
-    this.textarea.maxLength = 4000
+    // Mirrors CHAT_TEXT_MAX (src/shared/chat-constants.ts, also consumed by server/endpoints.ts)
+    // — the server 400s past this length anyway; capping client-side stops the user from typing
+    // a message the send can never succeed at.
+    this.textarea.maxLength = CHAT_TEXT_MAX
     this.textarea.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
@@ -493,71 +488,96 @@ export class SessionFeed {
 
   private handleEvent(e: Record<string, unknown>): void {
     const { kind } = e
-    if (kind === 'started') {
-      const model = typeof e.model === 'string' ? e.model : '?'
-      this.setStatus(`Session started · ${model}`)
-      // Model re-seeds from the event itself, as before — the started payload IS the source
-      // of truth for which model actually booted. Effort/permission carry no such field
-      // (control-request-only, or spawn-flag-only for effort), so re-apply the last
-      // user-chosen values instead of leaving them at whatever the DOM happened to hold.
-      this.seedConfigBar(e)
-      this.effortSelect.value = this.lastEffort ?? ''
-      this.permissionSelect.value = this.lastPermission ?? ''
-    } else if (kind === 'assistant-text') {
-      const text = typeof e.text === 'string' ? e.text : ''
-      this.finalizeAssistantText(text)
-      this.setBusyish(true)
-    } else if (kind === 'user-text') {
-      const text = typeof e.text === 'string' ? e.text : ''
-      const element = typeof e.element === 'object' && e.element !== null ? (e.element as Record<string, unknown>) : undefined
-      this.addRow(this.makeUserBubble(text, element))
-    } else if (kind === 'assistant-delta') {
-      const text = typeof e.text === 'string' ? e.text : ''
-      this.appendDelta(text)
-      this.setBusyish(true)
-    } else if (kind === 'tool-started') {
-      const toolId = typeof e.toolId === 'string' ? e.toolId : ''
-      const name = typeof e.name === 'string' ? e.name : ''
-      const detail = typeof e.detail === 'string' ? e.detail : ''
-      const editRaw = typeof e.edit === 'object' && e.edit !== null ? (e.edit as Record<string, unknown>) : null
-      const edit =
-        editRaw && typeof editRaw.file === 'string' && typeof editRaw.before === 'string' && typeof editRaw.after === 'string'
-          ? { file: editRaw.file, before: editRaw.before, after: editRaw.after }
-          : undefined
-      const row = this.makeToolRow(toolId, name, detail, edit)
-      this.toolRows.set(toolId, row)
-      this.addRow(row)
-      this.setBusyish(true)
-    } else if (kind === 'config-changed') {
-      this.addRow(this.makeConfigRow(e))
-      this.seedConfigBar(e)
-      if (typeof e.effort === 'string') this.lastEffort = e.effort
-      if (typeof e.permissionMode === 'string') this.lastPermission = e.permissionMode
-    } else if (kind === 'tool-finished') {
-      const toolId = typeof e.toolId === 'string' ? e.toolId : ''
-      const row = this.toolRows.get(toolId)
-      if (row) {
-        const spinner = row.querySelector('.session-spinner')
-        if (spinner) spinner.textContent = '✓'
+    switch (kind) {
+      case 'started': {
+        const model = typeof e.model === 'string' ? e.model : '?'
+        this.setStatus(`Session started · ${model}`)
+        // Model re-seeds from the event itself, as before — the started payload IS the source
+        // of truth for which model actually booted. Effort/permission carry no such field
+        // (control-request-only, or spawn-flag-only for effort), so re-apply the last
+        // user-chosen values instead of leaving them at whatever the DOM happened to hold.
+        this.seedConfigBar(e)
+        this.effortSelect.value = this.lastEffort ?? ''
+        this.permissionSelect.value = this.lastPermission ?? ''
+        break
       }
-    } else if (kind === 'turn-complete') {
-      if (e.isError === true) {
-        const errorText = typeof e.errorText === 'string' ? e.errorText : 'Turn error'
-        this.addRow(this.makeErrorRow(errorText))
+      case 'assistant-text': {
+        const text = typeof e.text === 'string' ? e.text : ''
+        this.finalizeAssistantText(text)
+        this.setBusyish(true)
+        break
       }
-      this.setBusyish(false)
-      this.clearStreamingBubble()
-    } else if (kind === 'session-error') {
-      const text = typeof e.text === 'string' ? e.text : 'Session error'
-      this.addRow(this.makeErrorRow(text))
-      this.setBusyish(false)
-      this.clearStreamingBubble()
-    } else if (kind === 'ended') {
-      this.setStatus('Session ended')
-      this.setBusyish(false)
-      this.clearStreamingBubble()
+      case 'user-text': {
+        const text = typeof e.text === 'string' ? e.text : ''
+        const element = typeof e.element === 'object' && e.element !== null ? (e.element as Record<string, unknown>) : undefined
+        this.addRow(this.makeUserBubble(text, element))
+        break
+      }
+      case 'assistant-delta': {
+        const text = typeof e.text === 'string' ? e.text : ''
+        this.appendDelta(text)
+        this.setBusyish(true)
+        break
+      }
+      case 'tool-started': {
+        const toolId = typeof e.toolId === 'string' ? e.toolId : ''
+        const name = typeof e.name === 'string' ? e.name : ''
+        const detail = typeof e.detail === 'string' ? e.detail : ''
+        const editRaw = typeof e.edit === 'object' && e.edit !== null ? (e.edit as Record<string, unknown>) : null
+        const edit =
+          editRaw && typeof editRaw.file === 'string' && typeof editRaw.before === 'string' && typeof editRaw.after === 'string'
+            ? { file: editRaw.file, before: editRaw.before, after: editRaw.after }
+            : undefined
+        const row = this.makeToolRow(toolId, name, detail, edit)
+        this.toolRows.set(toolId, row)
+        this.addRow(row)
+        this.setBusyish(true)
+        break
+      }
+      case 'config-changed': {
+        this.addRow(this.makeConfigRow(e))
+        this.seedConfigBar(e)
+        if (typeof e.effort === 'string') this.lastEffort = e.effort
+        if (typeof e.permissionMode === 'string') this.lastPermission = e.permissionMode
+        break
+      }
+      case 'tool-finished': {
+        const toolId = typeof e.toolId === 'string' ? e.toolId : ''
+        const row = this.toolRows.get(toolId)
+        if (row) {
+          const spinner = row.querySelector('.session-spinner')
+          if (spinner) spinner.textContent = '✓'
+        }
+        break
+      }
+      case 'turn-complete': {
+        if (e.isError === true) {
+          const errorText = typeof e.errorText === 'string' ? e.errorText : 'Turn error'
+          this.addRow(this.makeErrorRow(errorText))
+        }
+        this.setBusyish(false)
+        this.clearStreamingBubble()
+        break
+      }
+      case 'session-error': {
+        const text = typeof e.text === 'string' ? e.text : 'Session error'
+        this.addRow(this.makeErrorRow(text))
+        this.setBusyish(false)
+        this.clearStreamingBubble()
+        break
+      }
+      case 'ended': {
+        this.setStatus('Session ended')
+        this.setBusyish(false)
+        this.clearStreamingBubble()
+        break
+      }
+      default:
+        // default: unknown kinds are ignored on purpose — the wire outlives any one bundle
+        // build (a rebuilt server can stream to a cached client), so runtime tolerance here
+        // is load-bearing; do NOT add a compile-time exhaustiveness check on wire data.
+        break
     }
-    // unknown kind → ignore silently
   }
 
   // ---------------------------------------------------------------------------
@@ -667,8 +687,7 @@ export class SessionFeed {
       const details = document.createElement('details')
       details.className = 'session-diff'
       const summary = document.createElement('summary')
-      const slash = edit.file.lastIndexOf('/')
-      summary.textContent = slash === -1 ? edit.file : edit.file.slice(slash + 1)
+      summary.textContent = basename(edit.file)
       const before = document.createElement('pre')
       before.className = 'diff-before'
       before.textContent = edit.before

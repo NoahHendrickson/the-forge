@@ -1,4 +1,5 @@
 import type { TaggedElement } from './source'
+import { basename } from './source'
 import type { InspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { NumberField } from './controls'
@@ -252,13 +253,17 @@ export class Panel {
       this.headTag.textContent = data.tag
       if (data.source) {
         const srcText = `${data.source.file}:${data.source.line}:${data.source.col}`
-        const slash = data.source.file.lastIndexOf('/')
+        const base = basename(data.source.file)
+        // Dir prefix is everything before the basename — derived from the shared basename()
+        // helper's result rather than re-finding the slash, so this and tailSpan below agree
+        // by construction (file.length - base.length is the slash index + 1, or 0 when there's
+        // no '/' at all, matching the old ternary's '' case).
         const dirSpan = document.createElement('span')
         dirSpan.className = 'src-dir'
-        dirSpan.textContent = slash === -1 ? '' : data.source.file.slice(0, slash + 1)
+        dirSpan.textContent = data.source.file.slice(0, data.source.file.length - base.length)
         const tailSpan = document.createElement('span')
         tailSpan.className = 'src-tail'
-        tailSpan.textContent = `${slash === -1 ? data.source.file : data.source.file.slice(slash + 1)}:${data.source.line}:${data.source.col}`
+        tailSpan.textContent = `${base}:${data.source.line}:${data.source.col}`
         this.headSrc.replaceChildren(dirSpan, tailSpan)
         this.headSrc.title = srcText
         if (!this.headSrc.isConnected) this.head.append(this.headSrc)

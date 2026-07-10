@@ -1,5 +1,5 @@
 import { Overlay } from './overlay'
-import { findTaggedElement, parseSourceAttr, type TaggedElement } from './source'
+import { findTaggedElement, parseSourceAttr, basename, type TaggedElement } from './source'
 import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
@@ -49,9 +49,7 @@ function elementChipLabel(el: TaggedElement): { source: string; tag: string; lab
   const dcSource = el.dataset.dcSource ?? ''
   const parsed = dcSource ? parseSourceAttr(dcSource) : null
   if (!parsed) return { source: dcSource, tag, label: tag }
-  const slash = parsed.file.lastIndexOf('/')
-  const base = slash === -1 ? parsed.file : parsed.file.slice(slash + 1)
-  return { source: dcSource, tag, label: `${tag} · ${base}:${parsed.line}` }
+  return { source: dcSource, tag, label: `${tag} · ${basename(parsed.file)}:${parsed.line}` }
 }
 
 export class DesignMode {
