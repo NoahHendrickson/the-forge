@@ -986,17 +986,17 @@ describe('config-changed row', () => {
 // ---------------------------------------------------------------------------
 
 describe('chat input cluster', () => {
-  // Composer consolidation (Task 1) decoupled the send GESTURE from onSay: trySend no longer
-  // reads currentChip or awaits/clears anything itself — it just guards and fires onSend
-  // (fire-and-forget). A host's onSend implementation is what reads getText()/getChip() and
-  // decides what sending means (Task 3 wires the real one); these tests prove the feed's own
-  // gesture-to-onSend wiring, not any particular onSend behavior.
-  it('send fires onSend (not onSay) once text is non-empty — the feed no longer decides what sending means', () => {
+  // Composer consolidation (Task 1) decoupled the send GESTURE from the chat POST: trySend no
+  // longer reads currentChip or awaits/clears anything itself — it just guards and fires onSend
+  // (fire-and-forget). A host's onSend implementation (ComposerSend#send, composer-send.ts, for
+  // the real app) is what reads getText()/getChip() and decides what sending means; these tests
+  // prove the feed's own gesture-to-onSend wiring, not any particular onSend behavior. The old
+  // `onSay` hook these tests used to also stub was deleted from SessionFeed's public surface by
+  // the composer-send extraction — the chat POST lives in ComposerSend#postSay now.
+  it('send fires onSend once text is non-empty — the feed no longer decides what sending means', () => {
     const sent: number[] = []
-    const said: unknown[] = []
     const feed = new SessionFeed()
     feed.onSend = () => sent.push(1)
-    feed.onSay = (text, element) => { said.push([text, element]) }
     document.body.appendChild(feed.root)
 
     feed.setChip({ source: 'src/App.tsx:12:3', tag: 'div', label: 'div · App.tsx:12' })
@@ -1006,7 +1006,6 @@ describe('chat input cluster', () => {
     sendBtn.click()
 
     expect(sent).toEqual([1])
-    expect(said).toEqual([]) // onSay is no longer invoked directly by the feed's own gesture
     // Text/chip are no longer cleared by the feed itself — that's the host onSend
     // implementation's job now, via getText()/clearText()/getChip()/setChip(null).
     expect(textarea.value).toBe('  make it bigger  ')
@@ -1019,18 +1018,15 @@ describe('chat input cluster', () => {
     expect(textarea.maxLength).toBe(4000)
   })
 
-  it('Cmd-Enter fires onSend, not onSay', () => {
+  it('Cmd-Enter fires onSend', () => {
     const sent: number[] = []
-    const said: string[] = []
     const feed = new SessionFeed()
     feed.onSend = () => sent.push(1)
-    feed.onSay = (text) => { said.push(text) }
     document.body.appendChild(feed.root)
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
     textarea.value = 'hello'
     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, cancelable: true }))
     expect(sent).toEqual([1])
-    expect(said).toEqual([])
   })
 
   it('Ctrl-Enter also fires onSend', () => {

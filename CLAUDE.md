@@ -65,7 +65,8 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 
 | Module | Responsibility |
 | --- | --- |
-| `index.ts` | client entry: design-mode toggle, selection wiring, the composer's send-everything verb (↑) |
+| `index.ts` | client entry: design-mode toggle, selection wiring, drafts-leg plumbing (queue/dispatch/lifecycle) injected into `ComposerSend` |
+| `composer-send.ts` | `ComposerSend` — the send-everything verb: orchestration (drafts-first-when-both) + the chat leg (POSTs `/session/say`), in-flight guard for the chat leg (`draftsInFlight` stays in index.ts, guarding the injected drafts leg) |
 | `source.ts` | parse `data-dc-source` attrs; `TaggedElement` type |
 | `overlay.ts` | shadow-DOM host, hover/selection outlines, the whole CSS design system (string const) |
 | `inspector.ts` | reads an element's computed-style snapshot for the panel |
@@ -87,7 +88,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `changelist.ts` | Changes lifecycle list (view over `LifecycleSession` + drafts): per-change rows `draft` → `sent` → `applying` → `done`/`failed`, re-send/dismiss; its `.changes-section` root now mounts inside the composer's draft disclosure (`feed.draftSlot`), not a panel slot of its own |
 | `lifecycle-store.ts` | sessionStorage persistence + the canonical element resolver (`resolveElement`/`locateBySource`) used by verifier, healing, and restore |
 | `request.ts` | change-request builder: before/after CSS + utility deltas, markdown |
-| `session-feed.ts` | the chat surface: bubbles/deltas/diffs + stream consumer, and the unified chat composer (chip/textarea/model-effort-permission controls, the send↔stop ↑/■ morph, placeholder statuses, and the drafts pill hosting the ChangeList in its disclosure — the send-everything verb queues drafts then says chat in one ↑ gesture) |
+| `session-feed.ts` | the chat surface: bubbles/deltas/diffs + stream consumer, and the unified chat composer (chip/textarea/model-effort-permission controls, the send↔stop ↑/■ morph, placeholder statuses, and the drafts pill hosting the ChangeList in its disclosure); `onSend` is the only send hook — `ComposerSend` (composer-send.ts) owns what sending means |
 | `verifier.ts` | post-send polling, computed-style verification, backoff when server is gone |
 | `watch.ts` | watcher-state poller (design-mode-on only) for the linked-session indicator |
 | `ui/button.ts` | `createButton` — the single place overlay buttons are born |

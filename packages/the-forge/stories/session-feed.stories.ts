@@ -45,19 +45,16 @@ function makeFeedInstance(lines: string[]): { feed: SessionFeed; host: HTMLEleme
   const feed = new SessionFeed({ fetchFn })
   feed.onInterrupt = () => alert('Stop requested')
   feed.onDecide = (id, allow) => alert(`Decision: ${id} → ${allow ? 'Allow' : 'Deny'}`)
-  feed.onSay = (text, element) => alert(`Say: "${text}"${element ? ` (${element.tag} · ${element.source})` : ''}`)
-  // composer-send/Cmd-Enter now fire onSend (composer consolidation Task 1) — this story wires
-  // the same read-text/read-chip/call-onSay/clear-on-success shape as index.ts's shim so the
-  // catalog's Send control stays functional (Task 3 will replace both with the real verb).
+  // composer-send/Cmd-Enter fire onSend (composer consolidation Task 1); the real host
+  // (index.ts) delegates this to ComposerSend#send (composer-send.ts), which owns the
+  // read-text/read-chip/POST-/session/say/clear-on-success shape. This story just alerts
+  // instead of POSTing, so the catalog's Send control stays functional without a live server.
   feed.onSend = () => {
     const text = feed.getText()
     const chip = feed.getChip()
-    Promise.resolve(feed.onSay(text, chip ?? undefined)).then((ok) => {
-      if (ok) {
-        feed.clearText()
-        feed.setChip(null)
-      }
-    })
+    alert(`Say: "${text}"${chip ? ` (${chip.tag} · ${chip.source})` : ''}`)
+    feed.clearText()
+    feed.setChip(null)
   }
   feed.onConfig = (cfg) => alert(`Config: ${JSON.stringify(cfg)}`)
   feed.start()

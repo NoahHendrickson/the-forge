@@ -79,21 +79,16 @@ export class SessionFeed {
   onInterrupt: () => void = () => {}
   /** Called when user clicks Allow/Deny on an approval row — host wires to the decide endpoint. */
   onDecide: (id: string, allow: boolean) => void = () => {}
-  /** Called by a host's onSend implementation (NOT by the feed's own click/Cmd-Enter gesture
-   * anymore — composer consolidation Task 1 decoupled the send gesture from this verb; see
-   * onSend below) with trimmed, non-empty text and the currently chipped element (if any) —
-   * host wires to POST /__the-forge/session/say. May still return a Promise<boolean> (ok); the
-   * HOST is now responsible for awaiting it and deciding what a truthy/falsy result means
-   * (clearing the textarea/chip via clearText()/setChip(null) only on true — a non-ok response
-   * or network failure must never silently discard what the user typed, final-review fix 3 —
-   * and rendering any failure explanation via renderTransientError before resolving false). */
-  onSay: (text: string, element?: { source: string; tag: string }) => void | Promise<boolean> = () => {}
-  /** Called on Send (click or Cmd/Ctrl-Enter) once the textarea holds non-empty text. The feed
-   * itself is deliberately verb-agnostic now — it no longer decides what "sending" means (that
-   * used to be onSay's job, invoked directly from trySend). The host wires onSend to whatever
-   * it wants sending to do, reading getText()/getChip() and calling clearText()/setChip(null)
-   * itself once it decides the send succeeded (composer consolidation Task 1; Task 3 wires the
-   * real send-everything verb — drafts + say, one gesture). */
+  /** Called on Send (click or Cmd/Ctrl-Enter) once the textarea holds non-empty text (or, since
+   * composer consolidation Task 3, whenever there are drafts to send even with an empty
+   * textarea — see trySend's guard). The feed itself is deliberately verb-agnostic — it does not
+   * decide what "sending" means; that used to be its own `onSay` hook's job (invoked directly
+   * from trySend), which was deleted from this public surface by the composer-send extraction —
+   * the chat POST now lives in ComposerSend#postSay (composer-send.ts), reached only via
+   * getText()/getChip()/clearText()/setChip(null) below, same as before. The host wires onSend
+   * to whatever it wants sending to do, calling clearText()/setChip(null) itself once it decides
+   * the send succeeded (composer consolidation Task 1; Task 3 wires the real send-everything
+   * verb — drafts + say, one gesture — via ComposerSend). */
   onSend: () => void = () => {}
   /** Called when the effort or permission picker changes, with ONLY the changed key — host
    * wires to POST /__the-forge/session/config. */
@@ -446,9 +441,10 @@ export class SessionFeed {
     this.updateSendMorph()
   }
 
-  /** The element currently attached via setChip, shaped as the {source, tag} pair onSay
-   * expects — onSend takes no arguments, so a host implementation needs its own way to read
-   * what trySend used to build directly from currentChip. */
+  /** The element currently attached via setChip, shaped as the {source, tag} pair
+   * ComposerSend#postSay's request body expects — onSend takes no arguments, so a host
+   * implementation needs its own way to read what trySend used to build directly from
+   * currentChip. */
   getChip(): { source: string; tag: string } | null {
     return this.currentChip ? { source: this.currentChip.source, tag: this.currentChip.tag } : null
   }

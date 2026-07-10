@@ -21,6 +21,7 @@ import { type AgentName } from './agent'
 import { WatchStatus, watchIndicatorFor, type Rung } from './watch'
 import { SessionFeed } from './session-feed'
 import { saveLifecycle, loadLifecycle, sourceIndex, locateBySource, type PersistedLifecycle } from './lifecycle-store'
+import { ComposerSend } from './composer-send'
 
 /** Rapid edits (e.g. dragging a number field) within this window reuse the first snapshot. */
 const RIPPLE_DEBOUNCE_MS = 300
@@ -87,15 +88,14 @@ export class DesignMode {
    * overlay.sendButton.disabled guard now that the button is retired; a rapid double-fire of
    * the composer's ↑ (or onSend racing a second call before the first's /queue POST settles)
    * must still produce exactly one /queue POST. Cleared once the round trip (queue AND
-   * dispatch) fully settles, matching the old button's re-enable timing. */
+   * dispatch) fully settles, matching the old button's re-enable timing.
+   *
+   * This flag and ComposerSend's own chatInFlight (composer-send.ts) are TWO independent
+   * in-flight guards, deliberately not collapsed into one shared phase enum — see the why-comment
+   * on the ComposerSend class (composer-send extraction review round) for the overlap they exist
+   * to allow: the chat leg's /session/say POST can already be in flight while this leg's
+   * /dispatch POST is still settling. */
   private draftsInFlight = false
-  /** Re-entrancy guard for sendChat() (final-review fix C2) — milestone B's chat leg had its
-   * own double-send protection before the send gesture moved to the composer's ↑ (Task 1/3),
-   * which dropped it: a rapid double-click of ↑ (or onSend racing a second call before the
-   * first /session/say POST settles) must still produce exactly one POST, mirroring
-   * draftsInFlight's guard for the drafts leg. Cleared once the /say round trip settles either
-   * way (success or failure). */
-  private chatInFlight = false
   /** Watcher-state poller — runs ONLY while design mode is on (started/stopped in
    * setActive), so watch mode adds zero idle overhead to the page. Session-state
    * transitions also fire refreshStatus so the embedded-session indicator stays current. The
@@ -110,6 +110,10 @@ export class DesignMode {
   /** Live activity stream from the embedded session (Task 7/8) — idle-zero: start/stop
    * mirror this.watch.start()/stop() in setActive so no fetch or timer survives design mode off. */
   private feed = new SessionFeed({ headers: forgeSecretHeaders })
+  /** Single owner of the send-everything verb's orchestration + chat leg (composer-send.ts) —
+   * constructed in the constructor body (needs this.feed/this.drafts/this.watch, not available
+   * to a field initializer at this position). */
+  private composerSend: ComposerSend
   private buttonTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>()
 
   // Layout-ripple state: idle-zero — only populated during the post-edit window.
@@ -203,64 +207,20 @@ export class DesignMode {
         body: JSON.stringify({ id, allow }),
       }).catch(() => {})
     }
-    // The onSend shim below AWAITS this result (composer consolidation Task 1 moved that round
-    // trip out of session-feed.ts's own trySend — see its updated doc-comment) and only clears
-    // the textarea/chip on a true resolution — the optimistic clear moved to the success path
-    // so a failed send never silently discards what the user typed (final-review fix 3). Every
-    // non-ok response and every network failure renders a transient .session-error-row before
-    // resolving false; 429 keeps its specific queue-full copy, everything else gets the
-    // generic retry copy.
-    this.feed.onSay = (text, element) => {
-      return fetch('/__the-forge/session/say', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
-        body: JSON.stringify({ text, element }),
-      })
-        .then((res) => {
-          if (res.ok) return true
-          if (res.status === 429) {
-            this.feed.renderTransientError('chat queue full — wait for the current turn')
-          } else {
-            this.feed.renderTransientError('message failed to send — try again')
-          }
-          return false
-        })
-        .catch(() => {
-          this.feed.renderTransientError('message failed to send — try again')
-          return false
-        })
-    }
-    // The send-everything verb (composer consolidation Task 3): the composer's ↑ is now the
-    // ONLY send surface, firing whichever of drafts/chat are present in one gesture. Drafts go
-    // FIRST when both are present — the server answers a chat turn only after applying whatever
-    // is already queued ahead of it (nudge-before-FIFO), so queuing edits before the chat POST
-    // keeps client-observed send order consistent with server-observed apply order. Only
-    // sendDrafts' /queue leg is awaited here, not its /dispatch leg (which it kicks off and lets
-    // run to completion on its own) — dispatch is a best-effort delivery hint, not a
-    // precondition for the chat turn to proceed. Drafts alone or text alone just run their own
-    // leg. The two legs are INDEPENDENT (review fix 1's pinned semantics): a failed queue POST
-    // renders its own error row (see sendDrafts) but never swallows the typed message — the
-    // chat leg still fires after the queue attempt settles. The trimmed text is captured ONCE,
-    // here at gesture time, and passed through to sendChat (review fix 2): re-reading the
-    // textarea after the awaited queue POST would send whatever the user edited it to during
-    // that async gap — pinned semantics are "send what the user had at click time".
-    this.feed.onSend = () => {
-      const hasDrafts = this.drafts.elementCount() > 0
-      const text = this.feed.getText()
-      // Belt-and-braces (final-review fix C1): the textarea's own disabled attribute already
-      // stops a real user keystroke from landing while chat is unavailable, but getText() reads
-      // .value directly, and a value set before the disable (or poked in some other way) can
-      // still be non-empty — so the chat leg must ALSO be gated here on the same signal
-      // setAvailability's caller (refreshStatus, below) derives from, not just on textarea.value
-      // being non-empty. sessionEnabled() undefined (not yet probed, or an older server) means
-      // "available by default" — only an explicit false disables the leg.
-      const chatAvailable = this.watch.sessionEnabled() !== false
-      const proceedWithChat = (): void => {
-        if (text && chatAvailable) void this.sendChat(text)
-      }
-      if (hasDrafts) this.sendDrafts().then(proceedWithChat)
-      else proceedWithChat()
-    }
+    // ComposerSend (composer-send.ts) owns the send-everything verb's orchestration and its chat
+    // leg — the composer's ↑ is the only send surface, firing whichever of drafts/chat are
+    // present in one gesture. The drafts leg (sendDrafts, below) stays here and is injected in —
+    // see ComposerSendOpts#sendDraftsLeg's doc comment for why. feed.onSay (SessionFeed's old
+    // chat-POST hook) is gone — the POST now happens inside ComposerSend#postSay via the
+    // postJson host hook below, so index.ts no longer needs to wire a /session/say fetch itself.
+    this.composerSend = new ComposerSend({
+      feed: this.feed,
+      postJson: (path, body) => this.postJson(path, body),
+      sendDraftsLeg: () => this.sendDrafts(),
+      hasDrafts: () => this.drafts.elementCount() > 0,
+      chatAvailable: () => this.watch.sessionEnabled() !== false,
+    })
+    this.feed.onSend = () => this.composerSend.send()
     this.feed.onConfig = (cfg) => {
       void fetch('/__the-forge/session/config', {
         method: 'POST',
@@ -449,15 +409,32 @@ export class DesignMode {
       .catch(() => onSettled(null))
   }
 
+  /** Host-injected POST helper handed to ComposerSend (composer-send.ts) as `postJson` — shares
+   * the same secret-header + JSON-body shape as queueRequest/postDispatch/onConfig's own fetch
+   * calls above, so composer-send.ts never has to read globalThis.__THE_FORGE__ itself. */
+  private postJson(path: string, body: unknown): Promise<Response> {
+    return fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+      body: JSON.stringify(body),
+    })
+  }
+
   /** The drafts leg of the send-everything verb (composer consolidation Task 3) — extracted
    * verbatim from the old standalone 'Send to agent' button's click handler (the button itself
-   * is retired: the composer's ↑ is the only send surface now). Behavior is unchanged — queue
-   * POST -> dispatch POST -> lifecycle row registration — only the button-flash feedback
-   * (flashButton(overlay.sendButton, ...)) is gone, since there is no button left to flash.
-   * Resolves once the /queue leg SETTLES (registered or failed) — deliberately NOT once
-   * /dispatch also settles — so onSend can chain the chat leg immediately after, matching the
-   * server's nudge-before-FIFO ordering (edits land in the queue ahead of the chat turn) without
-   * stalling on dispatch's best-effort round trip. */
+   * is retired: the composer's ↑ is the only send surface now, via ComposerSend#send in
+   * composer-send.ts, which this method is injected into as sendDraftsLeg). Behavior is
+   * unchanged — queue POST -> dispatch POST -> lifecycle row registration — only the
+   * button-flash feedback (flashButton(overlay.sendButton, ...)) is gone, since there is no
+   * button left to flash. Resolves once the /queue leg SETTLES (registered or failed) —
+   * deliberately NOT once /dispatch also settles — so ComposerSend#send can chain the chat leg
+   * immediately after, matching the server's nudge-before-FIFO ordering (edits land in the
+   * queue ahead of the chat turn) without stalling on dispatch's best-effort round trip.
+   *
+   * This method (and draftsInFlight above) stayed here rather than moving into composer-send.ts
+   * whole — see ComposerSendOpts#sendDraftsLeg's doc comment in composer-send.ts for why: it
+   * reaches into DraftStore/LifecycleSession/Verifier/ChangeList state and shares its
+   * queue/dispatch plumbing with resend(), below. */
   private sendDrafts(): Promise<void> {
     if (this.draftsInFlight) return Promise.resolve() // re-entrancy guard: a POST is already in flight
     // R2 F-C: prepareSend reads the DraftStore directly (always current), so this flush isn't
@@ -496,40 +473,6 @@ export class DesignMode {
       }
       this.queueRequest(request, md, onSendOk, onSendFailed)
     })
-  }
-
-  /** The chat leg of the send-everything verb — extracted from the Task-1 shim (see git
-   * history): POSTs the given text + the attached chip via onSay, and — only on a true (ok)
-   * resolution — clears both. A falsy resolution (network failure, 429, any non-ok response)
-   * already rendered its own explanation via onSay's renderTransientError call and must leave
-   * the typed text/chip untouched (final-review fix 3 — never silently discard what the user
-   * typed). `text` is a PARAMETER, not re-read from feed.getText() here (review fix 2): onSend
-   * awaits the drafts leg's /queue POST before calling this, and the textarea can change during
-   * that gap — the pinned semantics send what the user had at click time. Guards non-empty
-   * itself so no caller can POST a blank turn.
-   *
-   * chatInFlight (final-review fix C2) makes a second call while one is already in flight a
-   * no-op — a rapid double-click of ↑ must produce exactly one /session/say POST, not two.
-   * clearText() only fires when feed.getText() still equals the text this call sent (deferred
-   * Minor 7): the user may have retyped the textarea during the round trip, and an
-   * unconditional clear would silently discard that — only wipe it when what's there now is
-   * still exactly what was sent (i.e. nothing changed underneath it). setChip(null) stays
-   * unconditional on ok — the chip has no independent "retyped" concept to preserve. */
-  private sendChat(text: string): Promise<void> {
-    if (!text.trim()) return Promise.resolve()
-    if (this.chatInFlight) return Promise.resolve()
-    this.chatInFlight = true
-    const chip = this.feed.getChip()
-    return Promise.resolve(this.feed.onSay(text, chip ?? undefined))
-      .then((ok) => {
-        if (ok) {
-          if (this.feed.getText() === text) this.feed.clearText()
-          this.feed.setChip(null)
-        }
-      })
-      .finally(() => {
-        this.chatInFlight = false
-      })
   }
 
   /** Re-queues one failed element-change as a fresh request. Safe and unfiltered by design:
