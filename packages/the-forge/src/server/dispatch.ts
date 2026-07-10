@@ -250,9 +250,10 @@ async function tryAppleScript(
  * untouched — their reminder arrives via the MCP tool result. */
 export function augmentDispatchMarkdown(agent: DispatchOpts['agent'], markdown: string, pendingId: string | null): string {
   if (agent !== 'cursor' || pendingId === null) return markdown
+  // Short id, same as renderItems in mcp/protocol.ts — Queue.mark resolves unique prefixes.
   return (
     markdown +
-    `\n\nWhen done, call the \`mark_applied\` tool from the \`the-forge\` MCP server with ids: ${pendingId} and status "applied" (or "failed" with a one-line note).`
+    `\n\nWhen done, call the \`mark_applied\` tool from the \`the-forge\` MCP server with ids: ${pendingId.slice(0, 8)} and status "applied" (or "failed" with a one-line note).`
   )
 }
 

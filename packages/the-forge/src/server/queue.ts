@@ -156,7 +156,15 @@ export class Queue {
   mark(ids: string[], status: 'applied' | 'failed', note?: string): QueueItem[] {
     const marked: QueueItem[] = []
     for (const id of ids) {
-      const item = this.items.find((i) => i.id === id)
+      // Agent-facing text renders ids as 8-char prefixes (renderItems in mcp/protocol.ts —
+      // token cost), so accept a unique prefix as well as the full id. An ambiguous prefix
+      // matches nothing rather than guessing — the unresolved item re-queues via the
+      // stale-claim timeout instead of the wrong item going terminal.
+      let item = this.items.find((i) => i.id === id)
+      if (!item && id.length >= 8) {
+        const prefixed = this.items.filter((i) => i.id.startsWith(id))
+        if (prefixed.length === 1) item = prefixed[0]
+      }
       if (!item) continue
       if (item.status === 'applied' || item.status === 'failed') continue // already terminal — do not clobber
       item.status = status

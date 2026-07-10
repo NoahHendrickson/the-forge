@@ -123,12 +123,15 @@ function textResult(text: string, isError?: boolean): { content: Array<{ type: '
 }
 
 /** Shared change-request rendering for pull_design_edits and the wait loop's items case —
- * one format, so the /forge-design and /forge-watch apply steps read identically. */
+ * one format, so the /forge-design and /forge-watch apply steps read identically.
+ * Ids are rendered as 8-char prefixes: a full UUID tokenizes at ~15-22 tokens and appears
+ * three times per item in model-bound text (wrapper, reminder, the agent's own mark_applied
+ * echo) — Queue.mark resolves unique prefixes server-side, and the 200-item queue cap makes
+ * an 8-hex-char collision practically impossible. The created-at timestamp is deliberately
+ * not rendered (the agent has no use for it; it was pure token cost). */
 function renderItems(items: QueueItemLike[]): { body: string; ids: string } {
-  const body = items
-    .map((i) => `--- request ${i.id} (created ${i.createdAt}) ---\n${i.markdown}`)
-    .join('\n\n')
-  const ids = items.map((i) => i.id).join(', ')
+  const body = items.map((i) => `--- request ${i.id.slice(0, 8)} ---\n${i.markdown}`).join('\n\n')
+  const ids = items.map((i) => i.id.slice(0, 8)).join(', ')
   return { body, ids }
 }
 

@@ -476,7 +476,9 @@ describe('POST /__the-forge/dispatch', () => {
       expect(res.statusCode).toBe(200)
       expect(receivedOpts.markdown).toContain('# md body')
       expect(receivedOpts.markdown).toContain('mark_applied')
-      expect(receivedOpts.markdown).toContain(added.id)
+      // Short id, same as renderItems in mcp/protocol.ts — Queue.mark resolves unique prefixes.
+      expect(receivedOpts.markdown).toContain(added.id.slice(0, 8))
+      expect(receivedOpts.markdown).not.toContain(added.id)
     })
 
     it('does not append the trailer for claude-code (the MCP tool result carries the reminder there)', async () => {

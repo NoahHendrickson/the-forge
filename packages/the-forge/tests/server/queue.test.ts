@@ -52,6 +52,33 @@ describe('Queue', () => {
     expect(q.mark(['nope'], 'applied')).toEqual([]) // unknown ids ignored
   })
 
+  // Agent-facing text renders ids as 8-char prefixes (mcp/protocol.ts renderItems — full
+  // UUIDs cost ~15-22 tokens each and appeared 3x per item), so mark() must resolve a
+  // unique prefix back to the full id. Full ids keep working; an ambiguous prefix marks
+  // nothing rather than guessing.
+  it('mark resolves a unique 8-char id prefix', () => {
+    const q = new Queue(dir)
+    const a = q.add({}, 'a')
+    q.pull()
+    const marked = q.mark([a.id.slice(0, 8)], 'applied')
+    expect(marked).toHaveLength(1)
+    expect(q.get(a.id)!.status).toBe('applied')
+  })
+
+  it('mark ignores an ambiguous prefix instead of guessing', () => {
+    const q = new Queue(dir)
+    const a = q.add({}, 'a')
+    const b = q.add({}, 'b')
+    // Force two items onto the same 8-char prefix.
+    ;(q as unknown as { items: Array<{ id: string }> }).items[0].id = 'aaaaaaaa-1111-4111-8111-111111111111'
+    ;(q as unknown as { items: Array<{ id: string }> }).items[1].id = 'aaaaaaaa-2222-4222-8222-222222222222'
+    q.pull()
+    expect(q.mark(['aaaaaaaa'], 'applied')).toEqual([])
+    expect(q.get('aaaaaaaa-1111-4111-8111-111111111111')!.status).toBe('claimed')
+    void a
+    void b
+  })
+
   it('does not let a stale mark() clobber an item already in a terminal state (double-claim)', () => {
     const q = new Queue(dir)
     const a = q.add({}, 'a')
