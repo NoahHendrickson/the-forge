@@ -609,7 +609,13 @@ button {
 // chip row, textarea, and controls row. .composer-chips: the chip row (+ Task 2's drafts
 // pill). .composer-controls: model/effort/permission pickers + spacer + composer-send, one
 // row. .session-model only caps the width, since full model ids are much longer than the
-// fixed effort/permission vocabularies. .chat-chip: the element attached to the next message.
+// fixed effort/permission vocabularies. The three selects carry min-width: 0 so they can
+// shrink below their intrinsic content width — without it a flex item's default
+// min-width: auto pins them at content size, and once the model select fills its 100px cap the
+// row overflows a narrow (320px default) panel and shoves the flex: none composer-send clean
+// off the right edge (real-browser regression; jsdom can't see flex, so no unit test guards it).
+// Clipping (ellipsis/nowrap) keeps a shrunk select legible via its native chevron.
+// .chat-chip: the element attached to the next message.
 // .chat-input: the textarea (+ disabled-reason) — Send moved out into .composer-controls, one
 // row below, alongside the pickers. .chat-disabled-reason: shown when setAvailability(false,
 // reason) disables the input.
@@ -622,7 +628,7 @@ button {
 .composer-chips:empty { display: none; }
 .composer-controls { display: flex; align-items: center; gap: 6px; }
 .composer-spacer { flex: 1 1 auto; }
-.composer-controls .size-mode { font-size: 11px; }
+.composer-controls .size-mode { font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-model { max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
 .chat-chip {
   display: flex; align-items: center; gap: 6px;
