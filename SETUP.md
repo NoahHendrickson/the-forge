@@ -168,8 +168,8 @@ Report back with something like this (adapt paths/commands to the project):
 >
 > 1. Run the dev server (`npm run dev`) and open the app.
 > 2. Click the **Design** toggle in the bottom-right corner, then click any element to edit it — drag values, pick colors, press `=` in a field for the Tailwind token picker.
-> 3. When it looks right, hit **Send to agent**.
-> 4. In a Claude Code session opened **at this project's root**, type `/forge-watch` once — that session stays linked and applies every edit you send, automatically. (First time, Claude Code will ask to approve the `the-forge` MCP server — say yes. If Claude Code was already open during setup, restart it so it picks up the new `.mcp.json`.)
+> 3. When it looks right, press **↑** in the composer at the bottom of the panel — you can type a message alongside your edits to steer the change, or just send the edits as-is.
+> 4. By default an embedded Claude Code session applies them and streams its progress back into the panel (approve any tool prompts right in the overlay). Prefer your own terminal? In a Claude Code session opened **at this project's root**, type `/forge-watch` once — that session stays linked and applies every edit you send, automatically. (First time, Claude Code will ask to approve the `the-forge` MCP server — say yes. If Claude Code was already open during setup, restart it so it picks up the new `.mcp.json`.)
 > 5. Watch your edits flip to **Implemented** in the panel once the code change lands and hot-reloads.
 >
 > Not using Claude Code? Hit **Copy for agent** instead and paste the change request into Cursor, Codex, or any agent.
@@ -184,7 +184,7 @@ The daily loop, once installed:
 2. **Toggle Design mode** (bottom-right). Hovering now outlines elements; click one to open the properties panel.
 3. **Edit live.** Scrub padding/margin/radius/size, set typography, fills and strokes with a real color picker, align with the 9-dot matrix. Press `=` in any field to search your Tailwind tokens. Everything previews instantly as inline styles — your React code is untouched while you experiment. Use the before/after compare to sanity-check, and reset anything you don't like.
 4. **Send it.** Two ways to get changes into your source code:
-   - **Send to agent** — queues a deterministic change request (exact `file:line`, `py-2.5 → py-6` style deltas). In Claude Code, `/forge-watch` links your session so every Send is applied automatically (the panel shows **● Linked**); or type `/forge-design` to pull and apply the queued batch once. Watchers auto-stop after 20 idle minutes — just type `/forge-watch` again.
+   - **↑ in the composer** — queues a deterministic change request (exact `file:line`, `py-2.5 → py-6` style deltas) and hands it to an agent. By default that's an embedded Claude Code session living in the panel (spawned at the project root on your subscription; it streams its activity back, and non-edit tools ask for approval in the overlay). You can type in the composer to send instructions with — or without — your drafted edits. Alternatively, `/forge-watch` in your own Claude Code session links it so every send applies there (the panel shows **● Linked**; watchers auto-stop after 20 idle minutes — just type `/forge-watch` again), or `/forge-design` pulls and applies the queued batch once.
    - **Copy for agent** — copies the same change request as markdown to paste into any agent (Cursor, Codex, a chat window, anything).
 5. **Verify.** After the agent edits your source and the dev server hot-reloads (Vite HMR, or Next Fast Refresh), The Forge checks the computed styles and flips matching drafts to **Implemented**. If something doesn't match, the draft stays visible so nothing is silently lost.
 

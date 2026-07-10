@@ -1,6 +1,6 @@
 # The Forge — agent guide
 
-A dev-only plugin (single package `forge-mode`, subpaths `forge-mode/vite`, `forge-mode/next`, `forge-mode/design-mode`) that gives any Vite + React app **or** Next.js 15/16 app (both routers, both dev bundlers) a Figma-style design mode: click an element in the running app, edit properties live in a floating panel, and send deterministic, token-aware change requests to the AI coding agent you already use (Claude Code / Cursor / Codex) via a bundled stdio MCP server. Product pitch: [README.md](README.md). Specs: [docs/specs/2026-07-03-the-forge-design.md](docs/specs/2026-07-03-the-forge-design.md) (original Vite design), [docs/specs/2026-07-04-next-adapter-design.md](docs/specs/2026-07-04-next-adapter-design.md) (Next adapter). Process conventions and working agreements: [docs/HANDOFF.md](docs/HANDOFF.md). One dated plan per milestone in [docs/plans/](docs/plans/).
+A dev-only plugin (single package `forge-mode`, subpaths `forge-mode/vite`, `forge-mode/next`, `forge-mode/design-mode`) that gives any Vite + React app **or** Next.js 15/16 app (both routers, both dev bundlers) a Figma-style design mode: click an element in the running app, edit properties live in a floating panel, and send deterministic, token-aware change requests to the AI coding agent you already use (Claude Code / Cursor / Codex) via a bundled stdio MCP server. Naming decoder (post 2026-07-10 rename): ONLY the npm package and bin are `forge-mode` — the repo, the `packages/the-forge` directory, the `.the-forge/` runtime dir, the `/__the-forge/` URL prefix, and the MCP server name `the-forge` all deliberately keep the old name; don't "fix" them. Product pitch: [README.md](README.md). Specs: [docs/specs/2026-07-03-the-forge-design.md](docs/specs/2026-07-03-the-forge-design.md) (original Vite design), [docs/specs/2026-07-04-next-adapter-design.md](docs/specs/2026-07-04-next-adapter-design.md) (Next adapter). Process conventions and working agreements: [docs/HANDOFF.md](docs/HANDOFF.md). One dated plan per milestone in [docs/plans/](docs/plans/).
 
 ## Commands
 
@@ -17,11 +17,12 @@ npm run dev -w next-pages             # Next demo, Pages Router (fixtures/next-p
 ./scripts/check-prod-clean.sh         # prod build has zero plugin traces (Vite + Next) + 320KB package budget
 npx forge-mode init                    # (in a host project) detect Vite/Next, install, wire config, mount ForgeDesignMode
 ./scripts/check-init.sh               # real-tarball smoke test of `forge-mode init` against bare Vite + Next scaffolds
+./scripts/e2e-embedded-feed.sh        # E2E of the embedded-session loop (requires npm run build first)
 ```
 
 Single test file: `npx vitest run tests/client/panel.test.ts` from `packages/the-forge/`.
 
-The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub that throws — import a subpath instead), `vite.js` (the node-side Vite plugin), `next.js` (the node-side Next config wrapper + sidecar starter), `design-mode.js` (the `<ForgeDesignMode />` component; zero `node:*` imports so it's safe inside a browser bundle), `client.js` (the browser overlay, served only in dev), `next-loader.cjs` (the JSX-tagging loader Turbopack/webpack `require()` directly — built CJS regardless of the package's own ESM), `mcp.js` (the stdio MCP bin agents launch), and `cli.js` (the `the-forge` bin — `npx forge-mode init`, from `src/cli/`). The npm package ships `dist/` only.
+The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub that throws — import a subpath instead), `vite.js` (the node-side Vite plugin), `next.js` (the node-side Next config wrapper + sidecar starter), `design-mode.js` (the `<ForgeDesignMode />` component; zero `node:*` imports so it's safe inside a browser bundle), `client.js` (the browser overlay, served only in dev), `next-loader.cjs` (the JSX-tagging loader Turbopack/webpack `require()` directly — built CJS regardless of the package's own ESM), `mcp.js` (the stdio MCP bin agents launch), and `cli.js` (the `forge-mode` bin — `npx forge-mode init`, from `src/cli/`). The npm package ships `dist/` only.
 
 ## Architecture — the loop
 
@@ -69,6 +70,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `composer-send.ts` | `ComposerSend` — the send-everything verb: orchestration (drafts-first-when-both) + the chat leg (POSTs `/session/say`), in-flight guard for the chat leg (`draftsInFlight` stays in index.ts, guarding the injected drafts leg) |
 | `source.ts` | parse `data-dc-source` attrs; `TaggedElement` type |
 | `overlay.ts` | shadow-DOM host, hover/selection outlines, the whole CSS design system (string const) |
+| `dock.ts` | panel docked/floating prefs: width clamps, sessionStorage persistence (`STORAGE_KEY 'the-forge:panel'`) |
 | `inspector.ts` | reads an element's computed-style snapshot for the panel |
 | `panel.ts` | the properties panel orchestrator (Panel class); `feedDivider`/`feedSplit()` are thin pass-throughs to `feed-divider.ts` |
 | `feed-divider.ts` | the panel↔chat drag divider: clamps, dblclick reset, sessionStorage persistence (`FEED_SPLIT_KEY`) |
@@ -76,6 +78,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `panel-readers.ts` | pure computed-style readers/normalizers (`isFlex`, `normalizeJustify`, font helpers) |
 | `panel-token-ui.ts` | PanelTokenUi — the token affordance cluster: shared TokenPicker instance, scale-field open path, pill boundTokens bookkeeping (B5/Compare rules), color-row token button; plus pillLabelFor/colorDisplay helpers |
 | `panel-layout.ts` | `LayoutSection` — the auto-layout cluster (add/remove policy + `FLEX_CONTAINER_PROPS`, direction+wrap, gap, matrix, baseline, flex-child controls); covered by the panel suites, no own test file |
+| `panel-fillstroke.ts` | `FillStrokeSection` — the Fill/Stroke cluster (color rows, stroke W+style+Color, add/remove empty-state buttons); covered by the panel suites, no own test file |
 | `controls.ts` | `NumberField` — scrubbing numeric input with math expressions and `auto` |
 | `layout-controls.ts` | `SegmentField` + 9-dot `AlignMatrix` |
 | `colorpicker.ts` | popover color picker (SV area, hex, contrast ratio) |
@@ -97,6 +100,10 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `ui/menu.ts` | `createMenuButton` — chevron + popover menu factory (sizing menu) |
 | `ui/swatch.ts` | `createColorRow` — the `.color-row` swatch/value markup (shared by panel + story) |
 
+### src/shared
+
+`src/shared/chat-constants.ts` is bundled into BOTH the server bundles and the browser client — it must stay pure data with **no imports, forever** (adding one drags server code into the browser bundle or vice versa). It holds the chat/session constants both sides must agree on (permission modes, models, effort levels).
+
 ## MCP contract
 
 - **Four tools** (server name `the-forge`, bin `dist/mcp.js`):
@@ -105,7 +112,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
   - `wait_for_design_edits` — no args; the `/forge-watch` loop (long-poll `POST /__the-forge/wait`, ~20s hold). Lifecycle: wait → apply → mark → re-wait; the server tells the loop to stop after 20 idle minutes (idle auto-stop), on preemption by another watch session, when the user unlinks it from the overlay's watch indicator (`POST /__the-forge/unwatch`), or when no dev server is found. A live watcher makes `/dispatch` return the `watcher` rung and skip the keystroke ladder entirely (`WatcherHub` in `src/server/watchers.ts`).
   - `approve` — `{ tool_use_id: string, tool_name: string, input: unknown }`; the decision is made in the overlay's approval UI (Allow/Deny buttons); deny-on-timeout/unreachable. The CLI is launched with `--permission-prompt-tool mcp__the-forge__approve`; edit-tier tools are statically allowed and never reach `approve`.
 - **Endpoint discovery:** the plugin resolves the project root by walking up from Vite's (or Next's) root to the nearest `.git` (`resolveProjectRoot` in `src/server/setup.ts`, monorepo-safe) and writes `.the-forge/endpoint-<pid>.json` (`{port, host, pid, secret}`, written by `writeEndpointFile` in `src/server/endpoints.ts`). The bin (`src/mcp/discover.ts`) walks up from `process.cwd()` (max 10 levels) to the nearest `.the-forge/` with a live endpoint; within a directory it filters entries to live pids, newest mtime wins; legacy `endpoint.json` is only used when no per-pid file exists. Identical on Next — the sidecar writes the same file shape, just from a loopback server instead of Vite's own.
-- **Auth:** mutating endpoints (`POST /__the-forge/pull`, `/mark`, `/queue`, `/dispatch`, `/wait`, `/unwatch`, `/session/interrupt`, `/approval`, `/approval/decide`) require the `X-Forge-Secret` header from the endpoint file. `GET /__the-forge/session/events` is also secret-gated (it streams file paths and commands).
+- **Auth:** mutating endpoints (`POST /__the-forge/pull`, `/mark`, `/queue`, `/dispatch`, `/wait`, `/unwatch`, `/session/say`, `/session/config`, `/session/interrupt`, `/approval`, `/approval/decide`) require the `X-Forge-Secret` header from the endpoint file. `GET /__the-forge/session/events` is also secret-gated (it streams file paths and commands). `.the-forge/` runtime state is written owner-only (0700 dir, 0600 files) — the endpoint file carries the secret.
 - **Install side-effects (auto, idempotent):** the plugin writes a `the-forge` entry into `.mcp.json` and the `/forge-design` + `/forge-watch` commands at `.claude/commands/`, all at the git root; with `agent: 'cursor'` it also writes the entry into `.cursor/mcp.json` so Cursor can `mark_applied` and close the verification loop; it also writes a `.gitignore` entry for `.the-forge/` at the git root. `.the-forge/` is gitignored runtime state.
 - **Queue lifecycle:** `pending` → `claimed` (stale claims re-queue after 5 min) → `applied`/`failed`; terminal items pruned after 24h, 200-item cap; corrupt `queue.json` is quarantined to `queue.json.corrupt-<ts>`, never silently discarded. An edit needing user confirmation is marked `failed` with note `needs confirmation: <why>` — never left claimed-but-unmarked, or the stale-claim timeout re-delivers it every 5 min.
 - The MCP server is a hand-rolled zero-dependency JSON-RPC subset (`src/mcp/protocol.ts`). **Do not replace it with `@modelcontextprotocol/sdk`** — zero runtime dependencies is a deliberate, headline footprint feature.
