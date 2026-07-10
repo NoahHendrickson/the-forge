@@ -628,6 +628,79 @@ describe('delta streaming', () => {
     expect(urls[1]).toContain('since=5')
     feed.stop()
   })
+
+  // Final-review fix 5: stale streaming bubble hygiene — turn-complete/session-error/ended
+  // must null out streamingBubble/streamingText, or the NEXT turn's deltas silently append to
+  // a bubble that belongs to a turn that already ended (in-band error, no final assistant-text
+  // ever arrived to clear it via finalizeAssistantText's own path).
+  it('error turn mid-stream: next turn\'s deltas start a FRESH bubble', async () => {
+    const lines = [
+      feedLine(0, { kind: 'assistant-delta', text: 'Old turn...' }),
+      feedLine(1, { kind: 'turn-complete', isError: true, errorText: 'boom' }),
+      feedLine(0, { kind: 'assistant-delta', text: 'New' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const bubbles = feed.root.querySelectorAll('.chat-msg.chat-assistant.chat-streaming')
+    expect(bubbles.length).toBe(1)
+    expect(bubbles[0].textContent).toBe('New') // not 'Old turn...New' — a fresh bubble, not a stale append
+    feed.stop()
+  })
+
+  it('session-error mid-stream also starts a fresh bubble on the next turn', async () => {
+    const lines = [
+      feedLine(0, { kind: 'assistant-delta', text: 'Stalled...' }),
+      feedLine(1, { kind: 'session-error', text: 'spawn failed' }),
+      feedLine(0, { kind: 'assistant-delta', text: 'Recovered' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const bubbles = feed.root.querySelectorAll('.chat-msg.chat-assistant.chat-streaming')
+    expect(bubbles.length).toBe(1)
+    expect(bubbles[0].textContent).toBe('Recovered')
+    feed.stop()
+  })
+
+  it('ended mid-stream also starts a fresh bubble on reconnect', async () => {
+    const lines = [
+      feedLine(0, { kind: 'assistant-delta', text: 'Mid...' }),
+      feedLine(1, { kind: 'ended' }),
+      feedLine(0, { kind: 'assistant-delta', text: 'Fresh' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const bubbles = feed.root.querySelectorAll('.chat-msg.chat-assistant.chat-streaming')
+    expect(bubbles.length).toBe(1)
+    expect(bubbles[0].textContent).toBe('Fresh')
+    feed.stop()
+  })
+
+  it('evicted streaming bubble does not swallow the final text', async () => {
+    // Seed one row, then start a stream (creates the bubble as row #2), then push enough
+    // additional rows to push the streaming bubble itself out via the MAX_ROWS(200) cap
+    // before the turn ever finalizes — the eventual final assistant-text must render as a
+    // fresh, VISIBLE bubble rather than writing into an already-evicted (detached) node.
+    const lines: string[] = [feedLine(1, { kind: 'user-text', text: 'seed' }), feedLine(0, { kind: 'assistant-delta', text: 'streaming...' })]
+    for (let i = 2; i <= 201; i++) {
+      lines.push(feedLine(i, { kind: 'user-text', text: `filler ${i}` }))
+    }
+    lines.push(feedLine(300, { kind: 'assistant-text', text: 'FINAL ANSWER' }))
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush(400)
+    const bubbles = feed.root.querySelectorAll('.chat-msg.chat-assistant')
+    expect(bubbles.length).toBe(1)
+    expect(bubbles[0].textContent).toBe('FINAL ANSWER')
+    expect(feed.root.textContent).toContain('FINAL ANSWER')
+    feed.stop()
+  })
 })
 
 describe('diff disclosure', () => {
@@ -699,10 +772,17 @@ describe('config-changed row', () => {
 // ---------------------------------------------------------------------------
 
 describe('chat input cluster', () => {
-  it('send fires onSay with trimmed text + chip element and clears both', () => {
+  // Final-review fix 3: the optimistic clear moved to the success path — trySend no longer
+  // clears synchronously (a non-ok response must never silently lose what the user typed).
+  // onSay may return a Promise<boolean> (ok); a plain void return (as most of the tests below
+  // use) never resolves truthy, so those tests only assert on `said`, not on clearing.
+  it('send fires onSay with trimmed text + chip element (success clears both, async)', async () => {
     const said: Array<[string, { source: string; tag: string } | undefined]> = []
     const feed = new SessionFeed()
-    feed.onSay = (text, element) => said.push([text, element])
+    feed.onSay = (text, element) => {
+      said.push([text, element])
+      return Promise.resolve(true)
+    }
     document.body.appendChild(feed.root)
 
     feed.setChip({ source: 'src/App.tsx:12:3', tag: 'div', label: 'div · App.tsx:12' })
@@ -712,14 +792,65 @@ describe('chat input cluster', () => {
     sendBtn.click()
 
     expect(said).toEqual([['make it bigger', { source: 'src/App.tsx:12:3', tag: 'div' }]])
+    // Not cleared synchronously — only once the returned promise resolves ok.
+    expect(textarea.value).toBe('  make it bigger  ')
+
+    await Promise.resolve()
+    await Promise.resolve()
+
     expect(textarea.value).toBe('')
     expect((feed.root.querySelector('.chat-chip') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('success clears text and chip', async () => {
+    const feed = new SessionFeed()
+    feed.onSay = () => Promise.resolve(true)
+    document.body.appendChild(feed.root)
+    feed.setChip({ source: 'x:1:1', tag: 'div', label: 'div · x:1' })
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    const sendBtn = feed.root.querySelector('.chat-send') as HTMLButtonElement
+    textarea.value = 'ship it'
+    sendBtn.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(textarea.value).toBe('')
+    expect((feed.root.querySelector('.chat-chip') as HTMLElement).hidden).toBe(true)
+    expect(textarea.disabled).toBe(false)
+    expect(sendBtn.disabled).toBe(false)
+  })
+
+  it('non-429 failure renders error row and preserves the typed text', async () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.onSay = () => {
+      // The host (index.ts) is the one that actually renders the error row on a non-ok
+      // response/network failure — this stub mirrors that contract at the feed level.
+      feed.renderTransientError('message failed to send — try again')
+      return Promise.resolve(false)
+    }
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    const sendBtn = feed.root.querySelector('.chat-send') as HTMLButtonElement
+    textarea.value = 'keep me'
+    sendBtn.click()
+    await Promise.resolve()
+    await Promise.resolve()
+    const errorRow = feed.root.querySelector('.session-error-row')
+    expect(errorRow?.textContent).toBe('message failed to send — try again')
+    expect(textarea.value).toBe('keep me') // nothing restored/cleared on failure
+    expect(textarea.disabled).toBe(false) // un-disabled after the failed send
+    expect(sendBtn.disabled).toBe(false)
+  })
+
+  it('textarea has maxLength 4000 (mirrors CHAT_TEXT_MAX server cap)', () => {
+    const feed = new SessionFeed()
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    expect(textarea.maxLength).toBe(4000)
   })
 
   it('Cmd-Enter sends', () => {
     const said: string[] = []
     const feed = new SessionFeed()
-    feed.onSay = (text) => said.push(text)
+    feed.onSay = (text) => { said.push(text) }
     document.body.appendChild(feed.root)
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
     textarea.value = 'hello'
@@ -730,7 +861,7 @@ describe('chat input cluster', () => {
   it('Ctrl-Enter also sends', () => {
     const said: string[] = []
     const feed = new SessionFeed()
-    feed.onSay = (text) => said.push(text)
+    feed.onSay = (text) => { said.push(text) }
     document.body.appendChild(feed.root)
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
     textarea.value = 'hello'
@@ -741,7 +872,7 @@ describe('chat input cluster', () => {
   it('plain Enter (no modifier) does not send', () => {
     const said: string[] = []
     const feed = new SessionFeed()
-    feed.onSay = (text) => said.push(text)
+    feed.onSay = (text) => { said.push(text) }
     document.body.appendChild(feed.root)
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
     textarea.value = 'hello'
@@ -752,7 +883,7 @@ describe('chat input cluster', () => {
   it('empty (or whitespace-only) text never fires onSay', () => {
     const said: string[] = []
     const feed = new SessionFeed()
-    feed.onSay = (text) => said.push(text)
+    feed.onSay = (text) => { said.push(text) }
     document.body.appendChild(feed.root)
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
     const sendBtn = feed.root.querySelector('.chat-send') as HTMLButtonElement
@@ -764,7 +895,7 @@ describe('chat input cluster', () => {
   it('send with no chip omits element', () => {
     const said: Array<[string, { source: string; tag: string } | undefined]> = []
     const feed = new SessionFeed()
-    feed.onSay = (text, element) => said.push([text, element])
+    feed.onSay = (text, element) => { said.push([text, element]) }
     document.body.appendChild(feed.root)
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
     textarea.value = 'plain message'
@@ -817,7 +948,7 @@ describe('chat input cluster', () => {
   it('disabled input never fires onSay even if trySend is somehow reached', () => {
     const said: string[] = []
     const feed = new SessionFeed()
-    feed.onSay = (text) => said.push(text)
+    feed.onSay = (text) => { said.push(text) }
     document.body.appendChild(feed.root)
     feed.setAvailability({ enabled: false, reason: 'nope' })
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
@@ -958,6 +1089,43 @@ describe('config bar pickers', () => {
     effortSelect.value = 'xhigh'
     effortSelect.dispatchEvent(new Event('change'))
     expect(fired).toEqual([{ effort: 'xhigh' }])
+  })
+
+  // Final-review fix 2 (client): the manager now re-applies model/permissionMode server-side
+  // on every respawn's `started` event — the picker must agree with that reality rather than
+  // relying on DOM inertia. `started` re-seeds ONLY the model select from the event (as
+  // before); effort/permission are explicitly reset to their last-user-chosen values.
+  it('started after config-changed keeps effort/permission picker selections consistent', async () => {
+    const lines = [
+      feedLine(1, { kind: 'config-changed', effort: 'high', permissionMode: 'plan' }),
+      // A respawn's started event carries no effort/permissionMode field.
+      feedLine(2, { kind: 'started', sessionId: 's2', model: 'claude-opus-4-5', mcpLoaded: true }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const effortSelect = feed.root.querySelector('.session-effort') as HTMLSelectElement
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+    expect(effortSelect.value).toBe('high')
+    expect(permSelect.value).toBe('plan')
+    // Model still seeds from the started event itself, unaffected by the remembered values.
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    expect(modelSelect.value).toBe('claude-opus-4-5')
+    feed.stop()
+  })
+
+  it('a started event before any config-changed leaves effort/permission on the placeholder', async () => {
+    const lines = [feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const effortSelect = feed.root.querySelector('.session-effort') as HTMLSelectElement
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+    expect(effortSelect.value).toBe('')
+    expect(permSelect.value).toBe('')
+    feed.stop()
   })
 
   it('changing the permission select fires onConfig with only permissionMode', () => {

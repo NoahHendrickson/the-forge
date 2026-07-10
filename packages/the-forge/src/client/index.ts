@@ -181,20 +181,31 @@ export class DesignMode {
         body: JSON.stringify({ id, allow }),
       }).catch(() => {})
     }
-    // Fire-and-forget: the feed clears its own textarea/chip synchronously on send (see
-    // trySend in session-feed.ts) — it does not wait on this POST's result. A 429 (chat
-    // queue full) is the one failure worth surfacing, via the same transient-error-row path
-    // in-band errors use.
+    // The feed now AWAITS this result (trySend in session-feed.ts) and only clears its
+    // textarea/chip on a true resolution — the optimistic clear moved to the success path so
+    // a failed send never silently discards what the user typed (final-review fix 3). Every
+    // non-ok response and every network failure renders a transient .session-error-row before
+    // resolving false; 429 keeps its specific queue-full copy, everything else gets the
+    // generic retry copy.
     this.feed.onSay = (text, element) => {
-      void fetch('/__the-forge/session/say', {
+      return fetch('/__the-forge/session/say', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
         body: JSON.stringify({ text, element }),
       })
         .then((res) => {
-          if (res.status === 429) this.feed.renderTransientError('chat queue full — wait for the current turn')
+          if (res.ok) return true
+          if (res.status === 429) {
+            this.feed.renderTransientError('chat queue full — wait for the current turn')
+          } else {
+            this.feed.renderTransientError('message failed to send — try again')
+          }
+          return false
         })
-        .catch(() => {})
+        .catch(() => {
+          this.feed.renderTransientError('message failed to send — try again')
+          return false
+        })
     }
     this.feed.onConfig = (cfg) => {
       void fetch('/__the-forge/session/config', {

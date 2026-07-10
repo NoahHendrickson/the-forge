@@ -1111,6 +1111,60 @@ describe('chat input cluster wiring (Task 6 — floating prompt popup retired)',
     expect(errorRow?.textContent).toBe('chat queue full — wait for the current turn')
   })
 
+  it('a 500 from /session/say renders the generic failure row and preserves the typed text (final-review fix 3)', async () => {
+    const fetchMock = hangingEventsAnd((url) =>
+      url === '/__the-forge/session/say' ? Promise.resolve({ ok: false, status: 500, json: async () => ({ error: 'boom' }) }) : null
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'do not lose me'
+    ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+
+    await flushMicrotasks()
+
+    const errorRow = mode.panelRoot.querySelector('.session-error-row')
+    expect(errorRow?.textContent).toBe('message failed to send — try again')
+    expect(textarea.value).toBe('do not lose me')
+    expect(textarea.disabled).toBe(false)
+  })
+
+  it('a network failure from /session/say renders the generic failure row and preserves the typed text', async () => {
+    const fetchMock = hangingEventsAnd((url) =>
+      url === '/__the-forge/session/say' ? Promise.reject(new Error('network down')) : null
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'still here'
+    ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+
+    await flushMicrotasks()
+
+    const errorRow = mode.panelRoot.querySelector('.session-error-row')
+    expect(errorRow?.textContent).toBe('message failed to send — try again')
+    expect(textarea.value).toBe('still here')
+  })
+
+  it('a successful /session/say clears the textarea only after the response resolves', async () => {
+    const fetchMock = hangingEventsAnd((url) =>
+      url === '/__the-forge/session/say' ? Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) }) : null
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'send me'
+    ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+
+    await flushMicrotasks()
+
+    expect(textarea.value).toBe('')
+    expect(textarea.disabled).toBe(false)
+  })
+
   it('changing the effort picker POSTs /session/config with the secret header and only the changed key', async () => {
     const fetchMock = hangingEventsAnd((url) =>
       url === '/__the-forge/session/config' ? Promise.resolve({ ok: true, json: async () => ({ ok: true }) }) : null

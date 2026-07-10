@@ -82,8 +82,13 @@ export class SessionFeed {
   /** Called when user clicks Allow/Deny on an approval row — host wires to the decide endpoint. */
   onDecide: (id: string, allow: boolean) => void = () => {}
   /** Called on Send (click or Cmd/Ctrl-Enter) with trimmed, non-empty text and the currently
-   * chipped element (if any) — host wires to POST /__the-forge/session/say. */
-  onSay: (text: string, element?: { source: string; tag: string }) => void = () => {}
+   * chipped element (if any) — host wires to POST /__the-forge/session/say. May return a
+   * Promise<boolean> (ok); trySend awaits it (Promise.resolve of a plain `void` return
+   * settles falsy) and only clears the textarea/chip once it resolves true — a non-ok
+   * response or network failure must never silently discard what the user typed (final-review
+   * fix 3). The host is responsible for rendering any failure explanation (renderTransientError)
+   * before resolving false. */
+  onSay: (text: string, element?: { source: string; tag: string }) => void | Promise<boolean> = () => {}
   /** Called when the effort or permission picker changes, with ONLY the changed key — host
    * wires to POST /__the-forge/session/config. */
   onConfig: (cfg: { model?: string; permissionMode?: string; effort?: string }) => void = () => {}
@@ -130,6 +135,14 @@ export class SessionFeed {
   private readonly approvalRows = new Map<string, HTMLElement>()
   /** All rows appended to this.list, in insertion order; capped at MAX_ROWS (oldest removed). */
   private readonly rowList: HTMLElement[] = []
+  /** Last-user-chosen effort/permissionMode seen via config-changed rows — re-applied to the
+   * pickers on every `started` event (final-review fix 2). The manager now re-applies these
+   * server-side on every respawn too (a respawned child otherwise silently reverts them), so
+   * this keeps the UI honest about that reality instead of relying on DOM inertia (a `started`
+   * event's payload carries no effort/permissionMode field to seed from directly). Undefined
+   * until the first config-changed for that key — the pickers stay on their placeholder. */
+  private lastEffort: string | undefined = undefined
+  private lastPermission: string | undefined = undefined
   /** The single in-progress .chat-streaming bubble, if any — the first seq-0 delta after a
    * non-delta event creates it; subsequent deltas append to it; the next final assistant-text
    * replaces its content and clears this back to null (no duplicate bubble). */
@@ -224,6 +237,9 @@ export class SessionFeed {
     this.textarea.className = 'chat-textarea'
     this.textarea.placeholder = 'Message the session…'
     this.textarea.rows = 2
+    // Mirrors CHAT_TEXT_MAX (server/endpoints.ts) — the server 400s past this length anyway;
+    // capping client-side stops the user from typing a message the send can never succeed at.
+    this.textarea.maxLength = 4000
     this.textarea.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
@@ -283,14 +299,25 @@ export class SessionFeed {
     this.addRow(this.makeErrorRow(text))
   }
 
+  /** Disables the input for the round trip (blocks a double-send and gives the user visible
+   * feedback), then waits on onSay's result: ok → clear text/chip (the ONLY point the
+   * optimistic clear happens now — final-review fix 3); not ok → leave the text exactly as
+   * typed (the host already rendered the failure explanation) and just re-enable. */
   private trySend(): void {
     if (this.textarea.disabled) return
     const text = this.textarea.value.trim()
     if (!text) return
     const element = this.currentChip ? { source: this.currentChip.source, tag: this.currentChip.tag } : undefined
-    this.onSay(text, element)
-    this.textarea.value = ''
-    this.setChip(null)
+    this.textarea.disabled = true
+    this.sendBtn.disabled = true
+    Promise.resolve(this.onSay(text, element)).then((ok) => {
+      this.textarea.disabled = false
+      this.sendBtn.disabled = false
+      if (ok) {
+        this.textarea.value = ''
+        this.setChip(null)
+      }
+    })
   }
 
   /** Seeds the config bar from a started/config-changed event — only the keys present in the
@@ -469,7 +496,13 @@ export class SessionFeed {
     if (kind === 'started') {
       const model = typeof e.model === 'string' ? e.model : '?'
       this.setStatus(`Session started · ${model}`)
+      // Model re-seeds from the event itself, as before — the started payload IS the source
+      // of truth for which model actually booted. Effort/permission carry no such field
+      // (control-request-only, or spawn-flag-only for effort), so re-apply the last
+      // user-chosen values instead of leaving them at whatever the DOM happened to hold.
       this.seedConfigBar(e)
+      this.effortSelect.value = this.lastEffort ?? ''
+      this.permissionSelect.value = this.lastPermission ?? ''
     } else if (kind === 'assistant-text') {
       const text = typeof e.text === 'string' ? e.text : ''
       this.finalizeAssistantText(text)
@@ -498,6 +531,8 @@ export class SessionFeed {
     } else if (kind === 'config-changed') {
       this.addRow(this.makeConfigRow(e))
       this.seedConfigBar(e)
+      if (typeof e.effort === 'string') this.lastEffort = e.effort
+      if (typeof e.permissionMode === 'string') this.lastPermission = e.permissionMode
     } else if (kind === 'tool-finished') {
       const toolId = typeof e.toolId === 'string' ? e.toolId : ''
       const row = this.toolRows.get(toolId)
@@ -511,13 +546,16 @@ export class SessionFeed {
         this.addRow(this.makeErrorRow(errorText))
       }
       this.setBusyish(false)
+      this.clearStreamingBubble()
     } else if (kind === 'session-error') {
       const text = typeof e.text === 'string' ? e.text : 'Session error'
       this.addRow(this.makeErrorRow(text))
       this.setBusyish(false)
+      this.clearStreamingBubble()
     } else if (kind === 'ended') {
       this.setStatus('Session ended')
       this.setBusyish(false)
+      this.clearStreamingBubble()
     }
     // unknown kind → ignore silently
   }
@@ -535,6 +573,20 @@ export class SessionFeed {
   private setBusyish(on: boolean): void {
     this.busyish = on
     this.stopBtn.hidden = !on
+  }
+
+  /** Invalidates a stale in-progress streaming bubble (final-review fix 5) — called from
+   * turn-complete/session-error/ended, none of which are guaranteed to be preceded by a
+   * finalizing assistant-text (an in-band error can end a turn mid-stream with no final text
+   * ever arriving). Without this, the NEXT turn's first delta would silently append to a
+   * bubble that belongs to an already-ended turn (appendDelta's `if (!this.streamingBubble)`
+   * check sees it as still-live). Also drops the `.chat-streaming` class from the now-stale
+   * bubble still in the DOM, or it would keep showing the "still typing" affordance for a
+   * turn that already ended. A no-op when there's no live bubble. */
+  private clearStreamingBubble(): void {
+    this.streamingBubble?.classList.remove('chat-streaming')
+    this.streamingBubble = null
+    this.streamingText = ''
   }
 
   /** Final assistant-text lands here (never the raw addRow path) so it can replace an
@@ -689,6 +741,12 @@ export class SessionFeed {
     if (this.rowList.length > MAX_ROWS) {
       const excess = this.rowList.splice(0, this.rowList.length - MAX_ROWS)
       for (const el of excess) el.remove()
+      // A still-streaming bubble old enough to be evicted here is now detached from the DOM —
+      // if left referenced, the eventual finalizeAssistantText would write the final text into
+      // that invisible node instead of a fresh, visible one (final-review fix 5).
+      if (this.streamingBubble && excess.includes(this.streamingBubble)) {
+        this.clearStreamingBubble()
+      }
     }
   }
 }
