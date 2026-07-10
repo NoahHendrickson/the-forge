@@ -383,6 +383,17 @@ describe('Panel', () => {
     expect(labels).toEqual(['Min W', 'Max W', 'Min H', 'Max H'])
   })
 
+  it('sizing chevron lives inside the field box (2026-07-07 panel-input-polish spec)', () => {
+    const { panel } = setup()
+    for (const props of [P.W, P.H]) {
+      const nf = [...panel.root.querySelectorAll('.nf')].find(
+        (n) => (n as HTMLElement).dataset.props === props
+      ) as HTMLElement
+      expect(nf.classList.contains('nf-has-menu')).toBe(true)
+      expect(nf.querySelector('.menu-btn')).toBeTruthy()
+    }
+  })
+
   it('padding block carries a group label and one line with both H/V fields', () => {
     const { panel } = setup()
     const block = panel.root.querySelector('[data-padding-row]') as HTMLElement

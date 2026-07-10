@@ -356,7 +356,9 @@ button {
   width: 16px; align-self: stretch; padding: 0; border: none; background: none; flex: none;
   color: var(--text-muted); font-size: 9px; cursor: pointer; border-radius: 4px;
 }
-.menu-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.08); }` +
+.menu-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.08); }
+.nf-has-menu { padding-right: 2px; }
+.nf-has-menu .menu-btn { height: 18px; align-self: center; }` +
 // The menu popover appends to .panel-body (position: relative) — same host and z plane
 // as .token-popover, so it scrolls with the rows and never clips at the panel edge.
 // min-width here must match ui/menu.ts's MENU_WIDTH const, used to clamp the popover's

@@ -979,7 +979,13 @@ export class Panel {
         this.layoutSection.onSizeModeChange(spec, value)
       },
     })
-    row.append(menu.button)
+    // Inside the field box (2026-07-07 spec): .nf's border box IS the visual input, so the
+    // chevron becomes its last flex child — [label][input][whisper][chevron] — with zero
+    // positioning. Load-bearing: ui/menu.ts positions the popover via offsetTop/offsetLeft
+    // against popoverHost as the nearest positioned ancestor; a position on .nf would
+    // silently become the offsetParent and strand the popover at the field's local coords.
+    bound.field.root.classList.add('nf-has-menu')
+    bound.field.root.append(menu.button)
 
     this.layoutSection.registerSizeMode({ menuBtn: menu.button, close: menu.close, spec, field: bound.field, mode: 'fixed' })
     return row
