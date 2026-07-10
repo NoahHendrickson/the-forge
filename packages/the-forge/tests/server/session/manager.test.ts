@@ -983,8 +983,11 @@ describe('SessionManager', () => {
     })
 
     it('PULL_TURN_TEXT is the exact ratified constant', () => {
+      // Carries the scope/needs-confirmation guardrail since 2026-07-10: the queued markdown
+      // no longer repeats it per item, and this turn text is the embedded path's only
+      // instruction wrapper.
       expect(PULL_TURN_TEXT).toBe(
-        'New design edits are queued. Call the the-forge MCP tool pull_design_edits, apply each request exactly as written, then call mark_applied. Do not run the app, take screenshots, or preview the result.',
+        'New design edits are queued. Call the the-forge MCP tool pull_design_edits, apply each request exactly as written, then call mark_applied. An edit needing the user\'s confirmation (e.g. a shared component rendered elsewhere) is "failed" with note "needs confirmation: <reason>". Do not run the app, take screenshots, or preview the result.',
       )
     })
 

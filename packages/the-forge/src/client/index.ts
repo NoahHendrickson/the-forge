@@ -7,6 +7,7 @@ import { Dock } from './dock'
 import {
   buildChangeRequestWithElements,
   renderMarkdown,
+  renderStandaloneMarkdown,
   rebuildRequestFromSeed,
   type ChangeRequest,
   type ElementChange,
@@ -256,7 +257,10 @@ export class DesignMode {
         this.flashButton(overlay.copyButton, 'No changes', 'Copy for agent')
         return
       }
-      const md = renderMarkdown(request)
+      // Standalone render (guardrails included): the clipboard payload is pasted into an
+      // arbitrary agent with no command text in context — unlike the queue path at
+      // sendDrafts below, which stays lean because its delivery wrapper carries them.
+      const md = renderStandaloneMarkdown(request)
       navigator.clipboard
         .writeText(md)
         .then(() => this.flashButton(overlay.copyButton, 'Copied ✓', 'Copy for agent'))

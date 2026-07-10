@@ -322,6 +322,10 @@ describe('DesignMode selection (M2)', () => {
     expect(md).toContain('# Design change request')
     expect(md).toContain('src/Button.tsx:42:8')
     expect(md).toContain('padding-top')
+    // Copy is a wrapper-less path (pasted into an arbitrary agent with no command text in
+    // context), so the standalone render carries the guardrails the queued markdown dropped.
+    expect(md).toContain('this call site only')
+    expect(md).toContain('Do not run the app')
     expect(overlay.copyButton.textContent).toBe('Copied ✓')
   })
 

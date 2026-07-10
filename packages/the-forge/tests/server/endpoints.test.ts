@@ -479,6 +479,10 @@ describe('POST /__the-forge/dispatch', () => {
       // Short id, same as renderItems in mcp/protocol.ts — Queue.mark resolves unique prefixes.
       expect(receivedOpts.markdown).toContain(added.id.slice(0, 8))
       expect(receivedOpts.markdown).not.toContain(added.id)
+      // The deeplink is the one rung whose markdown travels with no instruction wrapper, so
+      // the guardrails ride the augmentation here instead of every queued item.
+      expect(receivedOpts.markdown).toContain('this call site only')
+      expect(receivedOpts.markdown).toContain('Do not run the app')
     })
 
     it('does not append the trailer for claude-code (the MCP tool result carries the reminder there)', async () => {

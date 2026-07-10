@@ -36,7 +36,7 @@ export const MAX_START_FAILURES = 3
  * interpolation — request content never travels through the turn text (same rule as the
  * canned watch texts in src/mcp/protocol.ts). */
 export const PULL_TURN_TEXT: string =
-  'New design edits are queued. Call the the-forge MCP tool pull_design_edits, apply each request exactly as written, then call mark_applied. Do not run the app, take screenshots, or preview the result.'
+  'New design edits are queued. Call the the-forge MCP tool pull_design_edits, apply each request exactly as written, then call mark_applied. An edit needing the user\'s confirmation (e.g. a shared component rendered elsewhere) is "failed" with note "needs confirmation: <reason>". Do not run the app, take screenshots, or preview the result.'
 
 /** Max chat turns parked while busy/starting. A single slot suffices for the pull nudge
  * (pull claims everything), but chat is free-form user text — unbounded queueing would let

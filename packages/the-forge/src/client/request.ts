@@ -158,12 +158,11 @@ function elementContext(el: TaggedElement, changes: ChangeItem[]): ElementChange
   }
 }
 
-// "skip and report", never "pause": an unresolved (claimed-but-unmarked) item goes stale
-// after CLAIM_TIMEOUT_MS and gets re-delivered on a later watch cycle — a paused agent would
-// be re-asked the same question every few minutes. The command texts (server/setup.ts) spell
-// out the MCP mechanics: mark_applied status "failed", note "needs confirmation: <why>".
-export const SCOPE_GUARDRAIL =
-  'Scope: apply to this call site only. If a change would modify a shared component rendered elsewhere, skip it and report it back as needing confirmation — do not pause waiting for an answer.'
+// Definitions (and their why-comments) moved to src/shared/guardrails.ts so the server's
+// Cursor deeplink augmentation can share them without importing client code; SCOPE_GUARDRAIL
+// stays re-exported for existing importers.
+import { SCOPE_GUARDRAIL, NO_PREVIEW_GUARDRAIL } from '../shared/guardrails'
+export { SCOPE_GUARDRAIL }
 
 export function cssPath(start: TaggedElement): string {
   const parts: string[] = []
@@ -316,12 +315,20 @@ export function renderMarkdown(req: ChangeRequest): string {
     lines.push('')
   })
 
-  lines.push(SCOPE_GUARDRAIL)
-  // No verification ask here on purpose: the browser-side verifier (verifier.ts) checks computed
-  // styles post-HMR itself. Telling the agent to "verify" makes it spin up dev servers/screenshots
-  // to preview the result the user is already watching live.
-  lines.push('Do not run the app, take screenshots, or preview the result — the user is watching the live app, and The Forge verifies the changes automatically.')
+  // No scope/no-preview guardrails here (2026-07-10 cost review): queue-delivered markdown
+  // always arrives inside an instruction wrapper that already carries them once per delivery
+  // (DESIGN_COMMAND/WATCH_COMMAND/PULL_TURN_TEXT/Cursor augmentation — see the placement map
+  // in src/shared/guardrails.ts), so repeating them per item was pure token cost. Wrapper-less
+  // paths must use renderStandaloneMarkdown below instead.
   return lines.join('\n')
+}
+
+/** Markdown + guardrails, for paths where the request travels with NO instruction wrapper of
+ * its own — today that's the Copy-for-agent clipboard payload, pasted into an arbitrary agent
+ * with no command text in context. Queue-delivered markdown stays lean (see renderMarkdown's
+ * closing comment). */
+export function renderStandaloneMarkdown(req: ChangeRequest): string {
+  return `${renderMarkdown(req)}\n${SCOPE_GUARDRAIL}\n${NO_PREVIEW_GUARDRAIL}`
 }
 
 export interface PromptRequest {

@@ -7,6 +7,7 @@ import {
   buildPromptRequest,
   cssPath,
   renderMarkdown,
+  renderStandaloneMarkdown,
   renderPromptMarkdown,
   type PromptRequest,
   REMOVE_AUTO_LAYOUT_INTENT,
@@ -499,10 +500,23 @@ describe('renderMarkdown', () => {
     expect(md).toContain('src/App.tsx:7:9')
     expect(md).toContain('`py-2.5` → `py-6`')
     expect(md).toContain('padding-block: 10px → 24px')
-    expect(md).toContain('this call site only')
     expect(md).toContain('EXACTLY')
-    expect(md).toContain('Do not run the app')
     expect(md).not.toContain('After applying, verify')
+    // The scope + no-preview guardrails no longer ride every queued item (2026-07-10 cost
+    // review: they were duplicated by the delivery wrapper on every path) — they live in the
+    // command/turn texts, the Cursor deeplink augmentation, and renderStandaloneMarkdown.
+    expect(md).not.toContain('this call site only')
+    expect(md).not.toContain('Do not run the app')
+  })
+
+  it('renderStandaloneMarkdown appends the guardrails for wrapper-less paths (Copy for agent)', () => {
+    const el = makeButton()
+    const store = new DraftStore()
+    store.apply(el, 'padding-top', '24px')
+    const md = renderStandaloneMarkdown(buildChangeRequest(store, TW))
+    expect(md).toContain('padding-top: 10px → 24px')
+    expect(md).toContain('this call site only')
+    expect(md).toContain('Do not run the app')
   })
 
   it('renders css-only lines when not Tailwind', () => {
