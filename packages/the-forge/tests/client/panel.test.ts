@@ -91,6 +91,14 @@ afterEach(() => {
 })
 
 describe('Panel', () => {
+  // Composer consolidation Task 2: the Changes list moved off panel.changesSlot into the chat
+  // composer's drafts disclosure (session-feed.ts draftSlot) — the field (and its entry in the
+  // root append list) is retired, not just emptied.
+  it('no longer exposes a changesSlot mount point', () => {
+    const { panel } = setup()
+    expect((panel as unknown as { changesSlot?: unknown }).changesSlot).toBeUndefined()
+  })
+
   it('shows header with source location and populates fields from computed styles', () => {
     const { panel } = setup()
     expect(panel.root.textContent).toContain('src/Card.tsx:4:7')
@@ -3401,5 +3409,159 @@ describe('Docked mode structure (docked-panel spec)', () => {
     expect(sections.querySelector('.panel-section')).not.toBeNull()
     expect(sections.querySelector('.color-popover')).toBeNull()
     expect(sections.querySelector('.token-popover')).toBeNull()
+  })
+})
+
+describe('Feed divider (composer-consolidation Task 4)', () => {
+  // Minimal Storage stand-in (Map-backed) — mirrors lifecycle-store.test.ts's use of a
+  // narrow object cast `as Storage` for the broken-storage case, but a full working
+  // implementation here so restore-on-construct can round-trip through it.
+  function fakeStorage(): Storage {
+    const data = new Map<string, string>()
+    return {
+      get length() {
+        return data.size
+      },
+      clear: () => data.clear(),
+      getItem: (k: string) => (data.has(k) ? data.get(k)! : null),
+      key: (i: number) => Array.from(data.keys())[i] ?? null,
+      removeItem: (k: string) => {
+        data.delete(k)
+      },
+      setItem: (k: string, v: string) => {
+        data.set(k, v)
+      },
+    } as Storage
+  }
+
+  // jsdom has no real layout — the panel root's height is mocked directly (same mechanism
+  // ripple.test.ts uses: assign getBoundingClientRect on the element under test) so the
+  // 120px-each-side clamp has a concrete height to clamp against.
+  function feedPanel(storage?: Storage) {
+    const drafts = new DraftStore()
+    const panel = new Panel(drafts, () => {}, undefined, storage)
+    document.body.appendChild(panel.root)
+    panel.root.getBoundingClientRect = () => new DOMRect(0, 0, 320, 600)
+    return panel
+  }
+
+  function dragFeed(panel: Panel, fromY: number, toY: number) {
+    panel.feedDivider.dispatchEvent(
+      new MouseEvent('pointerdown', { clientY: fromY, button: 0, bubbles: true, cancelable: true })
+    )
+    document.dispatchEvent(new MouseEvent('pointermove', { clientY: toY }))
+    document.dispatchEvent(new MouseEvent('pointerup', {}))
+  }
+
+  afterEach(() => {
+    sessionStorage.clear()
+  })
+
+  it('feedDivider sits between the properties body and the feed slot, before any drag or persisted value has happened', () => {
+    const panel = feedPanel()
+    expect(panel.feedDivider.className).toBe('feed-divider')
+    expect(panel.feedSlot.className).toBe('panel-feed-slot')
+    const children = Array.from(panel.root.children)
+    const bodyIndex = children.indexOf(panel.root.querySelector('.panel-body')!)
+    const dividerIndex = children.indexOf(panel.feedDivider)
+    const feedIndex = children.indexOf(panel.feedSlot)
+    expect(bodyIndex).toBeGreaterThanOrEqual(0)
+    expect(dividerIndex).toBeGreaterThan(bodyIndex)
+    expect(feedIndex).toBeGreaterThan(dividerIndex)
+    expect(panel.feedSplit()).toBe(-1)
+    expect(panel.feedSlot.style.flexBasis).toBe('')
+  })
+
+  it('dragging the divider sets an explicit px flex-basis on feedSlot', () => {
+    const panel = feedPanel()
+    // Starting from the CSS default (45% of the mocked 600px panel = 270px), dragging the
+    // divider UP by 50px (clientY 400 -> 350) grows the feed area below it by 50px.
+    dragFeed(panel, 400, 350)
+    expect(panel.feedSplit()).toBe(320)
+    expect(panel.feedSlot.style.flexBasis).toBe('320px')
+  })
+
+  it('clamps at 120px from each end of the panel height', () => {
+    const panel = feedPanel()
+    dragFeed(panel, 400, 0) // far up -> would exceed panel height, clamps to height - 120
+    expect(panel.feedSplit()).toBe(480)
+    const panel2 = feedPanel()
+    dragFeed(panel2, 400, 4000) // far down -> would go negative, clamps to 120
+    expect(panel2.feedSplit()).toBe(120)
+  })
+
+  it('double-click resets the split to the CSS default and clears the persisted key', () => {
+    const panel = feedPanel()
+    dragFeed(panel, 400, 350)
+    expect(panel.feedSplit()).not.toBe(-1)
+    expect(sessionStorage.getItem(Panel.FEED_SPLIT_KEY)).not.toBeNull()
+    panel.feedDivider.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    expect(panel.feedSplit()).toBe(-1)
+    expect(panel.feedSlot.style.flexBasis).toBe('')
+    expect(sessionStorage.getItem(Panel.FEED_SPLIT_KEY)).toBeNull()
+  })
+
+  it('persists the split to injected Storage on pointerup and restores it on construction (fake Storage)', () => {
+    const storage = fakeStorage()
+    const panel = feedPanel(storage)
+    dragFeed(panel, 400, 350)
+    const saved = panel.feedSplit()
+    expect(saved).toBe(320)
+    expect(storage.getItem(Panel.FEED_SPLIT_KEY)).toBe(String(saved))
+    const restored = feedPanel(storage)
+    expect(restored.feedSplit()).toBe(saved)
+  })
+
+  it('an invalid or absent persisted value falls back to the CSS default (-1)', () => {
+    const storage = fakeStorage()
+    storage.setItem(Panel.FEED_SPLIT_KEY, 'not-a-number')
+    const panel = feedPanel(storage)
+    expect(panel.feedSplit()).toBe(-1)
+    const storage2 = fakeStorage()
+    const panel2 = feedPanel(storage2)
+    expect(panel2.feedSplit()).toBe(-1)
+  })
+
+  it('document has zero pointer listeners before pointerdown, arms them on pointerdown, and disarms on pointerup (idle-zero)', () => {
+    const panel = feedPanel()
+    const addSpy = vi.spyOn(document, 'addEventListener')
+    const removeSpy = vi.spyOn(document, 'removeEventListener')
+    expect(addSpy).not.toHaveBeenCalledWith('pointermove', expect.any(Function))
+    panel.feedDivider.dispatchEvent(
+      new MouseEvent('pointerdown', { clientY: 400, button: 0, bubbles: true, cancelable: true })
+    )
+    expect(addSpy).toHaveBeenCalledWith('pointermove', expect.any(Function))
+    expect(addSpy).toHaveBeenCalledWith('pointerup', expect.any(Function))
+    document.dispatchEvent(new MouseEvent('pointerup', {}))
+    expect(removeSpy).toHaveBeenCalledWith('pointermove', expect.any(Function))
+    expect(removeSpy).toHaveBeenCalledWith('pointerup', expect.any(Function))
+    // Concrete proof, not just the spy call: a move dispatched AFTER pointerup must be a
+    // no-op (dock.test.ts's "drag listeners detach on pointerup" pattern).
+    const settled = panel.feedSplit()
+    document.dispatchEvent(new MouseEvent('pointermove', { clientY: 0 }))
+    expect(panel.feedSplit()).toBe(settled)
+    addSpy.mockRestore()
+    removeSpy.mockRestore()
+  })
+
+  it('non-primary-button pointerdown does not start a drag', () => {
+    const panel = feedPanel()
+    panel.feedDivider.dispatchEvent(
+      new MouseEvent('pointerdown', { clientY: 400, button: 2, bubbles: true, cancelable: true })
+    )
+    document.dispatchEvent(new MouseEvent('pointermove', { clientY: 100 }))
+    expect(panel.feedSplit()).toBe(-1)
+  })
+
+  it('pointercancel tears the drag down like pointerup', () => {
+    const panel = feedPanel()
+    panel.feedDivider.dispatchEvent(
+      new MouseEvent('pointerdown', { clientY: 400, button: 0, bubbles: true, cancelable: true })
+    )
+    document.dispatchEvent(new MouseEvent('pointermove', { clientY: 350 }))
+    const mid = panel.feedSplit()
+    document.dispatchEvent(new MouseEvent('pointercancel', {}))
+    document.dispatchEvent(new MouseEvent('pointermove', { clientY: 0 }))
+    expect(panel.feedSplit()).toBe(mid)
   })
 })

@@ -12,6 +12,7 @@ import { ColorPicker } from './colorpicker'
 import { PanelTokenUi, colorDisplay } from './panel-token-ui'
 import { LayoutSection } from './panel-layout'
 import { FillStrokeSection } from './panel-fillstroke'
+import { installFeedDivider, FEED_SPLIT_KEY as FEED_DIVIDER_STORAGE_KEY, type FeedDividerHandle } from './feed-divider'
 import { readTokens, readTheme, parseColor as parseColorLocal } from './tokens'
 import {
   type RowSpec,
@@ -50,6 +51,11 @@ interface BoundField {
 }
 
 export class Panel {
+  /** sessionStorage key the feed split (feedSlot's dragged px height) persists under — sourced
+   * from feed-divider.ts (the module now owning the divider's drag/persist logic) so tests that
+   * read `Panel.FEED_SPLIT_KEY` keep working unmodified. */
+  static readonly FEED_SPLIT_KEY = FEED_DIVIDER_STORAGE_KEY
+
   root = document.createElement('div')
   compareButton = createButton()
   resetButton = createButton()
@@ -60,13 +66,18 @@ export class Panel {
    * whenever there's no live selection (docked "No selection" state included). Panel does
    * NOT know about the chat cluster itself; index.ts wires the click (Task 4/6). */
   promptButton = createButton({ label: 'Prompt', className: 'panel-prompt' })
-  /** Mount slot for the Changes lifecycle list (changelist.ts) — owned/populated by
-   * DesignMode, positioned here so it pins between the scrolling sections and the footer
-   * and stays visible in the docked no-selection empty state (body hidden, footer kept). */
-  changesSlot = document.createElement('div')
-  /** Mount slot for the SessionFeed (session-feed.ts) — sits above the Changes list so live
-   * session activity is the most prominent docked section. Wired by DesignMode (Task 8). */
+  /** Mount slot for the SessionFeed (session-feed.ts) — the Changes lifecycle list (changelist.ts)
+   * no longer gets its own dedicated slot here (composer consolidation Task 2): it now mounts
+   * inside the SessionFeed's own drafts disclosure (feed.draftSlot), so this is the only slot
+   * left. Stays visible in the docked no-selection empty state (body hidden, footer kept). */
   feedSlot = document.createElement('div')
+  /** Drag handle between `body` and `feedSlot` — the element itself now lives in feed-divider.ts
+   * (installFeedDivider), assigned here in the constructor. Public field kept as a thin
+   * pass-through so panel.test.ts's existing `panel.feedDivider` call sites need no changes. */
+  feedDivider!: HTMLElement
+  /** The feed-divider module's handle (feedSplit() + the drag/persist logic behind it) —
+   * feedSplit() below just forwards to this. */
+  private feedDividerHandle!: FeedDividerHandle
 
   private head = document.createElement('div')
   private headTag = document.createElement('div')
@@ -145,7 +156,10 @@ export class Panel {
     // control handler immediately BEFORE drafts.apply(...), so callers can snapshot
     // pre-edit layout state (e.g. for the ripple indicator) while onEdited (which
     // fires after apply) is used for post-edit re-measurement.
-    private onBeforeEdit: (el: TaggedElement) => void = () => {}
+    private onBeforeEdit: (el: TaggedElement) => void = () => {},
+    // Injectable Storage (lifecycle-store.ts's pattern) — real sessionStorage by default,
+    // a fake in tests. Fourth optional param keeps every existing call site untouched.
+    private storage: Storage = sessionStorage
   ) {
     this.root.id = 'panel'
     this.root.hidden = true
@@ -191,7 +205,19 @@ export class Panel {
     this.headActions.className = 'panel-head-actions'
     this.headActions.append(this.promptButton, this.modeButton)
     this.head.append(this.headActions)
-    this.root.append(this.resizeHandle, this.head, this.actions, this.emptyEl, this.body, this.feedSlot, this.changesSlot, this.footer)
+    this.feedSlot.className = 'panel-feed-slot'
+    this.feedDividerHandle = installFeedDivider({ feedSlot: this.feedSlot, root: this.root, storage: this.storage })
+    this.feedDivider = this.feedDividerHandle.el
+    this.root.append(
+      this.resizeHandle,
+      this.head,
+      this.actions,
+      this.emptyEl,
+      this.body,
+      this.feedDivider,
+      this.feedSlot,
+      this.footer
+    )
     // Popovers mount in the BODY (the scroll container), not the root — anchor.offsetTop
     // and the popover's absolute top must share the body's scrolled coordinate space or
     // the popover stops tracking its row the moment the sections scroll (see overlay.ts
@@ -313,6 +339,13 @@ export class Panel {
     this.docked = on
     this.root.classList.toggle('docked', on)
     if (!this.el) this.hide()
+  }
+
+  /** Thin pass-through to the feed-divider module's handle (feed-divider.ts) — see there for
+   * the -1 sentinel / persisted-split contract. Kept as a method here, not a public field, so
+   * panel.test.ts's existing `panel.feedSplit()` call sites need no changes. */
+  feedSplit(): number {
+    return this.feedDividerHandle.feedSplit()
   }
 
   /**

@@ -5,6 +5,7 @@ import { createButton } from './ui/button'
 import { createSelect } from './ui/select'
 import { basename } from './source'
 import { EFFORT_LEVELS, PERMISSION_MODES, CHAT_TEXT_MAX } from '../shared/chat-constants'
+import { type SessionState } from './watch'
 
 // Fixed vocabularies for the effort/permission pickers — built from the shared
 // EFFORT_LEVELS/PERMISSION_MODES arrays (src/shared/chat-constants.ts), the single source of
@@ -71,33 +72,49 @@ export interface SessionFeedOpts {
 export class SessionFeed {
   /** The section root — class="session-feed"; host appends this to panel.feedSlot. */
   root: HTMLElement
+  /** .draft-disclosure content host — index.ts appends the (unmodified) ChangeList's root
+   * here instead of the panel's old dedicated changesSlot (composer consolidation Task 2). */
+  draftSlot: HTMLElement
   /** Called when the user clicks Stop — host wires to POST /__the-forge/session/interrupt. */
   onInterrupt: () => void = () => {}
   /** Called when user clicks Allow/Deny on an approval row — host wires to the decide endpoint. */
   onDecide: (id: string, allow: boolean) => void = () => {}
-  /** Called on Send (click or Cmd/Ctrl-Enter) with trimmed, non-empty text and the currently
-   * chipped element (if any) — host wires to POST /__the-forge/session/say. May return a
-   * Promise<boolean> (ok); trySend awaits it (Promise.resolve of a plain `void` return
-   * settles falsy) and only clears the textarea/chip once it resolves true — a non-ok
-   * response or network failure must never silently discard what the user typed (final-review
-   * fix 3). The host is responsible for rendering any failure explanation (renderTransientError)
-   * before resolving false. */
-  onSay: (text: string, element?: { source: string; tag: string }) => void | Promise<boolean> = () => {}
+  /** Called on Send (click or Cmd/Ctrl-Enter) once the textarea holds non-empty text (or, since
+   * composer consolidation Task 3, whenever there are drafts to send even with an empty
+   * textarea — see trySend's guard). The feed itself is deliberately verb-agnostic — it does not
+   * decide what "sending" means; that used to be its own `onSay` hook's job (invoked directly
+   * from trySend), which was deleted from this public surface by the composer-send extraction —
+   * the chat POST now lives in ComposerSend#postSay (composer-send.ts), reached only via
+   * getText()/getChip()/clearText()/setChip(null) below, same as before. The host wires onSend
+   * to whatever it wants sending to do, calling clearText()/setChip(null) itself once it decides
+   * the send succeeded (composer consolidation Task 1; Task 3 wires the real send-everything
+   * verb — drafts + say, one gesture — via ComposerSend). */
+  onSend: () => void = () => {}
   /** Called when the effort or permission picker changes, with ONLY the changed key — host
    * wires to POST /__the-forge/session/config. */
   onConfig: (cfg: { model?: string; permissionMode?: string; effort?: string }) => void = () => {}
 
-  private readonly statusRow: HTMLElement
   private readonly list: HTMLElement
-  private readonly stopBtn: HTMLButtonElement
 
-  // --- config bar (header): model, effort, and permission pickers ---
-  private readonly configBar: HTMLElement
+  // --- config pickers: model, effort, and permission — live in .composer-controls ---
   private readonly modelSelect: HTMLSelectElement
   private readonly effortSelect: HTMLSelectElement
   private readonly permissionSelect: HTMLSelectElement
 
-  // --- element chip + input cluster (footer) ---
+  // --- chat composer (composer consolidation Task 1): the single bordered card holding the
+  // chip row, textarea, and controls row ---
+  private readonly chatComposer: HTMLElement
+  private readonly composerChips: HTMLElement
+  private readonly composerControls: HTMLElement
+  // --- drafts pill + disclosure (composer consolidation Task 2): the pill lives in
+  // composerChips alongside the element chip; draftDisclosure is a sibling block, above
+  // composerChips, that the pill's click toggles open/closed via the .open class — a
+  // details-free div toggle (no <details> semantics needed, there's only ever one thing to
+  // show/hide). draftSlot (public) is the content host inside it. ---
+  private readonly draftPill: HTMLButtonElement
+  private readonly draftDisclosure: HTMLElement
+
+  // --- element chip + input cluster ---
   private readonly chip: HTMLElement
   private readonly chipLabel: HTMLElement
   private readonly inputCluster: HTMLElement
@@ -145,8 +162,25 @@ export class SessionFeed {
    * textContent so appends are O(1) string concat rather than re-reading the DOM each delta. */
   private streamingText = ''
   /** True after any tool-started/assistant-text, cleared on turn-complete/ended/session-error.
-   * Controls Stop button visibility: visible while a turn is in flight ("busyish" state). */
+   * Drives composer-send's morph to ■ (interrupt) while a turn is in flight AND the textarea is
+   * empty — see updateSendMorph(). Typing during a busy turn flips the morph back to ↑ (the
+   * message queues mid-turn via the existing FIFO) so the user is never blocked from typing a
+   * follow-up while the current turn is still running. */
   private busyish = false
+  /** Mirrors updateSendMorph()'s last computed morph state — the click handler reads this
+   * instead of recomputing busyish && textarea-empty itself. */
+  private sendIsStop = false
+  /** Mirrored from setDraftState's count (composer consolidation Task 3) — lets trySend's
+   * empty-text guard admit a drafts-only send: the composer's ↑ is the single send surface for
+   * both edits and chat, so an empty textarea must not block sending when there ARE drafts to
+   * send, even though it still blocks when there is truly nothing (no text, no drafts). */
+  private draftCount = 0
+  /** Mirrors setAvailability's last `enabled` value — kept alongside draftCount so
+   * syncSendEnabled() can compute the send button's disabled state from both independent
+   * signals without either setter having to know the other's current value (final-review fix
+   * C1). Defaults true to match the button's native default-enabled state before the host's
+   * first setAvailability call. */
+  private sessionAvailable = true
 
   private readonly fetchFn: typeof fetch
   private readonly getHeaders: () => Record<string, string>
@@ -159,26 +193,16 @@ export class SessionFeed {
     this.root.className = 'session-feed'
     this.root.hidden = true
 
-    this.statusRow = document.createElement('div')
-    this.statusRow.className = 'session-row session-status'
-    this.statusRow.hidden = true
-
-    // Stop button: fires onInterrupt while a turn is in flight
-    this.stopBtn = createButton({ label: 'Stop', className: 'session-stop' })
-    this.stopBtn.type = 'button'
-    this.stopBtn.hidden = true
-    this.stopBtn.addEventListener('click', () => this.onInterrupt())
-
     this.list = document.createElement('div')
     this.list.className = 'session-list'
 
-    // Config bar (header): model, effort, and permission pickers — each stays on a
-    // placeholder option until a started/config-changed event seeds it; picking the
-    // placeholder itself is a no-op (see the '' guards in the onChange handlers). The model
-    // select's options are rebuilt per seed (seedModelOptions) rather than fixed like the
-    // other two — see the MODEL_ALIASES why-comment above.
-    this.configBar = document.createElement('div')
-    this.configBar.className = 'session-config-bar'
+    // Config pickers: model, effort, and permission — each stays on a placeholder option
+    // until a started/config-changed event seeds it; picking the placeholder itself is a
+    // no-op (see the '' guards in the onChange handlers). The model select's options are
+    // rebuilt per seed (seedModelOptions) rather than fixed like the other two — see the
+    // MODEL_ALIASES why-comment above. They used to live in their own header bar
+    // (.session-config-bar, retired); composer consolidation (Task 1) moves them into the
+    // composer's .composer-controls row instead — assembled further down.
     this.modelSelect = createSelect({
       className: 'session-model',
       options: [{ value: '', label: 'model…' }],
@@ -206,11 +230,10 @@ export class SessionFeed {
         this.onConfig({ permissionMode: value })
       },
     })
-    this.configBar.append(this.modelSelect, this.effortSelect, this.permissionSelect)
 
     // Element chip: Prompt-button / host sets it via setChip(); the × clears it locally
-    // (no host callback — Send/onSay reads currentChip directly, same as the old floating
-    // prompt popup used to read its own anchor).
+    // (no host callback — a host's onSend implementation reads it via getChip(), same as the
+    // old floating prompt popup used to read its own anchor).
     this.chip = document.createElement('div')
     this.chip.className = 'chat-chip'
     this.chip.hidden = true
@@ -220,8 +243,29 @@ export class SessionFeed {
     chipClear.addEventListener('click', () => this.setChip(null))
     this.chip.append(this.chipLabel, chipClear)
 
+    // Drafts pill + disclosure (composer consolidation Task 2): the pill is a plain
+    // createButton (CLAUDE.md's ui/ factory rule), hidden until setDraftState says otherwise.
+    // Its click toggles the sibling draftDisclosure's .open class — draftSlot is exposed
+    // publicly so index.ts can append the (unmodified) ChangeList's root into it.
+    this.draftPill = createButton({ className: 'draft-pill' })
+    this.draftPill.type = 'button'
+    this.draftPill.hidden = true
+    this.draftPill.addEventListener('click', () => this.draftDisclosure.classList.toggle('open'))
+
+    this.draftSlot = document.createElement('div')
+    this.draftSlot.className = 'draft-slot'
+    this.draftDisclosure = document.createElement('div')
+    this.draftDisclosure.className = 'draft-disclosure'
+    this.draftDisclosure.append(this.draftSlot)
+
+    // Composer chip row: the element chip plus the drafts pill (Task 2).
+    this.composerChips = document.createElement('div')
+    this.composerChips.className = 'composer-chips'
+    this.composerChips.append(this.chip, this.draftPill)
+
     // Input cluster: plain createElement for the textarea (no factory exists for it, per
-    // CLAUDE.md's ui/ factory rule — that rule covers buttons/selects), Send via createButton.
+    // CLAUDE.md's ui/ factory rule — that rule covers buttons/selects). Send now lives in
+    // .composer-controls, one row below, not in here (composer consolidation Task 1).
     this.inputCluster = document.createElement('div')
     this.inputCluster.className = 'chat-input'
     this.disabledReason = document.createElement('div')
@@ -229,7 +273,7 @@ export class SessionFeed {
     this.disabledReason.hidden = true
     this.textarea = document.createElement('textarea')
     this.textarea.className = 'chat-textarea'
-    this.textarea.placeholder = 'Message the session…'
+    this.textarea.placeholder = 'Message, or send your edits…'
     this.textarea.rows = 2
     // Mirrors CHAT_TEXT_MAX (src/shared/chat-constants.ts, also consumed by server/endpoints.ts)
     // — the server 400s past this length anyway; capping client-side stops the user from typing
@@ -246,17 +290,52 @@ export class SessionFeed {
       // itself inside the overlay's shadow host, that guard alone already keeps Escape from
       // deselecting/deactivating while typing. See design-mode.test.ts for the proof.
     })
-    this.sendBtn = createButton({ label: 'Send', className: 'chat-send' })
-    this.sendBtn.type = 'button'
-    this.sendBtn.addEventListener('click', () => this.trySend())
-    this.inputCluster.append(this.disabledReason, this.textarea, this.sendBtn)
+    // Re-evaluate the send↔stop morph on every keystroke — typing during a busy turn must
+    // flip ■ back to ↑ immediately (a mid-turn message queues via the existing FIFO), not just
+    // whenever busyish itself next transitions.
+    this.textarea.addEventListener('input', () => this.updateSendMorph())
+    this.inputCluster.append(this.disabledReason, this.textarea)
 
-    this.root.append(this.configBar, this.statusRow, this.stopBtn, this.list, this.chip, this.inputCluster)
+    // Composer send/stop button: morphs between ↑ (send, fires onSend) and ■ (interrupt, fires
+    // onInterrupt) — see updateSendMorph()/sendIsStop. Kept on BOTH .composer-send (the new
+    // hook) and the legacy .chat-send class — CSS class names are test hooks, extend don't
+    // rename, and design-mode.test.ts's existing Send-click assertions still query .chat-send.
+    this.sendBtn = createButton({ label: '↑', className: 'composer-send chat-send' })
+    this.sendBtn.type = 'button'
+    this.sendBtn.setAttribute('aria-label', 'Send')
+    this.sendBtn.addEventListener('click', () => {
+      if (this.sendIsStop) {
+        this.onInterrupt()
+        return
+      }
+      this.trySend()
+    })
+
+    const composerSpacer = document.createElement('div')
+    composerSpacer.className = 'composer-spacer'
+    this.composerControls = document.createElement('div')
+    this.composerControls.className = 'composer-controls'
+    this.composerControls.append(this.modelSelect, this.effortSelect, this.permissionSelect, composerSpacer, this.sendBtn)
+
+    // The single bordered composer card (composer consolidation Task 1) — replaces the retired
+    // status row, standalone Stop button, and .session-config-bar. draftDisclosure sits ABOVE
+    // composerChips (Task 2): it hosts the ChangeList, which can grow to its own max-height —
+    // above the chips/input/controls rows is the only position that never pushes the textarea
+    // around when it opens. Task 4 adds the draggable divider above .session-feed.
+    this.chatComposer = document.createElement('div')
+    this.chatComposer.className = 'chat-composer'
+    this.chatComposer.append(this.draftDisclosure, this.composerChips, this.inputCluster, this.composerControls)
+
+    this.root.append(this.list, this.chatComposer)
+    this.updateSendMorph()
   }
 
   /** Attaches (or clears, with `null`) the element a pending message will reference — Prompt
-   * button sets this via the host; the chip's own × also routes here. Cleared unconditionally
-   * on send (trySend), matching the contract's "chip cleared on send". */
+   * button sets this via the host; the chip's own × also routes here. No longer cleared by
+   * trySend itself (composer consolidation Task 1) — the feed's send gesture doesn't know
+   * whether a send "succeeded", so it's the host's onSend implementation that calls
+   * setChip(null) once it decides the send is done, same as it now clears the text via
+   * clearText(). */
   setChip(el: { source: string; tag: string; label: string } | null): void {
     this.currentChip = el
     this.chipLabel.textContent = el?.label ?? ''
@@ -269,15 +348,42 @@ export class SessionFeed {
     this.textarea.focus()
   }
 
+  /** Pushes the drafts-pill display state (composer consolidation Task 2) — index.ts calls
+   * this from both the drafts store's onChange (count) and the lifecycle session's onChange
+   * (applying), so either can independently flip the pill on/off without knowing about the
+   * other's derivation. `applying` wins the text over a nonzero count — an in-flight send stays
+   * "applying…" even while further drafts pile up behind it. Hidden only when there is truly
+   * nothing to show, which also force-closes the disclosure — an empty disclosure left open
+   * would show a blank block once the last draft/send resolves. */
+  setDraftState(s: { count: number; applying: boolean }): void {
+    this.draftCount = s.count
+    const visible = s.count > 0 || s.applying
+    this.draftPill.hidden = !visible
+    if (!visible) {
+      this.draftDisclosure.classList.remove('open')
+    } else {
+      this.draftPill.textContent = s.applying ? 'applying…' : s.count === 1 ? '1 edit drafted' : `${s.count} edits drafted`
+    }
+    // Draft count is one of the two independent signals that can license the send button —
+    // see syncSendEnabled (final-review fix C1).
+    this.syncSendEnabled()
+  }
+
   /** Enables/disables the input cluster and shows/hides the reason line. Availability
    * derivation lives in the HOST (index.ts) — this is a dumb setter. Also unhides the feed
-   * root (same as setStatus/addRow) so the input — and any disabled-reason — is visible as
-   * soon as design mode is on, even before the embedded session has emitted its first NDJSON
-   * event (a fresh session may sit at 'idle' until the user's first message auto-starts it). */
+   * root (same as addRow, and the 'started' event handler below) so the input — and any
+   * disabled-reason — is visible as soon as design mode is on, even before the embedded
+   * session has emitted its first NDJSON event (a fresh session may sit at 'idle' until the
+   * user's first message auto-starts it). */
   setAvailability(a: { enabled: boolean; reason?: string }): void {
     this.root.hidden = false
+    // Only the TEXTAREA (the chat leg) is gated by availability now — the send button is
+    // computed separately by syncSendEnabled, since drafts must stay sendable even when chat
+    // is unavailable (final-review fix C1: embedded:false must not disable the whole composer,
+    // only the chat leg — drafts ride the queue/watcher path that opt-out deliberately
+    // preserves, and there is no other send surface left for a terminal-only consumer).
     this.textarea.disabled = !a.enabled
-    this.sendBtn.disabled = !a.enabled
+    this.sessionAvailable = a.enabled
     if (!a.enabled && a.reason) {
       this.disabledReason.textContent = a.reason
       this.disabledReason.hidden = false
@@ -285,6 +391,15 @@ export class SessionFeed {
       this.disabledReason.hidden = true
       this.disabledReason.textContent = ''
     }
+    this.syncSendEnabled()
+  }
+
+  /** Recomputes composer-send's disabled state from the two independent signals that can each
+   * license it — sessionAvailable (setAvailability) OR a nonzero draftCount (setDraftState).
+   * Called from both setters so either can flip the button without waiting on the other
+   * (final-review fix C1). Disabled only when NEITHER signal licenses a send. */
+  private syncSendEnabled(): void {
+    this.sendBtn.disabled = !this.sessionAvailable && this.draftCount === 0
   }
 
   /** Renders a transient error row using the same styling as in-band session-error rows —
@@ -294,31 +409,77 @@ export class SessionFeed {
     this.addRow(this.makeErrorRow(text))
   }
 
-  /** Disables the input for the round trip (blocks a double-send and gives the user visible
-   * feedback), then waits on onSay's result: ok → clear text/chip (the ONLY point the
-   * optimistic clear happens now — final-review fix 3); not ok → leave the text exactly as
-   * typed (the host already rendered the failure explanation) and just re-enable. */
+  /** Guard + fire onSend — composer consolidation Task 1 moved everything past the guard out
+   * of the feed's hands: it used to disable the input, await onSay's promise, and clear text/
+   * chip on success itself (final-review fix 3's round trip); now onSend is a fire-and-forget
+   * `() => void` and the HOST owns that whole round trip via getText()/getChip()/clearText().
+   * The empty-text guard (Task 3) now admits a drafts-only send: it only blocks when there is
+   * BOTH no usable text AND no drafts (draftCount, kept current by setDraftState) — the
+   * composer's ↑ is the single send surface for edits and chat, so "nothing typed" must not
+   * block "something drafted". "Usable text" is text in an ENABLED textarea (final-review fix
+   * C1): a disabled textarea's value never counts, even if non-empty — availability gates the
+   * chat leg only via the textarea's own disabled state, not via a separate guard here, so a
+   * disabled-but-drafts-present composer still sends (see setAvailability/syncSendEnabled). */
   private trySend(): void {
-    if (this.textarea.disabled) return
-    const text = this.textarea.value.trim()
-    if (!text) return
-    const element = this.currentChip ? { source: this.currentChip.source, tag: this.currentChip.tag } : undefined
-    this.textarea.disabled = true
-    this.sendBtn.disabled = true
-    Promise.resolve(this.onSay(text, element)).then((ok) => {
-      this.textarea.disabled = false
-      this.sendBtn.disabled = false
-      if (ok) {
-        this.textarea.value = ''
-        this.setChip(null)
-      }
-    })
+    const hasUsableText = !this.textarea.disabled && this.textarea.value.trim() !== ''
+    if (!hasUsableText && this.draftCount === 0) return
+    this.onSend()
   }
 
-  /** Seeds the config bar from a started/config-changed event — only the keys present in the
-   * event are applied, matching the "each select shows a placeholder until seeded" contract.
-   * Programmatic .value / option rebuilds don't fire 'change', so this never loops back into
-   * onConfig. */
+  /** Trimmed textarea contents — a host's onSend implementation reads this instead of reaching
+   * into the feed's private textarea field directly. */
+  getText(): string {
+    return this.textarea.value.trim()
+  }
+
+  /** Empties the textarea — the host calls this once its onSend implementation decides the
+   * send succeeded (mirrors the old trySend's optimistic-on-success clear, now host-owned).
+   * Re-evaluates the send↔stop morph immediately, since setting .value programmatically
+   * doesn't fire the textarea's own 'input' listener. */
+  clearText(): void {
+    this.textarea.value = ''
+    this.updateSendMorph()
+  }
+
+  /** The element currently attached via setChip, shaped as the {source, tag} pair
+   * ComposerSend#postSay's request body expects — onSend takes no arguments, so a host
+   * implementation needs its own way to read what trySend used to build directly from
+   * currentChip. */
+  getChip(): { source: string; tag: string } | null {
+    return this.currentChip ? { source: this.currentChip.source, tag: this.currentChip.tag } : null
+  }
+
+  /** Maps embedded-session lifecycle state to the textarea's placeholder — the retired status
+   * row's job, now chrome-as-placeholder-text instead of a chrome ROW (composer consolidation
+   * Task 1). 'unavailable' is deliberately a no-op: setAvailability's disabled-reason line
+   * already owns messaging when the session is unavailable, so this must not fight it for the
+   * placeholder. Wiring this from WatchStatus.sessionState() + availability is a later task's
+   * job — this method's own mapping is what's under test here. */
+  setSessionState(s: SessionState): void {
+    if (s === 'unavailable') return
+    const placeholders: Record<Exclude<SessionState, 'unavailable'>, string> = {
+      idle: 'Message, or send your edits…',
+      ready: 'Message, or send your edits…',
+      starting: 'Starting session…',
+      busy: 'Working…',
+      failed: 'Message to retry…',
+    }
+    this.textarea.placeholder = placeholders[s]
+  }
+
+  /** Recomputes composer-send's morph — ■ (interrupt) while a turn is in flight (busyish) AND
+   * the textarea is empty; otherwise ↑ (send). Called on every busyish transition (setBusyish)
+   * and on every textarea keystroke (typing mid-turn flips it back to ↑ immediately). */
+  private updateSendMorph(): void {
+    this.sendIsStop = this.busyish && this.textarea.value.trim() === ''
+    this.sendBtn.textContent = this.sendIsStop ? '■' : '↑'
+    this.sendBtn.setAttribute('aria-label', this.sendIsStop ? 'Stop' : 'Send')
+  }
+
+  /** Seeds the config pickers from a started/config-changed event — only the keys present in
+   * the event are applied, matching the "each select shows a placeholder until seeded"
+   * contract. Programmatic .value / option rebuilds don't fire 'change', so this never loops
+   * back into onConfig. */
   private seedConfigBar(e: Record<string, unknown>): void {
     if (typeof e.model === 'string') this.seedModelOptions(e.model)
     if (typeof e.effort === 'string') this.effortSelect.value = e.effort
@@ -490,8 +651,11 @@ export class SessionFeed {
     const { kind } = e
     switch (kind) {
       case 'started': {
-        const model = typeof e.model === 'string' ? e.model : '?'
-        this.setStatus(`Session started · ${model}`)
+        // Unhides the root even when this 'started' event doesn't itself addRow (e.g. a
+        // started-only fixture) — the retired status row used to do this via setStatus; there
+        // is no status ROW to write it to anymore, but the composer/list must still become
+        // visible the moment a session actually starts.
+        this.root.hidden = false
         // Model re-seeds from the event itself, as before — the started payload IS the source
         // of truth for which model actually booted. Effort/permission carry no such field
         // (control-request-only, or spawn-flag-only for effort), so re-apply the last
@@ -567,7 +731,6 @@ export class SessionFeed {
         break
       }
       case 'ended': {
-        this.setStatus('Session ended')
         this.setBusyish(false)
         this.clearStreamingBubble()
         break
@@ -584,15 +747,9 @@ export class SessionFeed {
   // Rendering helpers
   // ---------------------------------------------------------------------------
 
-  private setStatus(text: string): void {
-    this.statusRow.textContent = text
-    this.statusRow.hidden = false
-    this.root.hidden = false
-  }
-
   private setBusyish(on: boolean): void {
     this.busyish = on
-    this.stopBtn.hidden = !on
+    this.updateSendMorph()
   }
 
   /** Invalidates a stale in-progress streaming bubble (final-review fix 5) — called from

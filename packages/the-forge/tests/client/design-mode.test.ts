@@ -276,10 +276,12 @@ describe('DesignMode selection (M2)', () => {
     expect(drafts.isComparingAll()).toBe(true)
     overlay.resetAllButton.click()
     expect(drafts.elementCount()).toBe(0)
-    // The watch indicator now always renders when design mode is on (even in 'none'
-    // state — the "○ Not linked" hint is deliberate per the 2026-07-05 spec), so the
-    // status strip stays visible when watchers are polled, not just when there are drafts.
-    expect(status.hidden).toBe(false)
+    // The watch strip now renders ONLY for a genuinely linked watcher — 'live' or 'asleep'
+    // (composer consolidation Task 3 reversed the 2026-07-05 upfront "○ Not linked" hint: the
+    // strip no longer renders for 'none'). The watch poll here never resolves synchronously
+    // (real setTimeout(0), not flushed by this test), so watcher state is still its initial
+    // 'none' — with zero drafts and no verifier summary, the strip is now hidden.
+    expect(status.hidden).toBe(true)
   })
 
   it('scroll re-measures the selection even when a hover frame is queued', () => {
@@ -491,30 +493,42 @@ describe('DesignMode multi-select (B6)', () => {
   })
 })
 
-describe('DesignMode send-to-agent (M4)', () => {
+// The standalone 'Send to agent' button was retired by composer consolidation (Task 3): the
+// composer's ↑ (.chat-send) is now the single send surface for both drafted edits and typed
+// chat. clickSend() is the drop-in trigger these tests use in place of the old
+// overlay.sendButton.click() — same button element the "chat input cluster wiring" describe
+// block already drives. The old button's flash-copy feedback ('No changes'/'Already sent'/
+// 'Send failed'/the per-rung 'Sent — …' labels) went away WITH the button — there is nothing
+// left to assert text content on, so those assertions are dropped; the underlying mechanics
+// (POST calls, duplicate filtering, registered ids, onSendComplete) are still asserted below.
+// sentLabelFor's own rung-copy matrix stays covered directly in watch.test.ts.
+describe('DesignMode composer send verb — drafts (M4 / Task 3)', () => {
   /** Flushes enough microtasks for the /queue POST *and* the chained /dispatch POST to settle. */
   async function flushSend(): Promise<void> {
     for (let i = 0; i < 6; i++) await Promise.resolve()
   }
 
-  it('a send where every draft is a no-op does not POST and flashes "No changes"', async () => {
+  function clickSend(panelRoot: HTMLElement): void {
+    ;(panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+  }
+
+  it('a send where every draft is a no-op does not POST /queue', async () => {
     const fetchMock = vi.fn((url: string) => {
       // feed start() fetches the events stream — park it, don't throw
       if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
       return Promise.resolve({ ok: true, json: async () => ({}) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     // jsdom's UA stylesheet gives <button> a 2px default border-width — drafting the same
     // value is a genuine no-op (same shape as a user scrubbing a value back to its original).
     drafts.apply(btn, 'border-top-width', '2px')
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await flushSend()
     // After wiring the SessionFeed, start() always fetches /session/events — check no /queue POST
     expect(fetchMock).not.toHaveBeenCalledWith('/__the-forge/queue', expect.anything())
-    expect(overlay.sendButton.textContent).toBe('No changes')
     expect(mode.sent.size()).toBe(0)
   })
 
@@ -540,11 +554,11 @@ describe('DesignMode send-to-agent (M4)', () => {
       return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { overlay, mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await flushSend() // request is now in flight
 
     overlay.copyButton.click()
@@ -552,49 +566,48 @@ describe('DesignMode send-to-agent (M4)', () => {
     expect(writeText).toHaveBeenCalledTimes(1) // copy is the manual escape hatch — never blocked by in-flight state
   })
 
-  it('re-clicking Send with an identical in-flight request does not re-queue and flashes "Already sent"', async () => {
+  it('re-clicking Send with an identical in-flight request does not re-queue', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
       if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
       return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await flushSend() // first send settles — drafts stay live until verification
 
-    overlay.sendButton.click() // impatient second click, nothing re-edited
+    clickSend(panel.root) // impatient second click, nothing re-edited
     await flushSend()
 
     const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
     expect(queueCalls).toHaveLength(1)
-    expect(overlay.sendButton.textContent).toBe('Already sent')
     expect(mode.sent.pendingIds()).toEqual(['q1'])
   })
 
-  it("reverting all drafts while another send is in flight flashes 'No changes', not 'Already sent' (agrees with Copy)", async () => {
+  it('reverting all drafts while another send is in flight does not re-queue (agrees with Copy\'s "No changes")', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
       if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
       return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await flushSend() // q1 in flight
 
     drafts.apply(btn, 'padding-top', '') // reverted to the original — the builder now produces nothing
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await flushSend()
 
-    expect(overlay.sendButton.textContent).toBe('No changes')
     expect(fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')).toHaveLength(1)
+    expect(mode.sent.pendingIds()).toEqual(['q1'])
   })
 
   it('re-editing an in-flight element to a NEW value sends again (not a duplicate)', async () => {
@@ -605,15 +618,15 @@ describe('DesignMode send-to-agent (M4)', () => {
       return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await flushSend()
 
     drafts.apply(btn, 'padding-top', '32px') // user kept editing — new value
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await flushSend()
 
     const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
@@ -629,18 +642,17 @@ describe('DesignMode send-to-agent (M4)', () => {
       throw new Error(`unexpected fetch: ${url}`)
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await flushSend()
     expect(fetchMock).toHaveBeenCalledWith('/__the-forge/queue', expect.objectContaining({ method: 'POST' }))
     const queueCall = fetchMock.mock.calls.find(([url]) => url === '/__the-forge/queue') as unknown as [string, { body: string }]
     const body = JSON.parse(queueCall[1].body)
     expect(body.markdown).toContain('# Design change request')
     expect(mode.sent.pendingIds()).toEqual(['q1'])
-    expect(overlay.sendButton.textContent).toBe('Sent — typed /forge-design into your session')
   })
 
   describe('dispatch chaining after a successful queue POST', () => {
@@ -657,98 +669,13 @@ describe('DesignMode send-to-agent (M4)', () => {
 
     it('POSTs /dispatch after a successful /queue POST', async () => {
       const fetchMock = stubQueueThenDispatch({ rung: 'tmux', detail: 'x' })
-      const { overlay, mode, drafts } = fullSetup()
+      const { mode, drafts, panel } = fullSetup()
       mode.setActive(true)
       const btn = document.querySelector('button')! as HTMLElement
       drafts.apply(btn, 'padding-top', '24px')
-      overlay.sendButton.click()
+      clickSend(panel.root)
       await flushSend()
       expect(fetchMock).toHaveBeenCalledWith('/__the-forge/dispatch', expect.objectContaining({ method: 'POST' }))
-    })
-
-    it('surfaces "typed /forge-design into your session" for rung tmux', async () => {
-      stubQueueThenDispatch({ rung: 'tmux', detail: 'x' })
-      const { overlay, mode, drafts } = fullSetup()
-      mode.setActive(true)
-      const btn = document.querySelector('button')! as HTMLElement
-      drafts.apply(btn, 'padding-top', '24px')
-      overlay.sendButton.click()
-      await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — typed /forge-design into your session')
-    })
-
-    it('surfaces "typed /forge-design into your session" for rung applescript', async () => {
-      stubQueueThenDispatch({ rung: 'applescript', detail: 'x' })
-      const { overlay, mode, drafts } = fullSetup()
-      mode.setActive(true)
-      const btn = document.querySelector('button')! as HTMLElement
-      drafts.apply(btn, 'padding-top', '24px')
-      overlay.sendButton.click()
-      await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — typed /forge-design into your session')
-    })
-
-    it('surfaces "opened in Cursor" for rung deeplink', async () => {
-      stubQueueThenDispatch({ rung: 'deeplink', detail: 'x' })
-      const { overlay, mode, drafts } = fullSetup()
-      mode.setActive(true)
-      const btn = document.querySelector('button')! as HTMLElement
-      drafts.apply(btn, 'padding-top', '24px')
-      overlay.sendButton.click()
-      await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — opened in Cursor')
-    })
-
-    it('surfaces "type /forge-design in Claude Code" for rung manual with the default agent', async () => {
-      stubQueueThenDispatch({ rung: 'manual', detail: 'x' })
-      const { overlay, mode, drafts } = fullSetup()
-      mode.setActive(true)
-      const btn = document.querySelector('button')! as HTMLElement
-      drafts.apply(btn, 'padding-top', '24px')
-      overlay.sendButton.click()
-      await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — queued. Type /forge-watch in Claude Code to link & apply')
-    })
-
-    it('surfaces the configured agent name for rung manual (cursor)', async () => {
-      ;(globalThis as { __THE_FORGE__?: { agent?: string } }).__THE_FORGE__ = { agent: 'cursor' }
-      stubQueueThenDispatch({ rung: 'manual', detail: 'x' })
-      const { overlay, mode, drafts } = fullSetup()
-      mode.setActive(true)
-      const btn = document.querySelector('button')! as HTMLElement
-      drafts.apply(btn, 'padding-top', '24px')
-      overlay.sendButton.click()
-      await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — queued. Type /forge-watch in Cursor to link & apply')
-      delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
-    })
-
-    it('surfaces the configured agent name for rung manual (codex)', async () => {
-      ;(globalThis as { __THE_FORGE__?: { agent?: string } }).__THE_FORGE__ = { agent: 'codex' }
-      stubQueueThenDispatch({ rung: 'manual', detail: 'x' })
-      const { overlay, mode, drafts } = fullSetup()
-      mode.setActive(true)
-      const btn = document.querySelector('button')! as HTMLElement
-      drafts.apply(btn, 'padding-top', '24px')
-      overlay.sendButton.click()
-      await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — queued. Type /forge-watch in Codex to link & apply')
-      delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
-    })
-
-    it('falls back to the manual label for an unrecognized rung value (defensive default, not the typed-into-session label)', async () => {
-      // The client's Rung union is a compile-time-only guarantee — the value actually arrives
-      // over the network as untyped JSON, so a server bug/future rung/typo must not silently
-      // fall into the "typed /forge-design into your session" bucket (which would misreport that a
-      // terminal was actually typed into).
-      stubQueueThenDispatch({ rung: 'not-a-real-rung', detail: 'x' })
-      const { overlay, mode, drafts } = fullSetup()
-      mode.setActive(true)
-      const btn = document.querySelector('button')! as HTMLElement
-      drafts.apply(btn, 'padding-top', '24px')
-      overlay.sendButton.click()
-      await flushSend()
-      expect(overlay.sendButton.textContent).toBe('Sent — queued. Type /forge-watch in Claude Code to link & apply')
     })
 
     it('still registers the send as successful (pending id tracked) even if /dispatch POST fails', async () => {
@@ -759,38 +686,13 @@ describe('DesignMode send-to-agent (M4)', () => {
         throw new Error(`unexpected fetch: ${url}`)
       })
       vi.stubGlobal('fetch', fetchMock)
-      const { overlay, mode, drafts } = fullSetup()
+      const { mode, drafts, panel } = fullSetup()
       mode.setActive(true)
       const btn = document.querySelector('button')! as HTMLElement
       drafts.apply(btn, 'padding-top', '24px')
-      overlay.sendButton.click()
+      clickSend(panel.root)
       await flushSend()
       expect(mode.sent.pendingIds()).toEqual(['q1'])
-      // Falls back to a manual-style label since dispatch itself couldn't be reached.
-      expect(overlay.sendButton.textContent).toBe('Sent — queued. Type /forge-watch in Claude Code to link & apply')
-    })
-
-    it('re-enables the send button only after both /queue and /dispatch settle', async () => {
-      let resolveDispatch!: (v: { ok: boolean; json: () => Promise<{ rung: string; detail: string }> }) => void
-      const fetchMock = vi.fn((url: string) => {
-        if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
-        if (url === '/__the-forge/dispatch') return new Promise((resolve) => (resolveDispatch = resolve))
-        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {}) // feed start() parks here
-        throw new Error(`unexpected fetch: ${url}`)
-      })
-      vi.stubGlobal('fetch', fetchMock)
-      const { overlay, mode, drafts } = fullSetup()
-      mode.setActive(true)
-      const btn = document.querySelector('button')! as HTMLElement
-      drafts.apply(btn, 'padding-top', '24px')
-      overlay.sendButton.click()
-      await Promise.resolve()
-      await Promise.resolve()
-      await Promise.resolve()
-      expect(overlay.sendButton.disabled).toBe(true)
-      resolveDispatch({ ok: true, json: async () => ({ rung: 'tmux', detail: 'x' }) })
-      await flushSend()
-      expect(overlay.sendButton.disabled).toBe(false)
     })
   })
 
@@ -798,11 +700,11 @@ describe('DesignMode send-to-agent (M4)', () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q1' }) })
     vi.stubGlobal('fetch', fetchMock)
     ;(globalThis as { __THE_FORGE__?: { secret?: string } }).__THE_FORGE__ = { secret: 'shh-secret' }
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await Promise.resolve()
     await Promise.resolve()
     const headers = fetchMock.mock.calls[0][1].headers
@@ -813,11 +715,11 @@ describe('DesignMode send-to-agent (M4)', () => {
   it('send omits X-Forge-Secret header when no secret is configured', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q1' }) })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await Promise.resolve()
     await Promise.resolve()
     const headers = fetchMock.mock.calls[0][1].headers
@@ -827,11 +729,11 @@ describe('DesignMode send-to-agent (M4)', () => {
   it('send registers the live element mapping keyed by the server-assigned id', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'q7' }) })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await Promise.resolve()
     await Promise.resolve()
     const entry = mode.sent.take('q7')!
@@ -842,33 +744,31 @@ describe('DesignMode send-to-agent (M4)', () => {
     expect(entry.elements[0].draftProps).toEqual(['padding-top'])
   })
 
-  it('send failure flashes "Send failed" and leaves drafts untouched', async () => {
+  it('send failure leaves drafts untouched and registers nothing', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error('network down'))
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await Promise.resolve()
     await Promise.resolve()
-    expect(overlay.sendButton.textContent).toBe('Send failed')
     expect(mode.sent.size()).toBe(0)
     expect(drafts.hasDrafts(btn)).toBe(true)
     expect(btn.style.getPropertyValue('padding-top')).toBe('24px')
   })
 
-  it('send failure on non-200 response also flashes "Send failed"', async () => {
+  it('send failure on non-200 response also registers nothing', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: 'bad' }) })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await Promise.resolve()
     await Promise.resolve()
-    expect(overlay.sendButton.textContent).toBe('Send failed')
     expect(mode.sent.size()).toBe(0)
   })
 
@@ -878,55 +778,15 @@ describe('DesignMode send-to-agent (M4)', () => {
       return Promise.resolve({ ok: true, json: async () => ({ rung: 'tmux', detail: 'x' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     const onSendComplete = vi.fn()
     mode.onSendComplete = onSendComplete
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    clickSend(panel.root)
     await flushSend()
     expect(onSendComplete).toHaveBeenCalledTimes(1)
-  })
-
-  it('disables the send button while the POST is in flight, and re-enables on success', async () => {
-    let resolveFetch!: (v: { ok: boolean; json: () => Promise<{ id: string }> }) => void
-    const fetchMock = vi.fn((url: string) => {
-      if (url === '/__the-forge/queue') return new Promise((resolve) => (resolveFetch = resolve))
-      return Promise.resolve({ ok: true, json: async () => ({ rung: 'tmux', detail: 'x' }) })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
-    mode.setActive(true)
-    const btn = document.querySelector('button')! as HTMLElement
-    drafts.apply(btn, 'padding-top', '24px')
-
-    overlay.sendButton.click()
-    await Promise.resolve()
-    expect(overlay.sendButton.disabled).toBe(true)
-
-    resolveFetch({ ok: true, json: async () => ({ id: 'q1' }) })
-    await flushSend()
-    expect(overlay.sendButton.disabled).toBe(false)
-  })
-
-  it('disables the send button while the POST is in flight, and re-enables on failure', async () => {
-    let rejectFetch!: (e: Error) => void
-    const fetchMock = vi.fn().mockReturnValue(new Promise((_resolve, reject) => (rejectFetch = reject)))
-    vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
-    mode.setActive(true)
-    const btn = document.querySelector('button')! as HTMLElement
-    drafts.apply(btn, 'padding-top', '24px')
-
-    overlay.sendButton.click()
-    await Promise.resolve()
-    expect(overlay.sendButton.disabled).toBe(true)
-
-    rejectFetch(new Error('network down'))
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(overlay.sendButton.disabled).toBe(false)
   })
 
   it('two rapid clicks result in exactly one /queue POST (re-entrancy guard)', async () => {
@@ -935,16 +795,428 @@ describe('DesignMode send-to-agent (M4)', () => {
       return Promise.resolve({ ok: true, json: async () => ({ rung: 'tmux', detail: 'x' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
 
-    overlay.sendButton.click()
-    overlay.sendButton.click()
+    clickSend(panel.root)
+    clickSend(panel.root)
     await flushSend()
     const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
     expect(queueCalls).toHaveLength(1)
+  })
+})
+
+// The send-everything verb itself (composer consolidation Task 3): feed.onSend combines the
+// drafts leg (sendDrafts) and the chat leg (sendChat) behind ONE gesture, drafts first when
+// both are present — see the why-comment on feed.onSend in index.ts for the nudge-before-FIFO
+// rationale. Also covers the watch strip's new linked-only gating and the setSessionState
+// wiring off the same watch poll tick refreshStatus already runs from.
+describe('composer send-everything verb + watch strip gating (Task 3)', () => {
+  function clickSend(panelRoot: HTMLElement): void {
+    ;(panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+  }
+
+  it('drafts only: fires the queue+dispatch POSTs and never POSTs /session/say', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    clickSend(panel.root)
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    const urls = fetchMock.mock.calls.map(([url]) => url)
+    expect(urls).toContain('/__the-forge/queue')
+    expect(urls).toContain('/__the-forge/dispatch')
+    expect(urls).not.toContain('/__the-forge/session/say')
+  })
+
+  it('text only: POSTs /session/say and never POSTs /queue', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, panel } = fullSetup()
+    mode.setActive(true)
+    const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'hello there'
+    clickSend(panel.root)
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    const urls = fetchMock.mock.calls.map(([url]) => url)
+    expect(urls).toContain('/__the-forge/session/say')
+    expect(urls).not.toContain('/__the-forge/queue')
+  })
+
+  it('both drafts and text: queues drafts FIRST, then POSTs /session/say (server nudge-before-FIFO order)', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'also do this'
+    clickSend(panel.root)
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    const urls = fetchMock.mock.calls.map(([url]) => url)
+    const queueIndex = urls.indexOf('/__the-forge/queue')
+    const sayIndex = urls.indexOf('/__the-forge/session/say')
+    expect(queueIndex).toBeGreaterThanOrEqual(0)
+    expect(sayIndex).toBeGreaterThan(queueIndex) // chat leg fires only after the queue leg settles
+    expect(textarea.value).toBe('') // the chat leg still ran its own clear-on-success
+  })
+
+  // Review fix 1 (Important): the old button flashed 'Send failed' on a failed /queue POST —
+  // with the button retired, the drafts leg must surface its failure through the same
+  // transient-error mechanism the chat leg already uses (renderTransientError), or a failed
+  // queue POST is completely invisible.
+  it('a network-failed /queue POST renders the transient queue-failure row', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.reject(new Error('network down'))
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    clickSend(panel.root)
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    const errorRow = panel.root.querySelector('.session-error-row')
+    expect(errorRow).not.toBeNull()
+    expect(errorRow?.textContent).toBe('failed to queue changes — try again')
+    expect(mode.sent.size()).toBe(0)
+  })
+
+  it('a non-2xx /queue response also renders the transient queue-failure row', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: false, status: 500, json: async () => ({ error: 'boom' }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    clickSend(panel.root)
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    const errorRow = panel.root.querySelector('.session-error-row')
+    expect(errorRow).not.toBeNull()
+    expect(errorRow?.textContent).toBe('failed to queue changes — try again')
+  })
+
+  // Pinned semantics (review fix 1): the two legs are independent by design — a failed queue
+  // POST must not swallow the typed message; the chat leg still fires, after the queue attempt.
+  it('queue failure with text present: error row renders AND the chat leg still fires, after the queue attempt', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.reject(new Error('network down'))
+      if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'still say this'
+    clickSend(panel.root)
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    const errorRow = panel.root.querySelector('.session-error-row')
+    expect(errorRow?.textContent).toBe('failed to queue changes — try again')
+    const urls = fetchMock.mock.calls.map(([url]) => url)
+    const queueIndex = urls.indexOf('/__the-forge/queue')
+    const sayIndex = urls.indexOf('/__the-forge/session/say')
+    expect(queueIndex).toBeGreaterThanOrEqual(0)
+    expect(sayIndex).toBeGreaterThan(queueIndex) // chat still after the queue attempt — ordering holds even on failure
+    expect(textarea.value).toBe('') // the chat leg itself succeeded, so its clear-on-success ran
+  })
+
+  // Review fix 2 (Minor): the chat text is captured ONCE at onSend entry — a user clearing (or
+  // re-editing) the textarea while the awaited /queue POST is in flight must not change what
+  // the chat leg sends. Pinned semantics: send what the user had at click time.
+  it('clearing the textarea while the queue POST is in flight still says the ORIGINAL click-time text', async () => {
+    let resolveQueue!: (v: { ok: boolean; json: () => Promise<{ id: string }> }) => void
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return new Promise((resolve) => (resolveQueue = resolve))
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'original message'
+    clickSend(panel.root)
+    await Promise.resolve() // /queue POST now in flight, unresolved
+
+    textarea.value = '' // user clears (or rewrites) mid-gap — must not affect what gets said
+    resolveQueue({ ok: true, json: async () => ({ id: 'q1' }) })
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+
+    const sayCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/session/say')
+    expect(sayCalls).toHaveLength(1)
+    const body = JSON.parse((sayCalls[0] as unknown as [string, { body: string }])[1].body)
+    expect(body.text).toBe('original message')
+  })
+
+  // Final-review fix C1: embedded:false (chat unavailable) must gate the CHAT leg only —
+  // drafts ride the queue/watcher path that opt-out deliberately preserves, so a terminal-only
+  // consumer who has drafted edits ('N edits drafted' pill) must still have a working send
+  // surface to get them onto the queue.
+  describe('drafts send survives embedded:false (final-review fix C1)', () => {
+    it('sessionEnabled:false + drafts present: ↑ stays enabled, click sends queue+dispatch, never /session/say', async () => {
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+        if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+        if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle', sessionEnabled: false }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, drafts, panel } = fullSetup()
+      mode.setActive(true)
+      await new Promise((r) => setTimeout(r, 5)) // watch's immediate 0ms poll settles (real timers)
+
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      // updateDraftPill() is wired off drafts.onChange, immediate (not debounced) — the pill
+      // (and therefore the send button) reflects the new count synchronously.
+      const sendBtn = panel.root.querySelector('.composer-send') as HTMLButtonElement
+      const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      expect(textarea.disabled).toBe(true) // chat leg stays gated
+      expect(sendBtn.disabled).toBe(false) // but drafts license the send surface
+
+      sendBtn.click()
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+
+      const urls = fetchMock.mock.calls.map(([url]) => url)
+      expect(urls).toContain('/__the-forge/queue')
+      expect(urls).toContain('/__the-forge/dispatch')
+      expect(urls).not.toContain('/__the-forge/session/say')
+    })
+
+    it('sessionEnabled:false + no drafts: ↑ stays disabled', async () => {
+      const fetchMock = vi.fn((url: string) => {
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle', sessionEnabled: false }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, panel } = fullSetup()
+      mode.setActive(true)
+      await new Promise((r) => setTimeout(r, 5))
+
+      const sendBtn = panel.root.querySelector('.composer-send') as HTMLButtonElement
+      expect(sendBtn.disabled).toBe(true)
+    })
+
+    it('a leftover chat text in a disabled textarea is never POSTed to /session/say (belt-and-braces)', async () => {
+      // Simulates the disabled-textarea-can-still-hold-text case the fix's belt-and-braces
+      // guard targets: directly stuffing .value bypasses the DOM's own disabled-input
+      // protections (unlike a real user keystroke, which a disabled textarea can't receive),
+      // so onSend's own availability check is what has to catch this, not the textarea's
+      // disabled attribute.
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+        if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+        if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle', sessionEnabled: false }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, drafts, panel } = fullSetup()
+      mode.setActive(true)
+      await new Promise((r) => setTimeout(r, 5))
+
+      const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      expect(textarea.disabled).toBe(true)
+      textarea.value = 'stale message' // bypasses the disabled attribute, same as a stale pre-disable value would
+
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      const sendBtn = panel.root.querySelector('.composer-send') as HTMLButtonElement
+      sendBtn.click()
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+
+      const urls = fetchMock.mock.calls.map(([url]) => url)
+      expect(urls).toContain('/__the-forge/queue')
+      expect(urls).not.toContain('/__the-forge/session/say')
+    })
+  })
+
+  // Final-review fix C2 + deferred-Minor 7: the chat leg lost milestone-B's double-send
+  // protection when the send gesture moved to the composer's ↑ (Task 1/3) — a rapid double
+  // click must not fire two /session/say POSTs, and clearText-on-success must not wipe text the
+  // user retyped during the round trip.
+  describe('chat double-send guard + safe clear (final-review fix C2 / deferred-Minor 7)', () => {
+    it('double-click ↑ with text in flight sends exactly ONE /session/say POST', async () => {
+      let resolveSay!: (v: { ok: boolean; status: number; json: () => Promise<{ ok: boolean }> }) => void
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/session/say') return new Promise((resolve) => (resolveSay = resolve))
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, panel } = fullSetup()
+      mode.setActive(true)
+      const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      textarea.value = 'hello there'
+      clickSend(panel.root)
+      await Promise.resolve() // the first /say POST is now in flight, unresolved
+      clickSend(panel.root) // second click before the first round trip settles
+      await Promise.resolve()
+      resolveSay({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+
+      const sayCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/session/say')
+      expect(sayCalls).toHaveLength(1)
+    })
+
+    it('original-unchanged text IS cleared once the /say POST resolves ok', async () => {
+      let resolveSay!: (v: { ok: boolean; status: number; json: () => Promise<{ ok: boolean }> }) => void
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/session/say') return new Promise((resolve) => (resolveSay = resolve))
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, panel } = fullSetup()
+      mode.setActive(true)
+      const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      textarea.value = 'original message'
+      clickSend(panel.root)
+      await Promise.resolve()
+      resolveSay({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+
+      expect(textarea.value).toBe('')
+    })
+
+    it('text retyped during the /say round trip is NOT wiped on success', async () => {
+      let resolveSay!: (v: { ok: boolean; status: number; json: () => Promise<{ ok: boolean }> }) => void
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/session/say') return new Promise((resolve) => (resolveSay = resolve))
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, panel } = fullSetup()
+      mode.setActive(true)
+      const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      textarea.value = 'original message'
+      clickSend(panel.root)
+      await Promise.resolve() // /say POST now in flight
+
+      textarea.value = 'retyped while waiting' // user edits mid-flight — must survive
+      resolveSay({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+
+      expect(textarea.value).toBe('retyped while waiting')
+    })
+  })
+
+  describe('watch strip gating', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('is present for a linked (live) watcher, absent once the state is embedded-session-active or none', async () => {
+      let watcher: 'live' | 'none' = 'live'
+      let session: 'idle' | 'ready' = 'idle'
+      const fetchMock = vi.fn((url: string) => {
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        if (url === '/__the-forge/status?ids=') return Promise.resolve({ ok: true, json: async () => ({ watcher, session }) })
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { overlay, mode } = fullSetup()
+      mode.setActive(true)
+      await vi.advanceTimersByTimeAsync(0) // the immediate first poll
+
+      const watchLabel = overlay.host.shadowRoot!.getElementById('watch') as HTMLElement
+      expect(watchLabel.hidden).toBe(false)
+      expect(watchLabel.textContent).toContain('Linked to Claude Code')
+
+      // Embedded session active, watcher itself unlinked — the strip must go away: the
+      // composer's own placeholder + drafts pill carry this state now, not the strip.
+      watcher = 'none'
+      session = 'ready'
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(watchLabel.hidden).toBe(true)
+
+      // Plain 'none' (nothing ever linked, no embedded session either) — also absent, a
+      // reversal of the old upfront "○ Not linked" hint.
+      session = 'idle'
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(watchLabel.hidden).toBe(true)
+    })
+
+    it('is present for an asleep watcher too (still a linked-terminal state)', async () => {
+      const fetchMock = vi.fn((url: string) => {
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        if (url === '/__the-forge/status?ids=')
+          return Promise.resolve({ ok: true, json: async () => ({ watcher: 'asleep', session: 'idle' }) })
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { overlay, mode } = fullSetup()
+      mode.setActive(true)
+      await vi.advanceTimersByTimeAsync(0)
+
+      const watchLabel = overlay.host.shadowRoot!.getElementById('watch') as HTMLElement
+      expect(watchLabel.hidden).toBe(false)
+      expect(watchLabel.textContent).toContain('asleep')
+    })
+  })
+
+  describe('setSessionState wiring off the watch poll tick', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('the composer placeholder tracks the embedded-session lifecycle reported by each poll tick', async () => {
+      let session: 'idle' | 'starting' | 'busy' = 'idle'
+      const fetchMock = vi.fn((url: string) => {
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        if (url === '/__the-forge/status?ids=') return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session }) })
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, panel } = fullSetup()
+      mode.setActive(true)
+      await vi.advanceTimersByTimeAsync(0)
+
+      const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      expect(textarea.placeholder).toBe('Message, or send your edits…')
+
+      session = 'busy'
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(textarea.placeholder).toBe('Working…')
+
+      session = 'starting'
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(textarea.placeholder).toBe('Starting session…')
+    })
   })
 })
 
@@ -962,6 +1234,31 @@ describe('change list wiring', () => {
     liveModes.push(mode)
     overlay.attachPanel(mode.panelRoot)
     expect(mode.panelRoot.querySelector('.changes-section')).not.toBeNull()
+  })
+
+  // Composer consolidation Task 2: the Changes list retired its dedicated panel.changesSlot in
+  // favor of living inside the chat composer's drafts disclosure (session-feed.ts) — reuse
+  // proof for ChangeList itself is changelist.test.ts passing byte-unchanged (see CLAUDE.md).
+  it('mounts the (unmodified) ChangeList inside .draft-disclosure, not a dedicated changesSlot', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    const disclosure = mode.panelRoot.querySelector('.draft-disclosure')
+    expect(disclosure).not.toBeNull()
+    expect(disclosure?.querySelector('.changes-section')).not.toBeNull()
+  })
+
+  it('drafting an edit updates the drafts pill via the existing drafts.onChange subscription', () => {
+    const { mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    const pill = mode.panelRoot.querySelector('.draft-pill') as HTMLElement
+    expect(pill.hidden).toBe(true)
+    drafts.apply(btn, 'padding-top', '24px')
+    expect(pill.hidden).toBe(false)
+    expect(pill.textContent).toBe('1 edit drafted')
   })
 
   it('seeds sent rows on a successful send and clears them on deactivate', async () => {
@@ -983,7 +1280,7 @@ describe('change list wiring', () => {
       return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    overlay.sendButton.click()
+    ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
     await flushSend()
     expect(mode.panelRoot.querySelectorAll('.change-row').length).toBeGreaterThan(0)
     expect(mode.panelRoot.querySelector('.chip-sent')).not.toBeNull()
@@ -1265,11 +1562,11 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
       return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { overlay, mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    ;(panel.root.querySelector('.chat-send') as HTMLButtonElement).click()
     await Promise.resolve()
     await Promise.resolve()
 
@@ -1298,11 +1595,11 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
       return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    ;(panel.root.querySelector('.chat-send') as HTMLButtonElement).click()
     await Promise.resolve()
     await Promise.resolve()
     expect(mode.sent.size()).toBe(1)
@@ -1349,13 +1646,13 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
       return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts, panel } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
     mode.select(btn) // panel is showing this element, as it might be while awaiting verification
 
-    overlay.sendButton.click()
+    ;(panel.root.querySelector('.chat-send') as HTMLButtonElement).click()
     await Promise.resolve()
     await Promise.resolve()
 
@@ -1385,11 +1682,11 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
       return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    ;(panel.root.querySelector('.chat-send') as HTMLButtonElement).click()
     await Promise.resolve()
     await Promise.resolve()
 
@@ -2002,7 +2299,7 @@ describe('lifecycle persistence', () => {
     overlay.attachPanel(mode.panelRoot)
     mode.setActive(true)
     ;(mode as never as { drafts: DraftStore }).drafts.apply(second as never, 'padding-top', '24px')
-    overlay.sendButton.click()
+    ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
     for (let i = 0; i < 6; i++) await Promise.resolve() // flush /queue + /dispatch
 
     const persisted = loadLifecycle()
@@ -2175,12 +2472,12 @@ describe('debounced scrub persistence (R2 F-C)', () => {
         return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
       })
       vi.stubGlobal('fetch', fetchMock)
-      const { overlay, mode, drafts } = fullSetup()
+      const { mode, drafts, panel } = fullSetup()
       mode.setActive(true)
       const btn = document.querySelector('button')! as HTMLElement
       drafts.apply(btn, 'padding-top', '24px')
 
-      overlay.sendButton.click()
+      ;(panel.root.querySelector('.chat-send') as HTMLButtonElement).click()
       // Flush microtasks under fake timers without advancing real time.
       for (let i = 0; i < 6; i++) await Promise.resolve()
 
@@ -2672,7 +2969,10 @@ describe('SessionFeed wiring', () => {
     expect(stopSpy).toHaveBeenCalled()
   })
 
-  it('Stop button POSTs /session/interrupt with secret header', async () => {
+  // The standalone Stop button was retired by composer consolidation (Task 1) \u2014 its job moved
+  // onto .composer-send's morph (\u25a0 while busyish and the textarea is empty). This is the
+  // behavior equivalent of the old "Stop button POSTs /session/interrupt" test.
+  it('composer-send, morphed to \u25a0 while busyish, POSTs /session/interrupt with secret header', async () => {
     const assistantLine = JSON.stringify({
       type: 'feed', seq: 1, at: new Date().toISOString(),
       event: { kind: 'assistant-text', text: 'working\u2026' },
@@ -2690,11 +2990,12 @@ describe('SessionFeed wiring', () => {
 
       await flushMicrotasks()
 
-      // Stop button is visible only while busyish (triggered by assistant-text event)
-      const stopBtn = mode.panelRoot.querySelector('.session-stop') as HTMLButtonElement
-      expect(stopBtn).not.toBeNull()
-      expect(stopBtn.hidden).toBe(false)
-      stopBtn.click()
+      // composer-send morphs to \u25a0 only while busyish (triggered by assistant-text event) and
+      // the textarea is empty.
+      const sendBtn = mode.panelRoot.querySelector('.composer-send') as HTMLButtonElement
+      expect(sendBtn).not.toBeNull()
+      expect(sendBtn.textContent).toBe('\u25a0')
+      sendBtn.click()
 
       const calls = fetchMock.mock.calls.filter(
         (c: unknown[]) => c[0] === '/__the-forge/session/interrupt'
@@ -2740,7 +3041,10 @@ describe('SessionFeed wiring', () => {
     }
   })
 
-  it('send flash shows the embedded copy when /dispatch answers rung "embedded"', async () => {
+  // sentLabelFor's 'embedded' rung copy is unit-tested directly in watch.test.ts — there is no
+  // button left to flash it onto (composer consolidation Task 3), so this proves the underlying
+  // mechanics instead: the queued send still registers when /dispatch answers rung 'embedded'.
+  it('registers the queued send when /dispatch answers rung "embedded"', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
       if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'embedded' }) })
@@ -2748,12 +3052,12 @@ describe('SessionFeed wiring', () => {
       return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { overlay, mode, drafts } = fullSetup()
+    const { mode, drafts, panel } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
-    overlay.sendButton.click()
+    ;(panel.root.querySelector('.chat-send') as HTMLButtonElement).click()
     for (let i = 0; i < 6; i++) await Promise.resolve()
-    expect(overlay.sendButton.textContent).toBe('Sent — applying in the embedded session')
+    expect(mode.sent.pendingIds()).toEqual(['q1'])
   })
 })

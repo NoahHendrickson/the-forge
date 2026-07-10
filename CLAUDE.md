@@ -65,11 +65,13 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 
 | Module | Responsibility |
 | --- | --- |
-| `index.ts` | client entry: design-mode toggle, selection wiring, Send button |
+| `index.ts` | client entry: design-mode toggle, selection wiring, drafts-leg plumbing (queue/dispatch/lifecycle) injected into `ComposerSend` |
+| `composer-send.ts` | `ComposerSend` — the send-everything verb: orchestration (drafts-first-when-both) + the chat leg (POSTs `/session/say`), in-flight guard for the chat leg (`draftsInFlight` stays in index.ts, guarding the injected drafts leg) |
 | `source.ts` | parse `data-dc-source` attrs; `TaggedElement` type |
 | `overlay.ts` | shadow-DOM host, hover/selection outlines, the whole CSS design system (string const) |
 | `inspector.ts` | reads an element's computed-style snapshot for the panel |
-| `panel.ts` | the properties panel orchestrator (Panel class) |
+| `panel.ts` | the properties panel orchestrator (Panel class); `feedDivider`/`feedSplit()` are thin pass-throughs to `feed-divider.ts` |
+| `feed-divider.ts` | the panel↔chat drag divider: clamps, dblclick reset, sessionStorage persistence (`FEED_SPLIT_KEY`) |
 | `panel-specs.ts` | RowSpec/SectionSpec types, SECTIONS definition, token-scale helpers (`tokenEntriesFor`); also hosts `defeatFillIfGrowing`, the shared app-CSS-fill defeat policy |
 | `panel-readers.ts` | pure computed-style readers/normalizers (`isFlex`, `normalizeJustify`, font helpers) |
 | `panel-token-ui.ts` | PanelTokenUi — the token affordance cluster: shared TokenPicker instance, scale-field open path, pill boundTokens bookkeeping (B5/Compare rules), color-row token button; plus pillLabelFor/colorDisplay helpers |
@@ -84,10 +86,10 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `ripple.ts` | measures which elements move when a draft lands; flashes ripple outlines |
 | `sent.ts` | `SentChange`/`SentEntry` types only (the registry class was absorbed into `lifecycle.ts`) |
 | `lifecycle.ts` | `LifecycleSession` — the single owner of in-flight send state: verifier store (`SentStore`), UI row state, persistence projection; `take()` resolves in place so terminal stage events still land |
-| `changelist.ts` | Changes lifecycle list (view over `LifecycleSession` + drafts): per-change rows `draft` → `sent` → `applying` → `done`/`failed`, re-send/dismiss |
+| `changelist.ts` | Changes lifecycle list (view over `LifecycleSession` + drafts): per-change rows `draft` → `sent` → `applying` → `done`/`failed`, re-send/dismiss; its `.changes-section` root now mounts inside the composer's draft disclosure (`feed.draftSlot`), not a panel slot of its own |
 | `lifecycle-store.ts` | sessionStorage persistence + the canonical element resolver (`resolveElement`/`locateBySource`) used by verifier, healing, and restore |
 | `request.ts` | change-request builder: before/after CSS + utility deltas, markdown |
-| `session-feed.ts` | the chat surface: bubbles/deltas/diffs/input/chip/pickers + stream consumer |
+| `session-feed.ts` | the chat surface: bubbles/deltas/diffs + stream consumer, and the unified chat composer (chip/textarea/model-effort-permission controls, the send↔stop ↑/■ morph, placeholder statuses, and the drafts pill hosting the ChangeList in its disclosure); `onSend` is the only send hook — `ComposerSend` (composer-send.ts) owns what sending means |
 | `verifier.ts` | post-send polling, computed-style verification, backoff when server is gone |
 | `watch.ts` | watcher-state poller (design-mode-on only) for the linked-session indicator |
 | `ui/button.ts` | `createButton` — the single place overlay buttons are born |
@@ -146,6 +148,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 - An unignored `.the-forge/` full-reloads Tailwind v4 apps on every Send — the queue markdown is made of class names, so Tailwind's scanner tracks `queue.json`. The plugin now writes the `.gitignore` entry and watcher excludes itself; if a consumer still sees reload-on-send, check that the `.gitignore` write didn't fail.
 - The Chrome DevTools Automatic Workspace Folders well-known path (`/.well-known/appspecific/com.chrome.devtools.json`, `DEVTOOLS_JSON_PATH` in `src/server/endpoints.ts`) lives outside the `/__the-forge/` prefix, so it needs its own routing on each framework: Vite's middleware in `createForgeMiddleware` checks for it before the `/__the-forge/` prefix gate; Next has no equivalent middleware hook, so `src/next/index.ts`'s rewrites merge adds a dedicated rewrite rule alongside the `/__the-forge/*` proxy rule, both pointing at the same sidecar.
 - **In-band CLI errors (rate limit, auth) arrive as `result` events with exit code 0** — the CLI exits cleanly and returns the error text in the `result` message body. Read the event text, not the exit code; mapping these to `session-error` instead of `turn-complete {isError:true}` is wrong.
+- The Changes list lives INSIDE the composer's draft disclosure since 2026-07-09 — `.changes-section` hooks unchanged, just reparented (`index.ts` appends `changeList.root` to `feed.draftSlot` instead of a panel `changesSlot`). The disclosure is a div toggle (`.draft-disclosure.open`), not a `<details>`, and the drafts pill (`.draft-pill`) is its only opener.
 
 ## Cursor Cloud specific instructions
 
@@ -153,4 +156,4 @@ Startup dependency refresh (`npm install`) is handled automatically; the notes b
 
 - **Build the plugin before running the demo app.** `fixtures/demo-app/vite.config.ts` imports `theForge` from `the-forge/vite`, which resolves to `packages/the-forge/dist/vite.js`. A fresh checkout has no `dist/`, so `npm run dev -w demo-app` will fail to resolve the plugin until you run `npm run build` first (`dist/` is gitignored, so it never arrives with the repo).
 - **Reaching the dev server:** it prints `http://localhost:5173/` but binds IPv6 (`[::1]:5173`); `localhost:5173` works from the browser and `curl` in this VM. Verify the transform is live with `curl -s http://localhost:5173/src/App.tsx` — served JSX carries `"data-dc-source": "file:line:col"` attributes (JSON-quoted in the compiled output, not raw `data-dc-source="..."`).
-- **The demo dev server is the E2E harness** for the design-mode loop (toggle bottom-right → select element → edit in panel → "Send to agent"). A successful send writes a pending item to `.the-forge/queue.json` at the git root; that plus the plugin-written `.mcp.json` and `.claude/commands/` are gitignored runtime state — never commit them.
+- **The demo dev server is the E2E harness** for the design-mode loop (toggle bottom-right → select element → edit in panel → ↑ in the composer). A successful send writes a pending item to `.the-forge/queue.json` at the git root; that plus the plugin-written `.mcp.json` and `.claude/commands/` are gitignored runtime state — never commit them.

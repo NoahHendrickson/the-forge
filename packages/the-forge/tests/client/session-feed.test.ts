@@ -99,11 +99,199 @@ describe('class shape', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Composer shell (composer consolidation Task 1): card, controls row, placeholder
+// statuses — retires the status row, standalone Stop button, and .session-config-bar.
+// ---------------------------------------------------------------------------
+
+describe('composer shell', () => {
+  it('builds .chat-composer with chip, textarea, and controls rows', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const composer = feed.root.querySelector('.chat-composer')
+    expect(composer).not.toBeNull()
+    expect(composer?.querySelector('.composer-chips')).not.toBeNull()
+    expect(composer?.querySelector('.chat-textarea')).not.toBeNull()
+    expect(composer?.querySelector('.composer-controls')).not.toBeNull()
+  })
+
+  it('the element chip lives inside .composer-chips', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const chips = feed.root.querySelector('.composer-chips')
+    expect(chips?.querySelector('.chat-chip')).not.toBeNull()
+  })
+
+  it('the three pickers and composer-send live in .composer-controls, and .session-config-bar is gone', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const controls = feed.root.querySelector('.composer-controls')
+    expect(controls).not.toBeNull()
+    expect(controls?.querySelector('.session-model')).not.toBeNull()
+    expect(controls?.querySelector('.session-effort')).not.toBeNull()
+    expect(controls?.querySelector('.session-permission')).not.toBeNull()
+    expect(controls?.querySelector('.composer-send')).not.toBeNull()
+    expect(feed.root.querySelector('.session-config-bar')).toBeNull()
+  })
+
+  it('the status row and standalone Stop button are gone', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    expect(feed.root.querySelector('.session-status')).toBeNull()
+    expect(feed.root.querySelector('.session-stop')).toBeNull()
+  })
+
+  it('getText/clearText round-trip: getText trims, clearText empties and re-evaluates the morph', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = '  hello world  '
+    expect(feed.getText()).toBe('hello world')
+    feed.clearText()
+    expect(textarea.value).toBe('')
+    expect(feed.getText()).toBe('')
+  })
+
+  it('placeholder mapping follows setSessionState', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    feed.setSessionState('idle')
+    expect(textarea.placeholder).toBe('Message, or send your edits…')
+    feed.setSessionState('ready')
+    expect(textarea.placeholder).toBe('Message, or send your edits…')
+    feed.setSessionState('starting')
+    expect(textarea.placeholder).toBe('Starting session…')
+    feed.setSessionState('busy')
+    expect(textarea.placeholder).toBe('Working…')
+    feed.setSessionState('failed')
+    expect(textarea.placeholder).toBe('Message to retry…')
+  })
+
+  it("setSessionState('unavailable') leaves the placeholder untouched — setAvailability owns that path", () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    feed.setSessionState('busy')
+    expect(textarea.placeholder).toBe('Working…')
+    feed.setSessionState('unavailable')
+    expect(textarea.placeholder).toBe('Working…') // unchanged
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Drafts pill + disclosure (composer consolidation Task 2) — the pill lives in
+// .composer-chips alongside the element chip; .draft-disclosure is a sibling block, above
+// .composer-chips, hosting draftSlot (where index.ts appends the unmodified ChangeList's root).
+// ---------------------------------------------------------------------------
+
+describe('drafts pill + disclosure', () => {
+  it('the drafts pill lives in .composer-chips alongside the element chip', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const chips = feed.root.querySelector('.composer-chips') as HTMLElement
+    expect(chips.querySelector('.draft-pill')).not.toBeNull()
+    expect(chips.querySelector('.chat-chip')).not.toBeNull()
+  })
+
+  it('.draft-disclosure is a sibling of .composer-chips inside .chat-composer, not nested in it', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const composer = feed.root.querySelector('.chat-composer') as HTMLElement
+    const chips = composer.querySelector('.composer-chips') as HTMLElement
+    const disclosure = composer.querySelector('.draft-disclosure') as HTMLElement
+    expect(disclosure).not.toBeNull()
+    expect(disclosure.parentElement).toBe(composer)
+    expect(chips.contains(disclosure)).toBe(false)
+  })
+
+  it('draftSlot is reachable inside .draft-disclosure and hosts appended content', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const marker = document.createElement('div')
+    marker.className = 'marker'
+    feed.draftSlot.appendChild(marker)
+    const disclosure = feed.root.querySelector('.draft-disclosure') as HTMLElement
+    expect(disclosure.contains(marker)).toBe(true)
+  })
+
+  it('pill is hidden at zero drafts and not applying', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    expect(pill.hidden).toBe(true)
+  })
+
+  it('setDraftState(2, false) unhides the pill with the plural count copy', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setDraftState({ count: 2, applying: false })
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    expect(pill.hidden).toBe(false)
+    expect(pill.textContent).toBe('2 edits drafted')
+  })
+
+  it('setDraftState(1, false) uses the singular copy', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setDraftState({ count: 1, applying: false })
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    expect(pill.textContent).toBe('1 edit drafted')
+  })
+
+  it('applying:true shows "applying…" and wins over a nonzero count', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setDraftState({ count: 3, applying: true })
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    expect(pill.hidden).toBe(false)
+    expect(pill.textContent).toBe('applying…')
+  })
+
+  it('applying:true with count 0 still shows the pill', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setDraftState({ count: 0, applying: true })
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    expect(pill.hidden).toBe(false)
+    expect(pill.textContent).toBe('applying…')
+  })
+
+  it('count===0 && !applying hides the pill and force-closes the disclosure', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    const disclosure = feed.root.querySelector('.draft-disclosure') as HTMLElement
+    feed.setDraftState({ count: 2, applying: false })
+    pill.click()
+    expect(disclosure.classList.contains('open')).toBe(true)
+    feed.setDraftState({ count: 0, applying: false })
+    expect(pill.hidden).toBe(true)
+    expect(disclosure.classList.contains('open')).toBe(false)
+  })
+
+  it('clicking the pill toggles .draft-disclosure open/closed', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setDraftState({ count: 1, applying: false })
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    const disclosure = feed.root.querySelector('.draft-disclosure') as HTMLElement
+    expect(disclosure.classList.contains('open')).toBe(false)
+    pill.click()
+    expect(disclosure.classList.contains('open')).toBe(true)
+    pill.click()
+    expect(disclosure.classList.contains('open')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Stream consumption — rows rendered from events
 // ---------------------------------------------------------------------------
 
 describe('stream consumption', () => {
-  it('renders a status row from a started event', async () => {
+  // Composer consolidation (Task 1) retired the status row — a 'started' event no longer
+  // writes chrome text anywhere; it just unhides the root and seeds the model select (the
+  // model info's real home now).
+  it('a started event unhides the feed root and seeds the model select (status row retired)', async () => {
     const feed = new SessionFeed({
       fetchFn: makeFetchFn([feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-3-5-sonnet', mcpLoaded: true })]),
     })
@@ -111,9 +299,9 @@ describe('stream consumption', () => {
     feed.start()
     await flush()
     expect(feed.root.hidden).toBe(false)
-    const status = feed.root.querySelector('.session-status')
-    expect(status).not.toBeNull()
-    expect(status?.textContent).toContain('claude-3-5-sonnet')
+    expect(feed.root.querySelector('.session-status')).toBeNull()
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    expect(modelSelect.value).toBe('claude-3-5-sonnet')
     feed.stop()
   })
 
@@ -126,8 +314,9 @@ describe('stream consumption', () => {
     document.body.appendChild(feed.root)
     feed.start()
     await flush()
+    // 'started' no longer adds a row of its own (status row retired) — only the text row.
     const rows = feed.root.querySelectorAll('.session-row')
-    expect(rows.length).toBeGreaterThanOrEqual(2) // status + text row
+    expect(rows.length).toBeGreaterThanOrEqual(1)
     expect(feed.root.textContent).toContain('Hello from Claude')
     feed.stop()
   })
@@ -179,19 +368,20 @@ describe('stream consumption', () => {
     feed.stop()
   })
 
-  it('session-error event renders an error row and hides Stop', async () => {
+  it('session-error event renders an error row and morphs composer-send back to send mode', async () => {
     const lines = [feedLine(1, { kind: 'session-error', text: 'Spawn failed' })]
     const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
     document.body.appendChild(feed.root)
     feed.start()
     await flush()
     expect(feed.root.querySelector('.session-error-row')?.textContent).toContain('Spawn failed')
-    const stop = feed.root.querySelector('.session-stop') as HTMLButtonElement | null
-    expect(stop?.hidden).toBe(true)
+    const sendBtn = feed.root.querySelector('.composer-send') as HTMLButtonElement
+    expect(sendBtn.textContent).toBe('↑')
+    expect(sendBtn.getAttribute('aria-label')).toBe('Send')
     feed.stop()
   })
 
-  it('ended event sets status to ended and hides Stop', async () => {
+  it('ended event flips busyish off — composer-send morphs back to send mode (status row retired)', async () => {
     const lines = [
       feedLine(1, { kind: 'assistant-text', text: 'hi' }), // makes busyish=true
       feedLine(2, { kind: 'ended' }),
@@ -200,25 +390,26 @@ describe('stream consumption', () => {
     document.body.appendChild(feed.root)
     feed.start()
     await flush()
-    expect(feed.root.querySelector('.session-status')?.textContent).toContain('ended')
-    const stop = feed.root.querySelector('.session-stop') as HTMLButtonElement | null
-    expect(stop?.hidden).toBe(true)
+    expect(feed.root.querySelector('.session-status')).toBeNull()
+    const sendBtn = feed.root.querySelector('.composer-send') as HTMLButtonElement
+    expect(sendBtn.textContent).toBe('↑')
     feed.stop()
   })
 
-  it('Stop button is visible while busyish (after tool-started, before turn-complete)', async () => {
+  it('composer-send morphs to ■ while busyish and the textarea is empty (after tool-started, before turn-complete)', async () => {
     // Only tool-started, no turn-complete → busyish stays true
     const lines = [feedLine(1, { kind: 'tool-started', toolId: 't1', name: 'Write', detail: 'x.ts' })]
     const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
     document.body.appendChild(feed.root)
     feed.start()
     await flush()
-    const stop = feed.root.querySelector('.session-stop') as HTMLButtonElement | null
-    expect(stop?.hidden).toBe(false)
+    const sendBtn = feed.root.querySelector('.composer-send') as HTMLButtonElement
+    expect(sendBtn.textContent).toBe('■')
+    expect(sendBtn.getAttribute('aria-label')).toBe('Stop')
     feed.stop()
   })
 
-  it('Stop button fires onInterrupt', async () => {
+  it('composer-send in stop mode fires onInterrupt on click', async () => {
     const lines = [feedLine(1, { kind: 'assistant-text', text: 'working…' })]
     let fired = 0
     const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
@@ -226,9 +417,32 @@ describe('stream consumption', () => {
     document.body.appendChild(feed.root)
     feed.start()
     await flush()
-    const stop = feed.root.querySelector('.session-stop') as HTMLButtonElement
+    const stop = feed.root.querySelector('.composer-send') as HTMLButtonElement
+    expect(stop.textContent).toBe('■')
     stop.click()
     expect(fired).toBe(1)
+    feed.stop()
+  })
+
+  it('typing while busyish flips composer-send back to ↑, and click fires onSend, not onInterrupt', async () => {
+    const lines = [feedLine(1, { kind: 'assistant-text', text: 'working…' })]
+    let interrupts = 0
+    let sends = 0
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    feed.onInterrupt = () => interrupts++
+    feed.onSend = () => sends++
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const sendBtn = feed.root.querySelector('.composer-send') as HTMLButtonElement
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    expect(sendBtn.textContent).toBe('■') // busyish + empty
+    textarea.value = 'hold on'
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(sendBtn.textContent).toBe('↑') // typing flips the morph back immediately
+    sendBtn.click()
+    expect(sends).toBe(1)
+    expect(interrupts).toBe(0)
     feed.stop()
   })
 
@@ -772,73 +986,30 @@ describe('config-changed row', () => {
 // ---------------------------------------------------------------------------
 
 describe('chat input cluster', () => {
-  // Final-review fix 3: the optimistic clear moved to the success path — trySend no longer
-  // clears synchronously (a non-ok response must never silently lose what the user typed).
-  // onSay may return a Promise<boolean> (ok); a plain void return (as most of the tests below
-  // use) never resolves truthy, so those tests only assert on `said`, not on clearing.
-  it('send fires onSay with trimmed text + chip element (success clears both, async)', async () => {
-    const said: Array<[string, { source: string; tag: string } | undefined]> = []
+  // Composer consolidation (Task 1) decoupled the send GESTURE from the chat POST: trySend no
+  // longer reads currentChip or awaits/clears anything itself — it just guards and fires onSend
+  // (fire-and-forget). A host's onSend implementation (ComposerSend#send, composer-send.ts, for
+  // the real app) is what reads getText()/getChip() and decides what sending means; these tests
+  // prove the feed's own gesture-to-onSend wiring, not any particular onSend behavior. The old
+  // `onSay` hook these tests used to also stub was deleted from SessionFeed's public surface by
+  // the composer-send extraction — the chat POST lives in ComposerSend#postSay now.
+  it('send fires onSend once text is non-empty — the feed no longer decides what sending means', () => {
+    const sent: number[] = []
     const feed = new SessionFeed()
-    feed.onSay = (text, element) => {
-      said.push([text, element])
-      return Promise.resolve(true)
-    }
+    feed.onSend = () => sent.push(1)
     document.body.appendChild(feed.root)
 
     feed.setChip({ source: 'src/App.tsx:12:3', tag: 'div', label: 'div · App.tsx:12' })
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
     textarea.value = '  make it bigger  '
-    const sendBtn = feed.root.querySelector('.chat-send') as HTMLButtonElement
+    const sendBtn = feed.root.querySelector('.composer-send') as HTMLButtonElement
     sendBtn.click()
 
-    expect(said).toEqual([['make it bigger', { source: 'src/App.tsx:12:3', tag: 'div' }]])
-    // Not cleared synchronously — only once the returned promise resolves ok.
+    expect(sent).toEqual([1])
+    // Text/chip are no longer cleared by the feed itself — that's the host onSend
+    // implementation's job now, via getText()/clearText()/getChip()/setChip(null).
     expect(textarea.value).toBe('  make it bigger  ')
-
-    await Promise.resolve()
-    await Promise.resolve()
-
-    expect(textarea.value).toBe('')
-    expect((feed.root.querySelector('.chat-chip') as HTMLElement).hidden).toBe(true)
-  })
-
-  it('success clears text and chip', async () => {
-    const feed = new SessionFeed()
-    feed.onSay = () => Promise.resolve(true)
-    document.body.appendChild(feed.root)
-    feed.setChip({ source: 'x:1:1', tag: 'div', label: 'div · x:1' })
-    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
-    const sendBtn = feed.root.querySelector('.chat-send') as HTMLButtonElement
-    textarea.value = 'ship it'
-    sendBtn.click()
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(textarea.value).toBe('')
-    expect((feed.root.querySelector('.chat-chip') as HTMLElement).hidden).toBe(true)
-    expect(textarea.disabled).toBe(false)
-    expect(sendBtn.disabled).toBe(false)
-  })
-
-  it('non-429 failure renders error row and preserves the typed text', async () => {
-    const feed = new SessionFeed()
-    document.body.appendChild(feed.root)
-    feed.onSay = () => {
-      // The host (index.ts) is the one that actually renders the error row on a non-ok
-      // response/network failure — this stub mirrors that contract at the feed level.
-      feed.renderTransientError('message failed to send — try again')
-      return Promise.resolve(false)
-    }
-    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
-    const sendBtn = feed.root.querySelector('.chat-send') as HTMLButtonElement
-    textarea.value = 'keep me'
-    sendBtn.click()
-    await Promise.resolve()
-    await Promise.resolve()
-    const errorRow = feed.root.querySelector('.session-error-row')
-    expect(errorRow?.textContent).toBe('message failed to send — try again')
-    expect(textarea.value).toBe('keep me') // nothing restored/cleared on failure
-    expect(textarea.disabled).toBe(false) // un-disabled after the failed send
-    expect(sendBtn.disabled).toBe(false)
+    expect((feed.root.querySelector('.chat-chip') as HTMLElement).hidden).toBe(false)
   })
 
   it('textarea has maxLength 4000 (mirrors CHAT_TEXT_MAX server cap)', () => {
@@ -847,60 +1018,57 @@ describe('chat input cluster', () => {
     expect(textarea.maxLength).toBe(4000)
   })
 
-  it('Cmd-Enter sends', () => {
-    const said: string[] = []
+  it('Cmd-Enter fires onSend', () => {
+    const sent: number[] = []
     const feed = new SessionFeed()
-    feed.onSay = (text) => { said.push(text) }
+    feed.onSend = () => sent.push(1)
     document.body.appendChild(feed.root)
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
     textarea.value = 'hello'
     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, cancelable: true }))
-    expect(said).toEqual(['hello'])
+    expect(sent).toEqual([1])
   })
 
-  it('Ctrl-Enter also sends', () => {
-    const said: string[] = []
+  it('Ctrl-Enter also fires onSend', () => {
+    const sent: number[] = []
     const feed = new SessionFeed()
-    feed.onSay = (text) => { said.push(text) }
+    feed.onSend = () => sent.push(1)
     document.body.appendChild(feed.root)
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
     textarea.value = 'hello'
     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }))
-    expect(said).toEqual(['hello'])
+    expect(sent).toEqual([1])
   })
 
   it('plain Enter (no modifier) does not send', () => {
-    const said: string[] = []
+    const sent: number[] = []
     const feed = new SessionFeed()
-    feed.onSay = (text) => { said.push(text) }
+    feed.onSend = () => sent.push(1)
     document.body.appendChild(feed.root)
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
     textarea.value = 'hello'
     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
-    expect(said).toEqual([])
+    expect(sent).toEqual([])
   })
 
-  it('empty (or whitespace-only) text never fires onSay', () => {
-    const said: string[] = []
+  it('empty (or whitespace-only) text never fires onSend', () => {
+    const sent: number[] = []
     const feed = new SessionFeed()
-    feed.onSay = (text) => { said.push(text) }
+    feed.onSend = () => sent.push(1)
     document.body.appendChild(feed.root)
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
-    const sendBtn = feed.root.querySelector('.chat-send') as HTMLButtonElement
+    const sendBtn = feed.root.querySelector('.composer-send') as HTMLButtonElement
     textarea.value = '   '
     sendBtn.click()
-    expect(said).toEqual([])
+    expect(sent).toEqual([])
   })
 
-  it('send with no chip omits element', () => {
-    const said: Array<[string, { source: string; tag: string } | undefined]> = []
+  it('getChip() returns null with no chip attached, and {source, tag} once one is', () => {
     const feed = new SessionFeed()
-    feed.onSay = (text, element) => { said.push([text, element]) }
     document.body.appendChild(feed.root)
-    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
-    textarea.value = 'plain message'
-    ;(feed.root.querySelector('.chat-send') as HTMLButtonElement).click()
-    expect(said).toEqual([['plain message', undefined]])
+    expect(feed.getChip()).toBeNull()
+    feed.setChip({ source: 'src/x.tsx:1:1', tag: 'div', label: 'div · x.tsx:1' })
+    expect(feed.getChip()).toEqual({ source: 'src/x.tsx:1:1', tag: 'div' })
   })
 
   it('chip renders label and × clears it', () => {
@@ -945,16 +1113,72 @@ describe('chat input cluster', () => {
     expect(reason.hidden).toBe(true)
   })
 
-  it('disabled input never fires onSay even if trySend is somehow reached', () => {
-    const said: string[] = []
+  it('disabled input never fires onSend even if trySend is somehow reached', () => {
+    const sent: number[] = []
     const feed = new SessionFeed()
-    feed.onSay = (text) => { said.push(text) }
+    feed.onSend = () => sent.push(1)
     document.body.appendChild(feed.root)
     feed.setAvailability({ enabled: false, reason: 'nope' })
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
     textarea.value = 'hello'
     ;(feed.root.querySelector('.chat-send') as HTMLButtonElement).click()
-    expect(said).toEqual([])
+    expect(sent).toEqual([])
+  })
+
+  // Final-review fix C1: availability (embedded:false) must gate the CHAT leg only — drafts
+  // ride the queue/watcher path that opt-out deliberately preserves, so a terminal-only
+  // consumer with drafted edits must still have a working send surface.
+  describe('drafts-only send survives availability:false (final-review fix C1)', () => {
+    it('sendBtn stays enabled when availability is disabled but drafts are present', () => {
+      const feed = new SessionFeed()
+      document.body.appendChild(feed.root)
+      const sendBtn = feed.root.querySelector('.composer-send') as HTMLButtonElement
+      const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+
+      feed.setAvailability({ enabled: false, reason: 'Embedded sessions are disabled in config' })
+      feed.setDraftState({ count: 2, applying: false })
+
+      expect(textarea.disabled).toBe(true) // the textarea itself stays disabled — only chat is gated
+      expect(sendBtn.disabled).toBe(false) // but the send surface stays usable for drafts
+    })
+
+    it('sendBtn re-disables once draftCount drops back to 0 while availability is still false', () => {
+      const feed = new SessionFeed()
+      document.body.appendChild(feed.root)
+      const sendBtn = feed.root.querySelector('.composer-send') as HTMLButtonElement
+
+      feed.setAvailability({ enabled: false, reason: 'nope' })
+      feed.setDraftState({ count: 1, applying: false })
+      expect(sendBtn.disabled).toBe(false)
+
+      feed.setDraftState({ count: 0, applying: false })
+      expect(sendBtn.disabled).toBe(true)
+    })
+
+    it('order-independence: setDraftState before setAvailability still lands on sendBtn enabled', () => {
+      const feed = new SessionFeed()
+      document.body.appendChild(feed.root)
+      const sendBtn = feed.root.querySelector('.composer-send') as HTMLButtonElement
+
+      feed.setDraftState({ count: 3, applying: false })
+      feed.setAvailability({ enabled: false, reason: 'nope' })
+      expect(sendBtn.disabled).toBe(false)
+    })
+
+    it('a disabled textarea with drafts present still fires onSend on click (drafts-only send)', () => {
+      const sent: number[] = []
+      const feed = new SessionFeed()
+      feed.onSend = () => sent.push(1)
+      document.body.appendChild(feed.root)
+
+      feed.setAvailability({ enabled: false, reason: 'nope' })
+      feed.setDraftState({ count: 1, applying: false })
+      const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      expect(textarea.disabled).toBe(true)
+
+      ;(feed.root.querySelector('.composer-send') as HTMLButtonElement).click()
+      expect(sent).toEqual([1])
+    })
   })
 
   it('renderTransientError renders a session-error-row', () => {

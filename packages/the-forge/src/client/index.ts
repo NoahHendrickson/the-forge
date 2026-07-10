@@ -18,9 +18,10 @@ import { snapshotRects, diffRects } from './ripple'
 import { resetTokensCache } from './tokens'
 import { ChangeList } from './changelist'
 import { type AgentName } from './agent'
-import { WatchStatus, sentLabelFor, watchIndicatorFor, type Rung } from './watch'
+import { WatchStatus, watchIndicatorFor, type Rung } from './watch'
 import { SessionFeed } from './session-feed'
 import { saveLifecycle, loadLifecycle, sourceIndex, locateBySource, type PersistedLifecycle } from './lifecycle-store'
+import { ComposerSend } from './composer-send'
 
 /** Rapid edits (e.g. dragging a number field) within this window reuse the first snapshot. */
 const RIPPLE_DEBOUNCE_MS = 300
@@ -83,6 +84,18 @@ export class DesignMode {
    * otherwise fire a second identical /queue POST. isDuplicate() can't catch this: the failed
    * record is already resolved, outside the sent-but-unverified duplicate window. */
   private resendsInFlight = new Set<SentSeed>()
+  /** Re-entrancy guard for sendDrafts() (composer consolidation Task 3) — replaces the old
+   * overlay.sendButton.disabled guard now that the button is retired; a rapid double-fire of
+   * the composer's ↑ (or onSend racing a second call before the first's /queue POST settles)
+   * must still produce exactly one /queue POST. Cleared once the round trip (queue AND
+   * dispatch) fully settles, matching the old button's re-enable timing.
+   *
+   * This flag and ComposerSend's own chatInFlight (composer-send.ts) are TWO independent
+   * in-flight guards, deliberately not collapsed into one shared phase enum — see the why-comment
+   * on the ComposerSend class (composer-send extraction review round) for the overlap they exist
+   * to allow: the chat leg's /session/say POST can already be in flight while this leg's
+   * /dispatch POST is still settling. */
+  private draftsInFlight = false
   /** Watcher-state poller — runs ONLY while design mode is on (started/stopped in
    * setActive), so watch mode adds zero idle overhead to the page. Session-state
    * transitions also fire refreshStatus so the embedded-session indicator stays current. The
@@ -97,6 +110,10 @@ export class DesignMode {
   /** Live activity stream from the embedded session (Task 7/8) — idle-zero: start/stop
    * mirror this.watch.start()/stop() in setActive so no fetch or timer survives design mode off. */
   private feed = new SessionFeed({ headers: forgeSecretHeaders })
+  /** Single owner of the send-everything verb's orchestration + chat leg (composer-send.ts) —
+   * constructed in the constructor body (needs this.feed/this.drafts/this.watch, not available
+   * to a field initializer at this position). */
+  private composerSend: ComposerSend
   private buttonTimers = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>()
 
   // Layout-ripple state: idle-zero — only populated during the post-edit window.
@@ -164,8 +181,19 @@ export class DesignMode {
       onSelect: (el) => this.select(el),
       onResend: (seed) => this.resend(seed),
     })
-    this.panel.changesSlot.appendChild(this.changeList.root)
+    // ChangeList now mounts inside the SessionFeed's own drafts disclosure (composer
+    // consolidation Task 2) instead of a dedicated panel.changesSlot — ChangeList itself is
+    // NOT modified; feed.draftSlot is just a new parent for the same root element.
+    this.feed.draftSlot.appendChild(this.changeList.root)
     this.panel.feedSlot.appendChild(this.feed.root)
+    // Drafts pill state (composer consolidation Task 2): count comes from the DraftStore (the
+    // same elementCount() refreshStatus already reads), applying is true while any lifecycle
+    // row is still sent/applying — the same stage predicate ChangeList's own inFlightProps
+    // uses to decide which draft rows are already represented by an in-flight row. Pushed from
+    // TWO independent triggers below: drafts.onChange (count can change) and session.onChange
+    // (applying can change) — either alone must be able to flip the pill without waiting on
+    // the other.
+    this.session.onChange(() => this.updateDraftPill())
     // Fire-and-forget with .catch(() => {}) — same style as the unlink button's fetch;
     // a failed interrupt just means the session keeps running (degraded, not broken).
     this.feed.onInterrupt = () => {
@@ -179,32 +207,20 @@ export class DesignMode {
         body: JSON.stringify({ id, allow }),
       }).catch(() => {})
     }
-    // The feed now AWAITS this result (trySend in session-feed.ts) and only clears its
-    // textarea/chip on a true resolution — the optimistic clear moved to the success path so
-    // a failed send never silently discards what the user typed (final-review fix 3). Every
-    // non-ok response and every network failure renders a transient .session-error-row before
-    // resolving false; 429 keeps its specific queue-full copy, everything else gets the
-    // generic retry copy.
-    this.feed.onSay = (text, element) => {
-      return fetch('/__the-forge/session/say', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
-        body: JSON.stringify({ text, element }),
-      })
-        .then((res) => {
-          if (res.ok) return true
-          if (res.status === 429) {
-            this.feed.renderTransientError('chat queue full — wait for the current turn')
-          } else {
-            this.feed.renderTransientError('message failed to send — try again')
-          }
-          return false
-        })
-        .catch(() => {
-          this.feed.renderTransientError('message failed to send — try again')
-          return false
-        })
-    }
+    // ComposerSend (composer-send.ts) owns the send-everything verb's orchestration and its chat
+    // leg — the composer's ↑ is the only send surface, firing whichever of drafts/chat are
+    // present in one gesture. The drafts leg (sendDrafts, below) stays here and is injected in —
+    // see ComposerSendOpts#sendDraftsLeg's doc comment for why. feed.onSay (SessionFeed's old
+    // chat-POST hook) is gone — the POST now happens inside ComposerSend#postSay via the
+    // postJson host hook below, so index.ts no longer needs to wire a /session/say fetch itself.
+    this.composerSend = new ComposerSend({
+      feed: this.feed,
+      postJson: (path, body) => this.postJson(path, body),
+      sendDraftsLeg: () => this.sendDrafts(),
+      hasDrafts: () => this.drafts.elementCount() > 0,
+      chatAvailable: () => this.watch.sessionEnabled() !== false,
+    })
+    this.feed.onSend = () => this.composerSend.send()
     this.feed.onConfig = (cfg) => {
       void fetch('/__the-forge/session/config', {
         method: 'POST',
@@ -227,44 +243,6 @@ export class DesignMode {
       if (this.session.applyStage(e)) this.persist()
     })
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
-    overlay.sendButton.addEventListener('click', () => {
-      if (overlay.sendButton.disabled) return // re-entrancy guard: a POST is already in flight
-      // R2 F-C: prepareSend reads the DraftStore directly (always current), so this flush isn't
-      // needed for the request itself — it's needed so persist()/the Changes list are coherent
-      // with what's about to be sent, rather than lagging behind by up to 300ms.
-      this.flushDraftSync()
-      const originalLabel = 'Send to agent'
-      const prepared = this.prepareSend()
-      if (prepared === 'no-changes' || prepared === 'already-sent') {
-        this.flashButton(overlay.sendButton, prepared === 'already-sent' ? 'Already sent' : 'No changes', originalLabel)
-        return
-      }
-      const { request, pairs } = prepared
-      const md = renderMarkdown(request)
-      const onSendFailed = (): void => {
-        overlay.sendButton.disabled = false
-        this.flashButton(overlay.sendButton, 'Send failed', originalLabel)
-      }
-      // Dispatch reaches for the user's already-RUNNING agent session (tmux/AppleScript/Cursor
-      // deeplink) so they never have to type anything but Enter — see server/dispatch.ts. A
-      // dispatch failure (network hiccup, non-200) must NOT undo the send: the request is
-      // already safely queued, so we degrade to the same copy as rung 'manual'.
-      const agent: AgentName = window.__THE_FORGE__?.agent ?? 'claude-code'
-      const onDispatchSettled = (rung: Rung | null): void => {
-        overlay.sendButton.disabled = false
-        // Watcher state read at settle time (not captured at click) — the poller may have
-        // learned the watcher fell asleep while the queue/dispatch round-trip was in flight.
-        this.flashButton(overlay.sendButton, sentLabelFor(rung ?? 'manual', agent, this.watch.current()), originalLabel)
-        this.onSendComplete?.()
-      }
-      const onSendOk = (id: string): void => {
-        const seeds = this.pairsToSeeds(pairs)
-        this.registerQueuedSend(id, seeds)
-        this.postDispatch(onDispatchSettled)
-      }
-      overlay.sendButton.disabled = true
-      this.queueRequest(request, md, onSendOk, onSendFailed)
-    })
     overlay.copyButton.addEventListener('click', () => {
       // Same empty guard as Send, but deliberately NOT the in-flight duplicate filter: copying
       // the markdown of a request that is still queued is a legitimate manual fallback (e.g.
@@ -312,9 +290,22 @@ export class DesignMode {
       // is a querySelectorAll+JSON.stringify+sessionStorage.setItem+replaceChildren — the same
       // "quiet window" debounce the layout-ripple logic already uses for the same reason.
       this.refreshStatus()
+      // updateDraftPill() stays immediate (not debounced) alongside refreshStatus() — it only
+      // reads drafts.elementCount() (a Map size), nothing scan/stringify-shaped.
+      this.updateDraftPill()
       if (this.draftSyncTimer) clearTimeout(this.draftSyncTimer)
       this.draftSyncTimer = setTimeout(() => this.flushDraftSync(), RIPPLE_DEBOUNCE_MS)
     }
+  }
+
+  /** Pushes {count, applying} to the SessionFeed's drafts pill (composer consolidation Task 2)
+   * — called from drafts.onChange (constructor) and session.onChange (constructor). count is
+   * the DraftStore's live element count; applying mirrors ChangeList's own inFlightProps stage
+   * predicate ('sent' | 'applying' rows are still in flight). */
+  private updateDraftPill(): void {
+    const count = this.drafts.elementCount()
+    const applying = this.session.records().some((r) => r.stage === 'sent' || r.stage === 'applying')
+    this.feed.setDraftState({ count, applying })
   }
 
   /** Cancels the pending debounced draft-sync timer (if any) and runs syncDrafts()+persist()
@@ -334,7 +325,7 @@ export class DesignMode {
     return this.panel.root
   }
 
-  /** The Send gate, kept out of the click handler so that stays wiring-only: builds the
+  /** The Send gate, kept out of sendDrafts() so that stays orchestration-only: builds the
    * request, applies the double-Send guard, and names why nothing survived. Duplicate
    * filtering drops elements whose exact change set is already in flight (sent, not yet
    * verified) — re-queueing an identical request would instruct the agent to redo utility
@@ -418,6 +409,72 @@ export class DesignMode {
       .catch(() => onSettled(null))
   }
 
+  /** Host-injected POST helper handed to ComposerSend (composer-send.ts) as `postJson` — shares
+   * the same secret-header + JSON-body shape as queueRequest/postDispatch/onConfig's own fetch
+   * calls above, so composer-send.ts never has to read globalThis.__THE_FORGE__ itself. */
+  private postJson(path: string, body: unknown): Promise<Response> {
+    return fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+      body: JSON.stringify(body),
+    })
+  }
+
+  /** The drafts leg of the send-everything verb (composer consolidation Task 3) — extracted
+   * verbatim from the old standalone 'Send to agent' button's click handler (the button itself
+   * is retired: the composer's ↑ is the only send surface now, via ComposerSend#send in
+   * composer-send.ts, which this method is injected into as sendDraftsLeg). Behavior is
+   * unchanged — queue POST -> dispatch POST -> lifecycle row registration — only the
+   * button-flash feedback (flashButton(overlay.sendButton, ...)) is gone, since there is no
+   * button left to flash. Resolves once the /queue leg SETTLES (registered or failed) —
+   * deliberately NOT once /dispatch also settles — so ComposerSend#send can chain the chat leg
+   * immediately after, matching the server's nudge-before-FIFO ordering (edits land in the
+   * queue ahead of the chat turn) without stalling on dispatch's best-effort round trip.
+   *
+   * This method (and draftsInFlight above) stayed here rather than moving into composer-send.ts
+   * whole — see ComposerSendOpts#sendDraftsLeg's doc comment in composer-send.ts for why: it
+   * reaches into DraftStore/LifecycleSession/Verifier/ChangeList state and shares its
+   * queue/dispatch plumbing with resend(), below. */
+  private sendDrafts(): Promise<void> {
+    if (this.draftsInFlight) return Promise.resolve() // re-entrancy guard: a POST is already in flight
+    // R2 F-C: prepareSend reads the DraftStore directly (always current), so this flush isn't
+    // needed for the request itself — it's needed so persist()/the Changes list are coherent
+    // with what's about to be sent, rather than lagging behind by up to 300ms.
+    this.flushDraftSync()
+    const prepared = this.prepareSend()
+    if (prepared === 'no-changes' || prepared === 'already-sent') return Promise.resolve()
+    const { request, pairs } = prepared
+    const md = renderMarkdown(request)
+    this.draftsInFlight = true
+    return new Promise<void>((resolveQueueLeg) => {
+      const onSendFailed = (): void => {
+        // The old button flashed 'Send failed' here — with the button retired, the same
+        // transient-error row the chat leg already uses is the surviving failure surface
+        // (review fix 1): a silently-dropped queue POST would leave the user believing their
+        // edits were sent.
+        this.feed.renderTransientError('failed to queue changes — try again')
+        this.draftsInFlight = false
+        resolveQueueLeg()
+      }
+      // Dispatch reaches for the user's already-RUNNING agent session (tmux/AppleScript/Cursor
+      // deeplink) so they never have to type anything but Enter — see server/dispatch.ts. A
+      // dispatch failure (network hiccup, non-200) must NOT undo the send: the request is
+      // already safely queued, so we degrade to the same copy as rung 'manual' (no visible
+      // label anymore, but onSendComplete/the guard release must still happen).
+      const onDispatchSettled = (): void => {
+        this.draftsInFlight = false
+        this.onSendComplete?.()
+      }
+      const onSendOk = (id: string): void => {
+        const seeds = this.pairsToSeeds(pairs)
+        this.registerQueuedSend(id, seeds)
+        resolveQueueLeg() // queue leg settled — dispatch continues below, unawaited
+        this.postDispatch(onDispatchSettled)
+      }
+      this.queueRequest(request, md, onSendOk, onSendFailed)
+    })
+  }
+
   /** Re-queues one failed element-change as a fresh request. Safe and unfiltered by design:
    * a failed apply changed no source, and failed items have already left the
    * sent-but-unverified set the duplicate filter checks. Reuses the queue → dispatch path
@@ -448,7 +505,10 @@ export class DesignMode {
       },
       () => {
         this.resendsInFlight.delete(seed)
-        this.flashButton(this.overlay.sendButton, 'Send failed', 'Send to agent')
+        // No button left to flash 'Send failed' onto (composer consolidation Task 3 retired
+        // 'Send to agent') — the failed row itself stays visible with a re-clickable Re-send
+        // button (see the F5 why-comment above), which is feedback enough that the re-queue
+        // attempt didn't land.
       }
     )
   }
@@ -613,12 +673,17 @@ export class DesignMode {
   private refreshStatus(): void {
     if (!this.active) return
     const agent: AgentName = window.__THE_FORGE__?.agent ?? 'claude-code'
-    this.overlay.updateStatus(
-      this.drafts.elementCount(),
-      this.drafts.isComparingAll(),
-      this.verifierSummary || undefined,
-      watchIndicatorFor(this.watch.current(), agent, this.watch.sessionState())
-    )
+    const watcherState = this.watch.current()
+    // The watch strip (panel footer, Overlay's #status) now renders ONLY for a genuinely
+    // LINKED watcher — 'live' or 'asleep' (composer consolidation Task 3). Embedded-session
+    // states no longer get a strip of their own: feed.setSessionState's placeholder text and
+    // the drafts pill already carry that state, so a strip too would just duplicate it. 'none'
+    // renders no strip either — a reversal of the 2026-07-05 upfront "○ Not linked" hint,
+    // revisited now that the composer itself surfaces link state without needing the strip.
+    // Passing no session arg to watchIndicatorFor is deliberate: its embedded-precedence branch
+    // must never fire here regardless of the live session state.
+    const watchIndicator = watcherState === 'live' || watcherState === 'asleep' ? watchIndicatorFor(watcherState, agent) : undefined
+    this.overlay.updateStatus(this.drafts.elementCount(), this.drafts.isComparingAll(), this.verifierSummary || undefined, watchIndicator)
     // Availability derivation lives HERE (the host), not in the feed — setAvailability is a
     // dumb setter. refreshStatus is wired to WatchStatus's onChange/onSessionChange/onTick
     // (constructor, all three), so this recomputes on EVERY poll cycle regardless of whether
@@ -632,6 +697,10 @@ export class DesignMode {
         ? { enabled: false, reason: 'Embedded sessions are disabled in config' }
         : { enabled: true }
     )
+    // Embedded-session lifecycle -> composer placeholder text (composer consolidation Task 3).
+    // Piggybacks on the same three triggers refreshStatus already runs from — do NOT add a
+    // second poller for this.
+    this.feed.setSessionState(this.watch.sessionState())
   }
 
   /** Serializes the full lifecycle to sessionStorage. Called only from state-change hooks

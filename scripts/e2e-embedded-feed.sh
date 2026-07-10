@@ -61,6 +61,19 @@ fi
 echo "==> Building plugin"
 (cd "$ROOT" && npm run build) >/dev/null
 
+# Build sanity (composer consolidation) — the served browser bundle must carry the composer's
+# new class hooks. These are the only surfaces this HTTP-level script can't assert via the feed
+# stream (they're DOM/CSS, not NDJSON), so grep the built client bundle directly: a refactor that
+# renamed/dropped .chat-composer / .draft-pill / .feed-divider would sail past every feed
+# assertion below but ship a broken overlay. CSS class names are test hooks — extend, don't rename.
+echo "==> Build sanity: composer class hooks in dist/client.js"
+CLIENT_JS="$ROOT/packages/the-forge/dist/client.js"
+[[ -f "$CLIENT_JS" ]] || fail "dist/client.js missing after build"
+for hook in chat-composer draft-pill feed-divider; do
+  grep -q "$hook" "$CLIENT_JS" || fail "dist/client.js missing composer hook: $hook"
+done
+pass "dist/client.js carries chat-composer, draft-pill, feed-divider"
+
 echo "==> Starting demo-app with fake claude on PATH"
 # Prefer IPv4 so curl to 127.0.0.1 matches the bound address.
 (

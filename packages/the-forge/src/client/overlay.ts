@@ -137,6 +137,19 @@ button {
 }
 .panel-resize:hover, .panel-resize:active { background: rgba(13,153,255,0.4); }
 ` +
+// feedSlot (composer-consolidation Task 4): 45% flex-basis is the CSS default, live only
+// until a drag or a restored persisted split sets an inline px flex-basis (Panel.feedSplit()
+// returns -1 while this default is in effect). display: flex here is what makes
+// .session-feed's own `flex: 1 1 auto` (overlay.ts's .session-feed rule, further below)
+// actually fill the slot instead of sizing to content.
+`.panel-feed-slot {
+  flex: 0 1 45%; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+.feed-divider {
+  flex: none; height: 5px; cursor: row-resize; position: relative; z-index: 5;
+}
+.feed-divider:hover, .feed-divider:active { background: rgba(13,153,255,0.4); }
+` +
 // .panel-mode's corner anchor moved onto the shared .panel-head-actions wrapper below —
 // .panel-prompt (content-sized, unlike .panel-mode's fixed 22px) needs a flex sibling to
 // sit beside rather than a guessed fixed right offset.
@@ -543,25 +556,23 @@ button {
 `
 ` +
 // Session feed — live activity stream from the embedded session (Task 7).
-// .session-feed: the section container, mirrors .changes-section structure.
+// .session-feed: the section container, mirrors .changes-section structure; flex-grows to
+// fill the space freed by the retired status row/config bar (composer consolidation Task 1 —
+// the draggable divider that further redistributes this height is Task 4).
 // .session-row: individual event rows (text snippets, tool rows, error rows, approvals).
 // .session-approval: a pending tool-approval row — has Allow/Deny buttons.
-// .session-stop: Stop button, visible while a turn is in flight (busyish state).
 // CSS class names here are test hooks — extend, don't rename.
 `.session-feed {
-  flex: none; display: flex; flex-direction: column; max-height: 220px;
+  flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0;
   border-top: 1px solid var(--separator);
 }
-.session-list { overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+.session-list { flex: 1 1 auto; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
 .session-list::-webkit-scrollbar { width: 8px; }
 .session-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 .session-row {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   padding: 3px 6px; border-radius: 6px; font: 400 var(--text-sm) var(--font-ui);
   color: var(--text-secondary); word-break: break-word;
-}
-.session-status {
-  padding: 6px 12px 2px; color: var(--text-faint); font: 500 var(--text-xs) var(--font-ui);
 }
 .session-error-row { color: #F87171; }
 .session-tool-row { color: var(--text-muted); }
@@ -570,11 +581,6 @@ button {
   border: 1px solid rgba(255,255,255,0.1); padding: 4px 6px; border-radius: 6px;
 }
 .session-approval-resolved { color: var(--text-muted); font-style: italic; border: none; }
-.session-stop {
-  align-self: flex-end; margin: 2px 8px 4px; background: rgba(248,113,113,0.15);
-  color: #F87171; border: 1px solid rgba(248,113,113,0.3);
-}
-.session-stop:hover { background: rgba(248,113,113,0.25); }
 ` +
 // Chat rendering (Task 5) — bubbles, delta streaming, diff disclosures, config rows.
 // .chat-msg: bubble base (extends .session-row); .chat-user / .chat-assistant: sender variant.
@@ -596,21 +602,34 @@ button {
 .diff-after { background: rgba(74,222,128,0.08); }
 .session-config { color: var(--text-faint); }
 ` +
-// Chat input cluster, element chip, config bar pickers (Task 6) — replaces the retired
-// floating prompt popup. .session-config-bar: header row (model + effort + permission
-// pickers, all .size-mode selects; .session-model only caps the width, since full model ids
-// are much longer than the fixed effort/permission vocabularies). .chat-chip: the element
-// attached to the next message, above the input. .chat-input: textarea + Send, pinned at the
-// feed section's bottom. .chat-disabled-reason: shown when setAvailability(false, reason)
-// disables the input.
+// Chat composer (composer consolidation Task 1) — replaces the retired status row, standalone
+// Stop button, and .session-config-bar. .chat-composer: the single bordered card holding the
+// chip row, textarea, and controls row. .composer-chips: the chip row (+ Task 2's drafts
+// pill). .composer-controls: model/effort/permission pickers + spacer + composer-send, one
+// row. .session-model only caps the width, since full model ids are much longer than the
+// fixed effort/permission vocabularies. The three selects carry min-width: 0 so they can
+// shrink below their intrinsic content width — without it a flex item's default
+// min-width: auto pins them at content size, and once the model select fills its 100px cap the
+// row overflows a narrow (320px default) panel and shoves the flex: none composer-send clean
+// off the right edge (real-browser regression; jsdom can't see flex, so no unit test guards it).
+// Clipping (ellipsis/nowrap) keeps a shrunk select legible via its native chevron.
+// .chat-chip: the element attached to the next message.
+// .chat-input: the textarea (+ disabled-reason) — Send moved out into .composer-controls, one
+// row below, alongside the pickers. .chat-disabled-reason: shown when setAvailability(false,
+// reason) disables the input.
 // CSS class names here are test hooks — extend, don't rename.
-`.session-config-bar {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  padding: 8px 8px 4px; border-bottom: 1px solid var(--separator);
+`.chat-composer {
+  display: flex; flex-direction: column; gap: 6px; margin: 8px; padding: 8px;
+  border: 1px solid var(--border-panel); border-radius: 10px; background: var(--surface);
 }
-.session-model { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.composer-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.composer-chips:empty { display: none; }
+.composer-controls { display: flex; align-items: center; gap: 6px; }
+.composer-spacer { flex: 1 1 auto; }
+.composer-controls .size-mode { font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-model { max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
 .chat-chip {
-  display: flex; align-items: center; gap: 6px; margin: 6px 8px 0;
+  display: flex; align-items: center; gap: 6px;
   padding: 4px 8px; border-radius: 6px; background: var(--control);
   font: 400 var(--text-xs) var(--font-mono); color: var(--text-secondary);
 }
@@ -619,9 +638,23 @@ button {
   font: 500 var(--text-sm) var(--font-ui); border-radius: 4px;
 }
 .chat-chip-clear:hover { color: var(--text-primary); background: var(--control-hover); }
-.chat-input {
-  display: flex; flex-direction: column; gap: 6px; padding: 8px; border-top: 1px solid var(--separator);
+` +
+// Drafts pill + disclosure (composer consolidation Task 2) — .draft-pill sits in
+// .composer-chips alongside .chat-chip; clicking it toggles .draft-disclosure open (a
+// details-free div toggle, not a <details> element — see session-feed.ts). .draft-disclosure
+// itself sits ABOVE .composer-chips in .chat-composer so opening it (it hosts the unmodified
+// ChangeList, whose own .changes-section rules cap it at max-height 180px) never pushes the
+// textarea/controls rows around — it grows upward into free panel space instead.
+// CSS class names here are test hooks — extend, don't rename.
+`.draft-pill {
+  flex: none; padding: 4px 8px; border-radius: 6px; background: var(--control); border: none;
+  font: 500 var(--text-xs) var(--font-ui); color: var(--text-secondary);
 }
+.draft-pill:hover { background: var(--control-hover); }
+.draft-disclosure { display: none; }
+.draft-disclosure.open { display: block; }
+` +
+`.chat-input { display: flex; flex-direction: column; gap: 6px; }
 .chat-textarea {
   box-sizing: border-box; width: 100%; resize: vertical; min-height: 40px;
   background: var(--control); color: var(--text-primary); border: 1px solid var(--border-panel);
@@ -631,20 +664,23 @@ button {
 .chat-textarea:disabled { opacity: 0.5; }
 ` +
 // SessionFeed mounts inside #panel (panel.feedSlot), but there is no generic `#panel button`
-// dark-token rule (each panel button opts in individually — see .session-stop above) — pin
-// the dark control styling explicitly, same idiom as .session-stop/.session-approval-allow.
-`.chat-send {
-  align-self: flex-end; background: var(--control); color: var(--text-primary); border: none; border-radius: 6px;
+// dark-token rule (each panel button opts in individually — see .session-approval-allow) — pin
+// the dark control styling explicitly, same idiom, for .composer-send: it now carries what
+// used to be .session-stop's job too (the send↔stop morph), so it earns the circular treatment.
+`.composer-send {
+  flex: none; width: 26px; height: 26px; border-radius: 50%; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--control); color: var(--text-primary); border: none;
+  font: 500 13px var(--font-ui);
 }
-.chat-send:hover { background: var(--control-hover); }
-.chat-send:disabled { opacity: 0.5; cursor: default; }
+.composer-send:hover { background: var(--control-hover); }
+.composer-send:disabled { opacity: 0.5; cursor: default; }
 .chat-disabled-reason { color: var(--text-faint); font: 400 var(--text-xs) var(--font-ui); padding: 0 2px; }
 `
 
 export class Overlay {
   host = document.createElement('div')
   toggle = createButton({ label: 'Design' })
-  sendButton = createButton({ label: 'Send to agent' })
   copyButton = createButton({ label: 'Copy for agent' })
   // compareAllButton's label is state-dependent ('Before'/'After') — set in updateStatus().
   compareAllButton = createButton()
@@ -687,7 +723,7 @@ export class Overlay {
     // Watch indicator leads the strip — it's ambient session state ("● Linked…"), read
     // before the per-draft controls and per-send summary.
     this.unlinkButton.hidden = true
-    this.status.append(this.watchLabel, this.unlinkButton, this.statusLabel, this.sendButton, this.copyButton, this.compareAllButton, this.resetAllButton, this.sentLabel)
+    this.status.append(this.watchLabel, this.unlinkButton, this.statusLabel, this.copyButton, this.compareAllButton, this.resetAllButton, this.sentLabel)
     this.outline.hidden = true
     this.selectOutline.hidden = true
     this.status.hidden = true
@@ -814,15 +850,17 @@ export class Overlay {
 
   updateStatus(draftCount: number, comparingAll: boolean, sentText?: string, watch?: { text: string; live: boolean; unlinkable?: boolean }): void {
     // Strip is visible when there are drafts OR a non-empty summary OR a watch indicator.
-    // Since the 2026-07-05 watcher-unlink spec, watchIndicatorFor always returns an
-    // indicator (the 'none' state renders the upfront "not linked" hint — a deliberate
-    // reversal of the original zero-UI-change rule), so in practice the strip is visible
-    // whenever design mode is on. `watch` stays optional so callers without watch state
-    // (tests, panel-only flows) keep today's hide-when-empty behavior.
+    // Since composer consolidation Task 3 (2026-07-09), the caller (index.ts's refreshStatus)
+    // only passes a `watch` indicator for a genuinely LINKED terminal watcher ('live' or
+    // 'asleep') — an embedded session's own lifecycle no longer gets a strip of its own (the
+    // composer's placeholder text and drafts pill already carry that state), and a 'none'
+    // watcher passes `undefined` rather than the old upfront "not linked" hint. So the strip is
+    // now genuinely absent most of the time, not "visible whenever design mode is on". `watch`
+    // stays optional so callers without watch state (tests, panel-only flows) keep today's
+    // hide-when-empty behavior.
     this.status.hidden = draftCount === 0 && !sentText && !watch
     // Draft-count label and controls are hidden when no drafts (they act on drafts)
     this.statusLabel.hidden = draftCount === 0
-    this.sendButton.hidden = draftCount === 0
     this.copyButton.hidden = draftCount === 0
     this.compareAllButton.hidden = draftCount === 0
     this.resetAllButton.hidden = draftCount === 0

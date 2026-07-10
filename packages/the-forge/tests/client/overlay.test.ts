@@ -231,27 +231,29 @@ describe('Overlay (M2 additions)', () => {
     expect((overlay.host.shadowRoot!.getElementById('status') as HTMLElement).hidden).toBe(true)
   })
 
-  it('status strip orders copy button after send, after the watch ✕', () => {
+  // 'Send to agent' (the standalone button) was retired by composer consolidation Task 3 — the
+  // composer's ↑ is the only send surface now — so the strip's only button ahead of Copy is the
+  // watch ✕.
+  it('status strip orders copy button after the watch ✕', () => {
     const overlay = new Overlay()
     overlay.mount()
     const status = overlay.host.shadowRoot!.getElementById('status')!
     const buttons = [...status.querySelectorAll('button')]
-    expect(buttons[2]).toBe(overlay.copyButton)
+    expect(buttons[1]).toBe(overlay.copyButton)
     expect(overlay.copyButton.textContent).toBe('Copy for agent')
+  })
+
+  it("has no standalone 'Send to agent' button — the composer's ↑ is the only send surface", () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    expect('sendButton' in overlay).toBe(false)
+    const status = overlay.host.shadowRoot!.getElementById('status')!
+    const labels = [...status.querySelectorAll('button')].map((b) => b.textContent)
+    expect(labels).not.toContain('Send to agent')
   })
 })
 
 describe('Overlay (M4 additions)', () => {
-  it('status strip orders send after the watch ✕, before copy', () => {
-    const overlay = new Overlay()
-    overlay.mount()
-    const status = overlay.host.shadowRoot!.getElementById('status')!
-    const buttons = [...status.querySelectorAll('button')]
-    expect(buttons[1]).toBe(overlay.sendButton)
-    expect(buttons[2]).toBe(overlay.copyButton)
-    expect(overlay.sendButton.textContent).toBe('Send to agent')
-  })
-
   it('updateStatus shows an optional sent span when given sentText', () => {
     const overlay = new Overlay()
     overlay.mount()
@@ -275,7 +277,6 @@ describe('Overlay (M4 additions)', () => {
     const root = overlay.host.shadowRoot!
     const status = root.getElementById('status') as HTMLElement
     expect(status.hidden).toBe(false)
-    expect(overlay.sendButton.hidden).toBe(true)
     expect(overlay.copyButton.hidden).toBe(true)
     expect(overlay.compareAllButton.hidden).toBe(true)
     expect(overlay.resetAllButton.hidden).toBe(true)
@@ -496,6 +497,17 @@ describe('Dock CSS (docked-panel spec)', () => {
   })
 })
 
+describe('Overlay CSS feed divider (composer-consolidation Task 4)', () => {
+  it('feed slot defaults to a 45% flex-basis split, overridden by inline px once dragged/restored', () => {
+    expect(CSS).toMatch(/\.panel-feed-slot\s*{[^}]*flex:\s*0\s+1\s+45%/s)
+  })
+  it('divider is a slim row-resize handle with a hover/active grab affordance', () => {
+    expect(CSS).toMatch(/\.feed-divider\s*{[^}]*height:\s*5px/s)
+    expect(CSS).toMatch(/\.feed-divider\s*{[^}]*cursor:\s*row-resize/s)
+    expect(CSS).toContain('.feed-divider:hover, .feed-divider:active { background: rgba(13,153,255,0.4); }')
+  })
+})
+
 describe('Dock polish CSS (PR #2 follow-ups)', () => {
   // Padding widened from 36px (PR #2, mode-button-only) to 96px (prompt-mode) to reserve
   // room for the whole .panel-head-actions cluster (Prompt + mode button), not just the
@@ -525,9 +537,10 @@ describe('Overlay CSS panel-prompt anchor (prompt-mode, floating prompt popup re
   })
 })
 
-describe('Overlay CSS chat input cluster / element chip / config bar (Task 6)', () => {
-  it('styles the config bar, model picker, chip, and input cluster as test-hook classes', () => {
-    expect(CSS).toContain('.session-config-bar')
+describe('Overlay CSS chat composer / element chip / controls (composer consolidation Task 1)', () => {
+  it('styles the composer, controls row, model picker, chip, and input cluster as test-hook classes', () => {
+    expect(CSS).toContain('.chat-composer')
+    expect(CSS).toContain('.composer-controls')
     expect(CSS).toContain('.session-model')
     expect(CSS).toContain('.chat-chip')
     expect(CSS).toContain('.chat-input')
@@ -537,16 +550,16 @@ describe('Overlay CSS chat input cluster / element chip / config bar (Task 6)', 
 
   // SessionFeed mounts INSIDE #panel (unlike the old floating prompt popup, which mounted as a shadow-
   // root sibling) — but there is still no generic `#panel button` dark-token fallback, so
-  // .chat-send needs the same explicit dark styling as .session-stop/.prompt-send used to.
-  it('styles .chat-send with the dark control tokens, not the light base button fallback', () => {
-    expect(CSS).toMatch(/\.chat-send\s*{[^}]*background:\s*var\(--control\)/s)
-    expect(CSS).toMatch(/\.chat-send:hover\s*{[^}]*background:\s*var\(--control-hover\)/s)
+  // .composer-send needs the same explicit dark styling as .session-approval-allow/.prompt-send used to.
+  it('styles .composer-send with the dark control tokens, not the light base button fallback', () => {
+    expect(CSS).toMatch(/\.composer-send\s*{[^}]*background:\s*var\(--control\)/s)
+    expect(CSS).toMatch(/\.composer-send:hover\s*{[^}]*background:\s*var\(--control-hover\)/s)
   })
 
   it('has no CSS-string comments (bundle-byte guard)', () => {
     // /* */ would parse, but it ships as bundle bytes — the whole point of the migration
     // (see the identical check earlier in this file).
-    const chatBlockStart = CSS.indexOf('.session-config-bar')
+    const chatBlockStart = CSS.indexOf('.chat-composer')
     expect(chatBlockStart).toBeGreaterThan(-1)
     expect(CSS.slice(chatBlockStart)).not.toContain('/*')
   })
@@ -588,12 +601,12 @@ describe('SessionFeed CSS hooks (Task 7)', () => {
     expect(CSS).toContain('.session-approval')
   })
 
-  it('CSS declares .session-stop as a test hook class', () => {
-    expect(CSS).toContain('.session-stop')
+  it('CSS declares .composer-send as a test hook class (composer consolidation Task 1 — retires .session-stop)', () => {
+    expect(CSS).toContain('.composer-send')
   })
 
-  it('CSS declares .session-status for the status row', () => {
-    expect(CSS).toContain('.session-status')
+  it('CSS declares .chat-composer for the composer card (composer consolidation Task 1 — retires the status row)', () => {
+    expect(CSS).toContain('.chat-composer')
   })
 
   it('CSS declares .session-error-row for error rows', () => {
