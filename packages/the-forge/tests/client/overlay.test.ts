@@ -526,7 +526,7 @@ describe('Overlay CSS panel-prompt anchor (prompt-mode, floating prompt popup re
 })
 
 describe('Overlay CSS chat input cluster / element chip / config bar (Task 6)', () => {
-  it('styles the config bar, model display, chip, and input cluster as test-hook classes', () => {
+  it('styles the config bar, model picker, chip, and input cluster as test-hook classes', () => {
     expect(CSS).toContain('.session-config-bar')
     expect(CSS).toContain('.session-model')
     expect(CSS).toContain('.chat-chip')

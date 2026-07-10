@@ -837,21 +837,89 @@ describe('chat input cluster', () => {
 })
 
 describe('config bar pickers', () => {
-  it('model display seeds from a started event', async () => {
+  it('model select seeds from a started event: current model selected, plus the CLI aliases', async () => {
     const feed = new SessionFeed({
       fetchFn: makeFetchFn([feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true })]),
     })
     document.body.appendChild(feed.root)
     feed.start()
     await flush()
-    expect(feed.root.querySelector('.session-model')?.textContent).toBe('claude-opus-4-5')
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    expect(modelSelect).not.toBeNull()
+    expect(modelSelect.value).toBe('claude-opus-4-5')
+    const values = [...modelSelect.options].map((o) => o.value)
+    expect(values).toEqual(['claude-opus-4-5', 'sonnet', 'opus', 'haiku'])
     feed.stop()
   })
 
-  it('model display shows a placeholder before any started/config-changed event', () => {
+  it('model select dedupes when the started model IS one of the aliases', async () => {
+    const feed = new SessionFeed({
+      fetchFn: makeFetchFn([feedLine(1, { kind: 'started', sessionId: 's1', model: 'opus', mcpLoaded: true })]),
+    })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    expect(modelSelect.value).toBe('opus')
+    const values = [...modelSelect.options].map((o) => o.value)
+    expect(values).toEqual(['opus', 'sonnet', 'haiku'])
+    feed.stop()
+  })
+
+  it('model select shows only a placeholder before any started/config-changed event', () => {
     const feed = new SessionFeed()
     document.body.appendChild(feed.root)
-    expect(feed.root.querySelector('.session-model')?.textContent).toBe('model…')
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    expect(modelSelect).not.toBeNull()
+    expect(modelSelect.value).toBe('')
+    const options = [...modelSelect.options]
+    expect(options).toHaveLength(1)
+    expect(options[0].textContent).toBe('model…')
+  })
+
+  it('config-changed {model} updates the model select value (rebuilding options around it)', async () => {
+    const lines = [
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
+      feedLine(2, { kind: 'config-changed', model: 'claude-sonnet-4-5' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    expect(modelSelect.value).toBe('claude-sonnet-4-5')
+    const values = [...modelSelect.options].map((o) => o.value)
+    expect(values).toEqual(['claude-sonnet-4-5', 'sonnet', 'opus', 'haiku'])
+    feed.stop()
+  })
+
+  it('seeding the model select never fires onConfig (no echo loop)', async () => {
+    const fired: Array<Record<string, string>> = []
+    const feed = new SessionFeed({
+      fetchFn: makeFetchFn([feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true })]),
+    })
+    feed.onConfig = (cfg) => fired.push(cfg)
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(fired).toEqual([])
+    feed.stop()
+  })
+
+  it('changing the model select fires onConfig with only model', async () => {
+    const fired: Array<Record<string, string>> = []
+    const feed = new SessionFeed({
+      fetchFn: makeFetchFn([feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true })]),
+    })
+    feed.onConfig = (cfg) => fired.push(cfg)
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    modelSelect.value = 'sonnet'
+    modelSelect.dispatchEvent(new Event('change'))
+    expect(fired).toEqual([{ model: 'sonnet' }])
+    feed.stop()
   })
 
   it('effort/permission selects seed from config-changed and stay silent (no onConfig fired)', async () => {

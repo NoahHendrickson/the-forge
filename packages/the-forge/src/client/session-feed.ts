@@ -5,11 +5,7 @@ import { createButton } from './ui/button'
 import { createSelect } from './ui/select'
 
 // Fixed vocabularies for the effort/permission pickers — mirrors server/endpoints.ts's
-// EFFORT_LEVELS/PERMISSION_MODES validation sets exactly (task-6 brief). The model
-// "picker" is deliberately NOT a select: the CLI exposes no enumerable model list, so v1
-// renders it as a read-only .session-model span seeded from started/config-changed events
-// instead of offering a fixed (and likely wrong/stale) option list. See task-6 report for
-// the full deviation writeup.
+// EFFORT_LEVELS/PERMISSION_MODES validation sets exactly (task-6 brief).
 const EFFORT_OPTIONS = [
   { value: '', label: 'effort…' },
   { value: 'low', label: 'low' },
@@ -25,6 +21,14 @@ const PERMISSION_OPTIONS = [
   { value: 'acceptEdits', label: 'acceptEdits' },
   { value: 'plan', label: 'plan' },
 ] as const
+
+// The model picker's option set is NOT a fixed vocabulary like effort/permissions: the CLI
+// exposes no enumerable model list, so the select offers the started/config-changed-reported
+// model (the only ground truth for "current") PLUS these aliases — the CLI's own documented
+// shorthands, resolved server-side by set_model (spike-verified in Task 1 with a full model
+// id). Deduped when the current value IS one of the aliases; rebuilt on every seed so a
+// config-changed to a model outside the list still renders as the selected option.
+const MODEL_ALIASES = ['sonnet', 'opus', 'haiku'] as const
 
 // ---------------------------------------------------------------------------
 // Stream line types (NDJSON, one object per line)
@@ -88,9 +92,9 @@ export class SessionFeed {
   private readonly list: HTMLElement
   private readonly stopBtn: HTMLButtonElement
 
-  // --- config bar (header): model is read-only display, effort/permission are real pickers ---
+  // --- config bar (header): model, effort, and permission pickers ---
   private readonly configBar: HTMLElement
-  private readonly modelDisplay: HTMLElement
+  private readonly modelSelect: HTMLSelectElement
   private readonly effortSelect: HTMLSelectElement
   private readonly permissionSelect: HTMLSelectElement
 
@@ -161,14 +165,22 @@ export class SessionFeed {
     this.list = document.createElement('div')
     this.list.className = 'session-list'
 
-    // Config bar (header): model is a read-only display; effort/permission are real pickers
-    // that stay on a placeholder option until a started/config-changed event seeds them —
-    // picking the placeholder itself is a no-op (see the '' guards in the onChange handlers).
+    // Config bar (header): model, effort, and permission pickers — each stays on a
+    // placeholder option until a started/config-changed event seeds it; picking the
+    // placeholder itself is a no-op (see the '' guards in the onChange handlers). The model
+    // select's options are rebuilt per seed (seedModelOptions) rather than fixed like the
+    // other two — see the MODEL_ALIASES why-comment above.
     this.configBar = document.createElement('div')
     this.configBar.className = 'session-config-bar'
-    this.modelDisplay = document.createElement('span')
-    this.modelDisplay.className = 'session-model'
-    this.modelDisplay.textContent = 'model…'
+    this.modelSelect = createSelect({
+      className: 'session-model',
+      options: [{ value: '', label: 'model…' }],
+      value: '',
+      onChange: (value) => {
+        if (value === '') return
+        this.onConfig({ model: value })
+      },
+    })
     this.effortSelect = createSelect({
       className: 'session-effort',
       options: EFFORT_OPTIONS,
@@ -187,7 +199,7 @@ export class SessionFeed {
         this.onConfig({ permissionMode: value })
       },
     })
-    this.configBar.append(this.modelDisplay, this.effortSelect, this.permissionSelect)
+    this.configBar.append(this.modelSelect, this.effortSelect, this.permissionSelect)
 
     // Element chip: Prompt-button / host sets it via setChip(); the × clears it locally
     // (no host callback — Send/onSay reads currentChip directly, same as the old floating
@@ -283,12 +295,29 @@ export class SessionFeed {
 
   /** Seeds the config bar from a started/config-changed event — only the keys present in the
    * event are applied, matching the "each select shows a placeholder until seeded" contract.
-   * Programmatic .value assignment does not fire 'change', so this never loops back into
+   * Programmatic .value / option rebuilds don't fire 'change', so this never loops back into
    * onConfig. */
   private seedConfigBar(e: Record<string, unknown>): void {
-    if (typeof e.model === 'string') this.modelDisplay.textContent = e.model
+    if (typeof e.model === 'string') this.seedModelOptions(e.model)
     if (typeof e.effort === 'string') this.effortSelect.value = e.effort
     if (typeof e.permissionMode === 'string') this.permissionSelect.value = e.permissionMode
+  }
+
+  /** Rebuilds the model select's options as [current, ...MODEL_ALIASES] (deduped, current
+   * first) and selects the current model. Rebuilt — not appended to — on every seed, so the
+   * placeholder disappears once a real model is known and a config-changed to a model outside
+   * the alias list still renders as the selected option instead of silently failing to match. */
+  private seedModelOptions(current: string): void {
+    const values = [current, ...MODEL_ALIASES.filter((a) => a !== current)]
+    this.modelSelect.replaceChildren(
+      ...values.map((v) => {
+        const opt = document.createElement('option')
+        opt.value = v
+        opt.textContent = v
+        return opt
+      })
+    )
+    this.modelSelect.value = current
   }
 
   /** Open the NDJSON stream — called when design mode turns on. Re-entrant guard: if a fetch

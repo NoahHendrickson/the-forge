@@ -599,19 +599,18 @@ button {
 .session-config { color: var(--text-faint); }
 ` +
 // Chat input cluster, element chip, config bar pickers (Task 6) — replaces the retired
-// floating prompt popup. .session-config-bar: header row (model display + effort/permission
-// pickers). .chat-chip: the element attached to the next message, above the input.
-// .chat-input: textarea + Send, pinned at the feed section's bottom. .chat-disabled-reason:
-// shown when setAvailability(false, reason) disables the input.
+// floating prompt popup. .session-config-bar: header row (model + effort + permission
+// pickers, all .size-mode selects; .session-model only caps the width, since full model ids
+// are much longer than the fixed effort/permission vocabularies). .chat-chip: the element
+// attached to the next message, above the input. .chat-input: textarea + Send, pinned at the
+// feed section's bottom. .chat-disabled-reason: shown when setAvailability(false, reason)
+// disables the input.
 // CSS class names here are test hooks — extend, don't rename.
 `.session-config-bar {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   padding: 8px 8px 4px; border-bottom: 1px solid var(--separator);
 }
-.session-model {
-  font: 500 var(--text-xs) var(--font-ui); color: var(--text-faint);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px;
-}
+.session-model { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
 .chat-chip {
   display: flex; align-items: center; gap: 6px; margin: 6px 8px 0;
   padding: 4px 8px; border-radius: 6px; background: var(--control);

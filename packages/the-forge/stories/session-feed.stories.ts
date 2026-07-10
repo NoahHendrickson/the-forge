@@ -162,7 +162,7 @@ export const ConfigChanged: Story = {
 
 /** Chat input cluster with no chip attached — the config bar's effort/permission pickers
  * sit on their placeholder option until a started/config-changed event seeds them; the
- * model display seeds from `started` the same way. */
+ * model picker seeds from `started` (current model + the CLI aliases sonnet/opus/haiku). */
 export const InputClusterIdle: Story = {
   render: () =>
     makeFeed([feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true })]),
@@ -180,13 +180,14 @@ export const InputClusterWithChip: Story = {
   },
 }
 
-/** Config bar seeded from config-changed (effort=high, permissionMode=plan) — the pickers
- * reflect the current values instead of their 'effort…'/'permissions…' placeholders. */
+/** Config bar seeded from config-changed (model, effort=high, permissionMode=plan) — all
+ * three pickers reflect the current values instead of their 'model…'/'effort…'/
+ * 'permissions…' placeholders; the model picker offers the current model + CLI aliases. */
 export const ConfigBarSeeded: Story = {
   render: () =>
     makeFeed([
       feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
-      feedLine(2, { kind: 'config-changed', effort: 'high', permissionMode: 'plan' }),
+      feedLine(2, { kind: 'config-changed', model: 'claude-sonnet-4-5', effort: 'high', permissionMode: 'plan' }),
     ]),
 }
 
