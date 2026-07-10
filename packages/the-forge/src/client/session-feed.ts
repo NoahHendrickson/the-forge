@@ -180,6 +180,12 @@ export class SessionFeed {
    * both edits and chat, so an empty textarea must not block sending when there ARE drafts to
    * send, even though it still blocks when there is truly nothing (no text, no drafts). */
   private draftCount = 0
+  /** Mirrors setAvailability's last `enabled` value — kept alongside draftCount so
+   * syncSendEnabled() can compute the send button's disabled state from both independent
+   * signals without either setter having to know the other's current value (final-review fix
+   * C1). Defaults true to match the button's native default-enabled state before the host's
+   * first setAvailability call. */
+  private sessionAvailable = true
 
   private readonly fetchFn: typeof fetch
   private readonly getHeaders: () => Record<string, string>
@@ -360,9 +366,12 @@ export class SessionFeed {
     this.draftPill.hidden = !visible
     if (!visible) {
       this.draftDisclosure.classList.remove('open')
-      return
+    } else {
+      this.draftPill.textContent = s.applying ? 'applying…' : s.count === 1 ? '1 edit drafted' : `${s.count} edits drafted`
     }
-    this.draftPill.textContent = s.applying ? 'applying…' : s.count === 1 ? '1 edit drafted' : `${s.count} edits drafted`
+    // Draft count is one of the two independent signals that can license the send button —
+    // see syncSendEnabled (final-review fix C1).
+    this.syncSendEnabled()
   }
 
   /** Enables/disables the input cluster and shows/hides the reason line. Availability
@@ -373,8 +382,13 @@ export class SessionFeed {
    * user's first message auto-starts it). */
   setAvailability(a: { enabled: boolean; reason?: string }): void {
     this.root.hidden = false
+    // Only the TEXTAREA (the chat leg) is gated by availability now — the send button is
+    // computed separately by syncSendEnabled, since drafts must stay sendable even when chat
+    // is unavailable (final-review fix C1: embedded:false must not disable the whole composer,
+    // only the chat leg — drafts ride the queue/watcher path that opt-out deliberately
+    // preserves, and there is no other send surface left for a terminal-only consumer).
     this.textarea.disabled = !a.enabled
-    this.sendBtn.disabled = !a.enabled
+    this.sessionAvailable = a.enabled
     if (!a.enabled && a.reason) {
       this.disabledReason.textContent = a.reason
       this.disabledReason.hidden = false
@@ -382,6 +396,15 @@ export class SessionFeed {
       this.disabledReason.hidden = true
       this.disabledReason.textContent = ''
     }
+    this.syncSendEnabled()
+  }
+
+  /** Recomputes composer-send's disabled state from the two independent signals that can each
+   * license it — sessionAvailable (setAvailability) OR a nonzero draftCount (setDraftState).
+   * Called from both setters so either can flip the button without waiting on the other
+   * (final-review fix C1). Disabled only when NEITHER signal licenses a send. */
+  private syncSendEnabled(): void {
+    this.sendBtn.disabled = !this.sessionAvailable && this.draftCount === 0
   }
 
   /** Renders a transient error row using the same styling as in-band session-error rows —
@@ -395,13 +418,16 @@ export class SessionFeed {
    * of the feed's hands: it used to disable the input, await onSay's promise, and clear text/
    * chip on success itself (final-review fix 3's round trip); now onSend is a fire-and-forget
    * `() => void` and the HOST owns that whole round trip via getText()/getChip()/clearText().
-   * Preserves the pre-existing disabled guard. The empty-text guard (Task 3) now admits a
-   * drafts-only send: it only blocks when there is BOTH no text AND no drafts (draftCount, kept
-   * current by setDraftState) — the composer's ↑ is the single send surface for edits and chat,
-   * so "nothing typed" must not block "something drafted". */
+   * The empty-text guard (Task 3) now admits a drafts-only send: it only blocks when there is
+   * BOTH no usable text AND no drafts (draftCount, kept current by setDraftState) — the
+   * composer's ↑ is the single send surface for edits and chat, so "nothing typed" must not
+   * block "something drafted". "Usable text" is text in an ENABLED textarea (final-review fix
+   * C1): a disabled textarea's value never counts, even if non-empty — availability gates the
+   * chat leg only via the textarea's own disabled state, not via a separate guard here, so a
+   * disabled-but-drafts-present composer still sends (see setAvailability/syncSendEnabled). */
   private trySend(): void {
-    if (this.textarea.disabled) return
-    if (!this.textarea.value.trim() && this.draftCount === 0) return
+    const hasUsableText = !this.textarea.disabled && this.textarea.value.trim() !== ''
+    if (!hasUsableText && this.draftCount === 0) return
     this.onSend()
   }
 

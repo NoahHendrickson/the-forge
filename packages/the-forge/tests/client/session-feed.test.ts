@@ -1129,6 +1129,62 @@ describe('chat input cluster', () => {
     expect(sent).toEqual([])
   })
 
+  // Final-review fix C1: availability (embedded:false) must gate the CHAT leg only — drafts
+  // ride the queue/watcher path that opt-out deliberately preserves, so a terminal-only
+  // consumer with drafted edits must still have a working send surface.
+  describe('drafts-only send survives availability:false (final-review fix C1)', () => {
+    it('sendBtn stays enabled when availability is disabled but drafts are present', () => {
+      const feed = new SessionFeed()
+      document.body.appendChild(feed.root)
+      const sendBtn = feed.root.querySelector('.composer-send') as HTMLButtonElement
+      const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+
+      feed.setAvailability({ enabled: false, reason: 'Embedded sessions are disabled in config' })
+      feed.setDraftState({ count: 2, applying: false })
+
+      expect(textarea.disabled).toBe(true) // the textarea itself stays disabled — only chat is gated
+      expect(sendBtn.disabled).toBe(false) // but the send surface stays usable for drafts
+    })
+
+    it('sendBtn re-disables once draftCount drops back to 0 while availability is still false', () => {
+      const feed = new SessionFeed()
+      document.body.appendChild(feed.root)
+      const sendBtn = feed.root.querySelector('.composer-send') as HTMLButtonElement
+
+      feed.setAvailability({ enabled: false, reason: 'nope' })
+      feed.setDraftState({ count: 1, applying: false })
+      expect(sendBtn.disabled).toBe(false)
+
+      feed.setDraftState({ count: 0, applying: false })
+      expect(sendBtn.disabled).toBe(true)
+    })
+
+    it('order-independence: setDraftState before setAvailability still lands on sendBtn enabled', () => {
+      const feed = new SessionFeed()
+      document.body.appendChild(feed.root)
+      const sendBtn = feed.root.querySelector('.composer-send') as HTMLButtonElement
+
+      feed.setDraftState({ count: 3, applying: false })
+      feed.setAvailability({ enabled: false, reason: 'nope' })
+      expect(sendBtn.disabled).toBe(false)
+    })
+
+    it('a disabled textarea with drafts present still fires onSend on click (drafts-only send)', () => {
+      const sent: number[] = []
+      const feed = new SessionFeed()
+      feed.onSend = () => sent.push(1)
+      document.body.appendChild(feed.root)
+
+      feed.setAvailability({ enabled: false, reason: 'nope' })
+      feed.setDraftState({ count: 1, applying: false })
+      const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      expect(textarea.disabled).toBe(true)
+
+      ;(feed.root.querySelector('.composer-send') as HTMLButtonElement).click()
+      expect(sent).toEqual([1])
+    })
+  })
+
   it('renderTransientError renders a session-error-row', () => {
     const feed = new SessionFeed()
     document.body.appendChild(feed.root)

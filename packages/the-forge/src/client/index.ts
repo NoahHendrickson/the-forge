@@ -89,6 +89,13 @@ export class DesignMode {
    * must still produce exactly one /queue POST. Cleared once the round trip (queue AND
    * dispatch) fully settles, matching the old button's re-enable timing. */
   private draftsInFlight = false
+  /** Re-entrancy guard for sendChat() (final-review fix C2) — milestone B's chat leg had its
+   * own double-send protection before the send gesture moved to the composer's ↑ (Task 1/3),
+   * which dropped it: a rapid double-click of ↑ (or onSend racing a second call before the
+   * first /session/say POST settles) must still produce exactly one POST, mirroring
+   * draftsInFlight's guard for the drafts leg. Cleared once the /say round trip settles either
+   * way (success or failure). */
+  private chatInFlight = false
   /** Watcher-state poller — runs ONLY while design mode is on (started/stopped in
    * setActive), so watch mode adds zero idle overhead to the page. Session-state
    * transitions also fire refreshStatus so the embedded-session indicator stays current. The
@@ -240,8 +247,16 @@ export class DesignMode {
     this.feed.onSend = () => {
       const hasDrafts = this.drafts.elementCount() > 0
       const text = this.feed.getText()
+      // Belt-and-braces (final-review fix C1): the textarea's own disabled attribute already
+      // stops a real user keystroke from landing while chat is unavailable, but getText() reads
+      // .value directly, and a value set before the disable (or poked in some other way) can
+      // still be non-empty — so the chat leg must ALSO be gated here on the same signal
+      // setAvailability's caller (refreshStatus, below) derives from, not just on textarea.value
+      // being non-empty. sessionEnabled() undefined (not yet probed, or an older server) means
+      // "available by default" — only an explicit false disables the leg.
+      const chatAvailable = this.watch.sessionEnabled() !== false
       const proceedWithChat = (): void => {
-        if (text) void this.sendChat(text)
+        if (text && chatAvailable) void this.sendChat(text)
       }
       if (hasDrafts) this.sendDrafts().then(proceedWithChat)
       else proceedWithChat()
@@ -491,16 +506,30 @@ export class DesignMode {
    * typed). `text` is a PARAMETER, not re-read from feed.getText() here (review fix 2): onSend
    * awaits the drafts leg's /queue POST before calling this, and the textarea can change during
    * that gap — the pinned semantics send what the user had at click time. Guards non-empty
-   * itself so no caller can POST a blank turn. */
+   * itself so no caller can POST a blank turn.
+   *
+   * chatInFlight (final-review fix C2) makes a second call while one is already in flight a
+   * no-op — a rapid double-click of ↑ must produce exactly one /session/say POST, not two.
+   * clearText() only fires when feed.getText() still equals the text this call sent (deferred
+   * Minor 7): the user may have retyped the textarea during the round trip, and an
+   * unconditional clear would silently discard that — only wipe it when what's there now is
+   * still exactly what was sent (i.e. nothing changed underneath it). setChip(null) stays
+   * unconditional on ok — the chip has no independent "retyped" concept to preserve. */
   private sendChat(text: string): Promise<void> {
     if (!text.trim()) return Promise.resolve()
+    if (this.chatInFlight) return Promise.resolve()
+    this.chatInFlight = true
     const chip = this.feed.getChip()
-    return Promise.resolve(this.feed.onSay(text, chip ?? undefined)).then((ok) => {
-      if (ok) {
-        this.feed.clearText()
-        this.feed.setChip(null)
-      }
-    })
+    return Promise.resolve(this.feed.onSay(text, chip ?? undefined))
+      .then((ok) => {
+        if (ok) {
+          if (this.feed.getText() === text) this.feed.clearText()
+          this.feed.setChip(null)
+        }
+      })
+      .finally(() => {
+        this.chatInFlight = false
+      })
   }
 
   /** Re-queues one failed element-change as a fresh request. Safe and unfiltered by design:

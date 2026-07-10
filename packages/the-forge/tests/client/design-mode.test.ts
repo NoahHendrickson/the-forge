@@ -982,6 +982,161 @@ describe('composer send-everything verb + watch strip gating (Task 3)', () => {
     expect(body.text).toBe('original message')
   })
 
+  // Final-review fix C1: embedded:false (chat unavailable) must gate the CHAT leg only —
+  // drafts ride the queue/watcher path that opt-out deliberately preserves, so a terminal-only
+  // consumer who has drafted edits ('N edits drafted' pill) must still have a working send
+  // surface to get them onto the queue.
+  describe('drafts send survives embedded:false (final-review fix C1)', () => {
+    it('sessionEnabled:false + drafts present: ↑ stays enabled, click sends queue+dispatch, never /session/say', async () => {
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+        if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+        if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle', sessionEnabled: false }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, drafts, panel } = fullSetup()
+      mode.setActive(true)
+      await new Promise((r) => setTimeout(r, 5)) // watch's immediate 0ms poll settles (real timers)
+
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      // updateDraftPill() is wired off drafts.onChange, immediate (not debounced) — the pill
+      // (and therefore the send button) reflects the new count synchronously.
+      const sendBtn = panel.root.querySelector('.composer-send') as HTMLButtonElement
+      const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      expect(textarea.disabled).toBe(true) // chat leg stays gated
+      expect(sendBtn.disabled).toBe(false) // but drafts license the send surface
+
+      sendBtn.click()
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+
+      const urls = fetchMock.mock.calls.map(([url]) => url)
+      expect(urls).toContain('/__the-forge/queue')
+      expect(urls).toContain('/__the-forge/dispatch')
+      expect(urls).not.toContain('/__the-forge/session/say')
+    })
+
+    it('sessionEnabled:false + no drafts: ↑ stays disabled', async () => {
+      const fetchMock = vi.fn((url: string) => {
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle', sessionEnabled: false }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, panel } = fullSetup()
+      mode.setActive(true)
+      await new Promise((r) => setTimeout(r, 5))
+
+      const sendBtn = panel.root.querySelector('.composer-send') as HTMLButtonElement
+      expect(sendBtn.disabled).toBe(true)
+    })
+
+    it('a leftover chat text in a disabled textarea is never POSTed to /session/say (belt-and-braces)', async () => {
+      // Simulates the disabled-textarea-can-still-hold-text case the fix's belt-and-braces
+      // guard targets: directly stuffing .value bypasses the DOM's own disabled-input
+      // protections (unlike a real user keystroke, which a disabled textarea can't receive),
+      // so onSend's own availability check is what has to catch this, not the textarea's
+      // disabled attribute.
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+        if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+        if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle', sessionEnabled: false }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, drafts, panel } = fullSetup()
+      mode.setActive(true)
+      await new Promise((r) => setTimeout(r, 5))
+
+      const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      expect(textarea.disabled).toBe(true)
+      textarea.value = 'stale message' // bypasses the disabled attribute, same as a stale pre-disable value would
+
+      const btn = document.querySelector('button')! as HTMLElement
+      drafts.apply(btn, 'padding-top', '24px')
+      const sendBtn = panel.root.querySelector('.composer-send') as HTMLButtonElement
+      sendBtn.click()
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+
+      const urls = fetchMock.mock.calls.map(([url]) => url)
+      expect(urls).toContain('/__the-forge/queue')
+      expect(urls).not.toContain('/__the-forge/session/say')
+    })
+  })
+
+  // Final-review fix C2 + deferred-Minor 7: the chat leg lost milestone-B's double-send
+  // protection when the send gesture moved to the composer's ↑ (Task 1/3) — a rapid double
+  // click must not fire two /session/say POSTs, and clearText-on-success must not wipe text the
+  // user retyped during the round trip.
+  describe('chat double-send guard + safe clear (final-review fix C2 / deferred-Minor 7)', () => {
+    it('double-click ↑ with text in flight sends exactly ONE /session/say POST', async () => {
+      let resolveSay!: (v: { ok: boolean; status: number; json: () => Promise<{ ok: boolean }> }) => void
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/session/say') return new Promise((resolve) => (resolveSay = resolve))
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, panel } = fullSetup()
+      mode.setActive(true)
+      const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      textarea.value = 'hello there'
+      clickSend(panel.root)
+      await Promise.resolve() // the first /say POST is now in flight, unresolved
+      clickSend(panel.root) // second click before the first round trip settles
+      await Promise.resolve()
+      resolveSay({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+
+      const sayCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/session/say')
+      expect(sayCalls).toHaveLength(1)
+    })
+
+    it('original-unchanged text IS cleared once the /say POST resolves ok', async () => {
+      let resolveSay!: (v: { ok: boolean; status: number; json: () => Promise<{ ok: boolean }> }) => void
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/session/say') return new Promise((resolve) => (resolveSay = resolve))
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, panel } = fullSetup()
+      mode.setActive(true)
+      const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      textarea.value = 'original message'
+      clickSend(panel.root)
+      await Promise.resolve()
+      resolveSay({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+
+      expect(textarea.value).toBe('')
+    })
+
+    it('text retyped during the /say round trip is NOT wiped on success', async () => {
+      let resolveSay!: (v: { ok: boolean; status: number; json: () => Promise<{ ok: boolean }> }) => void
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/session/say') return new Promise((resolve) => (resolveSay = resolve))
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, panel } = fullSetup()
+      mode.setActive(true)
+      const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+      textarea.value = 'original message'
+      clickSend(panel.root)
+      await Promise.resolve() // /say POST now in flight
+
+      textarea.value = 'retyped while waiting' // user edits mid-flight — must survive
+      resolveSay({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      for (let i = 0; i < 8; i++) await Promise.resolve()
+
+      expect(textarea.value).toBe('retyped while waiting')
+    })
+  })
+
   describe('watch strip gating', () => {
     beforeEach(() => vi.useFakeTimers())
     afterEach(() => vi.useRealTimers())
