@@ -1288,6 +1288,65 @@ describe('change list wiring', () => {
     mode.setActive(true)
     expect(mode.panelRoot.querySelectorAll('.change-row')).toHaveLength(0)
   })
+
+  // The other half of clear()'s contract ("suppression lifts on the next real mutation"): a
+  // deactivate/reactivate cycle must not leave the list permanently blank — a NEW send after
+  // reactivation renders its sent row again, and a verifier stage event resurrects in-flight
+  // rows. Regression pinned 2026-07-10: index.ts bypassed the ChangeList.addSent/applyStage
+  // delegates (calling session.register/applyStage directly), so suppressSeedRecords never
+  // reset and every row stayed hidden until a full page reload.
+  it('renders rows again after an off/on cycle: new send seeds a sent row, stage event resurrects in-flight rows', async () => {
+    vi.useFakeTimers() // act 3 advances the verifier's 2s status poll
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    const el = document.createElement('div')
+    el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
+    document.body.appendChild(el)
+    mode.setActive(true)
+    mode.select(el as never)
+    ;(mode as never as { drafts: DraftStore }).drafts.apply(el as never, 'padding-top', '24px')
+    let nextId = 0
+    // Both sends stay 'claimed' on the status poll — so the act-3 poll tick below produces a
+    // real sent -> applying stage transition through the verifier subscription path.
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: `q${++nextId}` }) })
+      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+      if (url.startsWith('/__the-forge/status?ids=') && nextId > 0) {
+        const items = Array.from({ length: nextId }, (_, i) => ({ id: `q${i + 1}`, status: 'claimed', note: null }))
+        return Promise.resolve({ ok: true, json: async () => ({ items, watcher: 'none' }) })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+    await flushSend()
+    expect(mode.panelRoot.querySelector('.chip-sent')).not.toBeNull()
+
+    mode.setActive(false)
+    mode.setActive(true)
+    expect(mode.panelRoot.querySelectorAll('.change-row')).toHaveLength(0)
+
+    // A new send after reactivation must be visible — draft a NEW value (the duplicate filter
+    // drops an identical in-flight change set) and send again.
+    mode.select(el as never)
+    ;(mode as never as { drafts: DraftStore }).drafts.apply(el as never, 'padding-top', '32px')
+    ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+    await flushSend()
+    expect(mode.panelRoot.querySelectorAll('.change-row').length).toBeGreaterThan(0)
+    expect(mode.panelRoot.querySelector('.chip-sent')).not.toBeNull()
+
+    // And a verifier stage event (the other designed suppression-lift) resurrects rows too:
+    // hide again, then let a status-poll tick deliver a sent -> applying transition.
+    mode.setActive(false)
+    mode.setActive(true)
+    expect(mode.panelRoot.querySelectorAll('.change-row')).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(mode.panelRoot.querySelectorAll('.change-row').length).toBeGreaterThan(0)
+    vi.useRealTimers()
+  })
 })
 
 describe('chat input cluster wiring (Task 6 — floating prompt popup retired)', () => {

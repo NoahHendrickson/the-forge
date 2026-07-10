@@ -240,7 +240,10 @@ export class DesignMode {
       // ticks every ~2s while a request is pending) — persisting on every tick regardless would
       // defeat "storage writes only on state changes" (final-review F4). Only a real stage
       // transition (sent -> applying, applying -> done, etc.) warrants a sessionStorage write.
-      if (this.session.applyStage(e)) this.persist()
+      // Routed through the ChangeList delegate (NOT session.applyStage directly): the delegate
+      // also lifts clear()'s row suppression, so a stage event after a design-mode off/on cycle
+      // resurrects the in-flight rows (regression pinned 2026-07-10).
+      if (this.changeList.applyStage(e)) this.persist()
     })
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
     overlay.copyButton.addEventListener('click', () => {
@@ -363,9 +366,11 @@ export class DesignMode {
   }
 
   /** Registers a freshly-queued send under its server-assigned id — the single path shared by
-   * Send's onSendOk and resend()'s re-queue success handler. */
+   * Send's onSendOk and resend()'s re-queue success handler. Goes through the ChangeList
+   * delegate (NOT session.register directly) so a new send also lifts clear()'s row
+   * suppression after a design-mode off/on cycle (regression pinned 2026-07-10). */
   private registerQueuedSend(id: string, seeds: SentSeed[]): void {
-    this.session.register(id, seeds)
+    this.changeList.addSent(id, seeds)
     this.verifier.start()
     this.persist()
   }
