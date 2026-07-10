@@ -9,6 +9,9 @@
 #   4. interrupt returns 200
 #   5. approval request parks, decide(allow) resolves it
 #   6. /status reports a live session state
+#   7. (Task 7) /session/say drives a chat turn: user-text → assistant-delta (seq 0) →
+#      assistant-text → tool-started carrying an Edit before/after; /session/config round-trips
+#      a model change onto the stream as config-changed
 #
 # Usage: ./scripts/e2e-embedded-feed.sh
 # Requires: npm run build already done (or this script builds).
@@ -58,8 +61,12 @@ echo "==> Starting demo-app with fake claude on PATH"
 # Prefer IPv4 so curl to 127.0.0.1 matches the bound address.
 (
   cd "$ROOT"
+  # chat (not default): Task 7 adds a /session/say + /session/config section below that needs
+  # the chat scenario's deltas/Edit-with-payload turn shape. chat is a superset of default's
+  # event kinds (assistant-text, tool-started, tool-finished, turn-complete all still fire), so
+  # every existing assertion in this script keeps passing under it.
   PATH="$FAKE_BIN:$PATH" \
-    FORGE_FAKE_CLAUDE_SCENARIO=default \
+    FORGE_FAKE_CLAUDE_SCENARIO=chat \
     npm run dev -w demo-app -- --host 127.0.0.1 --port "$PORT" --strictPort
 ) >"$LOG" 2>&1 &
 SERVER_PID=$!
@@ -223,6 +230,59 @@ while (( SECONDS < deadline )); do
 done
 (( have_resolved )) || fail "missing approval-resolved on stream"
 pass "approval-resolved on stream"
+
+echo "==> Chat: POST /session/say"
+SAY_RES="$(curl -sf "${HDR[@]}" -d '{"text":"hello from e2e"}' "$BASE/__the-forge/session/say")" \
+  || fail "POST /session/say failed"
+SAY_OK="$(node -e "const j=JSON.parse(process.argv[1]); process.stdout.write(String(j.ok))" "$SAY_RES")"
+[[ "$SAY_OK" == "true" ]] || fail "say returned ok≠true: $SAY_RES"
+pass "say → ok"
+
+echo "==> Waiting for chat feed events"
+# Expect: a user-text row (say()-only, never produced by the pull/dispatch flow above), at
+# least one seq:0 assistant-delta preview line, the final assistant-text, and an Edit-bearing
+# tool-started (before/after) — the chat scenario's turn shape (scripts/fake-bin/claude).
+deadline=$((SECONDS + 15))
+have_user_text=0 have_delta=0 have_chat_text=0 have_tool_edit=0
+while (( SECONDS < deadline )); do
+  if grep -q '"kind":"user-text"' "$EVENTS_FILE" 2>/dev/null; then have_user_text=1; fi
+  if grep '"seq":0' "$EVENTS_FILE" 2>/dev/null | grep -q '"assistant-delta"'; then have_delta=1; fi
+  if grep -q '"kind":"assistant-text"' "$EVENTS_FILE" 2>/dev/null; then have_chat_text=1; fi
+  if grep '"kind":"tool-started"' "$EVENTS_FILE" 2>/dev/null | grep -q '"edit"'; then have_tool_edit=1; fi
+  if (( have_user_text && have_delta && have_chat_text && have_tool_edit )); then
+    break
+  fi
+  sleep 0.2
+done
+
+(( have_user_text )) || fail "missing user-text event after say(). feed so far:\n$(cat "$EVENTS_FILE")"
+(( have_delta ))     || fail "missing seq:0 assistant-delta event. feed so far:\n$(cat "$EVENTS_FILE")"
+(( have_chat_text ))  || fail "missing assistant-text event. feed so far:\n$(cat "$EVENTS_FILE")"
+(( have_tool_edit ))  || fail "missing edit-bearing tool-started event. feed so far:\n$(cat "$EVENTS_FILE")"
+pass "chat feed: user-text → assistant-delta(seq 0) → assistant-text → tool-started(edit)"
+
+grep '"kind":"tool-started"' "$EVENTS_FILE" | grep -q '"before"' || fail "tool-started edit payload missing before"
+grep '"kind":"tool-started"' "$EVENTS_FILE" | grep -q '"after"' || fail "tool-started edit payload missing after"
+pass "tool-started edit payload carries before/after"
+
+echo "==> Config round-trip: POST /session/config"
+CONFIG_RES="$(curl -sf "${HDR[@]}" -d '{"model":"sonnet"}' "$BASE/__the-forge/session/config")" \
+  || fail "POST /session/config failed"
+CONFIG_OK="$(node -e "const j=JSON.parse(process.argv[1]); process.stdout.write(String(j.ok))" "$CONFIG_RES")"
+[[ "$CONFIG_OK" == "true" ]] || fail "config returned ok≠true: $CONFIG_RES"
+pass "config → ok"
+
+deadline=$((SECONDS + 5))
+have_config=0
+while (( SECONDS < deadline )); do
+  if grep '"kind":"config-changed"' "$EVENTS_FILE" 2>/dev/null | grep -q '"sonnet"'; then
+    have_config=1
+    break
+  fi
+  sleep 0.1
+done
+(( have_config )) || fail "missing config-changed(model=sonnet) on stream. feed so far:\n$(cat "$EVENTS_FILE")"
+pass "config-changed(model=sonnet) on stream"
 
 echo
 echo "ALL CHECKS PASSED (Task 9 Step 2 — fake-claude feed E2E)"

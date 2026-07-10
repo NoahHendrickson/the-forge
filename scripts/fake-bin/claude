@@ -9,6 +9,10 @@
  * Scenarios (FORGE_FAKE_CLAUDE_SCENARIO):
  *   default (or unset) — init → on user turn: text + Edit tool_use + tool_result + success
  *   rate-limit         — init → on user turn: in-band rate-limit result (is_error:true)
+ *   chat                — init → on user turn: 3 stream_event text deltas + final assistant text
+ *                         + Edit tool_use (old_string/new_string) + tool_result + success
+ *                         (milestone B / Task 7 E2E — shapes copied from the spike fixtures in
+ *                         packages/the-forge/tests/server/session/fixtures/claude-chat-ndjson.ts)
  *
  * Stays alive until SIGTERM/SIGINT (SessionManager.stop / process exit).
  */
@@ -85,6 +89,70 @@ function emitDefaultTurn() {
   }, 50)
 }
 
+// Milestone B / Task 7: chat scenario for the /session/say E2E section in
+// scripts/e2e-embedded-feed.sh. Envelope shapes (stream_event delta, the tool_use/tool_result/
+// result sequence) are copied from the spike fixtures — see claude-chat-ndjson.ts §Step 1.
+function emitChatTurn() {
+  const toolId = 'toolu_fake_chat_edit_1'
+  const deltaChunks = ['Sure, I can ', 'help with ', 'that.']
+  for (const text of deltaChunks) {
+    emit({
+      type: 'stream_event',
+      event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text } },
+      session_id: SESSION_ID,
+      parent_tool_use_id: null,
+      uuid: randomUUID(),
+    })
+  }
+  emit({
+    type: 'assistant',
+    session_id: SESSION_ID,
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: deltaChunks.join('') }],
+    },
+  })
+  emit({
+    type: 'assistant',
+    session_id: SESSION_ID,
+    message: {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: toolId,
+          name: 'Edit',
+          input: {
+            file_path: 'src/App.tsx',
+            old_string: 'const greeting = "hi"',
+            new_string: 'const greeting = "hello from e2e"',
+          },
+        },
+      ],
+    },
+  })
+  // Brief pause so the feed can render the in-flight tool row before finish (same as default).
+  setTimeout(() => {
+    emit({
+      type: 'user',
+      session_id: SESSION_ID,
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: toolId, content: 'ok' }],
+      },
+    })
+    emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      num_turns: 1,
+      result: 'done',
+      session_id: SESSION_ID,
+      total_cost_usd: 0.001,
+    })
+  }, 50)
+}
+
 function emitRateLimitTurn() {
   emit({
     type: 'assistant',
@@ -113,6 +181,7 @@ function emitRateLimitTurn() {
 
 function handleUserTurn() {
   if (SCENARIO === 'rate-limit') emitRateLimitTurn()
+  else if (SCENARIO === 'chat') emitChatTurn()
   else emitDefaultTurn()
 }
 
@@ -142,12 +211,25 @@ rl.on('line', (line) => {
     handleUserTurn()
     return
   }
-  // Interrupt is acknowledged by staying alive; the manager doesn't require a reply.
-  if (msg && msg.type === 'control_request' && msg.request && msg.request.subtype === 'interrupt') {
-    emit({
-      type: 'control_response',
-      response: { subtype: 'success', request_id: msg.request_id || randomUUID() },
-    })
+  // control_request acks — every scenario, not just chat, so setConfig()'s live stdin writes
+  // (setModel/setPermissionMode, called regardless of which scenario is running) always get a
+  // reply. Shapes copied from claude-chat-ndjson.ts §Step 2 (live-probed, CLI 2.1.201).
+  if (msg && msg.type === 'control_request' && msg.request) {
+    const requestId = msg.request_id || randomUUID()
+    const subtype = msg.request.subtype
+    if (subtype === 'interrupt') {
+      // Interrupt is acknowledged by staying alive; the manager doesn't require a reply.
+      emit({ type: 'control_response', response: { subtype: 'success', request_id: requestId } })
+    } else if (subtype === 'set_model') {
+      // No echo of the applied model — confirmation comes from a later assistant/result event.
+      emit({ type: 'control_response', response: { subtype: 'success', request_id: requestId } })
+    } else if (subtype === 'set_permission_mode') {
+      // Unlike set_model, this ack DOES echo the applied mode.
+      emit({
+        type: 'control_response',
+        response: { subtype: 'success', request_id: requestId, response: { mode: msg.request.mode } },
+      })
+    }
   }
 })
 
