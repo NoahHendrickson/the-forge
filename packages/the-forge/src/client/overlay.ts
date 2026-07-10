@@ -852,11 +852,14 @@ export class Overlay {
 
   updateStatus(draftCount: number, comparingAll: boolean, sentText?: string, watch?: { text: string; live: boolean; unlinkable?: boolean }): void {
     // Strip is visible when there are drafts OR a non-empty summary OR a watch indicator.
-    // Since the 2026-07-05 watcher-unlink spec, watchIndicatorFor always returns an
-    // indicator (the 'none' state renders the upfront "not linked" hint — a deliberate
-    // reversal of the original zero-UI-change rule), so in practice the strip is visible
-    // whenever design mode is on. `watch` stays optional so callers without watch state
-    // (tests, panel-only flows) keep today's hide-when-empty behavior.
+    // Since composer consolidation Task 3 (2026-07-09), the caller (index.ts's refreshStatus)
+    // only passes a `watch` indicator for a genuinely LINKED terminal watcher ('live' or
+    // 'asleep') — an embedded session's own lifecycle no longer gets a strip of its own (the
+    // composer's placeholder text and drafts pill already carry that state), and a 'none'
+    // watcher passes `undefined` rather than the old upfront "not linked" hint. So the strip is
+    // now genuinely absent most of the time, not "visible whenever design mode is on". `watch`
+    // stays optional so callers without watch state (tests, panel-only flows) keep today's
+    // hide-when-empty behavior.
     this.status.hidden = draftCount === 0 && !sentText && !watch
     // Draft-count label and controls are hidden when no drafts (they act on drafts)
     this.statusLabel.hidden = draftCount === 0
