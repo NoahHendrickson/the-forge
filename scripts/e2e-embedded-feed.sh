@@ -23,6 +23,10 @@ PORT=5173
 BASE="http://127.0.0.1:${PORT}"
 LOG="$(mktemp -t forge-e2e-feed.XXXXXX)"
 EVENTS_FILE="$(mktemp -t forge-e2e-events.XXXXXX)"
+# Fake-owned control_request receipt log (FORGE_FAKE_CLAUDE_LOG in scripts/fake-bin/claude):
+# the adapter deliberately never logs control_responses, so asserting "the set_model ack
+# landed in the fake" needs a record the fake itself writes.
+FAKE_LOG="$(mktemp -t forge-e2e-fake-receipts.XXXXXX)"
 SERVER_PID=""
 CURL_PID=""
 
@@ -38,7 +42,7 @@ cleanup() {
     kill -9 "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
   fi
-  rm -f "$LOG" "$EVENTS_FILE"
+  rm -f "$LOG" "$EVENTS_FILE" "$FAKE_LOG"
 }
 trap cleanup EXIT
 
@@ -67,6 +71,7 @@ echo "==> Starting demo-app with fake claude on PATH"
   # every existing assertion in this script keeps passing under it.
   PATH="$FAKE_BIN:$PATH" \
     FORGE_FAKE_CLAUDE_SCENARIO=chat \
+    FORGE_FAKE_CLAUDE_LOG="$FAKE_LOG" \
     npm run dev -w demo-app -- --host 127.0.0.1 --port "$PORT" --strictPort
 ) >"$LOG" 2>&1 &
 SERVER_PID=$!
@@ -284,5 +289,19 @@ done
 (( have_config )) || fail "missing config-changed(model=sonnet) on stream. feed so far:\n$(cat "$EVENTS_FILE")"
 pass "config-changed(model=sonnet) on stream"
 
+# The set_model control_request must have actually reached the fake CLI (its ack carries no
+# echo of the model on the stream, so the receipt log is the only place this is observable).
+deadline=$((SECONDS + 5))
+have_receipt=0
+while (( SECONDS < deadline )); do
+  if grep '"received":"set_model"' "$FAKE_LOG" 2>/dev/null | grep -q '"sonnet"'; then
+    have_receipt=1
+    break
+  fi
+  sleep 0.1
+done
+(( have_receipt )) || fail "set_model(sonnet) receipt missing from fake log. receipts so far:\n$(cat "$FAKE_LOG")"
+pass "set_model(sonnet) ack receipt in fake log"
+
 echo
-echo "ALL CHECKS PASSED (Task 9 Step 2 — fake-claude feed E2E)"
+echo "ALL CHECKS PASSED (fake-claude feed E2E (embedded session + chat))"

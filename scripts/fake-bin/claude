@@ -23,9 +23,23 @@ const readline = require('node:readline')
 
 const SESSION_ID = process.env.FORGE_FAKE_SESSION_ID || 'fake-session-e2e-0001'
 const SCENARIO = process.env.FORGE_FAKE_CLAUDE_SCENARIO || 'default'
+// Optional receipt log (Task 7): the adapter deliberately never logs control_responses, so
+// the E2E's "set_model ack landed" assertion needs a record the FAKE owns. When set, one JSON
+// line is appended per control_request received, in every scenario. Sidecar only — never
+// touches the stdout protocol or the lazy-boot behavior.
+const RECEIPT_LOG = process.env.FORGE_FAKE_CLAUDE_LOG || ''
 
 function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n')
+}
+
+function logReceipt(obj) {
+  if (!RECEIPT_LOG) return
+  try {
+    require('node:fs').appendFileSync(RECEIPT_LOG, JSON.stringify(obj) + '\n')
+  } catch {
+    // Best-effort — a failed receipt write must never break the protocol.
+  }
 }
 
 function emitInit() {
@@ -219,12 +233,15 @@ rl.on('line', (line) => {
     const subtype = msg.request.subtype
     if (subtype === 'interrupt') {
       // Interrupt is acknowledged by staying alive; the manager doesn't require a reply.
+      logReceipt({ received: 'interrupt' })
       emit({ type: 'control_response', response: { subtype: 'success', request_id: requestId } })
     } else if (subtype === 'set_model') {
       // No echo of the applied model — confirmation comes from a later assistant/result event.
+      logReceipt({ received: 'set_model', model: msg.request.model })
       emit({ type: 'control_response', response: { subtype: 'success', request_id: requestId } })
     } else if (subtype === 'set_permission_mode') {
       // Unlike set_model, this ack DOES echo the applied mode.
+      logReceipt({ received: 'set_permission_mode', mode: msg.request.mode })
       emit({
         type: 'control_response',
         response: { subtype: 'success', request_id: requestId, response: { mode: msg.request.mode } },
