@@ -137,6 +137,19 @@ button {
 }
 .panel-resize:hover, .panel-resize:active { background: rgba(13,153,255,0.4); }
 ` +
+// feedSlot (composer-consolidation Task 4): 45% flex-basis is the CSS default, live only
+// until a drag or a restored persisted split sets an inline px flex-basis (Panel.feedSplit()
+// returns -1 while this default is in effect). display: flex here is what makes
+// .session-feed's own `flex: 1 1 auto` (overlay.ts's .session-feed rule, further below)
+// actually fill the slot instead of sizing to content.
+`.panel-feed-slot {
+  flex: 0 1 45%; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+.feed-divider {
+  flex: none; height: 5px; cursor: row-resize; position: relative; z-index: 5;
+}
+.feed-divider:hover, .feed-divider:active { background: rgba(13,153,255,0.4); }
+` +
 // .panel-mode's corner anchor moved onto the shared .panel-head-actions wrapper below —
 // .panel-prompt (content-sized, unlike .panel-mode's fixed 22px) needs a flex sibling to
 // sit beside rather than a guessed fixed right offset.

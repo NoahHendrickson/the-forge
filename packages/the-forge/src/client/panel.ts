@@ -50,6 +50,9 @@ interface BoundField {
 }
 
 export class Panel {
+  /** sessionStorage key the feed split (feedSlot's dragged px height) persists under. */
+  static readonly FEED_SPLIT_KEY = 'the-forge:feed-split'
+
   root = document.createElement('div')
   compareButton = createButton()
   resetButton = createButton()
@@ -65,6 +68,12 @@ export class Panel {
    * inside the SessionFeed's own drafts disclosure (feed.draftSlot), so this is the only slot
    * left. Stays visible in the docked no-selection empty state (body hidden, footer kept). */
   feedSlot = document.createElement('div')
+  /** Drag handle between `body` and `feedSlot` (composer-consolidation Task 4) — mirrors
+   * resizeHandle's house pattern (pointerdown arms document-level move/up, disarmed on
+   * up/cancel — zero idle listeners) but drives feedSlot's flex-basis (vertical split)
+   * rather than the whole panel's width, and lives here rather than in Dock since it only
+   * redistributes space WITHIN the panel. See onFeedDragStart / feedSplit(). */
+  feedDivider = document.createElement('div')
 
   private head = document.createElement('div')
   private headTag = document.createElement('div')
@@ -143,7 +152,10 @@ export class Panel {
     // control handler immediately BEFORE drafts.apply(...), so callers can snapshot
     // pre-edit layout state (e.g. for the ripple indicator) while onEdited (which
     // fires after apply) is used for post-edit re-measurement.
-    private onBeforeEdit: (el: TaggedElement) => void = () => {}
+    private onBeforeEdit: (el: TaggedElement) => void = () => {},
+    // Injectable Storage (lifecycle-store.ts's pattern) — real sessionStorage by default,
+    // a fake in tests. Fourth optional param keeps every existing call site untouched.
+    private storage: Storage = sessionStorage
   ) {
     this.root.id = 'panel'
     this.root.hidden = true
@@ -189,7 +201,22 @@ export class Panel {
     this.headActions.className = 'panel-head-actions'
     this.headActions.append(this.promptButton, this.modeButton)
     this.head.append(this.headActions)
-    this.root.append(this.resizeHandle, this.head, this.actions, this.emptyEl, this.body, this.feedSlot, this.footer)
+    this.feedSlot.className = 'panel-feed-slot'
+    this.feedDivider.className = 'feed-divider'
+    this.feedDivider.addEventListener('pointerdown', this.onFeedDragStart)
+    this.feedDivider.addEventListener('dblclick', this.onFeedDividerReset)
+    const restoredSplit = this.readFeedSplit()
+    if (restoredSplit !== null) this.feedSlot.style.flexBasis = `${restoredSplit}px`
+    this.root.append(
+      this.resizeHandle,
+      this.head,
+      this.actions,
+      this.emptyEl,
+      this.body,
+      this.feedDivider,
+      this.feedSlot,
+      this.footer
+    )
     // Popovers mount in the BODY (the scroll container), not the root — anchor.offsetTop
     // and the popover's absolute top must share the body's scrolled coordinate space or
     // the popover stops tracking its row the moment the sections scroll (see overlay.ts
@@ -311,6 +338,86 @@ export class Panel {
     this.docked = on
     this.root.classList.toggle('docked', on)
     if (!this.el) this.hide()
+  }
+
+  /**
+   * Current feed area height in px (feedSlot's inline flex-basis), or -1 when still on
+   * the CSS default (`.panel-feed-slot`'s 45% flex-basis — no inline override yet because
+   * neither a drag nor a restored persisted value has happened). -1 rather than a
+   * computed px number because jsdom (and a not-yet-laid-out real panel) has no reliable
+   * height to compute a percentage against; callers that need a concrete px figure should
+   * drag first.
+   */
+  feedSplit(): number {
+    const basis = this.feedSlot.style.flexBasis
+    if (!basis || !basis.endsWith('px')) return -1
+    const value = parseInt(basis, 10)
+    return Number.isFinite(value) ? value : -1
+  }
+
+  /** Reads+validates the persisted split; null on absent/corrupt/disabled storage — the
+   * caller's job is deciding what "null" means (constructor: stay on the CSS default). */
+  private readFeedSplit(): number | null {
+    try {
+      const raw = this.storage.getItem(Panel.FEED_SPLIT_KEY)
+      if (raw === null) return null
+      const value = parseInt(raw, 10)
+      return Number.isFinite(value) && value > 0 ? value : null
+    } catch {
+      // Storage disabled/blocked (privacy modes) — fall back to the CSS default, never throw.
+      return null
+    }
+  }
+
+  private saveFeedSplit(value: number): void {
+    try {
+      this.storage.setItem(Panel.FEED_SPLIT_KEY, String(Math.round(value)))
+    } catch {
+      // Persistence is a nicety — a full/blocked storage must never break a drag.
+    }
+  }
+
+  private onFeedDragStart = (e: PointerEvent): void => {
+    if (e.button !== 0) return // primary button only — a right-click must not start a drag
+    e.preventDefault()
+    const startY = e.clientY
+    const panelHeight = this.root.getBoundingClientRect().height
+    // Entering the drag from the CSS default (feedSplit() === -1) has no px figure to
+    // start from yet — seed it from the same 45% the CSS default paints, so the first
+    // pixel of movement continues smoothly from where the divider visually was.
+    const startHeight = this.feedSplit() === -1 ? panelHeight * 0.45 : this.feedSplit()
+    const minSplit = 120
+    const maxSplit = Math.max(minSplit, panelHeight - 120)
+    let current = Math.min(maxSplit, Math.max(minSplit, startHeight))
+    // Document-level (not window, unlike resizeHandle's onResizeStart in dock.ts) per the
+    // composer-consolidation Task 4 contract — armed only for the drag's duration, same
+    // zero-idle-listeners discipline. No setPointerCapture — jsdom doesn't implement it,
+    // and document listeners cover the pointer leaving the handle anyway.
+    const onMove = (ev: PointerEvent): void => {
+      // Divider sits ABOVE feedSlot: dragging it UP (clientY decreases) grows the feed
+      // area below it, dragging it DOWN shrinks it — hence the subtraction of delta.
+      const delta = ev.clientY - startY
+      current = Math.min(maxSplit, Math.max(minSplit, startHeight - delta))
+      this.feedSlot.style.flexBasis = `${current}px`
+    }
+    const onUp = (): void => {
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', onUp)
+      document.removeEventListener('pointercancel', onUp)
+      this.saveFeedSplit(current)
+    }
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp)
+    document.addEventListener('pointercancel', onUp)
+  }
+
+  private onFeedDividerReset = (): void => {
+    this.feedSlot.style.flexBasis = ''
+    try {
+      this.storage.removeItem(Panel.FEED_SPLIT_KEY)
+    } catch {
+      // Storage disabled/blocked — the inline style reset above still lands.
+    }
   }
 
   /**

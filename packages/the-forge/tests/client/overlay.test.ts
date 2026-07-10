@@ -497,6 +497,17 @@ describe('Dock CSS (docked-panel spec)', () => {
   })
 })
 
+describe('Overlay CSS feed divider (composer-consolidation Task 4)', () => {
+  it('feed slot defaults to a 45% flex-basis split, overridden by inline px once dragged/restored', () => {
+    expect(CSS).toMatch(/\.panel-feed-slot\s*{[^}]*flex:\s*0\s+1\s+45%/s)
+  })
+  it('divider is a slim row-resize handle with a hover/active grab affordance', () => {
+    expect(CSS).toMatch(/\.feed-divider\s*{[^}]*height:\s*5px/s)
+    expect(CSS).toMatch(/\.feed-divider\s*{[^}]*cursor:\s*row-resize/s)
+    expect(CSS).toContain('.feed-divider:hover, .feed-divider:active { background: rgba(13,153,255,0.4); }')
+  })
+})
+
 describe('Dock polish CSS (PR #2 follow-ups)', () => {
   // Padding widened from 36px (PR #2, mode-button-only) to 96px (prompt-mode) to reserve
   // room for the whole .panel-head-actions cluster (Prompt + mode button), not just the
