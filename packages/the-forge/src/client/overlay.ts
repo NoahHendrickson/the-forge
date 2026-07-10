@@ -621,7 +621,23 @@ button {
   font: 500 var(--text-sm) var(--font-ui); border-radius: 4px;
 }
 .chat-chip-clear:hover { color: var(--text-primary); background: var(--control-hover); }
-.chat-input { display: flex; flex-direction: column; gap: 6px; }
+` +
+// Drafts pill + disclosure (composer consolidation Task 2) — .draft-pill sits in
+// .composer-chips alongside .chat-chip; clicking it toggles .draft-disclosure open (a
+// details-free div toggle, not a <details> element — see session-feed.ts). .draft-disclosure
+// itself sits ABOVE .composer-chips in .chat-composer so opening it (it hosts the unmodified
+// ChangeList, whose own .changes-section rules cap it at max-height 180px) never pushes the
+// textarea/controls rows around — it grows upward into free panel space instead.
+// CSS class names here are test hooks — extend, don't rename.
+`.draft-pill {
+  flex: none; padding: 4px 8px; border-radius: 6px; background: var(--control); border: none;
+  font: 500 var(--text-xs) var(--font-ui); color: var(--text-secondary);
+}
+.draft-pill:hover { background: var(--control-hover); }
+.draft-disclosure { display: none; }
+.draft-disclosure.open { display: block; }
+` +
+`.chat-input { display: flex; flex-direction: column; gap: 6px; }
 .chat-textarea {
   box-sizing: border-box; width: 100%; resize: vertical; min-height: 40px;
   background: var(--control); color: var(--text-primary); border: 1px solid var(--border-panel);

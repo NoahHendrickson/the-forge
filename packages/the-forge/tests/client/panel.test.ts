@@ -91,6 +91,14 @@ afterEach(() => {
 })
 
 describe('Panel', () => {
+  // Composer consolidation Task 2: the Changes list moved off panel.changesSlot into the chat
+  // composer's drafts disclosure (session-feed.ts draftSlot) — the field (and its entry in the
+  // root append list) is retired, not just emptied.
+  it('no longer exposes a changesSlot mount point', () => {
+    const { panel } = setup()
+    expect((panel as unknown as { changesSlot?: unknown }).changesSlot).toBeUndefined()
+  })
+
   it('shows header with source location and populates fields from computed styles', () => {
     const { panel } = setup()
     expect(panel.root.textContent).toContain('src/Card.tsx:4:7')

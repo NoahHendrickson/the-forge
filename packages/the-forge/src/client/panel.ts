@@ -60,12 +60,10 @@ export class Panel {
    * whenever there's no live selection (docked "No selection" state included). Panel does
    * NOT know about the chat cluster itself; index.ts wires the click (Task 4/6). */
   promptButton = createButton({ label: 'Prompt', className: 'panel-prompt' })
-  /** Mount slot for the Changes lifecycle list (changelist.ts) — owned/populated by
-   * DesignMode, positioned here so it pins between the scrolling sections and the footer
-   * and stays visible in the docked no-selection empty state (body hidden, footer kept). */
-  changesSlot = document.createElement('div')
-  /** Mount slot for the SessionFeed (session-feed.ts) — sits above the Changes list so live
-   * session activity is the most prominent docked section. Wired by DesignMode (Task 8). */
+  /** Mount slot for the SessionFeed (session-feed.ts) — the Changes lifecycle list (changelist.ts)
+   * no longer gets its own dedicated slot here (composer consolidation Task 2): it now mounts
+   * inside the SessionFeed's own drafts disclosure (feed.draftSlot), so this is the only slot
+   * left. Stays visible in the docked no-selection empty state (body hidden, footer kept). */
   feedSlot = document.createElement('div')
 
   private head = document.createElement('div')
@@ -191,7 +189,7 @@ export class Panel {
     this.headActions.className = 'panel-head-actions'
     this.headActions.append(this.promptButton, this.modeButton)
     this.head.append(this.headActions)
-    this.root.append(this.resizeHandle, this.head, this.actions, this.emptyEl, this.body, this.feedSlot, this.changesSlot, this.footer)
+    this.root.append(this.resizeHandle, this.head, this.actions, this.emptyEl, this.body, this.feedSlot, this.footer)
     // Popovers mount in the BODY (the scroll container), not the root — anchor.offsetTop
     // and the popover's absolute top must share the body's scrolled coordinate space or
     // the popover stops tracking its row the moment the sections scroll (see overlay.ts

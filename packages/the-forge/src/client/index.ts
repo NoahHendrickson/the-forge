@@ -164,8 +164,19 @@ export class DesignMode {
       onSelect: (el) => this.select(el),
       onResend: (seed) => this.resend(seed),
     })
-    this.panel.changesSlot.appendChild(this.changeList.root)
+    // ChangeList now mounts inside the SessionFeed's own drafts disclosure (composer
+    // consolidation Task 2) instead of a dedicated panel.changesSlot — ChangeList itself is
+    // NOT modified; feed.draftSlot is just a new parent for the same root element.
+    this.feed.draftSlot.appendChild(this.changeList.root)
     this.panel.feedSlot.appendChild(this.feed.root)
+    // Drafts pill state (composer consolidation Task 2): count comes from the DraftStore (the
+    // same elementCount() refreshStatus already reads), applying is true while any lifecycle
+    // row is still sent/applying — the same stage predicate ChangeList's own inFlightProps
+    // uses to decide which draft rows are already represented by an in-flight row. Pushed from
+    // TWO independent triggers below: drafts.onChange (count can change) and session.onChange
+    // (applying can change) — either alone must be able to flip the pill without waiting on
+    // the other.
+    this.session.onChange(() => this.updateDraftPill())
     // Fire-and-forget with .catch(() => {}) — same style as the unlink button's fetch;
     // a failed interrupt just means the session keeps running (degraded, not broken).
     this.feed.onInterrupt = () => {
@@ -329,9 +340,22 @@ export class DesignMode {
       // is a querySelectorAll+JSON.stringify+sessionStorage.setItem+replaceChildren — the same
       // "quiet window" debounce the layout-ripple logic already uses for the same reason.
       this.refreshStatus()
+      // updateDraftPill() stays immediate (not debounced) alongside refreshStatus() — it only
+      // reads drafts.elementCount() (a Map size), nothing scan/stringify-shaped.
+      this.updateDraftPill()
       if (this.draftSyncTimer) clearTimeout(this.draftSyncTimer)
       this.draftSyncTimer = setTimeout(() => this.flushDraftSync(), RIPPLE_DEBOUNCE_MS)
     }
+  }
+
+  /** Pushes {count, applying} to the SessionFeed's drafts pill (composer consolidation Task 2)
+   * — called from drafts.onChange (constructor) and session.onChange (constructor). count is
+   * the DraftStore's live element count; applying mirrors ChangeList's own inFlightProps stage
+   * predicate ('sent' | 'applying' rows are still in flight). */
+  private updateDraftPill(): void {
+    const count = this.drafts.elementCount()
+    const applying = this.session.records().some((r) => r.stage === 'sent' || r.stage === 'applying')
+    this.feed.setDraftState({ count, applying })
   }
 
   /** Cancels the pending debounced draft-sync timer (if any) and runs syncDrafts()+persist()

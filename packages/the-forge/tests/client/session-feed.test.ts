@@ -179,6 +179,111 @@ describe('composer shell', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Drafts pill + disclosure (composer consolidation Task 2) — the pill lives in
+// .composer-chips alongside the element chip; .draft-disclosure is a sibling block, above
+// .composer-chips, hosting draftSlot (where index.ts appends the unmodified ChangeList's root).
+// ---------------------------------------------------------------------------
+
+describe('drafts pill + disclosure', () => {
+  it('the drafts pill lives in .composer-chips alongside the element chip', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const chips = feed.root.querySelector('.composer-chips') as HTMLElement
+    expect(chips.querySelector('.draft-pill')).not.toBeNull()
+    expect(chips.querySelector('.chat-chip')).not.toBeNull()
+  })
+
+  it('.draft-disclosure is a sibling of .composer-chips inside .chat-composer, not nested in it', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const composer = feed.root.querySelector('.chat-composer') as HTMLElement
+    const chips = composer.querySelector('.composer-chips') as HTMLElement
+    const disclosure = composer.querySelector('.draft-disclosure') as HTMLElement
+    expect(disclosure).not.toBeNull()
+    expect(disclosure.parentElement).toBe(composer)
+    expect(chips.contains(disclosure)).toBe(false)
+  })
+
+  it('draftSlot is reachable inside .draft-disclosure and hosts appended content', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const marker = document.createElement('div')
+    marker.className = 'marker'
+    feed.draftSlot.appendChild(marker)
+    const disclosure = feed.root.querySelector('.draft-disclosure') as HTMLElement
+    expect(disclosure.contains(marker)).toBe(true)
+  })
+
+  it('pill is hidden at zero drafts and not applying', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    expect(pill.hidden).toBe(true)
+  })
+
+  it('setDraftState(2, false) unhides the pill with the plural count copy', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setDraftState({ count: 2, applying: false })
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    expect(pill.hidden).toBe(false)
+    expect(pill.textContent).toBe('2 edits drafted')
+  })
+
+  it('setDraftState(1, false) uses the singular copy', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setDraftState({ count: 1, applying: false })
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    expect(pill.textContent).toBe('1 edit drafted')
+  })
+
+  it('applying:true shows "applying…" and wins over a nonzero count', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setDraftState({ count: 3, applying: true })
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    expect(pill.hidden).toBe(false)
+    expect(pill.textContent).toBe('applying…')
+  })
+
+  it('applying:true with count 0 still shows the pill', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setDraftState({ count: 0, applying: true })
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    expect(pill.hidden).toBe(false)
+    expect(pill.textContent).toBe('applying…')
+  })
+
+  it('count===0 && !applying hides the pill and force-closes the disclosure', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    const disclosure = feed.root.querySelector('.draft-disclosure') as HTMLElement
+    feed.setDraftState({ count: 2, applying: false })
+    pill.click()
+    expect(disclosure.classList.contains('open')).toBe(true)
+    feed.setDraftState({ count: 0, applying: false })
+    expect(pill.hidden).toBe(true)
+    expect(disclosure.classList.contains('open')).toBe(false)
+  })
+
+  it('clicking the pill toggles .draft-disclosure open/closed', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setDraftState({ count: 1, applying: false })
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    const disclosure = feed.root.querySelector('.draft-disclosure') as HTMLElement
+    expect(disclosure.classList.contains('open')).toBe(false)
+    pill.click()
+    expect(disclosure.classList.contains('open')).toBe(true)
+    pill.click()
+    expect(disclosure.classList.contains('open')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Stream consumption — rows rendered from events
 // ---------------------------------------------------------------------------
 

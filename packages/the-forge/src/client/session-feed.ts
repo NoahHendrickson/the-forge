@@ -72,6 +72,9 @@ export interface SessionFeedOpts {
 export class SessionFeed {
   /** The section root — class="session-feed"; host appends this to panel.feedSlot. */
   root: HTMLElement
+  /** .draft-disclosure content host — index.ts appends the (unmodified) ChangeList's root
+   * here instead of the panel's old dedicated changesSlot (composer consolidation Task 2). */
+  draftSlot: HTMLElement
   /** Called when the user clicks Stop — host wires to POST /__the-forge/session/interrupt. */
   onInterrupt: () => void = () => {}
   /** Called when user clicks Allow/Deny on an approval row — host wires to the decide endpoint. */
@@ -108,6 +111,13 @@ export class SessionFeed {
   private readonly chatComposer: HTMLElement
   private readonly composerChips: HTMLElement
   private readonly composerControls: HTMLElement
+  // --- drafts pill + disclosure (composer consolidation Task 2): the pill lives in
+  // composerChips alongside the element chip; draftDisclosure is a sibling block, above
+  // composerChips, that the pill's click toggles open/closed via the .open class — a
+  // details-free div toggle (no <details> semantics needed, there's only ever one thing to
+  // show/hide). draftSlot (public) is the content host inside it. ---
+  private readonly draftPill: HTMLButtonElement
+  private readonly draftDisclosure: HTMLElement
 
   // --- element chip + input cluster ---
   private readonly chip: HTMLElement
@@ -227,10 +237,25 @@ export class SessionFeed {
     chipClear.addEventListener('click', () => this.setChip(null))
     this.chip.append(this.chipLabel, chipClear)
 
-    // Composer chip row: today just the element chip; Task 2 adds the drafts pill here too.
+    // Drafts pill + disclosure (composer consolidation Task 2): the pill is a plain
+    // createButton (CLAUDE.md's ui/ factory rule), hidden until setDraftState says otherwise.
+    // Its click toggles the sibling draftDisclosure's .open class — draftSlot is exposed
+    // publicly so index.ts can append the (unmodified) ChangeList's root into it.
+    this.draftPill = createButton({ className: 'draft-pill' })
+    this.draftPill.type = 'button'
+    this.draftPill.hidden = true
+    this.draftPill.addEventListener('click', () => this.draftDisclosure.classList.toggle('open'))
+
+    this.draftSlot = document.createElement('div')
+    this.draftSlot.className = 'draft-slot'
+    this.draftDisclosure = document.createElement('div')
+    this.draftDisclosure.className = 'draft-disclosure'
+    this.draftDisclosure.append(this.draftSlot)
+
+    // Composer chip row: the element chip plus the drafts pill (Task 2).
     this.composerChips = document.createElement('div')
     this.composerChips.className = 'composer-chips'
-    this.composerChips.append(this.chip)
+    this.composerChips.append(this.chip, this.draftPill)
 
     // Input cluster: plain createElement for the textarea (no factory exists for it, per
     // CLAUDE.md's ui/ factory rule — that rule covers buttons/selects). Send now lives in
@@ -287,11 +312,13 @@ export class SessionFeed {
     this.composerControls.append(this.modelSelect, this.effortSelect, this.permissionSelect, composerSpacer, this.sendBtn)
 
     // The single bordered composer card (composer consolidation Task 1) — replaces the retired
-    // status row, standalone Stop button, and .session-config-bar. Task 2 adds the drafts pill
-    // into .composer-chips; Task 4 adds the draggable divider above .session-feed.
+    // status row, standalone Stop button, and .session-config-bar. draftDisclosure sits ABOVE
+    // composerChips (Task 2): it hosts the ChangeList, which can grow to its own max-height —
+    // above the chips/input/controls rows is the only position that never pushes the textarea
+    // around when it opens. Task 4 adds the draggable divider above .session-feed.
     this.chatComposer = document.createElement('div')
     this.chatComposer.className = 'chat-composer'
-    this.chatComposer.append(this.composerChips, this.inputCluster, this.composerControls)
+    this.chatComposer.append(this.draftDisclosure, this.composerChips, this.inputCluster, this.composerControls)
 
     this.root.append(this.list, this.chatComposer)
     this.updateSendMorph()
@@ -313,6 +340,23 @@ export class SessionFeed {
    * replacing the old floating prompt popup's open(anchor). */
   focusInput(): void {
     this.textarea.focus()
+  }
+
+  /** Pushes the drafts-pill display state (composer consolidation Task 2) — index.ts calls
+   * this from both the drafts store's onChange (count) and the lifecycle session's onChange
+   * (applying), so either can independently flip the pill on/off without knowing about the
+   * other's derivation. `applying` wins the text over a nonzero count — an in-flight send stays
+   * "applying…" even while further drafts pile up behind it. Hidden only when there is truly
+   * nothing to show, which also force-closes the disclosure — an empty disclosure left open
+   * would show a blank block once the last draft/send resolves. */
+  setDraftState(s: { count: number; applying: boolean }): void {
+    const visible = s.count > 0 || s.applying
+    this.draftPill.hidden = !visible
+    if (!visible) {
+      this.draftDisclosure.classList.remove('open')
+      return
+    }
+    this.draftPill.textContent = s.applying ? 'applying…' : s.count === 1 ? '1 edit drafted' : `${s.count} edits drafted`
   }
 
   /** Enables/disables the input cluster and shows/hides the reason line. Availability

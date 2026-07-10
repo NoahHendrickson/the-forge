@@ -964,6 +964,31 @@ describe('change list wiring', () => {
     expect(mode.panelRoot.querySelector('.changes-section')).not.toBeNull()
   })
 
+  // Composer consolidation Task 2: the Changes list retired its dedicated panel.changesSlot in
+  // favor of living inside the chat composer's drafts disclosure (session-feed.ts) — reuse
+  // proof for ChangeList itself is changelist.test.ts passing byte-unchanged (see CLAUDE.md).
+  it('mounts the (unmodified) ChangeList inside .draft-disclosure, not a dedicated changesSlot', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    const mode = new DesignMode(overlay)
+    liveModes.push(mode)
+    overlay.attachPanel(mode.panelRoot)
+    const disclosure = mode.panelRoot.querySelector('.draft-disclosure')
+    expect(disclosure).not.toBeNull()
+    expect(disclosure?.querySelector('.changes-section')).not.toBeNull()
+  })
+
+  it('drafting an edit updates the drafts pill via the existing drafts.onChange subscription', () => {
+    const { mode, drafts } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    const pill = mode.panelRoot.querySelector('.draft-pill') as HTMLElement
+    expect(pill.hidden).toBe(true)
+    drafts.apply(btn, 'padding-top', '24px')
+    expect(pill.hidden).toBe(false)
+    expect(pill.textContent).toBe('1 edit drafted')
+  })
+
   it('seeds sent rows on a successful send and clears them on deactivate', async () => {
     const overlay = new Overlay()
     overlay.mount()
