@@ -231,27 +231,29 @@ describe('Overlay (M2 additions)', () => {
     expect((overlay.host.shadowRoot!.getElementById('status') as HTMLElement).hidden).toBe(true)
   })
 
-  it('status strip orders copy button after send, after the watch ✕', () => {
+  // 'Send to agent' (the standalone button) was retired by composer consolidation Task 3 — the
+  // composer's ↑ is the only send surface now — so the strip's only button ahead of Copy is the
+  // watch ✕.
+  it('status strip orders copy button after the watch ✕', () => {
     const overlay = new Overlay()
     overlay.mount()
     const status = overlay.host.shadowRoot!.getElementById('status')!
     const buttons = [...status.querySelectorAll('button')]
-    expect(buttons[2]).toBe(overlay.copyButton)
+    expect(buttons[1]).toBe(overlay.copyButton)
     expect(overlay.copyButton.textContent).toBe('Copy for agent')
+  })
+
+  it("has no standalone 'Send to agent' button — the composer's ↑ is the only send surface", () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    expect('sendButton' in overlay).toBe(false)
+    const status = overlay.host.shadowRoot!.getElementById('status')!
+    const labels = [...status.querySelectorAll('button')].map((b) => b.textContent)
+    expect(labels).not.toContain('Send to agent')
   })
 })
 
 describe('Overlay (M4 additions)', () => {
-  it('status strip orders send after the watch ✕, before copy', () => {
-    const overlay = new Overlay()
-    overlay.mount()
-    const status = overlay.host.shadowRoot!.getElementById('status')!
-    const buttons = [...status.querySelectorAll('button')]
-    expect(buttons[1]).toBe(overlay.sendButton)
-    expect(buttons[2]).toBe(overlay.copyButton)
-    expect(overlay.sendButton.textContent).toBe('Send to agent')
-  })
-
   it('updateStatus shows an optional sent span when given sentText', () => {
     const overlay = new Overlay()
     overlay.mount()
@@ -275,7 +277,6 @@ describe('Overlay (M4 additions)', () => {
     const root = overlay.host.shadowRoot!
     const status = root.getElementById('status') as HTMLElement
     expect(status.hidden).toBe(false)
-    expect(overlay.sendButton.hidden).toBe(true)
     expect(overlay.copyButton.hidden).toBe(true)
     expect(overlay.compareAllButton.hidden).toBe(true)
     expect(overlay.resetAllButton.hidden).toBe(true)

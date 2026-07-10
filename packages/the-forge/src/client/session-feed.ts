@@ -175,6 +175,11 @@ export class SessionFeed {
   /** Mirrors updateSendMorph()'s last computed morph state — the click handler reads this
    * instead of recomputing busyish && textarea-empty itself. */
   private sendIsStop = false
+  /** Mirrored from setDraftState's count (composer consolidation Task 3) — lets trySend's
+   * empty-text guard admit a drafts-only send: the composer's ↑ is the single send surface for
+   * both edits and chat, so an empty textarea must not block sending when there ARE drafts to
+   * send, even though it still blocks when there is truly nothing (no text, no drafts). */
+  private draftCount = 0
 
   private readonly fetchFn: typeof fetch
   private readonly getHeaders: () => Record<string, string>
@@ -350,6 +355,7 @@ export class SessionFeed {
    * nothing to show, which also force-closes the disclosure — an empty disclosure left open
    * would show a blank block once the last draft/send resolves. */
   setDraftState(s: { count: number; applying: boolean }): void {
+    this.draftCount = s.count
     const visible = s.count > 0 || s.applying
     this.draftPill.hidden = !visible
     if (!visible) {
@@ -389,12 +395,13 @@ export class SessionFeed {
    * of the feed's hands: it used to disable the input, await onSay's promise, and clear text/
    * chip on success itself (final-review fix 3's round trip); now onSend is a fire-and-forget
    * `() => void` and the HOST owns that whole round trip via getText()/getChip()/clearText().
-   * Preserves the pre-existing disabled and non-empty-text guards. The empty-text guard will
-   * grow a "unless drafts exist" exception once the drafts pill lands (Task 2) — out of scope
-   * here. */
+   * Preserves the pre-existing disabled guard. The empty-text guard (Task 3) now admits a
+   * drafts-only send: it only blocks when there is BOTH no text AND no drafts (draftCount, kept
+   * current by setDraftState) — the composer's ↑ is the single send surface for edits and chat,
+   * so "nothing typed" must not block "something drafted". */
   private trySend(): void {
     if (this.textarea.disabled) return
-    if (!this.textarea.value.trim()) return
+    if (!this.textarea.value.trim() && this.draftCount === 0) return
     this.onSend()
   }
 

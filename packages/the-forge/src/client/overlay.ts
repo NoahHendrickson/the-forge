@@ -664,7 +664,6 @@ button {
 export class Overlay {
   host = document.createElement('div')
   toggle = createButton({ label: 'Design' })
-  sendButton = createButton({ label: 'Send to agent' })
   copyButton = createButton({ label: 'Copy for agent' })
   // compareAllButton's label is state-dependent ('Before'/'After') — set in updateStatus().
   compareAllButton = createButton()
@@ -707,7 +706,7 @@ export class Overlay {
     // Watch indicator leads the strip — it's ambient session state ("● Linked…"), read
     // before the per-draft controls and per-send summary.
     this.unlinkButton.hidden = true
-    this.status.append(this.watchLabel, this.unlinkButton, this.statusLabel, this.sendButton, this.copyButton, this.compareAllButton, this.resetAllButton, this.sentLabel)
+    this.status.append(this.watchLabel, this.unlinkButton, this.statusLabel, this.copyButton, this.compareAllButton, this.resetAllButton, this.sentLabel)
     this.outline.hidden = true
     this.selectOutline.hidden = true
     this.status.hidden = true
@@ -842,7 +841,6 @@ export class Overlay {
     this.status.hidden = draftCount === 0 && !sentText && !watch
     // Draft-count label and controls are hidden when no drafts (they act on drafts)
     this.statusLabel.hidden = draftCount === 0
-    this.sendButton.hidden = draftCount === 0
     this.copyButton.hidden = draftCount === 0
     this.compareAllButton.hidden = draftCount === 0
     this.resetAllButton.hidden = draftCount === 0
