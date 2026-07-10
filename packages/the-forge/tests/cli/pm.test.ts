@@ -80,18 +80,18 @@ describe('detectPM', () => {
 
 describe('installCommand', () => {
   it('builds npm install -D', () => {
-    expect(installCommand('npm')).toEqual({ cmd: 'npm', args: ['install', '-D', 'the-forge'] })
+    expect(installCommand('npm')).toEqual({ cmd: 'npm', args: ['install', '-D', 'forge-mode'] })
   })
 
   it('builds pnpm add -D', () => {
-    expect(installCommand('pnpm')).toEqual({ cmd: 'pnpm', args: ['add', '-D', 'the-forge'] })
+    expect(installCommand('pnpm')).toEqual({ cmd: 'pnpm', args: ['add', '-D', 'forge-mode'] })
   })
 
   it('builds yarn add -D', () => {
-    expect(installCommand('yarn')).toEqual({ cmd: 'yarn', args: ['add', '-D', 'the-forge'] })
+    expect(installCommand('yarn')).toEqual({ cmd: 'yarn', args: ['add', '-D', 'forge-mode'] })
   })
 
   it('builds bun add -d', () => {
-    expect(installCommand('bun')).toEqual({ cmd: 'bun', args: ['add', '-d', 'the-forge'] })
+    expect(installCommand('bun')).toEqual({ cmd: 'bun', args: ['add', '-d', 'forge-mode'] })
   })
 })

@@ -1,4 +1,4 @@
-// The `the-forge` bin (task A3). Thin by design: this is the only file allowed
+// The `forge-mode` bin (task A3). Thin by design: this is the only file allowed
 // to touch process.argv/exit or spawn a child process — everything else
 // (detection, package-manager sniffing, orchestration) lives behind the pure
 // functions and the injectable InitIO seam in detect.ts / pm.ts / init.ts, so
@@ -11,8 +11,8 @@
 import { spawn } from 'node:child_process'
 import { init, type InitIO } from './init'
 
-const HELP = `the-forge
-usage: npx the-forge init
+const HELP = `forge-mode
+usage: npx forge-mode init
 
 Figma-style design mode for your running Vite or Next.js app.
 Docs: https://github.com/NoahHendrickson/the-forge#readme`
@@ -55,6 +55,6 @@ main(process.argv)
   .then((code) => process.exit(code))
   .catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err)
-    console.error(`the-forge: unexpected error — ${message}`)
+    console.error(`forge-mode: unexpected error — ${message}`)
     process.exit(1)
   })

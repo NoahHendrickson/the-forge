@@ -13,24 +13,24 @@ Works on **Vite + React** and **Next.js 15/16** (App Router and Pages Router, Tu
 In the project you want to use The Forge in:
 
 ```bash
-npx the-forge init
+npx forge-mode init
 ```
 
-It detects Vite or Next.js, adds `the-forge` as a dev dependency with your package manager, wires it into your config, and mounts `<ForgeDesignMode />` — printing `[done]` / `[skip]` / `[manual]` for each step. Anything it can't do safely it prints the exact snippet for instead; it never touches git, and re-running it is safe.
+It detects Vite or Next.js, adds `forge-mode` as a dev dependency with your package manager, wires it into your config, and mounts `<ForgeDesignMode />` — printing `[done]` / `[skip]` / `[manual]` for each step. Anything it can't do safely it prints the exact snippet for instead; it never touches git, and re-running it is safe.
 
 **Setting this up with an AI coding agent?** Hand it the full setup guide — it's written to be followed by agents step by step, including every manual fallback and a troubleshooting section:
 **https://github.com/NoahHendrickson/the-forge/blob/main/SETUP.md**
 
 ### Manual setup
 
-`npm install -D the-forge`, then wire in whichever framework you're on.
+`npm install -D forge-mode`, then wire in whichever framework you're on.
 
 **Vite + React** — add `theForge()` before the React plugin, so it can tag JSX before React compiles it:
 
 ```ts
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { theForge } from 'the-forge/vite'
+import { theForge } from 'forge-mode/vite'
 
 export default defineConfig({
   plugins: [theForge(), react()],
@@ -41,7 +41,7 @@ export default defineConfig({
 
 ```ts
 // next.config.ts
-import { withForge } from 'the-forge/next'
+import { withForge } from 'forge-mode/next'
 
 export default withForge({
   // ...the project's existing next.config fields
@@ -50,7 +50,7 @@ export default withForge({
 
 ```tsx
 // app/layout.tsx (App Router) — or pages/_app.tsx (Pages Router)
-import { ForgeDesignMode } from 'the-forge/design-mode'
+import { ForgeDesignMode } from 'forge-mode/design-mode'
 // mount <ForgeDesignMode /> once; it renders null outside development
 ```
 

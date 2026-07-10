@@ -19,13 +19,13 @@ export default defineConfig({
     expect(result.kind).toBe('edited')
     if (result.kind !== 'edited') throw new Error('unreachable')
 
-    expect(result.code).toContain(`import { theForge } from 'the-forge/vite'`)
+    expect(result.code).toContain(`import { theForge } from 'forge-mode/vite'`)
     expect(result.code).toContain(`plugins: [theForge(), react(), tailwindcss()],`)
 
     // Rest of the source is byte-identical once the inserted import line and
     // the inserted "theForge(), " token are removed.
     const withoutImport = result.code.replace(
-      `import { theForge } from 'the-forge/vite'\n`,
+      `import { theForge } from 'forge-mode/vite'\n`,
       ''
     )
     const withoutPlugin = withoutImport.replace('theForge(), ', '')
@@ -38,11 +38,11 @@ export default defineConfig({
     expect(result.kind).toBe('edited')
     if (result.kind !== 'edited') throw new Error('unreachable')
 
-    expect(result.code).toContain(`import { theForge } from 'the-forge/vite'`)
+    expect(result.code).toContain(`import { theForge } from 'forge-mode/vite'`)
     expect(result.code).toContain(`plugins: [theForge(), react()],`)
 
     const withoutImport = result.code.replace(
-      `import { theForge } from 'the-forge/vite'\n\n`,
+      `import { theForge } from 'forge-mode/vite'\n\n`,
       ''
     )
     const withoutPlugin = withoutImport.replace('theForge(), ', '')
@@ -93,8 +93,8 @@ export default defineConfig({
     expect(result.kind).toBe('fallback')
   })
 
-  it('reports already when the-forge/vite is already imported', () => {
-    const source = `import { theForge } from 'the-forge/vite'\nimport { defineConfig } from 'vite'\n\nexport default defineConfig({\n  plugins: [theForge(), react()],\n})\n`
+  it('reports already when forge-mode/vite is already imported', () => {
+    const source = `import { theForge } from 'forge-mode/vite'\nimport { defineConfig } from 'vite'\n\nexport default defineConfig({\n  plugins: [theForge(), react()],\n})\n`
     const result = addViteForgePlugin(source)
     expect(result).toEqual({ kind: 'already' })
   })
@@ -124,11 +124,11 @@ describe('wrapNextConfigExport', () => {
     expect(result.kind).toBe('edited')
     if (result.kind !== 'edited') throw new Error('unreachable')
 
-    expect(result.code).toContain(`import { withForge } from 'the-forge/next'`)
+    expect(result.code).toContain(`import { withForge } from 'forge-mode/next'`)
     expect(result.code).toContain(`export default withForge(nextConfig)`)
 
     const withoutImport = result.code.replace(
-      `import { withForge } from 'the-forge/next'\n`,
+      `import { withForge } from 'forge-mode/next'\n`,
       ''
     )
     const withoutWrap = withoutImport.replace('withForge(nextConfig)', 'nextConfig')
@@ -140,7 +140,7 @@ describe('wrapNextConfigExport', () => {
     const result = wrapNextConfigExport(source)
     expect(result.kind).toBe('edited')
     if (result.kind !== 'edited') throw new Error('unreachable')
-    expect(result.code).toContain(`import { withForge } from 'the-forge/next'`)
+    expect(result.code).toContain(`import { withForge } from 'forge-mode/next'`)
     expect(result.code).toContain(`export default withForge({})`)
   })
 
@@ -150,14 +150,14 @@ describe('wrapNextConfigExport', () => {
     expect(result.kind).toBe('edited')
     if (result.kind !== 'edited') throw new Error('unreachable')
 
-    expect(result.code).toContain(`const { withForge } = require('the-forge/next')`)
+    expect(result.code).toContain(`const { withForge } = require('forge-mode/next')`)
     expect(result.code).toContain(`module.exports = withForge(nextConfig)`)
-    expect(result.code.indexOf(`require('the-forge/next')`)).toBeLessThan(
+    expect(result.code.indexOf(`require('forge-mode/next')`)).toBeLessThan(
       result.code.indexOf('/** @type')
     )
 
     const withoutImport = result.code.replace(
-      `const { withForge } = require('the-forge/next')\n\n`,
+      `const { withForge } = require('forge-mode/next')\n\n`,
       ''
     )
     const withoutWrap = withoutImport.replace('withForge(nextConfig)', 'nextConfig')
@@ -172,7 +172,7 @@ describe('wrapNextConfigExport', () => {
 
     expect(result.code.startsWith(`'use strict'`)).toBe(true)
     expect(result.code.indexOf(`'use strict'`)).toBeLessThan(
-      result.code.indexOf(`require('the-forge/next')`)
+      result.code.indexOf(`require('forge-mode/next')`)
     )
     expect(result.code).toContain(`module.exports = withForge(nextConfig)`)
   })
@@ -193,7 +193,7 @@ describe('wrapNextConfigExport', () => {
     expect(result.code).toContain(`export default withForge(loadConfig())`)
 
     const withoutImport = result.code.replace(
-      `import { withForge } from 'the-forge/next'\n`,
+      `import { withForge } from 'forge-mode/next'\n`,
       ''
     )
     const withoutWrap = withoutImport.replace('withForge(loadConfig())', 'loadConfig()')
@@ -209,8 +209,8 @@ describe('wrapNextConfigExport', () => {
     expect(second).toEqual({ kind: 'already' })
   })
 
-  it('reports already when the-forge/next is already imported', () => {
-    const source = `import { withForge } from 'the-forge/next'\n\nexport default withForge({})\n`
+  it('reports already when forge-mode/next is already imported', () => {
+    const source = `import { withForge } from 'forge-mode/next'\n\nexport default withForge({})\n`
     const result = wrapNextConfigExport(source)
     expect(result).toEqual({ kind: 'already' })
   })
@@ -263,12 +263,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     if (result.kind !== 'edited') throw new Error('unreachable')
 
     expect(result.code).toContain(
-      `import { ForgeDesignMode } from 'the-forge/design-mode'`
+      `import { ForgeDesignMode } from 'forge-mode/design-mode'`
     )
     expect(result.code).toContain(`        <ForgeDesignMode />\n        {children}`)
 
     const withoutImport = result.code.replace(
-      `import { ForgeDesignMode } from 'the-forge/design-mode'\n`,
+      `import { ForgeDesignMode } from 'forge-mode/design-mode'\n`,
       ''
     )
     const withoutMount = withoutImport.replace(`        <ForgeDesignMode />\n`, '')
@@ -293,8 +293,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     expect(result.code).toContain(`      <body>\n        <ForgeDesignMode />{children}</body>`)
   })
 
-  it('reports already when the-forge/design-mode is already imported', () => {
-    const source = `import { ForgeDesignMode } from 'the-forge/design-mode'\n\nexport default function RootLayout({ children }) {\n  return (\n    <html>\n      <body>\n        <ForgeDesignMode />\n        {children}\n      </body>\n    </html>\n  )\n}\n`
+  it('reports already when forge-mode/design-mode is already imported', () => {
+    const source = `import { ForgeDesignMode } from 'forge-mode/design-mode'\n\nexport default function RootLayout({ children }) {\n  return (\n    <html>\n      <body>\n        <ForgeDesignMode />\n        {children}\n      </body>\n    </html>\n  )\n}\n`
     const result = mountDesignMode(source, 'app')
     expect(result).toEqual({ kind: 'already' })
   })
@@ -359,14 +359,14 @@ export default function App({ Component, pageProps }: AppProps) {
     if (result.kind !== 'edited') throw new Error('unreachable')
 
     expect(result.code).toContain(
-      `import { ForgeDesignMode } from 'the-forge/design-mode'`
+      `import { ForgeDesignMode } from 'forge-mode/design-mode'`
     )
     expect(result.code).toContain(
       `      <Component {...pageProps} />\n      <ForgeDesignMode />`
     )
 
     const withoutImport = result.code.replace(
-      `import { ForgeDesignMode } from 'the-forge/design-mode'\n`,
+      `import { ForgeDesignMode } from 'forge-mode/design-mode'\n`,
       ''
     )
     const withoutMount = withoutImport.replace(`\n      <ForgeDesignMode />`, '')
@@ -385,14 +385,14 @@ export default function App({ Component, pageProps }: AppProps) {
     if (result.kind !== 'edited') throw new Error('unreachable')
 
     expect(result.code).toContain(
-      `import { ForgeDesignMode } from 'the-forge/design-mode'`
+      `import { ForgeDesignMode } from 'forge-mode/design-mode'`
     )
     expect(result.code).toContain(
       `<><Component {...pageProps} /><ForgeDesignMode /></>`
     )
 
     const withoutImport = result.code.replace(
-      `import { ForgeDesignMode } from 'the-forge/design-mode'\n`,
+      `import { ForgeDesignMode } from 'forge-mode/design-mode'\n`,
       ''
     )
     const withoutWrap = withoutImport.replace(
@@ -420,8 +420,8 @@ export default function App({ Component, pageProps }: AppProps) {
     expect(second).toEqual({ kind: 'already' })
   })
 
-  it('reports already when the-forge/design-mode is already imported', () => {
-    const source = `import { ForgeDesignMode } from 'the-forge/design-mode'\n\nexport default function App({ Component, pageProps }) {\n  return (\n    <>\n      <Component {...pageProps} />\n      <ForgeDesignMode />\n    </>\n  )\n}\n`
+  it('reports already when forge-mode/design-mode is already imported', () => {
+    const source = `import { ForgeDesignMode } from 'forge-mode/design-mode'\n\nexport default function App({ Component, pageProps }) {\n  return (\n    <>\n      <Component {...pageProps} />\n      <ForgeDesignMode />\n    </>\n  )\n}\n`
     const result = mountDesignMode(source, 'pages')
     expect(result).toEqual({ kind: 'already' })
   })

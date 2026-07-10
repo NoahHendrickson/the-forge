@@ -1,5 +1,5 @@
 {
-  "name": "the-forge",
+  "name": "forge-mode",
   "version": "0.1.0",
   "description": "Figma-style design mode for your running Vite or Next.js app — sends deterministic, token-aware change requests to the AI coding agent you already use.",
   "license": "MIT",
@@ -28,7 +28,7 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": { "the-forge": "./dist/cli.js" },
+  "bin": { "forge-mode": "./dist/cli.js" },
   "files": ["dist"],
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsup",

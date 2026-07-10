@@ -1,5 +1,5 @@
 import type { AppProps } from 'next/app'
-import { ForgeDesignMode } from 'the-forge/design-mode'
+import { ForgeDesignMode } from 'forge-mode/design-mode'
 
 export default function App({ Component, pageProps }: AppProps) {
   return (

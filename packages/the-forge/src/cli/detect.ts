@@ -1,4 +1,4 @@
-// Filesystem sniffing for `npx the-forge init` (task A3). Pure given a directory
+// Filesystem sniffing for `npx forge-mode init` (task A3). Pure given a directory
 // listing — no process/child_process here, so it's trivially unit-testable against
 // mkdtemp scaffolds. `init.ts` is the only caller.
 

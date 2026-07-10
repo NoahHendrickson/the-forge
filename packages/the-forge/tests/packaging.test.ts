@@ -10,8 +10,8 @@ const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'p
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
 
 describe('package.json publish readiness', () => {
-  it('exposes a the-forge bin pointing at dist/cli.js', () => {
-    expect(pkg.bin).toEqual({ 'the-forge': './dist/cli.js' })
+  it('exposes a forge-mode bin pointing at dist/cli.js', () => {
+    expect(pkg.bin).toEqual({ 'forge-mode': './dist/cli.js' })
   })
 
   it('main and types point at the root stub dist files', () => {
@@ -66,7 +66,7 @@ describe('package.json publish readiness', () => {
     const readmePath = path.join(path.dirname(pkgPath), 'README.md')
     expect(fs.existsSync(readmePath), 'packages/the-forge/README.md must exist').toBe(true)
     const readme = fs.readFileSync(readmePath, 'utf8')
-    expect(readme).toContain('npx the-forge init')
+    expect(readme).toContain('npx forge-mode init')
     // Agents reading the npm page need an absolute link — relative README links
     // are only rewritten by npm's renderer, not by registry API consumers.
     expect(readme).toContain('https://github.com/NoahHendrickson/the-forge/blob/main/SETUP.md')

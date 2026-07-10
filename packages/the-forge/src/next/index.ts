@@ -6,7 +6,7 @@ import { DEVTOOLS_JSON_PATH } from '../server/endpoints'
 import type { DispatchOpts } from '../server/dispatch'
 
 // Never `import { PHASE_DEVELOPMENT_SERVER } from 'next'` — this module (and therefore the
-// whole `the-forge/next` subpath) must load without `next` installed, since only the types
+// whole `forge-mode/next` subpath) must load without `next` installed, since only the types
 // are structural here (repo-wide constraint: next/react/vite are optional peers). The value
 // itself is stable, public Next API surface (unchanged across 15/16 per the N0 spike).
 const PHASE_DEVELOPMENT_SERVER = 'phase-development-server'

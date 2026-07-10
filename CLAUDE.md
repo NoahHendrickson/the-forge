@@ -1,27 +1,27 @@
 # The Forge — agent guide
 
-A dev-only plugin (single package `the-forge`, subpaths `the-forge/vite`, `the-forge/next`, `the-forge/design-mode`) that gives any Vite + React app **or** Next.js 15/16 app (both routers, both dev bundlers) a Figma-style design mode: click an element in the running app, edit properties live in a floating panel, and send deterministic, token-aware change requests to the AI coding agent you already use (Claude Code / Cursor / Codex) via a bundled stdio MCP server. Product pitch: [README.md](README.md). Specs: [docs/specs/2026-07-03-the-forge-design.md](docs/specs/2026-07-03-the-forge-design.md) (original Vite design), [docs/specs/2026-07-04-next-adapter-design.md](docs/specs/2026-07-04-next-adapter-design.md) (Next adapter). Process conventions and working agreements: [docs/HANDOFF.md](docs/HANDOFF.md). One dated plan per milestone in [docs/plans/](docs/plans/).
+A dev-only plugin (single package `forge-mode`, subpaths `forge-mode/vite`, `forge-mode/next`, `forge-mode/design-mode`) that gives any Vite + React app **or** Next.js 15/16 app (both routers, both dev bundlers) a Figma-style design mode: click an element in the running app, edit properties live in a floating panel, and send deterministic, token-aware change requests to the AI coding agent you already use (Claude Code / Cursor / Codex) via a bundled stdio MCP server. Product pitch: [README.md](README.md). Specs: [docs/specs/2026-07-03-the-forge-design.md](docs/specs/2026-07-03-the-forge-design.md) (original Vite design), [docs/specs/2026-07-04-next-adapter-design.md](docs/specs/2026-07-04-next-adapter-design.md) (Next adapter). Process conventions and working agreements: [docs/HANDOFF.md](docs/HANDOFF.md). One dated plan per milestone in [docs/plans/](docs/plans/).
 
 ## Commands
 
 ```bash
 npm install && npm run build          # build the plugin (tsup)
 npm test                              # root gate: typecheck + full vitest suite
-npm run test:watch -w the-forge       # vitest watch mode
-npm run typecheck -w the-forge        # tsc --noEmit only
+npm run test:watch -w forge-mode       # vitest watch mode
+npm run typecheck -w forge-mode        # tsc --noEmit only
 npm run dev -w demo-app               # Vite demo (fixtures/demo-app); Design toggle bottom-right
-npm run storybook -w the-forge        # component catalog (overlay atoms), port 6006
+npm run storybook -w forge-mode        # component catalog (overlay atoms), port 6006
 npm run dev -w next-demo              # Next demo, App Router + Turbopack (fixtures/next-demo, port 5175)
 npm run dev:webpack -w next-demo      # same fixture, forced webpack dev bundler
 npm run dev -w next-pages             # Next demo, Pages Router (fixtures/next-pages, port 5176)
 ./scripts/check-prod-clean.sh         # prod build has zero plugin traces (Vite + Next) + 320KB package budget
-npx the-forge init                    # (in a host project) detect Vite/Next, install, wire config, mount ForgeDesignMode
-./scripts/check-init.sh               # real-tarball smoke test of `the-forge init` against bare Vite + Next scaffolds
+npx forge-mode init                    # (in a host project) detect Vite/Next, install, wire config, mount ForgeDesignMode
+./scripts/check-init.sh               # real-tarball smoke test of `forge-mode init` against bare Vite + Next scaffolds
 ```
 
 Single test file: `npx vitest run tests/client/panel.test.ts` from `packages/the-forge/`.
 
-The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub that throws — import a subpath instead), `vite.js` (the node-side Vite plugin), `next.js` (the node-side Next config wrapper + sidecar starter), `design-mode.js` (the `<ForgeDesignMode />` component; zero `node:*` imports so it's safe inside a browser bundle), `client.js` (the browser overlay, served only in dev), `next-loader.cjs` (the JSX-tagging loader Turbopack/webpack `require()` directly — built CJS regardless of the package's own ESM), `mcp.js` (the stdio MCP bin agents launch), and `cli.js` (the `the-forge` bin — `npx the-forge init`, from `src/cli/`). The npm package ships `dist/` only.
+The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub that throws — import a subpath instead), `vite.js` (the node-side Vite plugin), `next.js` (the node-side Next config wrapper + sidecar starter), `design-mode.js` (the `<ForgeDesignMode />` component; zero `node:*` imports so it's safe inside a browser bundle), `client.js` (the browser overlay, served only in dev), `next-loader.cjs` (the JSX-tagging loader Turbopack/webpack `require()` directly — built CJS regardless of the package's own ESM), `mcp.js` (the stdio MCP bin agents launch), and `cli.js` (the `the-forge` bin — `npx forge-mode init`, from `src/cli/`). The npm package ships `dist/` only.
 
 ## Architecture — the loop
 
@@ -40,7 +40,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `sidecar.ts` | `ensureSidecar()` — process-singleton loopback HTTP server wrapping `src/server/runtime.ts`; writes the per-pid endpoint file; owns the one-shot 60s "ForgeDesignMode never mounted" hint timer |
 | `loader.ts` | the actual Turbopack/webpack loader body, built separately to `dist/next-loader.cjs` so bundlers can `require()` it by path |
 
-`the-forge/design-mode` (`src/design-mode/index.ts`) is the one-component subpath mounted in the app: renders a `<script type="module" src="/__the-forge/client.js">` under `next dev`, `null` otherwise. It and everything it imports must stay free of `node:*` imports — the Pages Router compiles `_app.tsx` straight into the browser bundle — enforced by a boundary test.
+`forge-mode/design-mode` (`src/design-mode/index.ts`) is the one-component subpath mounted in the app: renders a `<script type="module" src="/__the-forge/client.js">` under `next dev`, `null` otherwise. It and everything it imports must stay free of `node:*` imports — the Pages Router compiles `_app.tsx` straight into the browser bundle — enforced by a boundary test.
 
 ### src/server/session modules
 
@@ -55,8 +55,8 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 
 | Module | Responsibility |
 | --- | --- |
-| `index.ts` | the `the-forge` bin entry — the only file allowed to touch `process.argv`/`exit` or spawn a child process; bare `npx the-forge` prints help |
-| `init.ts` | `init()` orchestrator for `npx the-forge init` — precondition checks, dependency-declared check, per-step `[done]`/`[skip]`/`[manual]` output, and the manual-fallback snippet constants (byte-identical to SETUP.md's code blocks, sync-tested) |
+| `index.ts` | the `forge-mode` bin entry — the only file allowed to touch `process.argv`/`exit` or spawn a child process; bare `npx forge-mode` prints help |
+| `init.ts` | `init()` orchestrator for `npx forge-mode init` — precondition checks, dependency-declared check, per-step `[done]`/`[skip]`/`[manual]` output, and the manual-fallback snippet constants (byte-identical to SETUP.md's code blocks, sync-tested) |
 | `detect.ts` | Vite vs Next detection (error on none/both) |
 | `pm.ts` | lockfile-based package-manager sniff (npm/pnpm/yarn/bun) + install command |
 | `edits.ts` | pure, fixture-pinned AST edits (add `theForge()` to Vite config, wrap Next config with `withForge()`, mount `<ForgeDesignMode />`) — conservative-fallback: unrecognized shapes are never touched |
@@ -139,12 +139,12 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 - The watch loop's per-cycle texts (WATCH_COMMAND in `setup.ts`, canned wait texts in `mcp/protocol.ts`) are a per-tick token cost — keep them terse, and never interpolate server data into them.
 - Next calls a `next.config` function (and therefore `withForge`) more than once per dev session — this is normal Next behavior, not a bug to fix. `ensureSidecar`'s module-level singleton and the per-pid endpoint file are what make repeated calls resolve to the same running sidecar instead of racing a second loopback server.
 - Next's rewrites proxy rewrites the request's `Host` header to the sidecar's own loopback address — the real page origin survives only in `X-Forwarded-Host`. `isAllowedHost` (`src/server/endpoints.ts`) reads `X-Forwarded-Host` in preference to `Host` when present, so a legitimately proxied same-origin browser request isn't rejected as cross-origin — that's the Origin-vs-Host cross-origin check (below the DNS-rebinding defense gate). `X-Forge-Secret` is the actual load-bearing auth gate regardless of which host header is in play.
-- `check-prod-clean.sh`'s Next grep excludes `*.map` — Turbopack embeds pre-DCE `sourcesContent` in sourcemaps for stack traces, which legitimately still contains the dev-only markers; the gate cares about executed/served output, not debug metadata — and it drops the bare `the-forge` token that the Vite-side grep uses, since `.next/` build metadata legitimately names the devDependency.
+- `check-prod-clean.sh`'s Next grep excludes `*.map` — Turbopack embeds pre-DCE `sourcesContent` in sourcemaps for stack traces, which legitimately still contains the dev-only markers; the gate cares about executed/served output, not debug metadata — and it drops the bare `the-forge`/`forge-mode` tokens that the Vite-side grep uses, since `.next/` build metadata legitimately names the devDependency.
 - assistant-delta stream lines carry seq 0 — ephemeral, never in the ring; don't advance reconnect cursors on them.
 - Next <15.3's `turbopack.rules` path is accepted-untested (YAGNI, no version sniffing); the webpack rule covers older/non-Turbopack setups. `turbopack.rules` needs no `enforce`/ordering key (our loader is the only transform registered there); the webpack rule DOES need `enforce: 'pre'`.
 - The React 18/19 workspace split is deliberate: root and `packages/the-forge` pin React 19, while `fixtures/demo-app` deliberately nests React 18 — two React copies in one page break rendering, so don't "unify" the versions without re-testing both fixture families.
 - After `npm run build`, a running demo dev server keeps serving the OLD client bundle — Vite caches the virtual client module; restart the dev server, a browser reload isn't enough.
-- Fresh git worktrees need their own `npm install` — otherwise Vite silently resolves `the-forge` to the main checkout's stale build.
+- Fresh git worktrees need their own `npm install` — otherwise Vite silently resolves `forge-mode` to the main checkout's stale build.
 - An unignored `.the-forge/` full-reloads Tailwind v4 apps on every Send — the queue markdown is made of class names, so Tailwind's scanner tracks `queue.json`. The plugin now writes the `.gitignore` entry and watcher excludes itself; if a consumer still sees reload-on-send, check that the `.gitignore` write didn't fail.
 - The Chrome DevTools Automatic Workspace Folders well-known path (`/.well-known/appspecific/com.chrome.devtools.json`, `DEVTOOLS_JSON_PATH` in `src/server/endpoints.ts`) lives outside the `/__the-forge/` prefix, so it needs its own routing on each framework: Vite's middleware in `createForgeMiddleware` checks for it before the `/__the-forge/` prefix gate; Next has no equivalent middleware hook, so `src/next/index.ts`'s rewrites merge adds a dedicated rewrite rule alongside the `/__the-forge/*` proxy rule, both pointing at the same sidecar.
 - **In-band CLI errors (rate limit, auth) arrive as `result` events with exit code 0** — the CLI exits cleanly and returns the error text in the `result` message body. Read the event text, not the exit code; mapping these to `session-error` instead of `turn-complete {isError:true}` is wrong.
@@ -154,6 +154,6 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 
 Startup dependency refresh (`npm install`) is handled automatically; the notes below are the non-obvious run/verify caveats — standard commands live in the `## Commands` section above.
 
-- **Build the plugin before running the demo app.** `fixtures/demo-app/vite.config.ts` imports `theForge` from `the-forge/vite`, which resolves to `packages/the-forge/dist/vite.js`. A fresh checkout has no `dist/`, so `npm run dev -w demo-app` will fail to resolve the plugin until you run `npm run build` first (`dist/` is gitignored, so it never arrives with the repo).
+- **Build the plugin before running the demo app.** `fixtures/demo-app/vite.config.ts` imports `theForge` from `forge-mode/vite`, which resolves to `packages/the-forge/dist/vite.js`. A fresh checkout has no `dist/`, so `npm run dev -w demo-app` will fail to resolve the plugin until you run `npm run build` first (`dist/` is gitignored, so it never arrives with the repo).
 - **Reaching the dev server:** it prints `http://localhost:5173/` but binds IPv6 (`[::1]:5173`); `localhost:5173` works from the browser and `curl` in this VM. Verify the transform is live with `curl -s http://localhost:5173/src/App.tsx` — served JSX carries `"data-dc-source": "file:line:col"` attributes (JSON-quoted in the compiled output, not raw `data-dc-source="..."`).
 - **The demo dev server is the E2E harness** for the design-mode loop (toggle bottom-right → select element → edit in panel → ↑ in the composer). A successful send writes a pending item to `.the-forge/queue.json` at the git root; that plus the plugin-written `.mcp.json` and `.claude/commands/` are gitignored runtime state — never commit them.
