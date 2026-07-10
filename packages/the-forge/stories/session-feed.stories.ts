@@ -1,5 +1,9 @@
 import type { Meta, StoryObj } from '@storybook/html-vite'
 import { SessionFeed } from '../src/client/session-feed'
+import { DraftStore } from '../src/client/drafts'
+import { LifecycleSession } from '../src/client/lifecycle'
+import { ChangeList } from '../src/client/changelist'
+import type { TaggedElement } from '../src/client/source'
 import { mountInShadow } from './mount'
 
 const meta: Meta = {
@@ -212,6 +216,91 @@ export const InputDisabled: Story = {
       feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
     ])
     feed.setAvailability({ enabled: false, reason: 'Embedded sessions are disabled in config' })
+    return host
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Unified chat composer states (composer consolidation Tasks 1–3)
+// ---------------------------------------------------------------------------
+// The composer's "ready" and "disabled-reason" states are already covered above by
+// InputClusterIdle (idle placeholder, ↑ send glyph) and InputDisabled (setAvailability(false)).
+// The three below add the states the consolidation introduced: the send↔stop morph, the drafts
+// pill, and the drafts pill's disclosure hosting the (unmodified) Changes list.
+
+/** Builds a TaggedElement stand-in for the drafts stories — a detached node carrying a
+ * data-dc-source attr, the only thing DraftStore/ChangeList read off it. */
+function taggedDiv(source: string, tag: string): TaggedElement {
+  const el = document.createElement(tag)
+  el.setAttribute('data-dc-source', source)
+  return el as unknown as TaggedElement
+}
+
+/** Busy-morphed composer — a turn is in flight (started → tool-started, no turn-complete yet)
+ * and the textarea is empty, so updateSendMorph() flips composer-send from ↑ to ■ (interrupt).
+ * Typing into the textarea would flip it back to ↑ (a mid-turn message queues via the FIFO). */
+export const ComposerBusyMorph: Story = {
+  render: () =>
+    makeFeed([
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
+      feedLine(2, { kind: 'assistant-text', text: 'On it — bumping the padding now.' }),
+      feedLine(3, { kind: 'tool-started', toolId: 't1', name: 'Edit', detail: 'src/App.tsx:12' }),
+      // No turn-complete: busyish stays true, so the send button renders ■.
+    ]),
+}
+
+/** Drafts pill — setDraftState({ count: 2 }) surfaces the pill in the composer's chip row
+ * ('2 edits drafted'); the disclosure stays closed (clicking the pill would open it — see
+ * ComposerDraftDisclosureOpen). */
+export const ComposerDraftsPill: Story = {
+  render: () => {
+    const { feed, host } = makeFeedInstance([
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
+    ])
+    feed.setDraftState({ count: 2, applying: false })
+    return host
+  },
+}
+
+/** Drafts pill, applying — an in-flight send holds the pill on 'applying…' (setDraftState's
+ * applying flag wins the label over the count). */
+export const ComposerDraftsApplying: Story = {
+  render: () => {
+    const { feed, host } = makeFeedInstance([
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
+    ])
+    feed.setDraftState({ count: 1, applying: true })
+    return host
+  },
+}
+
+/** Drafts pill with its disclosure open — the (unmodified) Changes list mounts inside
+ * feed.draftSlot exactly as index.ts wires it (feed.draftSlot.appendChild(changeList.root)),
+ * seeded with two drafted elements, and the pill's own click toggles the disclosure open so the
+ * catalog shows the change rows above the chip/input/controls rows. */
+export const ComposerDraftDisclosureOpen: Story = {
+  render: () => {
+    const { feed, host } = makeFeedInstance([
+      feedLine(1, { kind: 'started', sessionId: 's1', model: 'claude-opus-4-5', mcpLoaded: true }),
+    ])
+    const drafts = new DraftStore()
+    const session = new LifecycleSession()
+    const changeList = new ChangeList(drafts, session, {
+      onHover: () => {},
+      onSelect: () => {},
+      onResend: () => {},
+    })
+    const elA = taggedDiv('src/App.tsx:3:5', 'button')
+    const elB = taggedDiv('src/App.tsx:12:7', 'div')
+    drafts.apply(elA, 'padding-top', '24px')
+    drafts.apply(elA, 'padding-bottom', '24px')
+    drafts.apply(elB, 'background-color', 'rgb(37, 99, 235)')
+    changeList.syncDrafts()
+    feed.draftSlot.appendChild(changeList.root)
+    feed.setDraftState({ count: 2, applying: false })
+    // The pill's own click is the only opener — dispatch it so the story lands with the
+    // disclosure already open (.draft-disclosure.open), matching a user tapping the pill.
+    host.shadowRoot!.querySelector<HTMLButtonElement>('.draft-pill')!.click()
     return host
   },
 }
