@@ -54,3 +54,11 @@ contextual position) is unchanged — this is a one-time re-ratification, not a 
 - **Within-Layout order re-ratified:** W/H (+min/max) → auto-layout cluster → Padding
   (group label + one H|V line) → Align. Supersedes M-C's W/H → flex-child strip → cluster →
   padding order.
+
+## Amendment — 2026-07-07 (panel-input-polish)
+
+The Baseline toggle under the 9-dot matrix is **removed** (user-ratified, 2026-07-07
+brainstorm — see docs/specs/2026-07-07-panel-input-polish-design.md). `align-items:
+baseline` stays readable (`normalizeAlign` keeps the vocabulary; app-CSS baseline lights
+no matrix dot and previews as no-segment in the align strip) but is no longer writable
+from the panel — picking any matrix dot drafts over it.

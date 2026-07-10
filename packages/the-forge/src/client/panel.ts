@@ -398,8 +398,16 @@ export class Panel {
         ? this.els.flatMap((e) => spec.props.map((p) => this.readValue(e, p, getComputedStyle(e), spec)))
         : spec.props.map((p) => this.readValue(el, p, computed, spec))
       const mixed = values.some((v) => v !== values[0])
-      if (mixed) field.setMixed()
-      else field.set(values[0])
+      // Per-side comma display (2026-07-07 spec) is a single-element, differing-SIDES
+      // affair; across ELEMENTS the field keeps the ratified Mixed text (user-ratified).
+      // Non-finite reads (jsdom can't compute some values) also stay Mixed — never 'NaN,8'.
+      if (mixed && !multi && spec.props.length > 1 && values.every((v) => Number.isFinite(v))) {
+        field.setValues(values)
+      } else if (mixed) {
+        field.setMixed()
+      } else {
+        field.set(values[0])
+      }
       if (multi) continue // no token-pill bookkeeping across a multi-selection
 
       // B5 re-bind contract — see PanelTokenUi.rebind
@@ -979,7 +987,13 @@ export class Panel {
         this.layoutSection.onSizeModeChange(spec, value)
       },
     })
-    row.append(menu.button)
+    // Inside the field box (2026-07-07 spec): .nf's border box IS the visual input, so the
+    // chevron becomes its last flex child — [label][input][whisper][chevron] — with zero
+    // positioning. Load-bearing: ui/menu.ts positions the popover via offsetTop/offsetLeft
+    // against popoverHost as the nearest positioned ancestor; a position on .nf would
+    // silently become the offsetParent and strand the popover at the field's local coords.
+    bound.field.root.classList.add('nf-has-menu')
+    bound.field.root.append(menu.button)
 
     this.layoutSection.registerSizeMode({ menuBtn: menu.button, close: menu.close, spec, field: bound.field, mode: 'fixed' })
     return row
@@ -1024,6 +1038,22 @@ export class Panel {
       this.onEdited()
     }
 
+    // Per-side sibling of `commit` (comma entry, 2026-07-07 spec): values arrives fully
+    // expanded (one entry per prop, props order) from NumberField; each side drafts its own
+    // css. Applies to EVERY element in the selection (user-ratified multi behavior).
+    const commitValues = (values: number[]): void => {
+      if (!this.el) return
+      for (const el of this.els) {
+        this.onBeforeEdit(el)
+        for (let i = 0; i < spec.props.length; i++) {
+          spec.onBeforeApply?.(el, spec.props[i], this.drafts)
+          this.drafts.apply(el, spec.props[i], (spec.toCss ?? px)(values[i]))
+        }
+      }
+      this.refresh()
+      this.onEdited()
+    }
+
     // B6 scrub: baselines are snapshotted ONCE per drag (onScrubStart) — every subsequent
     // onRelative call during that same drag (each mousemove tick) resolves `apply(baseline)`
     // against the SAME frozen per-element-per-prop baseline, so a move REPLACES the previous
@@ -1062,6 +1092,8 @@ export class Panel {
       allowAuto: spec.sizeMode || spec.allowAuto,
       noTokenButton: !!spec.sizeMode,
       onInput: commit,
+      valuesCount: spec.props.length > 1 ? spec.props.length : undefined,
+      onValuesInput: spec.props.length > 1 ? commitValues : undefined,
       onRelative: multi
         ? (apply) => {
             // Relative deltas apply per-element against each element's own current value —

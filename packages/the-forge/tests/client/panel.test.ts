@@ -182,11 +182,11 @@ describe('Panel', () => {
     expect(onEdited).toHaveBeenCalled()
   })
 
-  it('shows mixed linked values via setMixed', () => {
+  it('shows differing linked side values as a comma list (2026-07-07: superseded setMixed)', () => {
     const { panel } = setup(
       `<div data-dc-source="src/a.tsx:1:1" id="t" style="padding-left: 4px; padding-right: 12px;"></div>`
     )
-    expect(fieldInput(panel, P.PX).value).toBe('Mixed')
+    expect(fieldInput(panel, P.PX).value).toBe('4,12')
   })
 
   it('expanding padding reveals per-side fields that edit one longhand', () => {
@@ -245,14 +245,45 @@ describe('Panel', () => {
     expect(fieldInput(panel, P.O).value).toBe('0')
   })
 
-  it('mixed detection still works while comparing', () => {
+  it('differing-side comma display still works while comparing (2026-07-07: superseded setMixed)', () => {
     const { panel, drafts, el } = setup(
       `<div data-dc-source="src/a.tsx:1:1" id="t" style="padding-left: 4px; padding-right: 12px;"></div>`
     )
     commit(fieldInput(panel, P.PX), '16')
     drafts.compare(el, true)
     panel.refresh()
-    expect(fieldInput(panel, P.PX).value).toBe('Mixed') // originals differ → mixed again
+    expect(fieldInput(panel, P.PX).value).toBe('4,12') // originals differ → comma display again
+  })
+
+  describe('comma per-side values (2026-07-07 panel-input-polish spec)', () => {
+    it('differing sides display as a comma list, equal sides as one number', () => {
+      const { panel } = setup(
+        `<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px 16px 8px 4px; width: 200px;"></div>`
+      )
+      expect(fieldInput(panel, P.PX).value).toBe('4,16') // props order: left, right
+      expect(fieldInput(panel, P.PY).value).toBe('8')
+    })
+
+    it('typing a comma pair drafts each side individually', () => {
+      const { el, panel, drafts } = setup()
+      commit(fieldInput(panel, P.PX), '16,8')
+      expect(drafts.current(el, 'padding-left')).toBe('16px')
+      expect(drafts.current(el, 'padding-right')).toBe('8px')
+      expect(fieldInput(panel, P.PX).value).toBe('16,8')
+    })
+
+    it('radius accepts CSS 3-value shorthand and re-displays compressed', () => {
+      const { el, panel, drafts } = setup()
+      commit(fieldInput(panel, P.R), '16,8,4')
+      expect(drafts.current(el, 'border-top-left-radius')).toBe('16px')
+      expect(drafts.current(el, 'border-top-right-radius')).toBe('8px')
+      expect(drafts.current(el, 'border-bottom-right-radius')).toBe('4px')
+      expect(drafts.current(el, 'border-bottom-left-radius')).toBe('8px')
+      expect(fieldInput(panel, P.R).value).toBe('16,8,4')
+    })
+
+    // Multi-element comma-entry test lives in `describe('Panel multi-select (B6)')` below —
+    // it needs the `multiSetup` helper defined in that block (don't duplicate the helper).
   })
 
   it('section order is Layout, Margin, Typography, Fill, Stroke, Appearance regardless of visibility', () => {
@@ -350,6 +381,17 @@ describe('Panel', () => {
     const { panel } = setup()
     const labels = [...panel.root.querySelectorAll('[data-minmax-row] .nf-label')].map((l) => l.textContent)
     expect(labels).toEqual(['Min W', 'Max W', 'Min H', 'Max H'])
+  })
+
+  it('sizing chevron lives inside the field box (2026-07-07 panel-input-polish spec)', () => {
+    const { panel } = setup()
+    for (const props of [P.W, P.H]) {
+      const nf = [...panel.root.querySelectorAll('.nf')].find(
+        (n) => (n as HTMLElement).dataset.props === props
+      ) as HTMLElement
+      expect(nf.classList.contains('nf-has-menu')).toBe(true)
+      expect(nf.querySelector('.menu-btn')).toBeTruthy()
+    }
   })
 
   it('padding block carries a group label and one line with both H/V fields', () => {
@@ -562,56 +604,10 @@ describe('Panel', () => {
     expect(dotAfter).toBeTruthy()
   })
 
-  describe('baseline alignment', () => {
-    it('toggle drafts align-items baseline and carries active state; matrix has no active dot', () => {
-      const { el, panel } = flexSetup()
-      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
-      btn.click()
-      expect(el.style.getPropertyValue('align-items')).toBe('baseline')
-      expect(btn.classList.contains('seg-active')).toBe(true)
-      expect(btn.getAttribute('aria-pressed')).toBe('true')
-      expect(panel.root.querySelector('.am-dot.am-active')).toBeNull()
-      expect(btn.classList.contains('baseline-toggle')).toBe(true)
-    })
-
-    it('clicking active toggle releases baseline (targeted discard of the session draft)', () => {
-      const { el, panel } = flexSetup()
-      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
-      btn.click()
-      expect(el.style.getPropertyValue('align-items')).toBe('baseline')
-      btn.click()
-      expect(el.style.getPropertyValue('align-items')).toBe('')
-      expect(btn.classList.contains('seg-active')).toBe(false)
-      expect(btn.getAttribute('aria-pressed')).toBe('false')
-    })
-
-    it('app-authored baseline (no session draft): toggle starts active, OFF drafts flex-start', () => {
-      const { el, panel, drafts } = flexSetup('align-items: baseline;')
-      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
-      // baseline comes from the app's own CSS — active on show(), with no draft to discard
-      expect(btn.classList.contains('seg-active')).toBe(true)
-      expect(btn.getAttribute('aria-pressed')).toBe('true')
-      expect(drafts.current(el, 'align-items')).toBeNull()
-
-      btn.click()
-
-      expect(drafts.current(el, 'align-items')).toBe('flex-start')
-      expect(btn.classList.contains('seg-active')).toBe(false)
-      expect(btn.getAttribute('aria-pressed')).toBe('false')
-    })
-
-    it('clicking a matrix dot exits baseline', () => {
-      const { el, panel, drafts } = flexSetup()
-      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
-      btn.click()
-      expect(drafts.current(el, 'align-items')).toBe('baseline')
-
-      const dot = panel.root.querySelector('.am-dot') as HTMLElement
-      dot.click()
-
-      expect(drafts.current(el, 'align-items')).toBe(dot.dataset.a)
-      expect(btn.classList.contains('seg-active')).toBe(false)
-    })
+  it('app-CSS baseline alignment lights no matrix dot (baseline is read-only since 2026-07-07)', () => {
+    const { panel } = flexSetup('align-items: baseline;')
+    expect(panel.root.querySelector('.am-dot.am-active')).toBeNull()
+    expect(panel.root.querySelector('[data-align-baseline]')).toBeNull()
   })
 
   describe('remove auto layout', () => {
@@ -694,7 +690,8 @@ describe('Panel', () => {
     const toggle = panel.root.querySelector('[data-align-toggle]') as HTMLElement
     const strip = panel.root.querySelector('[data-align-self]') as HTMLElement
     expect(toggle.getAttribute('aria-pressed')).toBe('false')
-    expect(strip.hidden).toBe(true)
+    expect(strip.hidden).toBe(false)
+    expect(strip.classList.contains('seg-disabled')).toBe(true)
     // sizing chevrons still shown for flex children — the toggle gates only the strip
     const menus = [...panel.root.querySelectorAll('.size-row .menu-btn')] as HTMLElement[]
     expect(menus.every((m) => !m.hidden)).toBe(true)
@@ -705,9 +702,36 @@ describe('Panel', () => {
     ;(panel.root.querySelector('[data-align-toggle]') as HTMLElement).click()
     const strip = panel.root.querySelector('[data-align-self]') as HTMLElement
     expect(strip.hidden).toBe(false)
+    expect(strip.classList.contains('seg-disabled')).toBe(false)
     expect(drafts.current(el, 'align-self')).toBeNull()
     // nothing to send: opening the row is not an edit (same contract as opening a min/max row)
     expect(buildChangeRequest(drafts).elements.find((e) => e.selector === '#t')).toBeUndefined()
+  })
+
+  it('toggle OFF shows a disabled preview of the parent align-items (2026-07-07 spec)', () => {
+    document.body.innerHTML = `<div id="parent" style="display: flex; align-items: center;">
+      <div data-dc-source="src/Child.tsx:1:1" id="t" style="width: 50px;"></div>
+    </div>`
+    const el = document.getElementById('t')! as HTMLElement
+    const panel = new Panel(new DraftStore(), vi.fn())
+    document.body.appendChild(panel.root)
+    panel.show(el, buildInspectorData(el))
+    const strip = panel.root.querySelector('[data-align-self]') as HTMLElement
+    expect(strip.hidden).toBe(false)
+    expect(strip.classList.contains('seg-disabled')).toBe(true)
+    expect((strip.querySelector('.seg-active') as HTMLElement).dataset.value).toBe('center')
+    // follows the parent live (the 9-dot matrix drafts inline styles → computed changes)
+    document.getElementById('parent')!.style.alignItems = 'flex-end'
+    panel.refresh()
+    expect((strip.querySelector('.seg-active') as HTMLElement).dataset.value).toBe('flex-end')
+  })
+
+  it('disabled preview never lights Auto; default parent reads flex-start (matrix mapping)', () => {
+    const { panel } = childSetup()
+    const strip = panel.root.querySelector('[data-align-self]') as HTMLElement
+    expect(strip.classList.contains('seg-disabled')).toBe(true)
+    const active = strip.querySelector('.seg-active') as HTMLElement
+    expect(active.dataset.value).toBe('flex-start')
   })
 
   it('picking a segment after toggling ON drafts align-self', () => {
@@ -729,7 +753,7 @@ describe('Panel', () => {
     expect(drafts.current(el, 'align-self')).toBe('center')
     toggle.click()
     expect(drafts.current(el, 'align-self')).toBeNull()
-    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).classList.contains('seg-disabled')).toBe(true)
   })
 
   it('auto-ON when the app CSS sets align-self; toggling OFF drafts align-self: auto', () => {
@@ -749,7 +773,7 @@ describe('Panel', () => {
     // The switch must actually turn OFF: a drafted `auto` reads as default (spec: drafted
     // align-self of auto/normal is non-disclosing) — final-review regression.
     expect(toggle.getAttribute('aria-pressed')).toBe('false')
-    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).classList.contains('seg-disabled')).toBe(true)
   })
 
   it('auto-ON for a restored (pre-show) align-self draft', () => {
@@ -780,7 +804,7 @@ describe('Panel', () => {
     // reselect the same element: buildBody rebuilds, latch must not survive
     const el = document.getElementById('t')! as HTMLElement
     panel.show(el, buildInspectorData(el))
-    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).hidden).toBe(true)
+    expect((panel.root.querySelector('[data-align-self]') as HTMLElement).classList.contains('seg-disabled')).toBe(true)
   })
 
   it('W size-mode Fill on a row parent drafts flex-grow and flex-basis (main axis)', () => {
@@ -893,6 +917,9 @@ describe('Panel', () => {
 
   it('cross-axis Fixed preserves a user-drafted align-self (only discards it when Fill wrote "stretch")', () => {
     const { el, panel, drafts } = childSetup()
+    // Segment strip is disabled until the align toggle is ON (2026-07-07 spec) — toggle ON
+    // first, matching every other segment-drafting test in this suite.
+    ;(panel.root.querySelector('[data-align-toggle]') as HTMLElement).click()
     const seg = panel.root.querySelector('[data-align-self]')!
     const startBtn = [...seg.querySelectorAll('.seg')].find((b) => b.textContent === 'Start') as HTMLElement
     startBtn.click()
@@ -1800,11 +1827,11 @@ describe('Panel Stroke section', () => {
     }
   })
 
-  it('W field shows Mixed when computed per-side widths differ', () => {
+  it('W field shows a comma list when computed per-side widths differ (2026-07-07: superseded Mixed)', () => {
     const { panel } = setup(
       `<div data-dc-source="src/Card.tsx:4:7" id="t" style="border-style: solid; border-top-width: 2px; border-right-width: 4px; border-bottom-width: 2px; border-left-width: 2px;"></div>`
     )
-    expect(strokeWidthField(panel).value).toBe('Mixed')
+    expect(strokeWidthField(panel).value).toBe('2,4,2,2')
   })
 
   it('drafting a width while computed border-style is none also drafts border-style: solid', () => {
@@ -2844,6 +2871,18 @@ describe('Panel multi-select (B6)', () => {
   it('a field with divergent values across the selection shows Mixed', () => {
     const { panel } = multiSetup('padding: 10px;', 'padding: 20px;')
     expect(fieldInput(panel, P.PX).value).toBe('Mixed')
+  })
+
+  // See `describe('comma per-side values (2026-07-07 panel-input-polish spec)')` above —
+  // this test lives here because it needs `multiSetup`, defined in this block.
+  it('multi-element selection keeps Mixed but a typed comma applies per-side to every element', () => {
+    const { a, b, panel, drafts } = multiSetup('padding: 10px;', 'padding: 20px;')
+    expect(fieldInput(panel, P.PX).value).toBe('Mixed')
+    commit(fieldInput(panel, P.PX), '16,8')
+    for (const el of [a, b]) {
+      expect(drafts.current(el, 'padding-left')).toBe('16px')
+      expect(drafts.current(el, 'padding-right')).toBe('8px')
+    }
   })
 
   it('a plain typed number applies the same absolute css to every element', () => {

@@ -65,6 +65,14 @@ export class SegmentField {
   set(value: string | null): void {
     this.setActiveValue(value)
   }
+
+  /** Disabled preview mode (2026-07-07 panel-input-polish spec): dims the track and blocks
+   * input while the value stays driveable via set() — used by the align strip to show the
+   * child's effective (parent-derived) alignment when the align-self toggle is off. */
+  setDisabled(disabled: boolean): void {
+    this.root.classList.toggle('seg-disabled', disabled)
+    for (const button of this.buttons) (button as HTMLButtonElement).disabled = disabled
+  }
 }
 
 export interface AlignMatrixOpts {

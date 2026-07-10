@@ -29,6 +29,15 @@ export interface NumberFieldOpts {
   onTokenOpen?: () => void
   /** Suppress the hover `{ }` button while keeping `onTokenOpen` reachable via `=` and `openToken()`. */
   noTokenButton?: boolean
+  /** Number of per-side props behind this field (2 or 4 — 2026-07-07 panel-input-polish
+   * spec). Enables comma-list entry (lists expand CSS-shorthand-style to this count via
+   * expandShorthand) and the setValues display state. Single-prop callers leave it unset —
+   * a comma there stays garbage → revert. */
+  valuesCount?: number
+  /** Fired with the FULLY EXPANDED, clamped per-prop list (one entry per prop, in the
+   * row's props order) after a comma entry, per-side arrow step, or per-side scrub —
+   * the caller never re-derives shorthand. */
+  onValuesInput?: (values: number[]) => void
 }
 
 // Two stroked brace paths in a 12x12 box; `stroke="currentColor"` so panel CSS themes it via
@@ -183,6 +192,35 @@ class ExprParser {
   }
 }
 
+/**
+ * CSS-shorthand expansion for comma-entered per-side values (2026-07-07 panel-input-polish
+ * spec). `count` is the row's prop count (2 or 4). Returns null when the list can't expand:
+ * empty, longer than count, or a 3-value list on a 2-prop row (only 4-prop rows have CSS
+ * 3-value semantics). 4-prop rules match the border-radius shorthand:
+ * [a] → a,a,a,a · [a,b] → a,b,a,b · [a,b,c] → a,b,c,b.
+ */
+export function expandShorthand(values: number[], count: number): number[] | null {
+  if (values.length === 0 || values.length > count) return null
+  if (values.length === count) return [...values]
+  if (values.length === 1) return new Array(count).fill(values[0])
+  if (count === 4 && values.length === 2) return [values[0], values[1], values[0], values[1]]
+  if (count === 4 && values.length === 3) return [values[0], values[1], values[2], values[1]]
+  return null
+}
+
+/**
+ * Shortest round-trippable comma form of per-side values — the display half of the same
+ * grammar (whatever this renders, expandShorthand restores). Drops trailing redundancy in
+ * CSS shorthand order: last==2nd, then 3rd==1st, then 2nd==1st.
+ */
+export function compressShorthand(values: number[]): number[] {
+  const out = [...values]
+  if (out.length === 4 && out[3] === out[1]) out.pop()
+  if (out.length === 3 && out[2] === out[0]) out.pop()
+  if (out.length === 2 && out[1] === out[0]) out.pop()
+  return out
+}
+
 const MIXED_TEXT = 'Mixed'
 const AUTO_TEXT = 'auto'
 
@@ -199,7 +237,11 @@ export class NumberField {
   // the exact committed value on refresh.
   private scrubStartValue = 0
   private scrubbing = false
-  private displayState: 'number' | 'mixed' | 'auto' = 'number'
+  private displayState: 'number' | 'mixed' | 'auto' | 'values' = 'number'
+  // Per-side values behind a 'values' display — the baseline for per-side arrows/scrub.
+  private lastValues: number[] | null = null
+  // Snapshot of lastValues at scrub mousedown (same frozen-baseline contract as scrubStartValue).
+  private scrubStartValues: number[] | null = null
   private pillBound = false
   private scrubListenersAttached = false
 
@@ -248,6 +290,14 @@ export class NumberField {
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
       e.preventDefault()
       const step = (e.shiftKey ? 10 : 1) * (e.key === 'ArrowUp' ? 1 : -1)
+      if (this.displayState === 'values' && this.lastValues && this.opts.onValuesInput) {
+        // Per-side stepping — the absolute path below would parseFloat('16,8') → 16 and
+        // collapse the variance to one number for every side.
+        const stepped = this.lastValues.map((v) => this.clamp(v + step))
+        this.setValues(stepped)
+        this.opts.onValuesInput(stepped)
+        return
+      }
       const base = Number.parseFloat(this.input.value)
       this.commit((Number.isFinite(base) ? base : 0) + step)
     })
@@ -258,6 +308,7 @@ export class NumberField {
       this.scrubbing = true
       this.scrubStartX = e.clientX
       this.scrubStartValue = this.lastValid ?? 0
+      this.scrubStartValues = this.displayState === 'values' && this.lastValues ? [...this.lastValues] : null
       window.addEventListener('mousemove', this.onScrub)
       window.addEventListener('mouseup', this.endScrub)
       this.scrubListenersAttached = true
@@ -285,11 +336,33 @@ export class NumberField {
     if (this.displayState === 'auto' && trimmed.toLowerCase() === AUTO_TEXT) {
       return
     }
+    if (this.displayState === 'values' && this.lastValues && trimmed === compressShorthand(this.lastValues).join(',')) {
+      return
+    }
 
     // Keyword handling (auto) takes priority when allowed.
     if (this.opts.allowAuto && trimmed.toLowerCase() === AUTO_TEXT) {
       this.setAuto()
       this.opts.onKeyword?.('auto')
+      return
+    }
+
+    // Comma list = per-side values (2026-07-07 spec). Segments are plain decimal literals
+    // (negatives allowed — margins), never expressions; the list expands CSS-shorthand-style
+    // to the row's prop count and clamps per side. Checked before the number/expression
+    // paths so a comma never half-parses as either.
+    if (this.opts.valuesCount !== undefined && this.opts.onValuesInput && trimmed.includes(',')) {
+      const segments = trimmed.split(',').map((s) => s.trim())
+      if (segments.every((s) => /^-?\d+(\.\d+)?$/.test(s))) {
+        const expanded = expandShorthand(segments.map(Number.parseFloat), this.opts.valuesCount)
+        if (expanded !== null) {
+          const clamped = expanded.map((v) => this.clamp(v))
+          this.setValues(clamped)
+          this.opts.onValuesInput(clamped)
+          return
+        }
+      }
+      this.revert()
       return
     }
 
@@ -338,6 +411,7 @@ export class NumberField {
   private revert(): void {
     if (this.displayState === 'mixed') this.setMixed()
     else if (this.displayState === 'auto') this.setAuto()
+    else if (this.displayState === 'values' && this.lastValues) this.setValues(this.lastValues)
     else this.render(this.lastValid)
   }
 
@@ -350,6 +424,14 @@ export class NumberField {
       // (per-move idempotency), unlike accumulating a running total here.
       const totalDeltaPx = e.clientX - this.scrubStartX
       this.opts.onRelative((baseline: number) => this.clamp(baseline + totalDeltaPx))
+      return
+    }
+    if (this.scrubStartValues && this.opts.onValuesInput) {
+      // Values-state scrub: each side moves by the same drag delta from ITS OWN frozen
+      // start value — the absolute commit below would overwrite every side with one number.
+      const moved = this.scrubStartValues.map((v) => this.clamp(v + (e.clientX - this.scrubStartX)))
+      this.setValues(moved)
+      this.opts.onValuesInput(moved)
       return
     }
     this.commit(this.scrubStartValue + (e.clientX - this.scrubStartX))
@@ -377,6 +459,7 @@ export class NumberField {
 
   private render(value: number | null): void {
     this.lastValid = value
+    this.lastValues = null
     this.input.value = value === null ? '' : String(value)
     this.displayState = 'number'
   }
@@ -401,6 +484,7 @@ export class NumberField {
     this.setWhisper(null)
     this.unbindPill()
     this.lastValid = null
+    this.lastValues = null
     this.input.value = MIXED_TEXT
     this.displayState = 'mixed'
   }
@@ -410,8 +494,21 @@ export class NumberField {
     this.setWhisper(null)
     this.unbindPill()
     this.lastValid = null
+    this.lastValues = null
     this.input.value = AUTO_TEXT
     this.displayState = 'auto'
+  }
+
+  /** Displays per-side values in shortest shorthand form (e.g. '16,8' — see
+   * compressShorthand); internal value is null (get() reports null), per-side baselines
+   * live in lastValues for arrows/scrub. */
+  setValues(values: number[]): void {
+    this.setWhisper(null)
+    this.unbindPill()
+    this.lastValid = null
+    this.lastValues = [...values]
+    this.input.value = compressShorthand(values).join(',')
+    this.displayState = 'values'
   }
 
   get(): number | null {
@@ -429,6 +526,7 @@ export class NumberField {
     this.input.title = label
     this.root.classList.add('nf-pill')
     this.displayState = 'number'
+    this.lastValues = null
   }
 
   /** Detaches a pill binding, restoring the input to an editable number display of lastValid. */
