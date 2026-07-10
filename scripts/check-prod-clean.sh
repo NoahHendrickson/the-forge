@@ -35,8 +35,11 @@ echo "PASS: Next.js production build is clean"
 # Package-size gate: the npm package ("files": ["dist"]) is the product's headline lightweight
 # guarantee. Raised 250→280 with the embedded-session milestone (SessionFeed + session/*
 # manager/adapter/approvals + approve MCP tool — ~29KB of real surface after whitespace
-# stripping was already applied to every bundle). Still a regression tripwire, not a target.
-MAX_UNPACKED_KB=280
+# stripping was already applied to every bundle). Raised 280→320 for milestone B (chat surface
+# — ratified 2026-07-09): session-feed.ts grew into the full chat surface (bubbles, deltas,
+# diff rows, input, element chip, model/permission pickers) and PromptBox was retired in favor
+# of it. Still a regression tripwire, not a target.
+MAX_UNPACKED_KB=320
 PACK_JSON=$(npm pack --dry-run --json -w the-forge 2>/dev/null)
 UNPACKED_KB=$(printf '%s' "$PACK_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(Math.ceil(j[0].unpackedSize/1024))})')
 # Guard against a silent PASS: [ -gt ] on an empty/non-numeric value errors to stderr but

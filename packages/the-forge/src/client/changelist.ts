@@ -2,7 +2,7 @@ import type { DraftStore } from './drafts'
 import type { StageEvent, LifecycleStage } from './verifier'
 import type { ChangeItem } from './request'
 import type { TaggedElement } from './source'
-import { parseSourceAttr } from './source'
+import { shortSource } from './source'
 import type { LifecycleSession, SentSeed, SeedRecord } from './lifecycle'
 
 export type { SentSeed } from './lifecycle'
@@ -30,14 +30,6 @@ function collapseWithMore(all: string[]): { text: string; full: string } {
 
 function summarize(changes: ChangeItem[]): { text: string; full: string } {
   return collapseWithMore(changes.map(summarizeItem))
-}
-
-function shortSource(dcSource: string | null): string {
-  if (!dcSource) return '(no source)'
-  const parsed = parseSourceAttr(dcSource)
-  if (!parsed) return '(no source)'
-  const slash = parsed.file.lastIndexOf('/')
-  return `${slash === -1 ? parsed.file : parsed.file.slice(slash + 1)}:${parsed.line}`
 }
 
 /** Renders the send/verify lifecycle as rows. Sent-row state lives in LifecycleSession now —
@@ -163,7 +155,10 @@ export class ChangeList {
   private label(tag: string, dcSource: string | null): [HTMLElement, HTMLElement] {
     const elLabel = document.createElement('span')
     elLabel.className = 'change-el'
-    elLabel.textContent = `${tag} · ${shortSource(dcSource)}`
+    // shortSource takes a non-null source (it's the shared src/client/source.ts export, also
+    // used by index.ts/panel.ts/session-feed.ts) — the null case (no dcSource at all) is
+    // handled here, matching shortSource's own '(no source)' fallback for an unparseable one.
+    elLabel.textContent = `${tag} · ${dcSource ? shortSource(dcSource) : '(no source)'}`
     const summary = document.createElement('span')
     summary.className = 'change-summary'
     return [elLabel, summary]

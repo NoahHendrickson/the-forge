@@ -536,34 +536,12 @@ button {
 .change-actions { display: flex; gap: 4px; flex-basis: 100%; padding: 0 6px 2px 22px; }
 
 ` +
-// Free-form prompt box (prompt-mode spec) — floats anchored to the selected element, a
-// sibling of the outlines in the shadow root (see mountPromptBox below).
-`.prompt-box {
-  position: fixed; z-index: 2147483646; width: 280px; box-sizing: border-box;
-  display: flex; flex-direction: column; gap: 6px; padding: 8px;
-  background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-}
-.prompt-textarea {
-  box-sizing: border-box; width: 100%; resize: vertical; min-height: 56px;
-  background: var(--control); color: var(--text-primary); border: 1px solid var(--border-panel);
-  border-radius: 4px; padding: 6px; font: 400 var(--text-sm)/1.4 var(--font-ui); outline: none;
-}
-.prompt-textarea:focus { border-color: var(--accent); }
-.prompt-box .prompt-send { align-self: flex-end; }
-` +
-// PromptBox mounts as a shadow-root sibling of #panel/#status (see mountPromptBox above),
-// so .prompt-send falls outside both of those scoped button rules and would otherwise
-// fall back to the plain base button rule (light pill) — mirror the dark #panel/#status
-// control idiom explicitly here instead.
-`.prompt-box .prompt-send {
-  background: var(--control); color: var(--text-primary); border: none; border-radius: 6px;
-}
-.prompt-box .prompt-send:hover { background: var(--control-hover); }
-` +
 // .panel-prompt is a layout-only class hook now — position/size comes from the
 // .panel-head-actions flex wrapper it's placed in (panel.ts); no rule needed here, but the
-// selector name stays a stable test contract (see panel.test.ts / overlay.test.ts).
+// selector name stays a stable test contract (see panel.test.ts / overlay.test.ts). The
+// floating prompt popup itself was retired in Task 6 — its anchored popup is replaced by the
+// feed's own persistent element chip + chat input (below), so there is no more shadow-root
+// sibling popup to style here.
 `
 ` +
 // Session feed — live activity stream from the embedded session (Task 7).
@@ -599,6 +577,70 @@ button {
   color: #F87171; border: 1px solid rgba(248,113,113,0.3);
 }
 .session-stop:hover { background: rgba(248,113,113,0.25); }
+` +
+// Chat rendering (Task 5) — bubbles, delta streaming, diff disclosures, config rows.
+// .chat-msg: bubble base (extends .session-row); .chat-user / .chat-assistant: sender variant.
+// .chat-streaming: the single in-progress delta bubble. .chat-msg-ref: element chip echo line.
+// .session-diff / .diff-before / .diff-after: collapsed <details> tool-edit disclosure.
+// .session-config: the config-changed summary line.
+// CSS class names here are test hooks — extend, don't rename.
+`.chat-msg { flex-direction: column; align-items: flex-start; gap: 2px; white-space: pre-wrap; }
+.chat-user { background: rgba(255,255,255,0.05); }
+.chat-assistant { background: rgba(255,255,255,0.03); }
+.chat-streaming { border: 1px dashed var(--border-strong); }
+.chat-msg-ref { color: var(--text-faint); font: 400 var(--text-xs) var(--font-mono); }
+.session-diff { flex-basis: 100%; margin-top: 2px; font: 400 var(--text-xs) var(--font-mono); }
+.session-diff summary { cursor: pointer; color: var(--text-muted); }
+.diff-before, .diff-after {
+  white-space: pre-wrap; word-break: break-word; margin: 2px 0; padding: 4px 6px; border-radius: 4px;
+}
+.diff-before { background: rgba(248,113,113,0.08); }
+.diff-after { background: rgba(74,222,128,0.08); }
+.session-config { color: var(--text-faint); }
+` +
+// Chat input cluster, element chip, config bar pickers (Task 6) — replaces the retired
+// floating prompt popup. .session-config-bar: header row (model + effort + permission
+// pickers, all .size-mode selects; .session-model only caps the width, since full model ids
+// are much longer than the fixed effort/permission vocabularies). .chat-chip: the element
+// attached to the next message, above the input. .chat-input: textarea + Send, pinned at the
+// feed section's bottom. .chat-disabled-reason: shown when setAvailability(false, reason)
+// disables the input.
+// CSS class names here are test hooks — extend, don't rename.
+`.session-config-bar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 8px 8px 4px; border-bottom: 1px solid var(--separator);
+}
+.session-model { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.chat-chip {
+  display: flex; align-items: center; gap: 6px; margin: 6px 8px 0;
+  padding: 4px 8px; border-radius: 6px; background: var(--control);
+  font: 400 var(--text-xs) var(--font-mono); color: var(--text-secondary);
+}
+.chat-chip-clear {
+  background: none; border: none; color: var(--text-faint); padding: 0 2px;
+  font: 500 var(--text-sm) var(--font-ui); border-radius: 4px;
+}
+.chat-chip-clear:hover { color: var(--text-primary); background: var(--control-hover); }
+.chat-input {
+  display: flex; flex-direction: column; gap: 6px; padding: 8px; border-top: 1px solid var(--separator);
+}
+.chat-textarea {
+  box-sizing: border-box; width: 100%; resize: vertical; min-height: 40px;
+  background: var(--control); color: var(--text-primary); border: 1px solid var(--border-panel);
+  border-radius: 4px; padding: 6px; font: 400 var(--text-sm)/1.4 var(--font-ui); outline: none;
+}
+.chat-textarea:focus { border-color: var(--accent); }
+.chat-textarea:disabled { opacity: 0.5; }
+` +
+// SessionFeed mounts inside #panel (panel.feedSlot), but there is no generic `#panel button`
+// dark-token rule (each panel button opts in individually — see .session-stop above) — pin
+// the dark control styling explicitly, same idiom as .session-stop/.session-approval-allow.
+`.chat-send {
+  align-self: flex-end; background: var(--control); color: var(--text-primary); border: none; border-radius: 6px;
+}
+.chat-send:hover { background: var(--control-hover); }
+.chat-send:disabled { opacity: 0.5; cursor: default; }
+.chat-disabled-reason { color: var(--text-faint); font: 400 var(--text-xs) var(--font-ui); padding: 0 2px; }
 `
 
 export class Overlay {
@@ -660,12 +702,6 @@ export class Overlay {
 
   attachPanel(panelRoot: HTMLElement): void {
     this.host.shadowRoot!.appendChild(panelRoot)
-  }
-
-  /** Prompt box mounts in the shadow root like the panel — fixed-position sibling of the
-   * outlines, so its coordinates share the overlay's viewport space. */
-  mountPromptBox(el: HTMLElement): void {
-    this.host.shadowRoot!.appendChild(el)
   }
 
   contains(target: EventTarget | null): boolean {

@@ -11,7 +11,9 @@ import {
   MAX_START_FAILURES,
   RING_CAPACITY,
   PULL_TURN_TEXT,
+  CHAT_QUEUE_CAP,
   type SessionManagerOpts,
+  type ElementRef,
 } from '../../../src/server/session/manager'
 import type { SessionAdapter, SessionEvent } from '../../../src/server/session/adapter'
 
@@ -28,6 +30,12 @@ interface FakeAdapter extends SessionAdapter {
   sendTurnCalls: string[]
   interruptCalls: number
   stopCalls: number
+  setModelCalls: string[]
+  setPermissionModeCalls: string[]
+  setEffortCalls: string[]
+  // Recorded from the makeAdapter(opts) factory call that created THIS instance —
+  // lets tests assert which --effort value a given spawn was created with.
+  effortReceived?: string
   emit(e: SessionEvent): void
 }
 
@@ -37,6 +45,9 @@ function makeFakeAdapter(): FakeAdapter {
     sendTurnCalls: [],
     interruptCalls: 0,
     stopCalls: 0,
+    setModelCalls: [],
+    setPermissionModeCalls: [],
+    setEffortCalls: [],
     onEvent: () => {},
     start(opts) {
       fa.startCalls.push({ cwd: opts.cwd, resumeId: opts.resumeId })
@@ -49,6 +60,19 @@ function makeFakeAdapter(): FakeAdapter {
     },
     stop() {
       fa.stopCalls++
+    },
+    // setModel/setPermissionMode: manager calls these directly from setConfig() (Task 3).
+    // setEffort stays a no-op call-recorder only — Task 3's effort path never calls the
+    // adapter's setEffort() (that's the ClaudeAdapter-confirmed-no-op instance method);
+    // effort is threaded through the makeAdapter(opts) factory instead.
+    setModel(model) {
+      fa.setModelCalls.push(model)
+    },
+    setPermissionMode(mode) {
+      fa.setPermissionModeCalls.push(mode)
+    },
+    setEffort(level) {
+      fa.setEffortCalls.push(level)
     },
     emit(e) {
       fa.onEvent(e)
@@ -69,8 +93,9 @@ function makeHarness(
   const adapters: FakeAdapter[] = []
   let t = 0
   const opts: SessionManagerOpts = {
-    makeAdapter: () => {
+    makeAdapter: (adapterOpts) => {
       const a = makeFakeAdapter()
+      a.effortReceived = adapterOpts?.effort
       adapters.push(a)
       return a
     },
@@ -81,6 +106,10 @@ function makeHarness(
     ...overrides,
   }
   return { adapters, opts }
+}
+
+function elem(source: string, tag: string): ElementRef {
+  return { source, tag }
 }
 
 // ---------------------------------------------------------------------------
@@ -979,6 +1008,548 @@ describe('SessionManager', () => {
       adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
 
       expect(fs.existsSync(path.join(nonExistentDir, 'session.json'))).toBe(true)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Task 3: say(), chat FIFO, in-flight recovery, config
+  // ---------------------------------------------------------------------------
+
+  describe('CHAT_QUEUE_CAP constant', () => {
+    it('is 20', () => {
+      expect(CHAT_QUEUE_CAP).toBe(20)
+    })
+  })
+
+  describe('say() — ready', () => {
+    it('sends the composed turn (text + element line) immediately and rings user-text', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      const events: FeedEvent[] = []
+      mgr.subscribe((e) => events.push(e))
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // → ready
+
+      const result = mgr.say('make it bigger', elem('src/App.tsx:10:2', 'div'))
+
+      expect(result).toEqual({ ok: true })
+      expect(mgr.state()).toBe<SessionState>('busy')
+      expect(adapters[0]!.sendTurnCalls).toEqual([
+        PULL_TURN_TEXT,
+        'make it bigger\n\n[Selected element: src/App.tsx:10:2 <div>]',
+      ])
+      const userTextRow = events.find((fe) => fe.event.kind === 'user-text')
+      expect(userTextRow?.event).toEqual({
+        kind: 'user-text',
+        text: 'make it bigger',
+        element: { source: 'src/App.tsx:10:2', tag: 'div' },
+      })
+    })
+
+    it('composes with no element suffix when no element is given', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
+
+      mgr.say('hello')
+
+      expect(adapters[0]!.sendTurnCalls[1]).toBe('hello')
+    })
+  })
+
+  describe('say() — idle/failed auto-start', () => {
+    it('idle: auto-starts and sends the composed turn immediately (lazy-boot send-at-spawn)', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      const result = mgr.say('add padding')
+
+      expect(result).toEqual({ ok: true })
+      expect(mgr.state()).toBe<SessionState>('busy')
+      expect(adapters).toHaveLength(1)
+      expect(adapters[0]!.startCalls).toHaveLength(1)
+      expect(adapters[0]!.sendTurnCalls).toEqual(['add padding'])
+    })
+
+    it('failed: auto-starts and sends immediately', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: true, errorText: 'rate limit' })
+      expect(mgr.state()).toBe<SessionState>('failed')
+
+      const result = mgr.say('try again')
+
+      expect(result).toEqual({ ok: true })
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.sendTurnCalls).toEqual(['try again'])
+      expect(mgr.state()).toBe<SessionState>('busy')
+    })
+  })
+
+  describe('say() — busy: chat FIFO queue', () => {
+    it('queues the composed text (no immediate sendTurn) and still rings user-text', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      const events: FeedEvent[] = []
+      mgr.subscribe((e) => events.push(e))
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      // busy, one sendTurn so far (the pull turn)
+
+      const result = mgr.say('make it red')
+
+      expect(result).toEqual({ ok: true })
+      expect(adapters[0]!.sendTurnCalls).toHaveLength(1) // not sent yet — queued
+      expect(events.some((fe) => fe.event.kind === 'user-text')).toBe(true)
+      expect(mgr.state()).toBe<SessionState>('busy')
+    })
+
+    it('queue-full at CHAT_QUEUE_CAP returns {ok:false, reason:"queue-full"} and rings nothing for that call', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      const events: FeedEvent[] = []
+      mgr.subscribe((e) => events.push(e))
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+
+      for (let i = 0; i < CHAT_QUEUE_CAP; i++) {
+        const r = mgr.say(`msg-${i}`)
+        expect(r).toEqual({ ok: true })
+      }
+      const countBeforeOverflow = events.filter((fe) => fe.event.kind === 'user-text').length
+      expect(countBeforeOverflow).toBe(CHAT_QUEUE_CAP)
+
+      const overflow = mgr.say('one too many')
+
+      expect(overflow).toEqual({ ok: false, reason: 'queue-full' })
+      // Rejected BEFORE ringing — no extra user-text row for the rejected call.
+      const countAfterOverflow = events.filter((fe) => fe.event.kind === 'user-text').length
+      expect(countAfterOverflow).toBe(CHAT_QUEUE_CAP)
+      expect(adapters[0]!.sendTurnCalls).toHaveLength(1) // still just the pull turn
+    })
+
+    it('two queued says flush in FIFO order across successive turn-completes', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+
+      mgr.say('first')
+      mgr.say('second')
+
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // flush 'first'
+      expect(adapters[0]!.sendTurnCalls).toEqual([PULL_TURN_TEXT, 'first'])
+      expect(mgr.state()).toBe<SessionState>('busy')
+
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // flush 'second'
+      expect(adapters[0]!.sendTurnCalls).toEqual([PULL_TURN_TEXT, 'first', 'second'])
+      expect(mgr.state()).toBe<SessionState>('busy')
+
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // queue empty → ready
+      expect(adapters[0]!.sendTurnCalls).toHaveLength(3)
+      expect(mgr.state()).toBe<SessionState>('ready')
+    })
+
+    it('a parked pull nudge flushes before the chat queue on turn-complete', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      // busy — pull turn already sent
+
+      mgr.say('chat turn')
+      mgr.notifyDesignEdits() // parks a nudge
+
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
+      // nudge flushes first, not the queued chat turn
+      expect(adapters[0]!.sendTurnCalls).toEqual([PULL_TURN_TEXT, PULL_TURN_TEXT])
+
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
+      // now the chat queue flushes
+      expect(adapters[0]!.sendTurnCalls).toEqual([PULL_TURN_TEXT, PULL_TURN_TEXT, 'chat turn'])
+    })
+  })
+
+  describe('assistant-delta: subscriber-only fan-out, never ringed', () => {
+    it('fans to subscribers as {seq: 0, at, event} and never lands in the ring', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      const events: FeedEvent[] = []
+      mgr.subscribe((e) => events.push(e))
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'assistant-delta', text: 'partial tok' })
+
+      const deltaEvents = events.filter((fe) => fe.event.kind === 'assistant-delta')
+      expect(deltaEvents).toHaveLength(1)
+      expect(deltaEvents[0]!.seq).toBe(0)
+      expect(deltaEvents[0]!.at).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+      expect(deltaEvents[0]!.event).toEqual({ kind: 'assistant-delta', text: 'partial tok' })
+
+      // Not in the ring — eventsSince(0) (all real seq'd events) excludes it.
+      expect(mgr.eventsSince(0).some((fe) => fe.event.kind === 'assistant-delta')).toBe(false)
+    })
+
+    it('does not advance the ring seq counter (a following real event keeps the prior seq)', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      const events: FeedEvent[] = []
+      mgr.subscribe((e) => events.push(e))
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true }) // seq 1
+      adapters[0]!.emit({ kind: 'assistant-delta', text: 'x' }) // seq 0, ephemeral
+      adapters[0]!.emit({ kind: 'assistant-text', text: 'done' }) // seq 2
+
+      const realSeqs = mgr.eventsSince(0).map((fe) => fe.seq)
+      expect(realSeqs).toEqual([1, 2])
+    })
+  })
+
+  describe('user-text: manager-produced, lands in ring/replay', () => {
+    it('a user-text event from say() is present in eventsSince() replay', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.say('hi there')
+
+      const rows = mgr.eventsSince(0).filter((fe) => fe.event.kind === 'user-text')
+      expect(rows).toHaveLength(1)
+      expect(rows[0]!.event).toEqual({ kind: 'user-text', text: 'hi there', element: undefined })
+      void adapters
+    })
+  })
+
+  describe('in-flight-turn recovery', () => {
+    it('watchdog respawn re-sends the in-flight CHAT turn, not PULL_TURN_TEXT', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // → ready
+
+      mgr.say('a chat turn') // ready → sends immediately, _inflightTurn = composed chat text
+      expect(adapters[0]!.sendTurnCalls).toEqual([PULL_TURN_TEXT, 'a chat turn'])
+
+      vi.advanceTimersByTime(35) // past the 30ms test watchdog
+
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.startCalls[0]!.resumeId).toBe('s1')
+      expect(adapters[1]!.sendTurnCalls).toEqual(['a chat turn'])
+    })
+
+    it('ended-while-busy respawn also re-sends the in-flight chat turn', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
+
+      mgr.say('another chat turn')
+      adapters[0]!.emit({ kind: 'ended' }) // unexpected exit mid-turn
+
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.sendTurnCalls).toEqual(['another chat turn'])
+    })
+
+    it('stale-resume retry (_start(true)) re-sends the in-flight turn', () => {
+      fs.writeFileSync(
+        path.join(dir, 'session.json'),
+        JSON.stringify({ sessionId: 'stale-id', updatedAt: 'x' }),
+      )
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.say('chat while starting from resume')
+      expect(adapters[0]!.startCalls[0]!.resumeId).toBe('stale-id')
+      // CLI rejects the resume id in-band, before ever emitting init/started.
+      adapters[0]!.emit({ kind: 'turn-complete', isError: true, errorText: 'not a UUID' })
+
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.startCalls[0]!.resumeId).toBeUndefined()
+      expect(adapters[1]!.sendTurnCalls).toEqual(['chat while starting from resume'])
+    })
+
+    it('watchdog respawn of a CHAT turn preserves a separately parked nudge (flushes as a pull afterward)', () => {
+      // The pre-Task-3 respawn unconditionally cleared the parked nudge — correct only
+      // because the resent turn was always PULL_TURN_TEXT (a fresh pull covers everything
+      // a nudge asks for). With chat turns in flight, that unconditional clear would
+      // silently drop a legitimately queued design-edit pull parked behind a dying chat
+      // turn. Pins the conditional: clear only when the resent turn IS the pull turn.
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // → ready
+
+      mgr.say('a chat turn') // busy — the in-flight turn is now a CHAT turn
+      mgr.notifyDesignEdits() // parks a pull nudge behind it
+
+      vi.advanceTimersByTime(35) // watchdog fires — kill + respawn
+
+      // Recovery re-sends the chat turn itself, never PULL_TURN_TEXT...
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.sendTurnCalls).toEqual(['a chat turn'])
+
+      // ...and the parked nudge SURVIVED the respawn: it flushes a pull turn on the
+      // resent chat turn's own completion (normal nudge-before-chat-queue flush order).
+      adapters[1]!.emit({ kind: 'started', sessionId: 's2', model: 'claude', mcpLoaded: true })
+      adapters[1]!.emit({ kind: 'turn-complete', isError: false })
+      expect(adapters[1]!.sendTurnCalls).toEqual(['a chat turn', PULL_TURN_TEXT])
+      expect(mgr.state()).toBe<SessionState>('busy')
+    })
+
+    it('stale-resume retry of a CHAT turn preserves a nudge parked during boot (flushes as a pull afterward)', () => {
+      // Same nudge-preservation rule on the stale-resume branch: an in-band error before
+      // started while a CHAT turn (not a pull) is in flight must retry the chat turn fresh
+      // WITHOUT dropping a pull nudge that arrived while the doomed resume child booted.
+      fs.writeFileSync(
+        path.join(dir, 'session.json'),
+        JSON.stringify({ sessionId: 'stale-id', updatedAt: 'x' }),
+      )
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.say('chat from idle') // auto-start with --resume stale-id, chat turn sent at spawn
+      expect(adapters[0]!.startCalls[0]!.resumeId).toBe('stale-id')
+      mgr.notifyDesignEdits() // design edit lands while the resume child boots — parks a nudge
+
+      // CLI rejects the resume id in-band, before ever emitting init/started.
+      adapters[0]!.emit({ kind: 'turn-complete', isError: true, errorText: 'not a UUID' })
+
+      // Fresh retry re-sends the chat turn itself...
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.startCalls[0]!.resumeId).toBeUndefined()
+      expect(adapters[1]!.sendTurnCalls).toEqual(['chat from idle'])
+
+      // ...and the nudge survived: it still flushes a pull turn once the retried chat
+      // turn completes.
+      adapters[1]!.emit({ kind: 'started', sessionId: 'fresh-1', model: 'claude', mcpLoaded: true })
+      adapters[1]!.emit({ kind: 'turn-complete', isError: false })
+      expect(adapters[1]!.sendTurnCalls).toEqual(['chat from idle', PULL_TURN_TEXT])
+      expect(mgr.state()).toBe<SessionState>('busy')
+    })
+
+    it('chat queue survives a watchdog respawn — the still-queued item flushes after recovery', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      // busy — pull turn in flight
+
+      mgr.say('queued while busy') // parks in _chatQueue (pull turn is the in-flight one)
+
+      vi.advanceTimersByTime(35) // watchdog fires — respawns, re-sends PULL_TURN_TEXT (the in-flight turn)
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.sendTurnCalls).toEqual([PULL_TURN_TEXT])
+
+      adapters[1]!.emit({ kind: 'started', sessionId: 's2', model: 'claude', mcpLoaded: true })
+      adapters[1]!.emit({ kind: 'turn-complete', isError: false }) // flush the surviving chat queue item
+
+      expect(adapters[1]!.sendTurnCalls).toEqual([PULL_TURN_TEXT, 'queued while busy'])
+    })
+  })
+
+  describe('setConfig()', () => {
+    it('calls adapter.setModel/setPermissionMode for provided keys and rings config-changed', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      const events: FeedEvent[] = []
+      mgr.subscribe((e) => events.push(e))
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+
+      const result = mgr.setConfig({ model: 'claude-haiku-4-5', permissionMode: 'acceptEdits' })
+
+      expect(result).toEqual({ ok: true })
+      expect(adapters[0]!.setModelCalls).toEqual(['claude-haiku-4-5'])
+      expect(adapters[0]!.setPermissionModeCalls).toEqual(['acceptEdits'])
+      const row = events.find((fe) => fe.event.kind === 'config-changed')
+      expect(row?.event).toEqual({
+        kind: 'config-changed',
+        model: 'claude-haiku-4-5',
+        permissionMode: 'acceptEdits',
+      })
+    })
+
+    it('model/permissionMode changes are allowed while busy (no respawn)', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      expect(mgr.state()).toBe<SessionState>('busy')
+
+      const result = mgr.setConfig({ model: 'claude-haiku-4-5' })
+
+      expect(result).toEqual({ ok: true })
+      expect(adapters).toHaveLength(1) // no respawn
+      expect(mgr.state()).toBe<SessionState>('busy')
+    })
+
+    it('effort change while NOT busy stops the live adapter (state -> idle) instead of eagerly respawning', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // → ready
+
+      const result = mgr.setConfig({ effort: 'high' })
+
+      expect(result).toEqual({ ok: true })
+      expect(adapters[0]!.stopCalls).toBe(1)
+      expect(mgr.state()).toBe<SessionState>('idle')
+      expect(adapters).toHaveLength(1) // no eager respawn — no boot-parked silent child
+    })
+
+    it('the NEXT send after an effort change auto-starts with the new effort flag threaded to makeAdapter', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
+      expect(adapters[0]!.effortReceived).toBeUndefined()
+
+      mgr.setConfig({ effort: 'xhigh' })
+      expect(mgr.state()).toBe<SessionState>('idle')
+
+      mgr.say('go')
+
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.effortReceived).toBe('xhigh')
+      expect(adapters[1]!.startCalls[0]!.resumeId).toBe('s1') // conversation survives via --resume
+      expect(adapters[1]!.sendTurnCalls).toEqual(['go'])
+    })
+
+    it('effort change while idle (no live adapter) just records it — next spawn uses it', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.setConfig({ effort: 'low' })
+      expect(mgr.state()).toBe<SessionState>('idle')
+      expect(adapters).toHaveLength(0)
+
+      mgr.notifyDesignEdits()
+
+      expect(adapters[0]!.effortReceived).toBe('low')
+    })
+
+    it('effort change while busy is rejected with {ok:false, reason:"busy"} — no kill of a live turn', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      const events: FeedEvent[] = []
+      mgr.subscribe((e) => events.push(e))
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      expect(mgr.state()).toBe<SessionState>('busy')
+
+      const result = mgr.setConfig({ effort: 'max' })
+
+      expect(result).toEqual({ ok: false, reason: 'busy' })
+      expect(adapters[0]!.stopCalls).toBe(0)
+      expect(mgr.state()).toBe<SessionState>('busy')
+      expect(events.some((fe) => fe.event.kind === 'config-changed')).toBe(false)
+    })
+
+    // Final-review fix 2: config must survive respawn. A respawned child pins
+    // --permission-mode default in its spawn args (and boots with whatever default model),
+    // regardless of what the user last picked — without re-applying, the picker would keep
+    // showing the old choice while the live adapter silently reverted.
+    it('setConfig then watchdog respawn re-applies model+permissionMode on started', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 'sess-1', model: 'claude', mcpLoaded: true })
+      // state: busy
+
+      mgr.setConfig({ model: 'claude-haiku-4-5', permissionMode: 'acceptEdits' })
+      expect(adapters[0]!.setModelCalls).toEqual(['claude-haiku-4-5'])
+      expect(adapters[0]!.setPermissionModeCalls).toEqual(['acceptEdits'])
+
+      vi.advanceTimersByTime(35) // past the 30ms test watchdog — kills + respawns
+      expect(adapters).toHaveLength(2)
+
+      adapters[1]!.emit({ kind: 'started', sessionId: 'sess-2', model: 'claude', mcpLoaded: true })
+
+      expect(adapters[1]!.setModelCalls).toEqual(['claude-haiku-4-5'])
+      expect(adapters[1]!.setPermissionModeCalls).toEqual(['acceptEdits'])
+    })
+
+    it('setConfig while idle records and applies on next started', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      const result = mgr.setConfig({ model: 'claude-haiku-4-5', permissionMode: 'plan' })
+      expect(result).toEqual({ ok: true })
+      expect(adapters).toHaveLength(0) // no live adapter to call — must still be recorded
+
+      mgr.notifyDesignEdits()
+      expect(adapters).toHaveLength(1)
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+
+      expect(adapters[0]!.setModelCalls).toEqual(['claude-haiku-4-5'])
+      expect(adapters[0]!.setPermissionModeCalls).toEqual(['plan'])
+    })
+  })
+
+  describe('stop() — Task 3 additions', () => {
+    it('clears the chat queue — a fresh session after stop() does not replay stale queued turns', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      mgr.say('queued but abandoned') // sits in _chatQueue (busy)
+
+      mgr.stop()
+      expect(mgr.state()).toBe<SessionState>('idle')
+
+      // Fresh session: reach ready, then confirm no leftover queued turn auto-fires.
+      mgr.notifyDesignEdits()
+      adapters[1]!.emit({ kind: 'started', sessionId: 's2', model: 'claude', mcpLoaded: true })
+      adapters[1]!.emit({ kind: 'turn-complete', isError: false })
+
+      expect(mgr.state()).toBe<SessionState>('ready')
+      expect(adapters[1]!.sendTurnCalls).toEqual([PULL_TURN_TEXT]) // no stray flush
+    })
+
+    // Final-review fix 2: dev-server close is a fresh posture — a NEW session must not
+    // silently inherit a stranger's remembered model/permissionMode (mirrors the existing
+    // chat-queue-clear rule above).
+    it('stop() clears remembered config', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.setConfig({ model: 'claude-haiku-4-5', permissionMode: 'acceptEdits' })
+      mgr.stop()
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+
+      expect(adapters[0]!.setModelCalls).toEqual([])
+      expect(adapters[0]!.setPermissionModeCalls).toEqual([])
     })
   })
 })

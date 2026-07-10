@@ -1,5 +1,5 @@
 import { Overlay } from './overlay'
-import { findTaggedElement, type TaggedElement } from './source'
+import { findTaggedElement, parseSourceAttr, basename, type TaggedElement } from './source'
 import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
@@ -7,15 +7,12 @@ import { Dock } from './dock'
 import {
   buildChangeRequestWithElements,
   renderMarkdown,
-  buildPromptRequest,
-  renderPromptMarkdown,
   rebuildRequestFromSeed,
   type ChangeRequest,
   type ElementChange,
   type PromptRequest,
 } from './request'
 import { LifecycleSession, type SentSeed } from './lifecycle'
-import { PromptBox } from './prompt'
 import { Verifier } from './verifier'
 import { snapshotRects, diffRects } from './ripple'
 import { resetTokensCache } from './tokens'
@@ -43,6 +40,18 @@ function forgeSecretHeaders(): Record<string, string> {
   return secret ? { 'X-Forge-Secret': secret } : {}
 }
 
+/** Builds the SessionFeed chip payload for an element — label format `<tag> · <basename>:<line>`,
+ * matching changelist.ts's shortSource formatting (the Changes list already established this
+ * as the project's element-label convention) rather than inventing a new one. An untagged
+ * element (no data-dc-source, or a malformed one) falls back to just the tag name. */
+function elementChipLabel(el: TaggedElement): { source: string; tag: string; label: string } {
+  const tag = el.tagName.toLowerCase()
+  const dcSource = el.dataset.dcSource ?? ''
+  const parsed = dcSource ? parseSourceAttr(dcSource) : null
+  if (!parsed) return { source: dcSource, tag, label: tag }
+  return { source: dcSource, tag, label: `${tag} · ${basename(parsed.file)}:${parsed.line}` }
+}
+
 export class DesignMode {
   active = false
   /** Ordered set of currently selected elements — VisBug-style multi-select (B6). */
@@ -68,7 +77,6 @@ export class DesignMode {
   private verifier: Verifier
   private verifierSummary = ''
   private changeList: ChangeList
-  private promptBox = new PromptBox()
   /** Seeds with a re-queue POST currently in flight (R2 F-A). The failed row deliberately
    * survives until the POST resolves (final-review F5) so the Re-send button stays clickable
    * during the round-trip — but that means a double-click before the first POST settles would
@@ -77,8 +85,15 @@ export class DesignMode {
   private resendsInFlight = new Set<SentSeed>()
   /** Watcher-state poller — runs ONLY while design mode is on (started/stopped in
    * setActive), so watch mode adds zero idle overhead to the page. Session-state
-   * transitions also fire refreshStatus so the embedded-session indicator stays current. */
-  private watch = new WatchStatus(() => this.refreshStatus(), () => this.refreshStatus())
+   * transitions also fire refreshStatus so the embedded-session indicator stays current. The
+   * third arg (onTick) fires on EVERY poll, transition or not — refreshStatus also recomputes
+   * chat availability from sessionEnabled(), which onChange/onSessionChange alone could miss
+   * (see WatchStatus's onTick doc comment). */
+  private watch = new WatchStatus(
+    () => this.refreshStatus(),
+    () => this.refreshStatus(),
+    () => this.refreshStatus()
+  )
   /** Live activity stream from the embedded session (Task 7/8) — idle-zero: start/stop
    * mirror this.watch.start()/stop() in setActive so no fetch or timer survives design mode off. */
   private feed = new SessionFeed({ headers: forgeSecretHeaders })
@@ -164,11 +179,45 @@ export class DesignMode {
         body: JSON.stringify({ id, allow }),
       }).catch(() => {})
     }
-    overlay.mountPromptBox(this.promptBox.root)
-    this.promptBox.onSend = (text) => this.sendPrompt(text)
+    // The feed now AWAITS this result (trySend in session-feed.ts) and only clears its
+    // textarea/chip on a true resolution — the optimistic clear moved to the success path so
+    // a failed send never silently discards what the user typed (final-review fix 3). Every
+    // non-ok response and every network failure renders a transient .session-error-row before
+    // resolving false; 429 keeps its specific queue-full copy, everything else gets the
+    // generic retry copy.
+    this.feed.onSay = (text, element) => {
+      return fetch('/__the-forge/session/say', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+        body: JSON.stringify({ text, element }),
+      })
+        .then((res) => {
+          if (res.ok) return true
+          if (res.status === 429) {
+            this.feed.renderTransientError('chat queue full — wait for the current turn')
+          } else {
+            this.feed.renderTransientError('message failed to send — try again')
+          }
+          return false
+        })
+        .catch(() => {
+          this.feed.renderTransientError('message failed to send — try again')
+          return false
+        })
+    }
+    this.feed.onConfig = (cfg) => {
+      void fetch('/__the-forge/session/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
+        body: JSON.stringify(cfg),
+      }).catch(() => {})
+    }
+    // Prompt button's job now: attach the selected element as a chip to the persistent chat
+    // input and focus it — replacing the old floating prompt popup's open(anchor) (retired Task 6).
     this.panel.promptButton.addEventListener('click', () => {
-      if (this.promptBox.isOpen()) this.promptBox.close()
-      else if (this.selected) this.promptBox.open(this.selected) // multi-select anchors to the first
+      if (!this.selected) return
+      this.feed.setChip(elementChipLabel(this.selected))
+      this.feed.focusInput()
     })
     this.verifier.subscribe((e) => {
       // applyStage returns false for poll re-emissions of an unchanged stage (the verifier
@@ -330,7 +379,7 @@ export class DesignMode {
     this.persist()
   }
 
-  /** Single POST-to-queue path shared by Send, sendPrompt, and resend() — each built its own
+  /** Single POST-to-queue path shared by Send and resend() — each built its own
    * fetch/.then/.catch chain before this extraction, differing only in what happens once an id
    * comes back (or the POST fails), which is exactly what onOk/onFail are for.
    * Nesting is deliberate, matching the pre-extraction Send handler: the send tests count
@@ -367,37 +416,6 @@ export class DesignMode {
           .catch(() => onSettled(null))
       })
       .catch(() => onSettled(null))
-  }
-
-  /** Queues a free-form prompt for the current selection. Independent of draft sends by spec:
-   * reads the selection, never the DraftStore (draftProps: []), and skips isDuplicate — every
-   * typed prompt is intentional. Re-entrancy comes from setBusy: trySend() no-ops while the
-   * queue POST is in flight. On success the box closes (text's job is done — the Changes-list
-   * row takes over); on failure it stays open with the text intact so the user can retry. */
-  private sendPrompt(text: string): void {
-    const { request, pairs } = buildPromptRequest(this.selection, text)
-    if (pairs.length === 0) return
-    const md = renderPromptMarkdown(request)
-    this.promptBox.setBusy(true)
-    this.queueRequest(
-      request,
-      md,
-      (id) => {
-        const seeds: SentSeed[] = pairs.map(([el, change]) => {
-          const dcSource = el.dataset.dcSource ?? null
-          return { el, dcSource, index: dcSource ? sourceIndex(el, dcSource) : 0, draftProps: [], change, prompt: text }
-        })
-        this.promptBox.close()
-        this.registerQueuedSend(id, seeds)
-        this.postDispatch(() => {
-          /* request is safely queued — manual rung, same as Send */
-        })
-      },
-      () => {
-        this.promptBox.setBusy(false)
-        this.flashButton(this.promptBox.sendButton, 'Send failed', 'Send')
-      }
-    )
   }
 
   /** Re-queues one failed element-change as a fresh request. Safe and unfiltered by design:
@@ -483,7 +501,6 @@ export class DesignMode {
       this.pendingRestore = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
-      this.promptBox.close()
       this.dock.exit()
       this.verifier.stop()
       this.watch.stop()
@@ -602,6 +619,19 @@ export class DesignMode {
       this.verifierSummary || undefined,
       watchIndicatorFor(this.watch.current(), agent, this.watch.sessionState())
     )
+    // Availability derivation lives HERE (the host), not in the feed — setAvailability is a
+    // dumb setter. refreshStatus is wired to WatchStatus's onChange/onSessionChange/onTick
+    // (constructor, all three), so this recomputes on EVERY poll cycle regardless of whether
+    // watcher/session actually transitioned — a poll that only changes sessionEnabled (e.g.
+    // watcher stays 'none' and session stays 'unavailable' throughout) would otherwise never
+    // reach here. A 'failed' session state is deliberately NOT surfaced here — its error text
+    // already lands as a feed row (session-error), so repeating it in the disabled-reason line
+    // would just duplicate the same message twice.
+    this.feed.setAvailability(
+      this.watch.sessionEnabled() === false
+        ? { enabled: false, reason: 'Embedded sessions are disabled in config' }
+        : { enabled: true }
+    )
   }
 
   /** Serializes the full lifecycle to sessionStorage. Called only from state-change hooks
@@ -665,7 +695,9 @@ export class DesignMode {
   }
 
   private setSelection(next: TaggedElement[]): void {
-    this.promptBox.close() // any selection change — including deselect — closes and discards
+    // Unlike the old floating prompt popup, the chat chip is deliberately NOT cleared on selection
+    // change (task-6 contract: only Send and the chip's own × clear it) — a chip stays
+    // attached to whatever element the user chose it for even as they browse other elements.
     this.selection = next
     this.clearRippleState()
     if (next.length === 0) {

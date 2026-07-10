@@ -1169,6 +1169,11 @@ class FakeAdapter implements SessionAdapter {
   sendTurn(_text: string) {}
   interrupt() {}
   stop() {}
+  // no-op stubs — Task 2 added these to the SessionAdapter interface; this fake only needs
+  // to satisfy the type here, not exercise them (Task 3 wires real config-endpoint calls).
+  setModel(_model: string) {}
+  setPermissionMode(_mode: string) {}
+  setEffort(_level: string) {}
   emit(e: SessionEvent) { this.onEvent(e) }
 }
 
@@ -1545,6 +1550,368 @@ describe('session endpoints (Task 4)', () => {
       const res = fakeRes()
       await run(mwSession, fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }), res)
       expect(JSON.parse(res.body).session).toBe('busy')
+    })
+  })
+})
+
+describe('chat endpoints (say/config)', () => {
+  const SECRET = 'chat-secret'
+  let sessionDir: string
+  let adapter: FakeAdapter
+  let manager: SessionManager
+  let session: ForgeSessionHandles
+  let mwSession: ReturnType<typeof createForgeMiddleware>
+  let mwSecured: ReturnType<typeof createForgeMiddleware>
+
+  beforeEach(() => {
+    sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-chat-'))
+    adapter = new FakeAdapter()
+    manager = new SessionManager({
+      makeAdapter: () => adapter,
+      forgeDir: sessionDir,
+      cwd: sessionDir,
+    })
+    const built = makeTestSession(manager)
+    session = built.session
+
+    mwSession = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, undefined, session)
+    mwSecured = createForgeMiddleware(queue, [], SECRET, { agent: 'claude-code', channelsFlag: false }, undefined, session)
+  })
+
+  describe('absent session → 404', () => {
+    it('POST /session/say 404s when session not wired', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('POST', '/__the-forge/session/say', { text: 'hi' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(404)
+      expect(JSON.parse(res.body)).toEqual({ error: 'embedded session unavailable' })
+    })
+
+    it('POST /session/config 404s when session not wired', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('POST', '/__the-forge/session/config', { model: 'x' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(404)
+      expect(JSON.parse(res.body)).toEqual({ error: 'embedded session unavailable' })
+    })
+  })
+
+  describe('embedded: false opt-out (final-review fix 1)', () => {
+    // DispatchConfig.embedded promises "nothing ever spawns a headless CLI" — say() auto-spawns
+    // an idle/failed session, so the opt-out must gate /say and /config too, not just /dispatch's
+    // embedded rung. A disabled rung and an absent session are indistinguishable to callers —
+    // same 404 body as the "session not wired" case above.
+    let mwDisabled: ReturnType<typeof createForgeMiddleware>
+
+    beforeEach(() => {
+      mwDisabled = createForgeMiddleware(
+        queue,
+        [],
+        undefined,
+        { agent: 'claude-code', channelsFlag: false, embedded: false },
+        undefined,
+        session
+      )
+    })
+
+    it('POST /session/say 404s when embedded: false, even with a wired session', async () => {
+      const sayImpl = vi.spyOn(manager, 'say')
+      const res = fakeRes()
+      await run(mwDisabled, fakeReq('POST', '/__the-forge/session/say', { text: 'hi' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(404)
+      expect(JSON.parse(res.body)).toEqual({ error: 'embedded session unavailable' })
+      expect(sayImpl).not.toHaveBeenCalled()
+    })
+
+    it('POST /session/config 404s when embedded: false, even with a wired session', async () => {
+      const setConfigSpy = vi.spyOn(manager, 'setConfig')
+      const res = fakeRes()
+      await run(mwDisabled, fakeReq('POST', '/__the-forge/session/config', { model: 'x' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(404)
+      expect(JSON.parse(res.body)).toEqual({ error: 'embedded session unavailable' })
+      expect(setConfigSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('secret gating', () => {
+    it('POST /session/say 403s without the secret when one is configured', async () => {
+      const res = fakeRes()
+      await run(mwSecured, fakeReq('POST', '/__the-forge/session/say', { text: 'hi' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(403)
+      expect(JSON.parse(res.body)).toEqual({ error: 'missing or invalid X-Forge-Secret' })
+    })
+
+    it('POST /session/say 403s with a wrong secret', async () => {
+      const res = fakeRes()
+      await run(
+        mwSecured,
+        fakeReq('POST', '/__the-forge/session/say', { text: 'hi' }, { host: 'localhost:5173', 'x-forge-secret': 'wrong' }),
+        res
+      )
+      expect(res.statusCode).toBe(403)
+    })
+
+    it('POST /session/config 403s without the secret', async () => {
+      const res = fakeRes()
+      await run(mwSecured, fakeReq('POST', '/__the-forge/session/config', { model: 'x' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(403)
+      expect(JSON.parse(res.body)).toEqual({ error: 'missing or invalid X-Forge-Secret' })
+    })
+  })
+
+  describe('POST /__the-forge/session/say', () => {
+    it('405s on GET', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('GET', '/__the-forge/session/say', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(405)
+    })
+
+    it('happy path calls manager.say with parsed element and responds {ok:true}', async () => {
+      const sayImpl = vi.spyOn(manager, 'say')
+      const res = fakeRes()
+      await run(
+        mwSession,
+        fakeReq(
+          'POST',
+          '/__the-forge/session/say',
+          { text: 'fix this button', element: { source: 'src/App.tsx:12:5', tag: 'button' } },
+          { host: 'localhost:5173' }
+        ),
+        res
+      )
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ ok: true })
+      expect(sayImpl).toHaveBeenCalledWith('fix this button', { source: 'src/App.tsx:12:5', tag: 'button' })
+    })
+
+    it('happy path without element calls manager.say(text, undefined)', async () => {
+      const sayImpl = vi.spyOn(manager, 'say')
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/say', { text: 'hello' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      expect(sayImpl).toHaveBeenCalledWith('hello', undefined)
+    })
+
+    it('400s on empty text', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/say', { text: '' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(400)
+    })
+
+    it('400s on missing text', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/say', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(400)
+    })
+
+    it('400s on non-string text', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/say', { text: 42 }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(400)
+    })
+
+    it('400s on text over 4000 chars', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/say', { text: 'a'.repeat(4001) }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(400)
+    })
+
+    it('accepts text at exactly 4000 chars', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/say', { text: 'a'.repeat(4000) }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+
+    it('400s on a source over 512 chars, never forwarded (final-review fix 4: length cap before the regex)', async () => {
+      const sayImpl = vi.spyOn(manager, 'say')
+      const res = fakeRes()
+      // A valid-shaped but oversized source — the anchored CHAT_SOURCE_RE would otherwise let
+      // an unbounded string ride the composed turn past the 4000-char text cap.
+      const longSource = `${'a/'.repeat(255)}x.tsx:1:1` // > 512 chars, matches the source shape
+      await run(
+        mwSession,
+        fakeReq('POST', '/__the-forge/session/say', { text: 'hi', element: { source: longSource, tag: 'div' } }, { host: 'localhost:5173' }),
+        res
+      )
+      expect(res.statusCode).toBe(400)
+      expect(sayImpl).not.toHaveBeenCalled()
+    })
+
+    it('400s on a tag over 64 chars, never forwarded (final-review fix 4)', async () => {
+      const sayImpl = vi.spyOn(manager, 'say')
+      const res = fakeRes()
+      const longTag = 'a'.repeat(65)
+      await run(
+        mwSession,
+        fakeReq('POST', '/__the-forge/session/say', { text: 'hi', element: { source: 'src/App.tsx:1:1', tag: longTag } }, { host: 'localhost:5173' }),
+        res
+      )
+      expect(res.statusCode).toBe(400)
+      expect(sayImpl).not.toHaveBeenCalled()
+    })
+
+    it('400s on an element with a space in source, never forwarded', async () => {
+      const sayImpl = vi.spyOn(manager, 'say')
+      const res = fakeRes()
+      await run(
+        mwSession,
+        fakeReq('POST', '/__the-forge/session/say', { text: 'hi', element: { source: 'src/App tsx:1:1', tag: 'div' } }, { host: 'localhost:5173' }),
+        res
+      )
+      expect(res.statusCode).toBe(400)
+      expect(sayImpl).not.toHaveBeenCalled()
+    })
+
+    it('400s on an element with the wrong colon count in source, never forwarded', async () => {
+      const sayImpl = vi.spyOn(manager, 'say')
+      const res = fakeRes()
+      await run(
+        mwSession,
+        fakeReq('POST', '/__the-forge/session/say', { text: 'hi', element: { source: 'src/App.tsx:1', tag: 'div' } }, { host: 'localhost:5173' }),
+        res
+      )
+      expect(res.statusCode).toBe(400)
+      expect(sayImpl).not.toHaveBeenCalled()
+    })
+
+    it('accepts a source made of dots and slashes (relative paths are fine)', async () => {
+      const res = fakeRes()
+      await run(
+        mwSession,
+        fakeReq('POST', '/__the-forge/session/say', { text: 'hi', element: { source: '../../etc:1:1', tag: 'div' } }, { host: 'localhost:5173' }),
+        res
+      )
+      expect(res.statusCode).toBe(200)
+    })
+
+    it('400s on an uppercase tag, never forwarded', async () => {
+      const sayImpl = vi.spyOn(manager, 'say')
+      const res = fakeRes()
+      await run(
+        mwSession,
+        fakeReq('POST', '/__the-forge/session/say', { text: 'hi', element: { source: 'src/App.tsx:1:1', tag: 'Div' } }, { host: 'localhost:5173' }),
+        res
+      )
+      expect(res.statusCode).toBe(400)
+      expect(sayImpl).not.toHaveBeenCalled()
+    })
+
+    it('400s on a <script> tag, never forwarded', async () => {
+      const sayImpl = vi.spyOn(manager, 'say')
+      const res = fakeRes()
+      await run(
+        mwSession,
+        fakeReq('POST', '/__the-forge/session/say', { text: 'hi', element: { source: 'src/App.tsx:1:1', tag: '<script>' } }, { host: 'localhost:5173' }),
+        res
+      )
+      expect(res.statusCode).toBe(400)
+      expect(sayImpl).not.toHaveBeenCalled()
+    })
+
+    it('429s with chat queue full when manager.say returns queue-full', async () => {
+      vi.spyOn(manager, 'say').mockReturnValue({ ok: false, reason: 'queue-full' })
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/say', { text: 'hi' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(429)
+      expect(JSON.parse(res.body)).toEqual({ error: 'chat queue full' })
+    })
+  })
+
+  describe('POST /__the-forge/session/config', () => {
+    it('405s on GET', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('GET', '/__the-forge/session/config', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(405)
+    })
+
+    it('400s when no keys are provided', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/config', {}, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(400)
+    })
+
+    it('happy path calls manager.setConfig and responds {ok:true}', async () => {
+      const setConfigSpy = vi.spyOn(manager, 'setConfig')
+      const res = fakeRes()
+      await run(
+        mwSession,
+        fakeReq(
+          'POST',
+          '/__the-forge/session/config',
+          { model: 'claude-opus', permissionMode: 'plan', effort: 'high' },
+          { host: 'localhost:5173' }
+        ),
+        res
+      )
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body)).toEqual({ ok: true })
+      expect(setConfigSpy).toHaveBeenCalledWith({ model: 'claude-opus', permissionMode: 'plan', effort: 'high' })
+    })
+
+    it('400s on an empty model string', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { model: '' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(400)
+    })
+
+    it('400s on model over 100 chars', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { model: 'a'.repeat(101) }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(400)
+    })
+
+    it('400s on bypassPermissions (not in the permissionMode allowlist)', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { permissionMode: 'bypassPermissions' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(400)
+    })
+
+    it('400s on an unknown effort level', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { effort: 'ultra' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(400)
+    })
+
+    it.each(['low', 'medium', 'high', 'xhigh', 'max'])('accepts effort=%s', async (effort) => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { effort }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+
+    it.each(['default', 'acceptEdits', 'plan'])('accepts permissionMode=%s', async (permissionMode) => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { permissionMode }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+    })
+
+    it('409s with session is busy when manager.setConfig returns busy', async () => {
+      vi.spyOn(manager, 'setConfig').mockReturnValue({ ok: false, reason: 'busy' })
+      const res = fakeRes()
+      await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { effort: 'high' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(409)
+      expect(JSON.parse(res.body)).toEqual({ error: 'session is busy' })
+    })
+  })
+
+  describe('GET /__the-forge/status sessionEnabled field', () => {
+    it('is true by default (embedded not set to false)', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }), res)
+      const body = JSON.parse(res.body)
+      expect(body.sessionEnabled).toBe(true)
+    })
+
+    it('is false when dispatchConfig.embedded is false', async () => {
+      const mwDisabled = createForgeMiddleware(
+        queue,
+        [],
+        undefined,
+        { agent: 'claude-code', channelsFlag: false, embedded: false },
+        undefined,
+        session
+      )
+      const res = fakeRes()
+      await run(mwDisabled, fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }), res)
+      const body = JSON.parse(res.body)
+      expect(body.sessionEnabled).toBe(false)
     })
   })
 })

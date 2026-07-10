@@ -993,163 +993,253 @@ describe('change list wiring', () => {
   })
 })
 
-describe('prompt sends', () => {
-  /** Flushes enough microtasks for the /queue POST *and* the chained /dispatch POST to settle —
-   * same convention as flushSend() elsewhere in this file. */
-  async function flushSend(): Promise<void> {
-    for (let i = 0; i < 6; i++) await Promise.resolve()
+describe('chat input cluster wiring (Task 6 — floating prompt popup retired)', () => {
+  /** Flushes enough microtasks for a fetch .then chain to settle — same convention as
+   * flushSend() elsewhere in this file. */
+  async function flushMicrotasks(rounds = 6): Promise<void> {
+    for (let i = 0; i < rounds; i++) await Promise.resolve()
   }
 
-  /** PromptBox mounts as a shadow-root sibling of #panel/#status (overlay.mountPromptBox) —
-   * locate it the same way tests reach into the shadow root for #panel/#status/#outline. */
-  function promptBoxRoot(overlay: Overlay): HTMLElement {
-    return overlay.host.shadowRoot!.querySelector('.prompt-box') as HTMLElement
+  /** Benign catch-all for the events stream + status poll — same shape as the
+   * "SessionFeed wiring" describe block's makeEventsFetch, inlined here since these tests
+   * mostly care about a single specific POST rather than scripted NDJSON lines. */
+  function hangingEventsAnd(extra: (url: string) => Promise<unknown> | null) {
+    return vi.fn((url: string) => {
+      const res = extra(url)
+      if (res) return res
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
   }
 
-  function stubQueueThenDispatch(dispatchResponse: { rung: string; detail: string } = { rung: 'watcher', detail: '' }) {
+  it('Prompt button sets the chip and focuses the chat textarea (no .prompt-box in DOM)', () => {
+    const { mode, overlay, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')!
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    const focusSpy = vi.spyOn(textarea, 'focus')
+
+    panel.promptButton.click()
+
+    const chip = mode.panelRoot.querySelector('.chat-chip') as HTMLElement
+    expect(chip.hidden).toBe(false)
+    // label format `<tag> · <basename>:<line>` — src/Button.tsx:42:8 → button · Button.tsx:42
+    expect(chip.textContent).toContain('button · Button.tsx:42')
+    expect(focusSpy).toHaveBeenCalled()
+    expect(overlay.host.shadowRoot!.querySelector('.prompt-box')).toBeNull()
+  })
+
+  it('clicking Prompt with no selection is a no-op (no chip, no focus)', () => {
+    const { mode, panel } = fullSetup()
+    mode.setActive(true)
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    const focusSpy = vi.spyOn(textarea, 'focus')
+    panel.promptButton.click()
+    expect(focusSpy).not.toHaveBeenCalled()
+    expect((mode.panelRoot.querySelector('.chat-chip') as HTMLElement).hidden).toBe(true)
+  })
+
+  it('say POSTs /session/say with the secret header and the chipped element, then clears the chip', async () => {
+    const fetchMock = hangingEventsAnd((url) =>
+      url === '/__the-forge/session/say' ? Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) }) : null
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    ;(globalThis as { __THE_FORGE__?: { secret?: string } }).__THE_FORGE__ = { secret: 'shhh' }
+    try {
+      const { mode, panel } = fullSetup()
+      mode.setActive(true)
+      const btn = document.querySelector('button')!
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      panel.promptButton.click() // sets the chip
+
+      const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+      textarea.value = 'make it pop'
+      ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+
+      await flushMicrotasks()
+
+      const calls = fetchMock.mock.calls.filter((c: unknown[]) => c[0] === '/__the-forge/session/say')
+      expect(calls).toHaveLength(1)
+      const [, init] = calls[0] as unknown as [string, { method: string; headers: Record<string, string>; body: string }]
+      expect(init.method).toBe('POST')
+      expect(init.headers['X-Forge-Secret']).toBe('shhh')
+      expect(JSON.parse(init.body)).toEqual({
+        text: 'make it pop',
+        element: { source: 'src/Button.tsx:42:8', tag: 'button' },
+      })
+      expect((mode.panelRoot.querySelector('.chat-chip') as HTMLElement).hidden).toBe(true)
+    } finally {
+      delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
+    }
+  })
+
+  it('say with no chipped element omits element from the body', async () => {
+    const fetchMock = hangingEventsAnd((url) =>
+      url === '/__the-forge/session/say' ? Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) }) : null
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'plain message'
+    ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+
+    await flushMicrotasks()
+
+    const calls = fetchMock.mock.calls.filter((c: unknown[]) => c[0] === '/__the-forge/session/say')
+    const [, init] = calls[0] as unknown as [string, { body: string }]
+    expect(JSON.parse(init.body)).toEqual({ text: 'plain message' })
+  })
+
+  it('429 from /session/say renders a queue-full row in the feed', async () => {
+    const fetchMock = hangingEventsAnd((url) =>
+      url === '/__the-forge/session/say' ? Promise.resolve({ ok: false, status: 429, json: async () => ({ error: 'chat queue full' }) }) : null
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'hello'
+    ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+
+    await flushMicrotasks()
+
+    const errorRow = mode.panelRoot.querySelector('.session-error-row')
+    expect(errorRow).not.toBeNull()
+    expect(errorRow?.textContent).toBe('chat queue full — wait for the current turn')
+  })
+
+  it('a 500 from /session/say renders the generic failure row and preserves the typed text (final-review fix 3)', async () => {
+    const fetchMock = hangingEventsAnd((url) =>
+      url === '/__the-forge/session/say' ? Promise.resolve({ ok: false, status: 500, json: async () => ({ error: 'boom' }) }) : null
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'do not lose me'
+    ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+
+    await flushMicrotasks()
+
+    const errorRow = mode.panelRoot.querySelector('.session-error-row')
+    expect(errorRow?.textContent).toBe('message failed to send — try again')
+    expect(textarea.value).toBe('do not lose me')
+    expect(textarea.disabled).toBe(false)
+  })
+
+  it('a network failure from /session/say renders the generic failure row and preserves the typed text', async () => {
+    const fetchMock = hangingEventsAnd((url) =>
+      url === '/__the-forge/session/say' ? Promise.reject(new Error('network down')) : null
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'still here'
+    ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+
+    await flushMicrotasks()
+
+    const errorRow = mode.panelRoot.querySelector('.session-error-row')
+    expect(errorRow?.textContent).toBe('message failed to send — try again')
+    expect(textarea.value).toBe('still here')
+  })
+
+  it('a successful /session/say clears the textarea only after the response resolves', async () => {
+    const fetchMock = hangingEventsAnd((url) =>
+      url === '/__the-forge/session/say' ? Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) }) : null
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'send me'
+    ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
+
+    await flushMicrotasks()
+
+    expect(textarea.value).toBe('')
+    expect(textarea.disabled).toBe(false)
+  })
+
+  it('changing the effort picker POSTs /session/config with the secret header and only the changed key', async () => {
+    const fetchMock = hangingEventsAnd((url) =>
+      url === '/__the-forge/session/config' ? Promise.resolve({ ok: true, json: async () => ({ ok: true }) }) : null
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    ;(globalThis as { __THE_FORGE__?: { secret?: string } }).__THE_FORGE__ = { secret: 'shhh' }
+    try {
+      const { mode } = fullSetup()
+      mode.setActive(true)
+      const effortSelect = mode.panelRoot.querySelector('.session-effort') as HTMLSelectElement
+      effortSelect.value = 'high'
+      effortSelect.dispatchEvent(new Event('change'))
+
+      await flushMicrotasks()
+
+      const calls = fetchMock.mock.calls.filter((c: unknown[]) => c[0] === '/__the-forge/session/config')
+      expect(calls).toHaveLength(1)
+      const [, init] = calls[0] as unknown as [string, { headers: Record<string, string>; body: string }]
+      expect(init.headers['X-Forge-Secret']).toBe('shhh')
+      expect(JSON.parse(init.body)).toEqual({ effort: 'high' })
+    } finally {
+      delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
+    }
+  })
+
+  it('sessionEnabled=false (from /status) disables the chat input with the config-disabled reason', async () => {
     const fetchMock = vi.fn((url: string) => {
-      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
-      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => dispatchResponse })
-      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle', sessionEnabled: false }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    return fetchMock
-  }
-
-  it('toggles the prompt box from the panel button, anchored to the selection', () => {
-    const { mode, overlay, panel } = fullSetup()
-    mode.setActive(true)
-    const btn = document.querySelector('button')!
-    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    expect(mode.panelRoot).toBeTruthy()
-
-    panel.promptButton.click()
-    expect(promptBoxRoot(overlay).hidden).toBe(false)
-    panel.promptButton.click()
-    expect(promptBoxRoot(overlay).hidden).toBe(true)
-  })
-
-  it('queues a prompt request and registers prompt seeds on success', async () => {
-    const fetchMock = stubQueueThenDispatch({ rung: 'watcher', detail: '' })
-    const { mode, overlay, panel } = fullSetup()
-    mode.setActive(true)
-    const btn = document.querySelector('button')!
-    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-
-    panel.promptButton.click()
-    const box = promptBoxRoot(overlay)
-    const textarea = box.querySelector('.prompt-textarea') as HTMLTextAreaElement
-    textarea.value = 'make it pop'
-    textarea.dispatchEvent(new Event('input'))
-    const sendButton = box.querySelector('.prompt-send') as HTMLButtonElement
-    sendButton.click()
-
-    await flushSend()
-
-    const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
-    expect(queueCalls).toHaveLength(1)
-    const body = JSON.parse((queueCalls[0] as unknown as [string, { body: string }])[1].body)
-    expect(body.request.kind).toBe('prompt')
-    expect(body.request.prompt).toBe('make it pop')
-    expect(body.markdown).toContain('# Design prompt')
-
-    expect(mode.session.records()[0].seed.prompt).toBe('make it pop')
-    expect(mode.session.records()[0].seed.draftProps).toEqual([]) // never touches drafts
-    expect(promptBoxRoot(overlay).hidden).toBe(true) // closed on queue success
-  })
-
-  it('keeps the box open with text intact on queue failure', async () => {
-    const fetchMock = vi.fn(() => Promise.resolve({ ok: false, json: async () => ({}) }))
-    vi.stubGlobal('fetch', fetchMock)
-    const { mode, overlay, panel } = fullSetup()
-    mode.setActive(true)
-    const btn = document.querySelector('button')!
-    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-
-    panel.promptButton.click()
-    const box = promptBoxRoot(overlay)
-    const textarea = box.querySelector('.prompt-textarea') as HTMLTextAreaElement
-    textarea.value = 'make it pop'
-    textarea.dispatchEvent(new Event('input'))
-    const sendButton = box.querySelector('.prompt-send') as HTMLButtonElement
-    sendButton.click()
-
-    await flushSend()
-
-    expect(promptBoxRoot(overlay).hidden).toBe(false)
-    expect(textarea.value).toBe('make it pop') // not discarded — user retries
-    expect(textarea.disabled).toBe(false) // busy lifted
-  })
-
-  it('closes the box on selection change and on deactivate', () => {
-    document.body.innerHTML = `
-      <button data-dc-source="src/Button.tsx:42:8" class="btn" id="a">a</button>
-      <button data-dc-source="src/Button2.tsx:1:1" class="btn" id="b">b</button>
-    `
-    const overlay = new Overlay()
-    overlay.mount()
-    const drafts = new DraftStore()
-    const panel = new Panel(drafts, () => {})
-    overlay.attachPanel(panel.root)
-    const mode = new DesignMode(overlay, panel, drafts)
-    liveModes.push(mode)
+    const { mode } = fullSetup()
     mode.setActive(true)
 
-    const a = document.getElementById('a')!
-    const b = document.getElementById('b')!
-    a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    panel.promptButton.click()
-    expect(promptBoxRoot(overlay).hidden).toBe(false)
+    await new Promise((r) => setTimeout(r, 5)) // watch's immediate 0ms poll settles (real timers)
 
-    b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    expect(promptBoxRoot(overlay).hidden).toBe(true)
-
-    b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    panel.promptButton.click()
-    expect(promptBoxRoot(overlay).hidden).toBe(false)
-    mode.setActive(false)
-    expect(promptBoxRoot(overlay).hidden).toBe(true)
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    const sendBtn = mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement
+    const reason = mode.panelRoot.querySelector('.chat-disabled-reason') as HTMLElement
+    expect(textarea.disabled).toBe(true)
+    expect(sendBtn.disabled).toBe(true)
+    expect(reason.hidden).toBe(false)
+    expect(reason.textContent).toBe('Embedded sessions are disabled in config')
   })
 
-  it('re-sends a failed prompt seed as a fresh prompt request', async () => {
+  it('sessionEnabled absent (older server) leaves the chat input enabled by default', async () => {
     const fetchMock = vi.fn((url: string) => {
-      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
-      if (url === '/__the-forge/dispatch') return Promise.resolve({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
-      if (url === '/__the-forge/status?ids=q1')
-        return Promise.resolve({ ok: true, json: async () => ({ items: [{ id: 'q1', status: 'failed', note: 'oops' }] }) })
-      return Promise.resolve({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
-    vi.useFakeTimers()
-    const { mode, overlay, panel } = fullSetup()
+    const { mode } = fullSetup()
+    mode.setActive(true)
+
+    await new Promise((r) => setTimeout(r, 5))
+
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    expect(textarea.disabled).toBe(false)
+  })
+
+  it('Escape does NOT deselect/deactivate while the chat textarea is focused', () => {
+    const { mode } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')!
     btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(mode.selected).toBe(btn)
 
-    panel.promptButton.click()
-    const box = promptBoxRoot(overlay)
-    const textarea = box.querySelector('.prompt-textarea') as HTMLTextAreaElement
-    textarea.value = 'make it pop'
-    textarea.dispatchEvent(new Event('input'))
-    const sendButton = box.querySelector('.prompt-send') as HTMLButtonElement
-    sendButton.click()
-    await vi.advanceTimersByTimeAsync(0)
+    const textarea = mode.panelRoot.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
 
-    // drive the seed to failed via the verifier's status poll
-    await vi.advanceTimersByTimeAsync(2000)
-    vi.useRealTimers()
-
-    const resendButton = mode.panelRoot.querySelector('.change-row .change-resend') as HTMLButtonElement
-    expect(resendButton).toBeTruthy()
-    fetchMock.mockClear()
-    resendButton.click()
-    await flushSend()
-
-    const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
-    expect(queueCalls).toHaveLength(1)
-    const body = JSON.parse((queueCalls[0] as unknown as [string, { body: string }])[1].body)
-    expect(body.request.kind).toBe('prompt')
-    expect(body.markdown).toContain('## Instruction')
+    // overlay.contains(e.target) already ignores every overlay-internal target (onKey,
+    // index.ts) — the chat textarea lives inside the panel, itself inside the overlay's
+    // shadow host, so no additional stopPropagation wiring is needed on the textarea itself.
+    expect(mode.selected).toBe(btn)
+    expect(mode.active).toBe(true)
   })
 })
 

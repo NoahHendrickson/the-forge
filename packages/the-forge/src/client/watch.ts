@@ -127,13 +127,27 @@ export class WatchStatus {
   private timer: ReturnType<typeof setTimeout> | null = null
   private state: WatcherState = 'none'
   private _sessionState: SessionState = 'unavailable'
+  /** Task 6: whether the server's DispatchConfig.embedded opt-out is on — distinct from
+   * `session` (the live adapter state) per server/endpoints.ts's own comment. `undefined`
+   * until the first successful poll answers (or forever, against an older server that omits
+   * the field) — the host (index.ts) treats undefined the same as `true` (available by
+   * default), only `false` disables the chat input. */
+  private _sessionEnabled: boolean | undefined = undefined
   /** Bumped by every start()/stop(): a fetch resolving under an older generation must not
    * touch state or reschedule (same stale-chain guard as the Verifier's poll loop). */
   private generation = 0
 
   constructor(
     private onChange: (state: WatcherState) => void,
-    private onSessionChange?: (s: SessionState) => void
+    private onSessionChange?: (s: SessionState) => void,
+    /** Fires once at the end of EVERY poll cycle (success or failure), regardless of whether
+     * watcher/session actually transitioned — onChange/onSessionChange only fire on a real
+     * transition, which would silently miss a same-state poll that nonetheless changed
+     * sessionEnabled (e.g. watcher stays 'none' and session stays 'unavailable' throughout,
+     * as when DispatchConfig.embedded is off server-side and there's no adapter to report
+     * transitions for). index.ts wires this to refreshStatus() so chat availability is
+     * recomputed on every tick, per the task-6 contract, not just on watcher/session flips. */
+    private onTick?: () => void
   ) {}
 
   current(): WatcherState {
@@ -142,6 +156,10 @@ export class WatchStatus {
 
   sessionState(): SessionState {
     return this._sessionState
+  }
+
+  sessionEnabled(): boolean | undefined {
+    return this._sessionEnabled
   }
 
   start(): void {
@@ -167,6 +185,9 @@ export class WatchStatus {
     // Reset session state silently — same rationale as watcher state: no stale
     // "active session" claim should survive a design-mode cycle.
     this._sessionState = 'unavailable'
+    // Same for the config-derived enabled flag — a fresh design-mode entry re-probes it
+    // rather than trusting a value from a previous cycle (or a previous dev server).
+    this._sessionEnabled = undefined
   }
 
   /** Applies a state a mutating endpoint already told us authoritatively in its response
@@ -184,10 +205,18 @@ export class WatchStatus {
   private poll(gen: number): void {
     if (gen !== this.generation) return
     fetch('/__the-forge/status?ids=')
-      .then((res) => (res.ok ? (res.json() as Promise<{ watcher?: unknown; session?: unknown }>) : null))
+      .then((res) => (res.ok ? (res.json() as Promise<{ watcher?: unknown; session?: unknown; sessionEnabled?: unknown }>) : null))
       .then((body) => {
         if (gen !== this.generation) return
         if (body === null) return this.degrade()
+        // sessionEnabled is parsed FIRST, before update()/updateSession() below — those two
+        // synchronously invoke onChange/onSessionChange, and index.ts's refreshStatus (wired
+        // to both) reads sessionEnabled() to recompute chat availability. Parsing it after
+        // the callbacks fire would make refreshStatus see a stale value on the very poll that
+        // changed it. Unknown-shape tolerance: only a real boolean updates the flag; an absent
+        // field (older server) or a malformed value is ignored rather than reset, since this is
+        // static config (not a liveness claim) with no "degrade on blip" need.
+        if (typeof body.sessionEnabled === 'boolean') this._sessionEnabled = body.sessionEnabled
         // 'none' is a legitimate, AUTHORITATIVE server answer (e.g. a fresh hub after a
         // Vite restart) — it must clear a cached 'asleep', not fall into the degrade
         // path with failures. Only truly unrecognized values (a future server) degrade.
@@ -211,6 +240,9 @@ export class WatchStatus {
       .catch(() => {
         if (gen !== this.generation) return
         this.degrade()
+      })
+      .then(() => {
+        if (gen === this.generation) this.onTick?.()
       })
       .finally(() => {
         // A stop() (or stop()+start()) while the fetch was in flight bumps the generation —

@@ -39,6 +39,9 @@ export const EDIT_TIER_ALLOW: string[] = [
 // before the permission-prompt-tool is ever consulted — the overlay Allow/Deny would simply
 // never appear. Sandboxed safe commands (echo, ls) still run without prompting in EVERY
 // mode; that's the CLI's own sandbox tier, not a gap in the gate.
+// --include-partial-messages (milestone B, chat surface): without it the CLI never emits
+// stream_event lines at all, so text deltas would only ever arrive as whole finished
+// `assistant` messages — this flag is what turns on token-by-token streaming.
 export const CLAUDE_ARGS: string[] = [
   '-p',
   '--input-format',
@@ -46,6 +49,7 @@ export const CLAUDE_ARGS: string[] = [
   '--output-format',
   'stream-json',
   '--verbose',
+  '--include-partial-messages',
   '--permission-mode',
   'default',
   '--permission-prompt-tool',
@@ -53,6 +57,43 @@ export const CLAUDE_ARGS: string[] = [
   '--allowedTools',
   EDIT_TIER_ALLOW.join(','),
 ]
+
+// Edit/MultiEdit/Write tool_use payloads can carry arbitrarily large before/after strings
+// (a full file rewrite via Write, e.g.) — cap each side so a single tool call can't blow up
+// the ring buffer or the wire payload to the browser. Truncation is a display concern only;
+// the CLI still has the real file on disk regardless of what the panel shows.
+export const EDIT_PAYLOAD_CAP = 1_500
+
+function truncateEditSide(s: string): string {
+  return s.length > EDIT_PAYLOAD_CAP ? s.slice(0, EDIT_PAYLOAD_CAP) + '…' : s
+}
+
+// Edit/MultiEdit → {file, before: old_string, after: new_string}; Write → {file, before: '',
+// after: content}. Absent/malformed `input` fields (a future CLI version renaming a field, a
+// tool_use block from an unrelated tool) must never throw — they just produce no edit payload,
+// same forward-compat posture as the rest of processLine's manual field checks.
+function buildEditPayload(
+  name: string,
+  input: Record<string, unknown>,
+): { file: string; before: string; after: string } | undefined {
+  const file = input['file_path']
+  if (typeof file !== 'string') return undefined
+
+  if (name === 'Edit' || name === 'MultiEdit') {
+    const before = input['old_string']
+    const after = input['new_string']
+    if (typeof before !== 'string' || typeof after !== 'string') return undefined
+    return { file, before: truncateEditSide(before), after: truncateEditSide(after) }
+  }
+
+  if (name === 'Write') {
+    const content = input['content']
+    if (typeof content !== 'string') return undefined
+    return { file, before: '', after: truncateEditSide(content) }
+  }
+
+  return undefined
+}
 
 function defaultSpawnFn(cmd: string, args: string[], opts: { cwd: string }): SpawnedChild {
   // spawn with pipe stdio so stdin/stdout/stderr are always present (never null)
@@ -64,6 +105,12 @@ export class ClaudeAdapter implements SessionAdapter {
   onEvent: (e: SessionEvent) => void = () => {}
 
   private readonly spawnFn: SpawnFn
+  // Spike verdict (Task 1, confirmed live CLI 2.1.201): effort has no set_effort control
+  // request — it's a spawn-flag-only knob (`--effort <level>`). A manager-owned effort
+  // change therefore kills this adapter and constructs a FRESH one via makeAdapter(opts)
+  // (manager.ts's per-spawn factory pattern) rather than mutating a live instance, so the
+  // flag is captured once here at construction time and applied in start()'s args.
+  private readonly effort: string | undefined
   private child: SpawnedChild | null = null
   // closed: set on stop() — prevents processing late stdout events after stop()
   private closed = false
@@ -72,14 +119,18 @@ export class ClaudeAdapter implements SessionAdapter {
   // stderrBuf: last ~500 chars of stderr, included in spawn-error/exit text if nonempty
   private stderrBuf = ''
 
-  constructor(spawnFn: SpawnFn = defaultSpawnFn) {
+  constructor(spawnFn: SpawnFn = defaultSpawnFn, opts?: { effort?: string }) {
     this.spawnFn = spawnFn
+    this.effort = opts?.effort
   }
 
   start(opts: { cwd: string; resumeId?: string }): void {
     const args = [...CLAUDE_ARGS]
     if (opts.resumeId) {
       args.push('--resume', opts.resumeId)
+    }
+    if (this.effort) {
+      args.push('--effort', this.effort)
     }
 
     const child = this.spawnFn('claude', args, { cwd: opts.cwd })
@@ -139,6 +190,40 @@ export class ClaudeAdapter implements SessionAdapter {
       request: { subtype: 'interrupt' },
     }
     this.child.stdin.write(JSON.stringify(msg) + '\n')
+  }
+
+  setModel(model: string): void {
+    if (!this.child || this.closed) return
+    // Ack carries NO echo of the applied model (confirmed live, CLI 2.1.201) — confirmation
+    // that the change landed has to come from the model field of a later assistant/result
+    // event, not from this control_response.
+    const msg = {
+      type: 'control_request',
+      request_id: randomUUID(),
+      request: { subtype: 'set_model', model },
+    }
+    this.child.stdin.write(JSON.stringify(msg) + '\n')
+  }
+
+  setPermissionMode(mode: string): void {
+    if (!this.child || this.closed) return
+    const msg = {
+      type: 'control_request',
+      request_id: randomUUID(),
+      request: { subtype: 'set_permission_mode', mode },
+    }
+    this.child.stdin.write(JSON.stringify(msg) + '\n')
+  }
+
+  // No-op by design: CONFIRMED live (CLI 2.1.201) there is no set_effort control_request
+  // subtype — the CLI answers any unknown subtype with a generic "Unsupported control
+  // request subtype" error, tried with both 'set_effort' and a nonsense subtype (see
+  // CONTROL_RESPONSE_SET_EFFORT_UNSUPPORTED in tests/server/session/fixtures/claude-chat-
+  // ndjson.ts). Effort is spawn-flag-only (`--effort <level>`), so changing it mid-session
+  // means the manager killing this child and respawning with `--resume <session_id>
+  // --effort <level>` — that's Task 3's respawn branch, not a stdin write here.
+  setEffort(_level: string): void {
+    // Intentionally empty.
   }
 
   stop(): void {
@@ -217,7 +302,14 @@ export class ClaudeAdapter implements SessionAdapter {
                 : typeof input['command'] === 'string'
                   ? input['command']
                   : ''
-            this.onEvent({ kind: 'tool-started', toolId, name, detail: rawDetail.slice(0, 120) })
+            const edit = buildEditPayload(name, input)
+            this.onEvent({
+              kind: 'tool-started',
+              toolId,
+              name,
+              detail: rawDetail.slice(0, 120),
+              ...(edit ? { edit } : {}),
+            })
           }
         }
         return
@@ -255,10 +347,39 @@ export class ClaudeAdapter implements SessionAdapter {
         return
       }
 
+      case 'stream_event': {
+        // --include-partial-messages turns these on. Only a text_delta carries chat text
+        // (thinking-block signature_delta, message_start/stop, content_block_start/stop,
+        // message_delta are all structural — see fixtures/claude-chat-ndjson.ts §Step 1 for
+        // the full observed envelope); everything else here falls through to the same
+        // liveness heartbeat as an unrecognized top-level type, same as before this case
+        // existed. The final complete `assistant` text block still arrives separately
+        // (assistant-text, above) — deltas are a preview only, never the source of truth.
+        const event = obj['event']
+        if (typeof event === 'object' && event !== null) {
+          const ev = event as Record<string, unknown>
+          if (ev['type'] === 'content_block_delta') {
+            const delta = ev['delta']
+            if (typeof delta === 'object' && delta !== null) {
+              const d = delta as Record<string, unknown>
+              if (d['type'] === 'text_delta') {
+                this.onEvent({
+                  kind: 'assistant-delta',
+                  text: typeof d['text'] === 'string' ? d['text'] : '',
+                })
+                return
+              }
+            }
+          }
+        }
+        this.onEvent({ kind: 'activity' })
+        return
+      }
+
       default:
-        // Unknown types (stream_event, control_response, etc.) — not rendered, but any
-        // parsed protocol line proves the child is alive: emit liveness for the watchdog.
-        // Same forward-compat posture as the client's untyped-JSON guards.
+        // Unknown types (control_response, etc.) — not rendered, but any parsed protocol
+        // line proves the child is alive: emit liveness for the watchdog. Same forward-compat
+        // posture as the client's untyped-JSON guards.
         this.onEvent({ kind: 'activity' })
         return
     }
