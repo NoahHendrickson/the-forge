@@ -70,7 +70,8 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `source.ts` | parse `data-dc-source` attrs; `TaggedElement` type |
 | `overlay.ts` | shadow-DOM host, hover/selection outlines, the whole CSS design system (string const) |
 | `inspector.ts` | reads an element's computed-style snapshot for the panel |
-| `panel.ts` | the properties panel orchestrator (Panel class); also owns the feed divider (drag handle between `body` and `feedSlot` — persists `feedSlot`'s px flex-basis under `FEED_SPLIT_KEY`) |
+| `panel.ts` | the properties panel orchestrator (Panel class); `feedDivider`/`feedSplit()` are thin pass-throughs to `feed-divider.ts` |
+| `feed-divider.ts` | the panel↔chat drag divider: clamps, dblclick reset, sessionStorage persistence (`FEED_SPLIT_KEY`) |
 | `panel-specs.ts` | RowSpec/SectionSpec types, SECTIONS definition, token-scale helpers (`tokenEntriesFor`); also hosts `defeatFillIfGrowing`, the shared app-CSS-fill defeat policy |
 | `panel-readers.ts` | pure computed-style readers/normalizers (`isFlex`, `normalizeJustify`, font helpers) |
 | `panel-token-ui.ts` | PanelTokenUi — the token affordance cluster: shared TokenPicker instance, scale-field open path, pill boundTokens bookkeeping (B5/Compare rules), color-row token button; plus pillLabelFor/colorDisplay helpers |
