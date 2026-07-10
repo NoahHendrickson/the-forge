@@ -1,4 +1,4 @@
-// Package-manager lockfile sniff + install-command construction for `npx the-forge
+// Package-manager lockfile sniff + install-command construction for `npx forge-mode
 // init` (task A3). Pure — no child_process here; `init.ts` is the only caller and
 // runs the resulting command through the injectable IO seam.
 
@@ -46,12 +46,12 @@ export function detectPM(cwd: string): PM {
 export function installCommand(pm: PM): { cmd: PM; args: string[] } {
   switch (pm) {
     case 'npm':
-      return { cmd: 'npm', args: ['install', '-D', 'the-forge'] }
+      return { cmd: 'npm', args: ['install', '-D', 'forge-mode'] }
     case 'pnpm':
-      return { cmd: 'pnpm', args: ['add', '-D', 'the-forge'] }
+      return { cmd: 'pnpm', args: ['add', '-D', 'forge-mode'] }
     case 'yarn':
-      return { cmd: 'yarn', args: ['add', '-D', 'the-forge'] }
+      return { cmd: 'yarn', args: ['add', '-D', 'forge-mode'] }
     case 'bun':
-      return { cmd: 'bun', args: ['add', '-d', 'the-forge'] }
+      return { cmd: 'bun', args: ['add', '-d', 'forge-mode'] }
   }
 }

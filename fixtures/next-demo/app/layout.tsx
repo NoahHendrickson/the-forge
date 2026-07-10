@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { ForgeDesignMode } from 'the-forge/design-mode'
+import { ForgeDesignMode } from 'forge-mode/design-mode'
 import './globals.css'
 
 export const metadata = {

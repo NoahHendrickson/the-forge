@@ -5,7 +5,7 @@ The Forge is a dev-only plugin that adds a Figma-style design mode to any Vite +
 This guide has three parts:
 
 1. [The 30-second version](#the-30-second-version) — run one command.
-2. [Agent setup instructions](#agent-setup-instructions) — what `npx the-forge init` does, and the manual/fallback steps for anything it can't handle automatically.
+2. [Agent setup instructions](#agent-setup-instructions) — what `npx forge-mode init` does, and the manual/fallback steps for anything it can't handle automatically.
 3. [How to use it](#how-to-use-it) — what to do once it's installed.
 
 ---
@@ -15,10 +15,10 @@ This guide has three parts:
 In the project you want to use The Forge in:
 
 ```bash
-npx the-forge init
+npx forge-mode init
 ```
 
-It detects Vite or Next.js, adds `the-forge` as a dev dependency with whichever package manager your lockfile implies, wires it into your config, and mounts `<ForgeDesignMode />` — printing `[done]`, `[skip]`, or `[manual]` for each step. It's conservative: anything it doesn't recognize (an unusual config shape, say) it leaves untouched and prints the exact manual snippet for instead. It never runs git commands, and running it again is safe (steps it already did print `[skip]`).
+It detects Vite or Next.js, adds `forge-mode` as a dev dependency with whichever package manager your lockfile implies, wires it into your config, and mounts `<ForgeDesignMode />` — printing `[done]`, `[skip]`, or `[manual]` for each step. It's conservative: anything it doesn't recognize (an unusual config shape, say) it leaves untouched and prints the exact manual snippet for instead. It never runs git commands, and running it again is safe (steps it already did print `[skip]`).
 
 If a step prints `[manual]`, follow the [agent setup instructions](#agent-setup-instructions) below for that step — or hand this whole file to your AI coding agent and ask it to finish the job.
 
@@ -26,7 +26,7 @@ If a step prints `[manual]`, follow the [agent setup instructions](#agent-setup-
 
 ## Agent setup instructions
 
-These are the manual/fallback steps behind `npx the-forge init` — what to do if a step printed `[manual]`, or if you're setting up by hand. If you're an AI agent asked to set up The Forge in a repo: run `npx the-forge init` first, then follow whichever steps below its output flagged `[manual]`. Follow these steps in order. If a prerequisite check fails, stop and report it instead of improvising.
+These are the manual/fallback steps behind `npx forge-mode init` — what to do if a step printed `[manual]`, or if you're setting up by hand. If you're an AI agent asked to set up The Forge in a repo: run `npx forge-mode init` first, then follow whichever steps below its output flagged `[manual]`. Follow these steps in order. If a prerequisite check fails, stop and report it instead of improvising.
 
 ### 0. Check prerequisites
 
@@ -46,12 +46,12 @@ If the project is neither Vite nor Next.js, stop here and tell your human The Fo
 From the host project root:
 
 ```bash
-npm install -D the-forge
+npm install -D forge-mode
 ```
 
-(or the equivalent for your package manager: `pnpm add -D the-forge`, `yarn add -D the-forge`, `bun add -D the-forge`.) `npx the-forge init` does this step for you, using whichever package manager your lockfile implies.
+(or the equivalent for your package manager: `pnpm add -D forge-mode`, `yarn add -D forge-mode`, `bun add -D forge-mode`.) `npx forge-mode init` does this step for you, using whichever package manager your lockfile implies.
 
-Not on npm yet in your environment? Install from a local checkout instead: clone `https://github.com/NoahHendrickson/the-forge.git` next to the host project, `npm install && npm run build` in it, then `npm install -D file:../the-forge/packages/the-forge --install-links` in the host project (the `--install-links` flag copies the package instead of symlinking it — required for Turbopack to resolve `exports` subpaths like `the-forge/design-mode` from a directory outside the project tree). This is a fallback path; prefer the npm install above once the package is published.
+Not on npm yet in your environment? Install from a local checkout instead: clone `https://github.com/NoahHendrickson/the-forge.git` next to the host project, `npm install && npm run build` in it, then `npm install -D file:../the-forge/packages/the-forge --install-links` in the host project (the `--install-links` flag copies the package instead of symlinking it — required for Turbopack to resolve `exports` subpaths like `forge-mode/design-mode` from a directory outside the project tree). This is a fallback path; prefer the npm install above once the package is published.
 
 ### 2. Wire it into the framework config
 
@@ -64,7 +64,7 @@ In `vite.config.ts`, import `theForge` and add it to `plugins` — **before** th
 ```ts
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { theForge } from 'the-forge/vite'
+import { theForge } from 'forge-mode/vite'
 
 export default defineConfig({
   plugins: [theForge(), react()],
@@ -79,7 +79,7 @@ Wrap the config in `next.config.ts` (or `.js`/`.mjs`) with `withForge`. It only 
 `next dev`; production builds pass through untouched:
 
 ```ts
-import { withForge } from 'the-forge/next'
+import { withForge } from 'forge-mode/next'
 
 export default withForge()
 ```
@@ -87,7 +87,7 @@ export default withForge()
 If the project already has a config object or function, pass it through instead of replacing it:
 
 ```ts
-import { withForge } from 'the-forge/next'
+import { withForge } from 'forge-mode/next'
 
 export default withForge({
   // ...the project's existing next.config fields
@@ -104,7 +104,7 @@ Then mount `<ForgeDesignMode />` once, in whichever of these two the project use
 ```tsx
 // app/layout.tsx
 import type { ReactNode } from 'react'
-import { ForgeDesignMode } from 'the-forge/design-mode'
+import { ForgeDesignMode } from 'forge-mode/design-mode'
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
@@ -123,7 +123,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 ```tsx
 // pages/_app.tsx
 import type { AppProps } from 'next/app'
-import { ForgeDesignMode } from 'the-forge/design-mode'
+import { ForgeDesignMode } from 'forge-mode/design-mode'
 
 export default function App({ Component, pageProps }: AppProps) {
   return (
@@ -195,6 +195,6 @@ The daily loop, once installed:
 - **Panel shows the watcher went idle** — type `/forge-watch` again in Claude Code; watchers deliberately stop after 20 idle minutes so a forgotten session never runs overnight.
 - **No Design toggle** — it only exists under `vite dev` (or Next's dev phase). Production builds contain zero trace of The Forge by design.
 - **On Next.js, `/__the-forge/*` requests 404** — something in the project is overwriting `rewrites()` instead of composing with it, so The Forge's proxy rule never reaches Next. Check that `withForge(...)` wraps the config that actually gets exported from `next.config.ts` (not an earlier, unwrapped version of it), and that nothing downstream re-defines `rewrites` after `withForge` has already set it.
-- **On Next.js (Turbopack), every route 500s with `Module not found: Can't resolve 'the-forge/design-mode'`** — this only happens with the local-checkout fallback install (step 1): the package was linked as a symlink (a plain `file:` install without `--install-links`), and Turbopack can't resolve `exports` subpaths through an out-of-tree symlink. Reinstall with the flag: `npm install -D file:../the-forge/packages/the-forge --install-links`, then restart the dev server. (`next dev --webpack` also works as a stopgap, but fix the install.) A normal `npm install -D the-forge` from npm doesn't hit this.
-- **Updating The Forge** — from npm: `npm update the-forge` (or your package manager's equivalent), then restart the dev server. From a local-checkout fallback install: `git pull && npm install && npm run build` in the `the-forge` checkout, then **re-run the install command (with `--install-links`) in the host project** — the copy in `node_modules` doesn't track the checkout — and restart the dev server.
-- **On Windows, `npx the-forge init` prints `[manual]` for the install step** — spawning the package manager can fail silently on some Windows shells; run the printed install command yourself, then re-run `npx the-forge init` to continue with the rest of the steps.
+- **On Next.js (Turbopack), every route 500s with `Module not found: Can't resolve 'forge-mode/design-mode'`** — this only happens with the local-checkout fallback install (step 1): the package was linked as a symlink (a plain `file:` install without `--install-links`), and Turbopack can't resolve `exports` subpaths through an out-of-tree symlink. Reinstall with the flag: `npm install -D file:../the-forge/packages/the-forge --install-links`, then restart the dev server. (`next dev --webpack` also works as a stopgap, but fix the install.) A normal `npm install -D forge-mode` from npm doesn't hit this.
+- **Updating The Forge** — from npm: `npm update forge-mode` (or your package manager's equivalent), then restart the dev server. From a local-checkout fallback install: `git pull && npm install && npm run build` in the `the-forge` checkout, then **re-run the install command (with `--install-links`) in the host project** — the copy in `node_modules` doesn't track the checkout — and restart the dev server.
+- **On Windows, `npx forge-mode init` prints `[manual]` for the install step** — spawning the package manager can fail silently on some Windows shells; run the printed install command yourself, then re-run `npx forge-mode init` to continue with the rest of the steps.

@@ -3,8 +3,8 @@
   "private": true,
   "workspaces": ["packages/*", "fixtures/*"],
   "scripts": {
-    "test": "npm run typecheck -w the-forge && npm run test -w the-forge",
-    "build": "npm run build -w the-forge"
+    "test": "npm run typecheck -w forge-mode && npm run test -w forge-mode",
+    "build": "npm run build -w forge-mode"
   },
   "devDependencies": {
     "react": "^19.0.0",

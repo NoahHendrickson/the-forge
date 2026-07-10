@@ -116,7 +116,7 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
           : null
       if (!clientPath) {
         throw new Error(
-          'the-forge: client bundle not found — run "npm run build -w the-forge"'
+          'the-forge: client bundle not found — run "npm run build -w forge-mode"'
         )
       }
       const bootstrap = `globalThis.__THE_FORGE__ = ${JSON.stringify({ secret, agent })};\n`

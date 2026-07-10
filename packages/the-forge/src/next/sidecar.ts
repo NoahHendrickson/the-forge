@@ -45,7 +45,7 @@ function defaultClientBundle(): string {
       ? builtFallback
       : null
   if (!clientPath) {
-    throw new Error('the-forge: client bundle not found — run "npm run build -w the-forge"')
+    throw new Error('the-forge: client bundle not found — run "npm run build -w forge-mode"')
   }
   return fs.readFileSync(clientPath, 'utf8')
 }
@@ -89,7 +89,7 @@ async function createSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
   let hintTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
     hintTimer = null
     console.warn(
-      "[the-forge] design mode never loaded — add <ForgeDesignMode /> from 'the-forge/design-mode' to your root layout (or _app.tsx)"
+      "[the-forge] design mode never loaded — add <ForgeDesignMode /> from 'forge-mode/design-mode' to your root layout (or _app.tsx)"
     )
   }, hintDelayMs)
   hintTimer.unref() // must never hold the process open on its own

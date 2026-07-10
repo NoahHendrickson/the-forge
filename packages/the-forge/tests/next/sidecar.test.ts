@@ -209,7 +209,7 @@ describe('ensureSidecar', () => {
 
       expect(warnSpy).toHaveBeenCalledTimes(1)
       expect(warnSpy.mock.calls[0][0]).toContain('design mode never loaded')
-      expect(warnSpy.mock.calls[0][0]).toContain("from 'the-forge/design-mode'")
+      expect(warnSpy.mock.calls[0][0]).toContain("from 'forge-mode/design-mode'")
       warnSpy.mockRestore()
     })
 

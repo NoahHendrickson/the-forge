@@ -80,10 +80,10 @@ describe('init — Vite happy path', () => {
     expect(code).toBe(0)
 
     const config = fs.readFileSync(path.join(dir, 'vite.config.ts'), 'utf8')
-    expect(config).toContain(`import { theForge } from 'the-forge/vite'`)
+    expect(config).toContain(`import { theForge } from 'forge-mode/vite'`)
     expect(config).toContain('plugins: [theForge(), react()],')
 
-    expect(runCalls).toEqual([{ cmd: 'npm', args: ['install', '-D', 'the-forge'] }])
+    expect(runCalls).toEqual([{ cmd: 'npm', args: ['install', '-D', 'forge-mode'] }])
 
     const out = lines.join('\n')
     expect(out).toContain('[done]')
@@ -111,14 +111,14 @@ describe('init — Next happy path (App Router)', () => {
     expect(code).toBe(0)
 
     const config = fs.readFileSync(path.join(dir, 'next.config.ts'), 'utf8')
-    expect(config).toContain(`import { withForge } from 'the-forge/next'`)
+    expect(config).toContain(`import { withForge } from 'forge-mode/next'`)
     expect(config).toContain('withForge(nextConfig)')
 
     const layout = fs.readFileSync(path.join(dir, 'app', 'layout.tsx'), 'utf8')
-    expect(layout).toContain(`import { ForgeDesignMode } from 'the-forge/design-mode'`)
+    expect(layout).toContain(`import { ForgeDesignMode } from 'forge-mode/design-mode'`)
     expect(layout).toContain('<ForgeDesignMode />')
 
-    expect(runCalls).toEqual([{ cmd: 'yarn', args: ['add', '-D', 'the-forge'] }])
+    expect(runCalls).toEqual([{ cmd: 'yarn', args: ['add', '-D', 'forge-mode'] }])
 
     const out = lines.join('\n')
     expect(out).toContain('[done]')
@@ -146,7 +146,7 @@ describe('init — exotic config falls back', () => {
     const out = lines.join('\n')
     expect(out).toContain('[manual]')
     // The manual snippet must be the real Vite setup snippet from SETUP.md.
-    expect(out).toContain(`import { theForge } from 'the-forge/vite'`)
+    expect(out).toContain(`import { theForge } from 'forge-mode/vite'`)
   })
 })
 
@@ -161,11 +161,11 @@ describe('init — Next with no detected layout falls back to manual mount', () 
     expect(code).toBe(0)
 
     const config = fs.readFileSync(path.join(dir, 'next.config.ts'), 'utf8')
-    expect(config).toContain(`import { withForge } from 'the-forge/next'`)
+    expect(config).toContain(`import { withForge } from 'forge-mode/next'`)
 
     const out = lines.join('\n')
     expect(out).toContain('[manual]')
-    expect(out).toContain(`import { ForgeDesignMode } from 'the-forge/design-mode'`)
+    expect(out).toContain(`import { ForgeDesignMode } from 'forge-mode/design-mode'`)
   })
 })
 
@@ -184,11 +184,11 @@ describe('init — failed install', () => {
     expect(code).toBe(0)
 
     const config = fs.readFileSync(path.join(dir, 'vite.config.ts'), 'utf8')
-    expect(config).toContain(`import { theForge } from 'the-forge/vite'`)
+    expect(config).toContain(`import { theForge } from 'forge-mode/vite'`)
 
     const out = lines.join('\n')
     expect(out).toContain('[manual]')
-    expect(out).toContain('npm install -D the-forge')
+    expect(out).toContain('npm install -D forge-mode')
     expect(out).toContain('[done]') // config edit still ran
   })
 })
@@ -216,14 +216,14 @@ describe('init — malformed package.json', () => {
     expect(code).toBe(0)
 
     const config = fs.readFileSync(path.join(dir, 'vite.config.ts'), 'utf8')
-    expect(config).toContain(`import { theForge } from 'the-forge/vite'`)
+    expect(config).toContain(`import { theForge } from 'forge-mode/vite'`)
 
     expect(runCalls).toEqual([])
 
     const out = lines.join('\n')
     expect(out).toContain('[manual]')
     expect(out.toLowerCase()).toContain('could not be parsed')
-    expect(out).toContain('npm install -D the-forge')
+    expect(out).toContain('npm install -D forge-mode')
     expect(out).toContain('[done]') // config edit still ran
   })
 })
@@ -258,10 +258,10 @@ describe.skipIf(!hasSetupMd)('init — manual snippets stay in sync with SETUP.m
 })
 
 describe('init — dependency skip', () => {
-  it('skips the install step when the-forge is already a dependency', async () => {
+  it('skips the install step when forge-mode is already a dependency', async () => {
     writeJSON(path.join(dir, 'package.json'), {
       name: 'x',
-      devDependencies: { 'the-forge': '^0.1.0' },
+      devDependencies: { 'forge-mode': '^0.1.0' },
     })
     fs.writeFileSync(
       path.join(dir, 'vite.config.ts'),
@@ -273,10 +273,10 @@ describe('init — dependency skip', () => {
     expect(lines.join('\n')).toContain('[skip]')
   })
 
-  it('also recognizes the-forge in dependencies (not just devDependencies)', async () => {
+  it('also recognizes forge-mode in dependencies (not just devDependencies)', async () => {
     writeJSON(path.join(dir, 'package.json'), {
       name: 'x',
-      dependencies: { 'the-forge': '^0.1.0' },
+      dependencies: { 'forge-mode': '^0.1.0' },
     })
     fs.writeFileSync(
       path.join(dir, 'vite.config.ts'),
@@ -305,7 +305,7 @@ describe('init — idempotency', () => {
     // Simulate the install step having actually landed the dependency, since
     // the stubbed `run` doesn't touch package.json.
     const pkg = JSON.parse(pkgAfterFirst)
-    pkg.devDependencies['the-forge'] = '^0.1.0'
+    pkg.devDependencies['forge-mode'] = '^0.1.0'
     writeJSON(path.join(dir, 'package.json'), pkg)
     const pkgForSecondRun = fs.readFileSync(path.join(dir, 'package.json'), 'utf8')
 

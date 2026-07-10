@@ -1,4 +1,4 @@
-// Pure string -> EditResult transforms for `npx the-forge init`. No fs/process
+// Pure string -> EditResult transforms for `npx forge-mode init`. No fs/process
 // imports here by design (task A2 contract) — a later task wires these into the
 // CLI's I/O shell, so this file stays trivially unit-testable and reviewable.
 //
@@ -108,7 +108,7 @@ function lastImportEnd(program: AstNode): number | null {
 // ---------------------------------------------------------------------------
 
 export function addViteForgePlugin(source: string): EditResult {
-  if (source.includes('the-forge/vite')) return { kind: 'already' }
+  if (source.includes('forge-mode/vite')) return { kind: 'already' }
 
   const program = parseModule(source)
   if (!program) {
@@ -179,7 +179,7 @@ export function addViteForgePlugin(source: string): EditResult {
     return { kind: 'fallback', reason: 'could not locate insertion point in plugins array' }
   }
 
-  insertImportInto(s, program, `import { theForge } from 'the-forge/vite'`)
+  insertImportInto(s, program, `import { theForge } from 'forge-mode/vite'`)
 
   return { kind: 'edited', code: s.toString() }
 }
@@ -189,7 +189,7 @@ export function addViteForgePlugin(source: string): EditResult {
 // ---------------------------------------------------------------------------
 
 export function wrapNextConfigExport(source: string): EditResult {
-  if (source.includes('the-forge/next')) return { kind: 'already' }
+  if (source.includes('forge-mode/next')) return { kind: 'already' }
 
   // Try ESM `export default <expr>` first, then CJS `module.exports = <expr>`.
   const esmProgram = parseModule(source)
@@ -215,7 +215,7 @@ export function wrapNextConfigExport(source: string): EditResult {
       s.appendLeft(declaration.start, 'withForge(')
       s.appendRight(declaration.end, ')')
 
-      insertImportInto(s, esmProgram, `import { withForge } from 'the-forge/next'`)
+      insertImportInto(s, esmProgram, `import { withForge } from 'forge-mode/next'`)
 
       return { kind: 'edited', code: s.toString() }
     }
@@ -256,9 +256,9 @@ export function wrapNextConfigExport(source: string): EditResult {
         const directives = (cjsProgram.directives as unknown as AstNode[]) ?? []
         const lastDirectiveEnd = directives.length > 0 ? directives[directives.length - 1].end : null
         if (typeof lastDirectiveEnd === 'number') {
-          s.appendLeft(lastDirectiveEnd, `\n\nconst { withForge } = require('the-forge/next')`)
+          s.appendLeft(lastDirectiveEnd, `\n\nconst { withForge } = require('forge-mode/next')`)
         } else {
-          s.prepend(`const { withForge } = require('the-forge/next')\n\n`)
+          s.prepend(`const { withForge } = require('forge-mode/next')\n\n`)
         }
 
         return { kind: 'edited', code: s.toString() }
@@ -336,7 +336,7 @@ function mountDesignModeApp(source: string, program: AstNode): EditResult {
   const indent = firstChildOnOwnLine ? lineIndentAt(source, firstChild.start as number) : bodyLineIndent + '  '
 
   const s = new MagicString(source)
-  insertImportInto(s, program, `import { ForgeDesignMode } from 'the-forge/design-mode'`)
+  insertImportInto(s, program, `import { ForgeDesignMode } from 'forge-mode/design-mode'`)
   s.appendLeft(opening.end, `\n${indent}<ForgeDesignMode />`)
 
   return { kind: 'edited', code: s.toString() }
@@ -368,7 +368,7 @@ function mountDesignModePages(source: string, program: AstNode): EditResult {
   // "sibling in an existing fragment/element" from "the entire return value".
   const parent = findParent(program, componentEl)
 
-  const importLine = `import { ForgeDesignMode } from 'the-forge/design-mode'`
+  const importLine = `import { ForgeDesignMode } from 'forge-mode/design-mode'`
 
   if (parent && (parent.type === 'JSXElement' || parent.type === 'JSXFragment')) {
     const indent = lineIndentAt(source, componentEl.start)
@@ -421,7 +421,7 @@ function findParent(root: AstNode, target: AstNode): AstNode | null {
 }
 
 export function mountDesignMode(source: string, router: 'app' | 'pages'): EditResult {
-  if (source.includes('the-forge/design-mode')) return { kind: 'already' }
+  if (source.includes('forge-mode/design-mode')) return { kind: 'already' }
 
   const program = parseModule(source)
   if (!program) {

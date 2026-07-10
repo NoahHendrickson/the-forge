@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Task A4: real-world smoke gate for `npx the-forge init`. The vitest suite never
+# Task A4: real-world smoke gate for `npx forge-mode init`. The vitest suite never
 # runs a real package manager or dev server, so this proves the whole loop on the
 # built npm artifact, outside the monorepo, against bare Vite and Next apps. Not
 # part of `npm test`; run before merging, like check-prod-clean.sh.
@@ -73,10 +73,10 @@ trap cleanup EXIT
 
 # --- Step 1: build the plugin and pack the real tarball -------------------
 npm run build
-npm pack -w the-forge --pack-destination "$TMP_DIR" >/dev/null
-TARBALL="$(find "$TMP_DIR" -maxdepth 1 -name 'the-forge-*.tgz' | head -n1)"
+npm pack -w forge-mode --pack-destination "$TMP_DIR" >/dev/null
+TARBALL="$(find "$TMP_DIR" -maxdepth 1 -name 'forge-mode-*.tgz' | head -n1)"
 if [ -z "$TARBALL" ]; then
-  echo "FAIL: npm pack did not produce a the-forge-*.tgz in $TMP_DIR" >&2
+  echo "FAIL: npm pack did not produce a forge-mode-*.tgz in $TMP_DIR" >&2
   exit 1
 fi
 echo "PASS: built plugin and packed $(basename "$TARBALL")"
@@ -154,17 +154,17 @@ echo "--- Vite: npm install ---"
 echo "PASS: Vite scaffold dependencies installed"
 
 # --- Step 3: run init, assert exit 0 + config wired --------------------
-echo "--- Vite: node node_modules/the-forge/dist/cli.js init ---"
+echo "--- Vite: node node_modules/forge-mode/dist/cli.js init ---"
 VITE_INIT_OUT="$TMP_DIR/vite-init-1.log"
-if ! (cd "$VITE_APP" && node node_modules/the-forge/dist/cli.js init >"$VITE_INIT_OUT" 2>&1); then
+if ! (cd "$VITE_APP" && node node_modules/forge-mode/dist/cli.js init >"$VITE_INIT_OUT" 2>&1); then
   echo "FAIL: Vite init (first run) exited non-zero — see $VITE_INIT_OUT" >&2
   cat "$VITE_INIT_OUT" >&2
   exit 1
 fi
 cat "$VITE_INIT_OUT"
 
-if ! grep -q "the-forge/vite" "$VITE_APP/vite.config.ts"; then
-  echo "FAIL: vite.config.ts does not import the-forge/vite after init" >&2
+if ! grep -q "forge-mode/vite" "$VITE_APP/vite.config.ts"; then
+  echo "FAIL: vite.config.ts does not import forge-mode/vite after init" >&2
   exit 1
 fi
 if ! grep -qE 'plugins:\s*\[\s*theForge\(\)' "$VITE_APP/vite.config.ts"; then
@@ -173,7 +173,7 @@ if ! grep -qE 'plugins:\s*\[\s*theForge\(\)' "$VITE_APP/vite.config.ts"; then
   exit 1
 fi
 if ! grep -q '\[skip\] dependency' "$VITE_INIT_OUT"; then
-  echo "FAIL: expected Vite init to [skip] the dependency step (tarball install already declares the-forge) — got:" >&2
+  echo "FAIL: expected Vite init to [skip] the dependency step (tarball install already declares forge-mode) — got:" >&2
   cat "$VITE_INIT_OUT" >&2
   exit 1
 fi
@@ -216,7 +216,7 @@ VITE_CONFIG_BEFORE="$TMP_DIR/vite.config.before.ts"
 cp "$VITE_APP/vite.config.ts" "$VITE_CONFIG_BEFORE"
 
 VITE_INIT_OUT_2="$TMP_DIR/vite-init-2.log"
-if ! (cd "$VITE_APP" && node node_modules/the-forge/dist/cli.js init >"$VITE_INIT_OUT_2" 2>&1); then
+if ! (cd "$VITE_APP" && node node_modules/forge-mode/dist/cli.js init >"$VITE_INIT_OUT_2" 2>&1); then
   echo "FAIL: Vite init (second run) exited non-zero — see $VITE_INIT_OUT_2" >&2
   cat "$VITE_INIT_OUT_2" >&2
   exit 1
@@ -282,17 +282,17 @@ echo "--- Next: npm install ---"
   || { echo "FAIL: Next scaffold npm install of tarball failed — see $TMP_DIR/next-install-tarball.log" >&2; exit 1; }
 echo "PASS: Next scaffold dependencies installed"
 
-echo "--- Next: node node_modules/the-forge/dist/cli.js init ---"
+echo "--- Next: node node_modules/forge-mode/dist/cli.js init ---"
 NEXT_INIT_OUT="$TMP_DIR/next-init-1.log"
-if ! (cd "$NEXT_APP" && node node_modules/the-forge/dist/cli.js init >"$NEXT_INIT_OUT" 2>&1); then
+if ! (cd "$NEXT_APP" && node node_modules/forge-mode/dist/cli.js init >"$NEXT_INIT_OUT" 2>&1); then
   echo "FAIL: Next init (first run) exited non-zero — see $NEXT_INIT_OUT" >&2
   cat "$NEXT_INIT_OUT" >&2
   exit 1
 fi
 cat "$NEXT_INIT_OUT"
 
-if ! grep -q "the-forge/next" "$NEXT_APP/next.config.ts"; then
-  echo "FAIL: next.config.ts does not import the-forge/next after init" >&2
+if ! grep -q "forge-mode/next" "$NEXT_APP/next.config.ts"; then
+  echo "FAIL: next.config.ts does not import forge-mode/next after init" >&2
   exit 1
 fi
 if ! grep -q "withForge" "$NEXT_APP/next.config.ts"; then
@@ -306,7 +306,7 @@ if ! grep -q "ForgeDesignMode" "$NEXT_APP/app/layout.tsx"; then
   exit 1
 fi
 if ! grep -q '\[skip\] dependency' "$NEXT_INIT_OUT"; then
-  echo "FAIL: expected Next init to [skip] the dependency step (tarball install already declares the-forge) — got:" >&2
+  echo "FAIL: expected Next init to [skip] the dependency step (tarball install already declares forge-mode) — got:" >&2
   cat "$NEXT_INIT_OUT" >&2
   exit 1
 fi
@@ -348,7 +348,7 @@ NEXT_CONFIG_BEFORE="$TMP_DIR/next.config.before.ts"
 cp "$NEXT_APP/next.config.ts" "$NEXT_CONFIG_BEFORE"
 
 NEXT_INIT_OUT_2="$TMP_DIR/next-init-2.log"
-if ! (cd "$NEXT_APP" && node node_modules/the-forge/dist/cli.js init >"$NEXT_INIT_OUT_2" 2>&1); then
+if ! (cd "$NEXT_APP" && node node_modules/forge-mode/dist/cli.js init >"$NEXT_INIT_OUT_2" 2>&1); then
   echo "FAIL: Next init (second run) exited non-zero — see $NEXT_INIT_OUT_2" >&2
   cat "$NEXT_INIT_OUT_2" >&2
   exit 1

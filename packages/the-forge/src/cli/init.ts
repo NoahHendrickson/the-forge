@@ -1,4 +1,4 @@
-// The `npx the-forge init` orchestrator (task A3). All effects — fs reads/writes
+// The `npx forge-mode init` orchestrator (task A3). All effects — fs reads/writes
 // aside, which are plain `fs` per the task brief — go through the injectable
 // InitIO seam so tests never spawn a real process. index.ts supplies the real
 // IO (child_process.spawn with stdio: 'inherit').
@@ -33,13 +33,13 @@ export interface InitIO {
 // these stay byte-identical to SETUP.md's own code blocks (the sync test — task A6).
 export const VITE_MANUAL_SNIPPET = `import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { theForge } from 'the-forge/vite'
+import { theForge } from 'forge-mode/vite'
 
 export default defineConfig({
   plugins: [theForge(), react()],
 })`
 
-export const NEXT_MANUAL_SNIPPET = `import { withForge } from 'the-forge/next'
+export const NEXT_MANUAL_SNIPPET = `import { withForge } from 'forge-mode/next'
 
 export default withForge({
   // ...the project's existing next.config fields
@@ -47,7 +47,7 @@ export default withForge({
 
 export const NEXT_APP_ROUTER_MANUAL_SNIPPET = `// app/layout.tsx
 import type { ReactNode } from 'react'
-import { ForgeDesignMode } from 'the-forge/design-mode'
+import { ForgeDesignMode } from 'forge-mode/design-mode'
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
@@ -62,7 +62,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
 export const NEXT_PAGES_ROUTER_MANUAL_SNIPPET = `// pages/_app.tsx
 import type { AppProps } from 'next/app'
-import { ForgeDesignMode } from 'the-forge/design-mode'
+import { ForgeDesignMode } from 'forge-mode/design-mode'
 
 export default function App({ Component, pageProps }: AppProps) {
   return (
@@ -97,7 +97,7 @@ function isDependencyDeclared(cwd: string): boolean | typeof PARSE_FAILED {
   const depTables = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']
   for (const table of depTables) {
     const deps = (pkg as Record<string, unknown>)[table]
-    if (typeof deps === 'object' && deps !== null && 'the-forge' in deps) return true
+    if (typeof deps === 'object' && deps !== null && 'forge-mode' in deps) return true
   }
   return false
 }
@@ -110,11 +110,11 @@ function printManual(io: InitIO, label: string, snippet: string): void {
 async function runInstallStep(io: InitIO): Promise<void> {
   const declared = isDependencyDeclared(io.cwd)
   const { cmd, args } = installCommand(detectPM(io.cwd))
-  const manualInstallSnippet = `  ${cmd} ${args.join(' ')}\n  # or: npm install -D the-forge`
+  const manualInstallSnippet = `  ${cmd} ${args.join(' ')}\n  # or: npm install -D forge-mode`
 
   if (declared === PARSE_FAILED) {
     // Conservative fallback: an unparseable package.json means we can't tell
-    // whether the-forge is already declared, so we can't safely run an
+    // whether forge-mode is already declared, so we can't safely run an
     // install for it either — same manual-install guidance as a failed
     // install, plus a note on why. Config-edit steps are still worth doing,
     // so this does not exit non-zero.
@@ -123,13 +123,13 @@ async function runInstallStep(io: InitIO): Promise<void> {
   }
 
   if (declared) {
-    io.log('[skip] dependency — the-forge already in package.json')
+    io.log('[skip] dependency — forge-mode already in package.json')
     return
   }
 
   const exitCode = await io.run(cmd, args)
   if (exitCode === 0) {
-    io.log('[done] dependency — installed the-forge')
+    io.log('[done] dependency — installed forge-mode')
     return
   }
 
@@ -140,7 +140,7 @@ function runViteConfigStep(io: InitIO, configPath: string): void {
   const source = fs.readFileSync(configPath, 'utf8')
   const result = addViteForgePlugin(source)
   if (result.kind === 'already') {
-    io.log('[skip] vite.config — the-forge already wired in')
+    io.log('[skip] vite.config — forge-mode already wired in')
     return
   }
   if (result.kind === 'fallback') {
@@ -155,7 +155,7 @@ function runNextConfigStep(io: InitIO, configPath: string): void {
   const source = fs.readFileSync(configPath, 'utf8')
   const result = wrapNextConfigExport(source)
   if (result.kind === 'already') {
-    io.log('[skip] next.config — the-forge already wired in')
+    io.log('[skip] next.config — forge-mode already wired in')
     return
   }
   if (result.kind === 'fallback') {
