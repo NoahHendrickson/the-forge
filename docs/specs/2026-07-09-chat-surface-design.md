@@ -60,6 +60,7 @@ Body `{ text: string, element?: { source: string, tag: string } }`.
 - **Diff rows:** Edit/Write tool rows with an `edit` payload get a collapsed `.session-diff` disclosure — before/after blocks, hand-rolled render, no diff library.
 - **Header:** model select, effort select, permission-mode select (all `ui/select`), seeded from `started` + `config-changed`; Stop as today.
 - **Disabled states:** input disabled + reason line — `sessionEnabled:false` → "Embedded sessions are disabled in config"; `failed` → last `session-error` text from the ring; binary-missing surfaces the spawn error the same way.
+  - **Post-review amendment (2026-07-09):** `failed` does **not** disable the input, in implementation — `say()` auto-restarts an idle/failed session (same lazy-boot send-at-spawn semantics as the pull path, §2.2), and the failure text already shows as a `session-error-row` in the feed rather than as a disabled-input reason line. Only `sessionEnabled:false` (the `dispatchConfig.embedded` opt-out) actually disables the input cluster.
 - Stories for chat bubbles, chip, diff row, picker header in `stories/`.
 
 ## 4. Security
@@ -138,3 +139,4 @@ Probe: wrote a slow first turn ("Count to 30 slowly, one number per line"), then
 - Codex/Cursor adapters and the harness picker (milestone C).
 - Chat persistence beyond the ring (no transcript archive).
 - Any queue/lifecycle changes — design edits' `draft → sent → applying → done` path is untouched.
+- **Post-review follow-up (2026-07-09):** delete `buildPromptRequest` (`src/client/request.ts`) and the legacy `seed.prompt` resend path (`src/client/changelist.ts`, `src/client/lifecycle.ts`) in milestone C — `prompt.ts` (PromptBox) is already gone (§3 above), but the queue-item shape and resend code that served its `kind:'prompt'` items are still live for old queue files. Once no queue file predating this milestone can realistically remain, retire them.
