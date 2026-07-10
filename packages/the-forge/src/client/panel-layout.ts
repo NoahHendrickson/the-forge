@@ -1,7 +1,7 @@
 /**
  * LayoutSection — the auto-layout cluster extracted from panel.ts (PR #16 promise #1):
  * add/remove-auto-layout policy + FLEX_CONTAINER_PROPS, direction+wrap, gap, the 9-dot
- * align matrix, baseline toggle, and the flex-child (Align/size-mode) controls.
+ * align matrix, and the flex-child (Align/size-mode) controls.
  *
  * This module has no test file of its own — its coverage IS tests/client/panel.test.ts
  * and tests/client/design-mode.test.ts (the move that created this file was behavior-
@@ -61,7 +61,6 @@ export class LayoutSection {
   private directionField: SegmentField | null = null
   private gapField: NumberField | null = null
   private alignMatrix: AlignMatrix | null = null
-  private baselineToggle: HTMLButtonElement | null = null
   private wrapToggle: HTMLButtonElement | null = null
   private addLayoutBtn: HTMLElement | null = null
   private removeLayoutBtn: HTMLButtonElement | null = null
@@ -198,29 +197,6 @@ export class LayoutSection {
       },
     })
     tile.append(this.alignMatrix.root)
-
-    // Figma keeps baseline out of the 9-dot matrix (it's an 'align text baseline' extra) —
-    // a small toggle under the matrix drafts it. Toggling OFF discards the session draft
-    // (stylesheet reality returns); if baseline came from the app's own CSS there is no
-    // draft to discard, so OFF drafts flex-start (the normalize default) instead.
-    const baselineBtn = createButton({ label: 'Baseline' })
-    baselineBtn.classList.add('seg', 'baseline-toggle')
-    baselineBtn.setAttribute('data-align-baseline', '')
-    baselineBtn.title = 'align-items: baseline → items-baseline'
-    baselineBtn.addEventListener('click', () => {
-      this.withEdit((el) => {
-        const active = this.deps.currentValue(el, 'align-items', getComputedStyle(el)) === 'baseline'
-        if (!active) {
-          this.deps.drafts.apply(el, 'align-items', 'baseline')
-        } else if (this.deps.drafts.current(el, 'align-items') !== null) {
-          this.deps.drafts.discard(el, ['align-items'])
-        } else {
-          this.deps.drafts.apply(el, 'align-items', 'flex-start')
-        }
-      })
-    })
-    this.baselineToggle = baselineBtn
-    tile.append(baselineBtn)
 
     grid.append(tile)
 
@@ -373,7 +349,7 @@ export class LayoutSection {
 
   /**
    * Today's refreshLayoutSection + refreshFlexChild, fused: add/remove visibility, direction/
-   * wrap/baseline state, matrix set, flex-child visibility.
+   * wrap state, matrix set, flex-child visibility.
    */
   refresh(el: TaggedElement, computed: CSSStyleDeclaration, multi: boolean): void {
     if (multi) {
@@ -461,9 +437,6 @@ export class LayoutSection {
     }
 
     this.alignMatrix?.set(normalizeJustify(justify), normalizeAlign(align), direction, spaceBetween)
-    const baselineOn = normalizeAlign(align) === 'baseline'
-    this.baselineToggle?.classList.toggle('seg-active', baselineOn)
-    this.baselineToggle?.setAttribute('aria-pressed', String(baselineOn))
   }
 
   private refreshFlexChild(el: TaggedElement, computed: CSSStyleDeclaration): void {
@@ -661,7 +634,6 @@ export class LayoutSection {
     this.directionField = null
     this.gapField = null
     this.alignMatrix = null
-    this.baselineToggle = null
     this.wrapToggle = null
     this.addLayoutBtn = null
     this.removeLayoutBtn = null

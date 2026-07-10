@@ -280,20 +280,15 @@ button {
 // Wrap toggle sits on the Direction row as a sibling of the exclusive track (Task 2) —
 // a small left margin reads as attached-but-separate rather than a third track option.
 `.wrap-toggle { flex: none; margin-left: 6px; }
-` +
-// .seg hard-clips overflow by design (title = escape hatch), but Baseline is a word, not a
-// glyph — let this one toggle size to its label so it doesn't clip to "Ba…" at the 280px
-// panel width (M-B review finding).
-`.baseline-toggle { width: auto; flex: none; overflow: visible; padding: 0 8px; }
 
 .layout-grid { display: flex; gap: 8px; width: 100%; }
 .layout-side { flex: 1; display: flex; flex-direction: column; gap: 6px; }
 .layout-side .nf { flex: 0 0 auto; }
 ` +
-// Column, not row: the tile holds the 64px matrix AND the Baseline toggle. As a centered
-// 88px flex ROW the pair overflowed both edges (centered overflow), pushing the matrix's
-// left dot column outside the tile — user-reported, browser-verified. Height is content-
-// driven (matrix + baseline + gap) with the width still pinned at 88px.
+// The tile is a centered column card around the 64px matrix (width pinned at 88px,
+// height content-driven). Column layout predates the Baseline toggle's 2026-07-07
+// removal and stays — a centered 88px flex ROW overflowed both edges (centered
+// overflow), pushing the matrix's left dot column outside the tile (user-reported).
 `.matrix-tile {
   width: 88px; background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.08); border-radius: 8px;

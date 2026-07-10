@@ -604,56 +604,10 @@ describe('Panel', () => {
     expect(dotAfter).toBeTruthy()
   })
 
-  describe('baseline alignment', () => {
-    it('toggle drafts align-items baseline and carries active state; matrix has no active dot', () => {
-      const { el, panel } = flexSetup()
-      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
-      btn.click()
-      expect(el.style.getPropertyValue('align-items')).toBe('baseline')
-      expect(btn.classList.contains('seg-active')).toBe(true)
-      expect(btn.getAttribute('aria-pressed')).toBe('true')
-      expect(panel.root.querySelector('.am-dot.am-active')).toBeNull()
-      expect(btn.classList.contains('baseline-toggle')).toBe(true)
-    })
-
-    it('clicking active toggle releases baseline (targeted discard of the session draft)', () => {
-      const { el, panel } = flexSetup()
-      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
-      btn.click()
-      expect(el.style.getPropertyValue('align-items')).toBe('baseline')
-      btn.click()
-      expect(el.style.getPropertyValue('align-items')).toBe('')
-      expect(btn.classList.contains('seg-active')).toBe(false)
-      expect(btn.getAttribute('aria-pressed')).toBe('false')
-    })
-
-    it('app-authored baseline (no session draft): toggle starts active, OFF drafts flex-start', () => {
-      const { el, panel, drafts } = flexSetup('align-items: baseline;')
-      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
-      // baseline comes from the app's own CSS — active on show(), with no draft to discard
-      expect(btn.classList.contains('seg-active')).toBe(true)
-      expect(btn.getAttribute('aria-pressed')).toBe('true')
-      expect(drafts.current(el, 'align-items')).toBeNull()
-
-      btn.click()
-
-      expect(drafts.current(el, 'align-items')).toBe('flex-start')
-      expect(btn.classList.contains('seg-active')).toBe(false)
-      expect(btn.getAttribute('aria-pressed')).toBe('false')
-    })
-
-    it('clicking a matrix dot exits baseline', () => {
-      const { el, panel, drafts } = flexSetup()
-      const btn = panel.root.querySelector('[data-align-baseline]') as HTMLButtonElement
-      btn.click()
-      expect(drafts.current(el, 'align-items')).toBe('baseline')
-
-      const dot = panel.root.querySelector('.am-dot') as HTMLElement
-      dot.click()
-
-      expect(drafts.current(el, 'align-items')).toBe(dot.dataset.a)
-      expect(btn.classList.contains('seg-active')).toBe(false)
-    })
+  it('app-CSS baseline alignment lights no matrix dot (baseline is read-only since 2026-07-07)', () => {
+    const { panel } = flexSetup('align-items: baseline;')
+    expect(panel.root.querySelector('.am-dot.am-active')).toBeNull()
+    expect(panel.root.querySelector('[data-align-baseline]')).toBeNull()
   })
 
   describe('remove auto layout', () => {
