@@ -19,6 +19,12 @@ const KNOWN_AGENTS = new Set<DispatchOpts['agent']>(['claude-code', 'cursor', 'c
 // /session/say + /session/config validation constants (Task 4). Regexes and the effort
 // allowlist are spike-pinned (spec §2.4) — verbatim, not derived.
 const CHAT_TEXT_MAX = 4000
+// Length caps checked BEFORE the regexes below (cheaper) — CHAT_SOURCE_RE/CHAT_TAG_RE are
+// anchored but have unbounded quantifiers, so a well-shaped-but-huge string (e.g. ~1MB of
+// "a/") would otherwise pass the regex and ride the composed turn straight past the
+// CHAT_TEXT_MAX text cap (final-review fix 4).
+const CHAT_SOURCE_MAX = 512
+const CHAT_TAG_MAX = 64
 const CHAT_SOURCE_RE = /^[\w./-]+:\d+:\d+$/
 const CHAT_TAG_RE = /^[a-z][a-z0-9-]*$/
 const CONFIG_MODEL_MAX = 100
@@ -454,6 +460,11 @@ export function createForgeMiddleware(
 
     if (pathname === '/__the-forge/session/say') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      // DispatchConfig.embedded promises "nothing ever spawns a headless CLI" — say() on an
+      // idle/failed session auto-spawns one, so the opt-out must gate this endpoint too, not
+      // just /dispatch's embedded rung. Checked BEFORE the session check: a disabled rung and
+      // an absent session must be indistinguishable to callers (same 404 body either way).
+      if (dispatchConfig.embedded === false) return send(res, 404, { error: 'embedded session unavailable' })
       if (!session) return send(res, 404, { error: 'embedded session unavailable' })
       readBody(req)
         .then((body) => {
@@ -470,6 +481,8 @@ export function createForgeMiddleware(
             if (
               typeof source !== 'string' ||
               typeof tag !== 'string' ||
+              source.length > CHAT_SOURCE_MAX ||
+              tag.length > CHAT_TAG_MAX ||
               !CHAT_SOURCE_RE.test(source) ||
               !CHAT_TAG_RE.test(tag)
             ) {
@@ -489,6 +502,10 @@ export function createForgeMiddleware(
 
     if (pathname === '/__the-forge/session/config') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+      // Same opt-out gate as /session/say above — config changes are meaningless (and
+      // model/permissionMode would silently no-op against a session that can never spawn)
+      // when the consumer has disabled the embedded rung entirely.
+      if (dispatchConfig.embedded === false) return send(res, 404, { error: 'embedded session unavailable' })
       if (!session) return send(res, 404, { error: 'embedded session unavailable' })
       readBody(req)
         .then((body) => {

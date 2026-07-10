@@ -1594,6 +1594,43 @@ describe('chat endpoints (say/config)', () => {
     })
   })
 
+  describe('embedded: false opt-out (final-review fix 1)', () => {
+    // DispatchConfig.embedded promises "nothing ever spawns a headless CLI" — say() auto-spawns
+    // an idle/failed session, so the opt-out must gate /say and /config too, not just /dispatch's
+    // embedded rung. A disabled rung and an absent session are indistinguishable to callers —
+    // same 404 body as the "session not wired" case above.
+    let mwDisabled: ReturnType<typeof createForgeMiddleware>
+
+    beforeEach(() => {
+      mwDisabled = createForgeMiddleware(
+        queue,
+        [],
+        undefined,
+        { agent: 'claude-code', channelsFlag: false, embedded: false },
+        undefined,
+        session
+      )
+    })
+
+    it('POST /session/say 404s when embedded: false, even with a wired session', async () => {
+      const sayImpl = vi.spyOn(manager, 'say')
+      const res = fakeRes()
+      await run(mwDisabled, fakeReq('POST', '/__the-forge/session/say', { text: 'hi' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(404)
+      expect(JSON.parse(res.body)).toEqual({ error: 'embedded session unavailable' })
+      expect(sayImpl).not.toHaveBeenCalled()
+    })
+
+    it('POST /session/config 404s when embedded: false, even with a wired session', async () => {
+      const setConfigSpy = vi.spyOn(manager, 'setConfig')
+      const res = fakeRes()
+      await run(mwDisabled, fakeReq('POST', '/__the-forge/session/config', { model: 'x' }, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(404)
+      expect(JSON.parse(res.body)).toEqual({ error: 'embedded session unavailable' })
+      expect(setConfigSpy).not.toHaveBeenCalled()
+    })
+  })
+
   describe('secret gating', () => {
     it('POST /session/say 403s without the secret when one is configured', async () => {
       const res = fakeRes()
@@ -1681,6 +1718,34 @@ describe('chat endpoints (say/config)', () => {
       const res = fakeRes()
       await run(mwSession, fakeReq('POST', '/__the-forge/session/say', { text: 'a'.repeat(4000) }, { host: 'localhost:5173' }), res)
       expect(res.statusCode).toBe(200)
+    })
+
+    it('400s on a source over 512 chars, never forwarded (final-review fix 4: length cap before the regex)', async () => {
+      const sayImpl = vi.spyOn(manager, 'say')
+      const res = fakeRes()
+      // A valid-shaped but oversized source — the anchored CHAT_SOURCE_RE would otherwise let
+      // an unbounded string ride the composed turn past the 4000-char text cap.
+      const longSource = `${'a/'.repeat(255)}x.tsx:1:1` // > 512 chars, matches the source shape
+      await run(
+        mwSession,
+        fakeReq('POST', '/__the-forge/session/say', { text: 'hi', element: { source: longSource, tag: 'div' } }, { host: 'localhost:5173' }),
+        res
+      )
+      expect(res.statusCode).toBe(400)
+      expect(sayImpl).not.toHaveBeenCalled()
+    })
+
+    it('400s on a tag over 64 chars, never forwarded (final-review fix 4)', async () => {
+      const sayImpl = vi.spyOn(manager, 'say')
+      const res = fakeRes()
+      const longTag = 'a'.repeat(65)
+      await run(
+        mwSession,
+        fakeReq('POST', '/__the-forge/session/say', { text: 'hi', element: { source: 'src/App.tsx:1:1', tag: longTag } }, { host: 'localhost:5173' }),
+        res
+      )
+      expect(res.statusCode).toBe(400)
+      expect(sayImpl).not.toHaveBeenCalled()
     })
 
     it('400s on an element with a space in source, never forwarded', async () => {

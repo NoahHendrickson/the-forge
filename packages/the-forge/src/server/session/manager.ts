@@ -174,6 +174,15 @@ export class SessionManager {
   // Task 1) — it's spawn-flag-only, so this is the ONLY way an effort change takes hold.
   private _spawnEffort: string | undefined = undefined
 
+  // Last model/permissionMode applied via setConfig() (final-review fix 2) — re-applied to
+  // every fresh adapter on its `started` event. Unlike effort, model/permissionMode are live
+  // control-request writes with no spawn flag, so a respawned child (watchdog fire,
+  // ended-while-busy, stale-resume retry — anywhere `--permission-mode default` is pinned in
+  // spawn args) otherwise silently reverts to defaults while the UI keeps showing the user's
+  // last choice. Cleared only by stop() — a respawn must inherit them, a fresh session must not.
+  private _lastSetModel: string | undefined = undefined
+  private _lastSetPermissionMode: string | undefined = undefined
+
   // Ring buffer: fixed-capacity circular store.
   private _ring: FeedEvent[] = []
   private _seq = 0
@@ -304,9 +313,14 @@ export class SessionManager {
     }
 
     if (cfg.model !== undefined) {
+      // Recorded regardless of whether an adapter is live — an idle/failed session (no
+      // adapter to call yet) must still remember the choice so the NEXT started re-applies
+      // it (see _lastSetModel's why-comment above).
+      this._lastSetModel = cfg.model
       this._adapter?.setModel(cfg.model)
     }
     if (cfg.permissionMode !== undefined) {
+      this._lastSetPermissionMode = cfg.permissionMode
       this._adapter?.setPermissionMode(cfg.permissionMode)
     }
     if (cfg.effort !== undefined) {
@@ -354,6 +368,10 @@ export class SessionManager {
     // Outstanding approvals belong to the child we just killed; their eventual registry
     // resolutions must not leave a fresh session's watchdog permanently suspended.
     this._pendingApprovals = 0
+    // Dev-server close = fresh posture (same rationale as the chat-queue clear above) — a
+    // NEW session must not silently inherit a stranger's remembered model/permissionMode.
+    this._lastSetModel = undefined
+    this._lastSetPermissionMode = undefined
     this._discardAdapter()?.stop()
     this._state = 'idle'
   }
@@ -447,6 +465,17 @@ export class SessionManager {
         this._sawStarted = true
         this._startFailures = 0
         writeSessionFile(this._opts.forgeDir, event.sessionId, new Date(this._clock()).toISOString())
+        // Re-apply the last user-chosen model/permissionMode to every fresh adapter — a
+        // respawn (watchdog fire, ended-while-busy, stale-resume retry) otherwise silently
+        // reverts to spawn defaults while the UI still shows the old choice (final-review
+        // fix 2). A harmless no-op re-send on the FIRST started of a session that never
+        // called setConfig (both undefined).
+        if (this._lastSetModel !== undefined) {
+          this._adapter?.setModel(this._lastSetModel)
+        }
+        if (this._lastSetPermissionMode !== undefined) {
+          this._adapter?.setPermissionMode(this._lastSetPermissionMode)
+        }
         if (this._state === 'starting') {
           // Explicit-start path (no turn written yet) — become ready and flush.
           this._state = 'ready'

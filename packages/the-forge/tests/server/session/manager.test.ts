@@ -1471,6 +1471,47 @@ describe('SessionManager', () => {
       expect(mgr.state()).toBe<SessionState>('busy')
       expect(events.some((fe) => fe.event.kind === 'config-changed')).toBe(false)
     })
+
+    // Final-review fix 2: config must survive respawn. A respawned child pins
+    // --permission-mode default in its spawn args (and boots with whatever default model),
+    // regardless of what the user last picked — without re-applying, the picker would keep
+    // showing the old choice while the live adapter silently reverted.
+    it('setConfig then watchdog respawn re-applies model+permissionMode on started', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 'sess-1', model: 'claude', mcpLoaded: true })
+      // state: busy
+
+      mgr.setConfig({ model: 'claude-haiku-4-5', permissionMode: 'acceptEdits' })
+      expect(adapters[0]!.setModelCalls).toEqual(['claude-haiku-4-5'])
+      expect(adapters[0]!.setPermissionModeCalls).toEqual(['acceptEdits'])
+
+      vi.advanceTimersByTime(35) // past the 30ms test watchdog — kills + respawns
+      expect(adapters).toHaveLength(2)
+
+      adapters[1]!.emit({ kind: 'started', sessionId: 'sess-2', model: 'claude', mcpLoaded: true })
+
+      expect(adapters[1]!.setModelCalls).toEqual(['claude-haiku-4-5'])
+      expect(adapters[1]!.setPermissionModeCalls).toEqual(['acceptEdits'])
+    })
+
+    it('setConfig while idle records and applies on next started', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      const result = mgr.setConfig({ model: 'claude-haiku-4-5', permissionMode: 'plan' })
+      expect(result).toEqual({ ok: true })
+      expect(adapters).toHaveLength(0) // no live adapter to call — must still be recorded
+
+      mgr.notifyDesignEdits()
+      expect(adapters).toHaveLength(1)
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+
+      expect(adapters[0]!.setModelCalls).toEqual(['claude-haiku-4-5'])
+      expect(adapters[0]!.setPermissionModeCalls).toEqual(['plan'])
+    })
   })
 
   describe('stop() — Task 3 additions', () => {
@@ -1492,6 +1533,23 @@ describe('SessionManager', () => {
 
       expect(mgr.state()).toBe<SessionState>('ready')
       expect(adapters[1]!.sendTurnCalls).toEqual([PULL_TURN_TEXT]) // no stray flush
+    })
+
+    // Final-review fix 2: dev-server close is a fresh posture — a NEW session must not
+    // silently inherit a stranger's remembered model/permissionMode (mirrors the existing
+    // chat-queue-clear rule above).
+    it('stop() clears remembered config', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.setConfig({ model: 'claude-haiku-4-5', permissionMode: 'acceptEdits' })
+      mgr.stop()
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+
+      expect(adapters[0]!.setModelCalls).toEqual([])
+      expect(adapters[0]!.setPermissionModeCalls).toEqual([])
     })
   })
 })
