@@ -133,6 +133,16 @@ function escapeCssIdent(value: string): string {
   return out
 }
 
+/** Strip backticks + collapse whitespace. Everything this touches is interpolated into
+ * `-wrapped code spans in the change-request markdown, and markdown ignores backslash escapes
+ * inside code spans — so page-controlled content (e.g. a user-generated class attribute, whose
+ * backtick CSS.escape merely backslash-prefixes) could otherwise close the span and inject
+ * instruction lines the agent reads as part of the request (2026-07-10 security review).
+ * `text` has always had this policy; className/selector get the identical treatment. */
+function sanitizeInline(value: string): string {
+  return value.replace(/[`]/g, '').replace(/\s+/g, ' ').trim()
+}
+
 /** Element identity/context block shared by the precise and prompt builders — tag, source,
  * classes, trimmed text, selector. `changes` is the caller's: measured deltas for the precise
  * flow, always [] for prompts. */
@@ -141,9 +151,9 @@ function elementContext(el: TaggedElement, changes: ChangeItem[]): ElementChange
   return {
     tag: el.tagName.toLowerCase(),
     source: el.dataset.dcSource ? parseSourceAttr(el.dataset.dcSource) : null,
-    className,
-    text: (el.textContent ?? '').replace(/[`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80),
-    selector: cssPath(el),
+    className: sanitizeInline(className),
+    text: sanitizeInline(el.textContent ?? '').slice(0, 80),
+    selector: sanitizeInline(cssPath(el)),
     changes,
   }
 }
