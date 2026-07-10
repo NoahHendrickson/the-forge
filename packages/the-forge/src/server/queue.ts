@@ -231,7 +231,10 @@ export class Queue {
   }
 
   private persist(): void {
-    fs.mkdirSync(this.dir, { recursive: true })
+    // Owner-only like writeEndpointFile (src/server/endpoints.ts): queue.json holds
+    // change-request markdown (project source excerpts) and lives beside the secret-bearing
+    // endpoint file. The rename below carries the tmp file's 0600 onto queue.json.
+    fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 })
     const merged = this.mergeWithDisk()
 
     // Apply the shared pruning rule to the merged array (stale disk items must also be pruned) —
@@ -248,7 +251,7 @@ export class Queue {
     // Scoped by pid: two server processes writing concurrently must not share a tmp path, or one
     // process's partial write/rename could race with the other's.
     const tmpFile = `${this.file}.tmp.${process.pid}`
-    fs.writeFileSync(tmpFile, JSON.stringify(finalMerged, null, 2))
+    fs.writeFileSync(tmpFile, JSON.stringify(finalMerged, null, 2), { mode: 0o600 })
     fs.renameSync(tmpFile, this.file)
   }
 }

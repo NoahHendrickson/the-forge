@@ -22,6 +22,16 @@ describe('Queue', () => {
     expect(onDisk[0].id).toBe(item.id)
   })
 
+  // queue.json holds change-request markdown (project source excerpts) and .the-forge/ sits
+  // next to the secret-bearing endpoint file — both stay owner-only (2026-07-10 security review).
+  it('persists queue.json owner-only (0600) in an owner-only dir (0700)', () => {
+    const fresh = path.join(dir, 'nested', '.the-forge')
+    const q = new Queue(fresh)
+    q.add({}, '# md')
+    expect(fs.statSync(path.join(fresh, 'queue.json')).mode & 0o777).toBe(0o600)
+    expect(fs.statSync(fresh).mode & 0o777).toBe(0o700)
+  })
+
   it('pull claims all pending items', () => {
     const q = new Queue(dir)
     const a = q.add({}, 'a')

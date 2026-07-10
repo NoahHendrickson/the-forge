@@ -112,10 +112,11 @@ function clearSessionFile(forgeDir: string): void {
 
 function writeSessionFile(forgeDir: string, sessionId: string, updatedAt: string): void {
   try {
-    // forgeDir may not exist yet (mirrors writeEndpointFile in src/server/endpoints.ts).
-    fs.mkdirSync(forgeDir, { recursive: true })
+    // forgeDir may not exist yet (mirrors writeEndpointFile in src/server/endpoints.ts,
+    // including the owner-only 0700/0600 perms — see the why-comment there).
+    fs.mkdirSync(forgeDir, { recursive: true, mode: 0o700 })
     const data: SessionFile = { sessionId, updatedAt }
-    fs.writeFileSync(path.join(forgeDir, 'session.json'), JSON.stringify(data), 'utf8')
+    fs.writeFileSync(path.join(forgeDir, 'session.json'), JSON.stringify(data), { encoding: 'utf8', mode: 0o600 })
   } catch {
     // I/O failure is non-fatal — resume just won't work next time.
   }
