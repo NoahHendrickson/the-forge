@@ -545,25 +545,23 @@ button {
 `
 ` +
 // Session feed — live activity stream from the embedded session (Task 7).
-// .session-feed: the section container, mirrors .changes-section structure.
+// .session-feed: the section container, mirrors .changes-section structure; flex-grows to
+// fill the space freed by the retired status row/config bar (composer consolidation Task 1 —
+// the draggable divider that further redistributes this height is Task 4).
 // .session-row: individual event rows (text snippets, tool rows, error rows, approvals).
 // .session-approval: a pending tool-approval row — has Allow/Deny buttons.
-// .session-stop: Stop button, visible while a turn is in flight (busyish state).
 // CSS class names here are test hooks — extend, don't rename.
 `.session-feed {
-  flex: none; display: flex; flex-direction: column; max-height: 220px;
+  flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0;
   border-top: 1px solid var(--separator);
 }
-.session-list { overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+.session-list { flex: 1 1 auto; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
 .session-list::-webkit-scrollbar { width: 8px; }
 .session-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 .session-row {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   padding: 3px 6px; border-radius: 6px; font: 400 var(--text-sm) var(--font-ui);
   color: var(--text-secondary); word-break: break-word;
-}
-.session-status {
-  padding: 6px 12px 2px; color: var(--text-faint); font: 500 var(--text-xs) var(--font-ui);
 }
 .session-error-row { color: #F87171; }
 .session-tool-row { color: var(--text-muted); }
@@ -572,11 +570,6 @@ button {
   border: 1px solid rgba(255,255,255,0.1); padding: 4px 6px; border-radius: 6px;
 }
 .session-approval-resolved { color: var(--text-muted); font-style: italic; border: none; }
-.session-stop {
-  align-self: flex-end; margin: 2px 8px 4px; background: rgba(248,113,113,0.15);
-  color: #F87171; border: 1px solid rgba(248,113,113,0.3);
-}
-.session-stop:hover { background: rgba(248,113,113,0.25); }
 ` +
 // Chat rendering (Task 5) — bubbles, delta streaming, diff disclosures, config rows.
 // .chat-msg: bubble base (extends .session-row); .chat-user / .chat-assistant: sender variant.
@@ -598,21 +591,28 @@ button {
 .diff-after { background: rgba(74,222,128,0.08); }
 .session-config { color: var(--text-faint); }
 ` +
-// Chat input cluster, element chip, config bar pickers (Task 6) — replaces the retired
-// floating prompt popup. .session-config-bar: header row (model + effort + permission
-// pickers, all .size-mode selects; .session-model only caps the width, since full model ids
-// are much longer than the fixed effort/permission vocabularies). .chat-chip: the element
-// attached to the next message, above the input. .chat-input: textarea + Send, pinned at the
-// feed section's bottom. .chat-disabled-reason: shown when setAvailability(false, reason)
-// disables the input.
+// Chat composer (composer consolidation Task 1) — replaces the retired status row, standalone
+// Stop button, and .session-config-bar. .chat-composer: the single bordered card holding the
+// chip row, textarea, and controls row. .composer-chips: the chip row (+ Task 2's drafts
+// pill). .composer-controls: model/effort/permission pickers + spacer + composer-send, one
+// row. .session-model only caps the width, since full model ids are much longer than the
+// fixed effort/permission vocabularies. .chat-chip: the element attached to the next message.
+// .chat-input: the textarea (+ disabled-reason) — Send moved out into .composer-controls, one
+// row below, alongside the pickers. .chat-disabled-reason: shown when setAvailability(false,
+// reason) disables the input.
 // CSS class names here are test hooks — extend, don't rename.
-`.session-config-bar {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  padding: 8px 8px 4px; border-bottom: 1px solid var(--separator);
+`.chat-composer {
+  display: flex; flex-direction: column; gap: 6px; margin: 8px; padding: 8px;
+  border: 1px solid var(--border-panel); border-radius: 10px; background: var(--surface);
 }
-.session-model { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.composer-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.composer-chips:empty { display: none; }
+.composer-controls { display: flex; align-items: center; gap: 6px; }
+.composer-spacer { flex: 1 1 auto; }
+.composer-controls .size-mode { font-size: 11px; }
+.session-model { max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
 .chat-chip {
-  display: flex; align-items: center; gap: 6px; margin: 6px 8px 0;
+  display: flex; align-items: center; gap: 6px;
   padding: 4px 8px; border-radius: 6px; background: var(--control);
   font: 400 var(--text-xs) var(--font-mono); color: var(--text-secondary);
 }
@@ -621,9 +621,7 @@ button {
   font: 500 var(--text-sm) var(--font-ui); border-radius: 4px;
 }
 .chat-chip-clear:hover { color: var(--text-primary); background: var(--control-hover); }
-.chat-input {
-  display: flex; flex-direction: column; gap: 6px; padding: 8px; border-top: 1px solid var(--separator);
-}
+.chat-input { display: flex; flex-direction: column; gap: 6px; }
 .chat-textarea {
   box-sizing: border-box; width: 100%; resize: vertical; min-height: 40px;
   background: var(--control); color: var(--text-primary); border: 1px solid var(--border-panel);
@@ -633,13 +631,17 @@ button {
 .chat-textarea:disabled { opacity: 0.5; }
 ` +
 // SessionFeed mounts inside #panel (panel.feedSlot), but there is no generic `#panel button`
-// dark-token rule (each panel button opts in individually — see .session-stop above) — pin
-// the dark control styling explicitly, same idiom as .session-stop/.session-approval-allow.
-`.chat-send {
-  align-self: flex-end; background: var(--control); color: var(--text-primary); border: none; border-radius: 6px;
+// dark-token rule (each panel button opts in individually — see .session-approval-allow) — pin
+// the dark control styling explicitly, same idiom, for .composer-send: it now carries what
+// used to be .session-stop's job too (the send↔stop morph), so it earns the circular treatment.
+`.composer-send {
+  flex: none; width: 26px; height: 26px; border-radius: 50%; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--control); color: var(--text-primary); border: none;
+  font: 500 13px var(--font-ui);
 }
-.chat-send:hover { background: var(--control-hover); }
-.chat-send:disabled { opacity: 0.5; cursor: default; }
+.composer-send:hover { background: var(--control-hover); }
+.composer-send:disabled { opacity: 0.5; cursor: default; }
 .chat-disabled-reason { color: var(--text-faint); font: 400 var(--text-xs) var(--font-ui); padding: 0 2px; }
 `
 

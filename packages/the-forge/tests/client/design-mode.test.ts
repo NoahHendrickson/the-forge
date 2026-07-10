@@ -2672,7 +2672,10 @@ describe('SessionFeed wiring', () => {
     expect(stopSpy).toHaveBeenCalled()
   })
 
-  it('Stop button POSTs /session/interrupt with secret header', async () => {
+  // The standalone Stop button was retired by composer consolidation (Task 1) \u2014 its job moved
+  // onto .composer-send's morph (\u25a0 while busyish and the textarea is empty). This is the
+  // behavior equivalent of the old "Stop button POSTs /session/interrupt" test.
+  it('composer-send, morphed to \u25a0 while busyish, POSTs /session/interrupt with secret header', async () => {
     const assistantLine = JSON.stringify({
       type: 'feed', seq: 1, at: new Date().toISOString(),
       event: { kind: 'assistant-text', text: 'working\u2026' },
@@ -2690,11 +2693,12 @@ describe('SessionFeed wiring', () => {
 
       await flushMicrotasks()
 
-      // Stop button is visible only while busyish (triggered by assistant-text event)
-      const stopBtn = mode.panelRoot.querySelector('.session-stop') as HTMLButtonElement
-      expect(stopBtn).not.toBeNull()
-      expect(stopBtn.hidden).toBe(false)
-      stopBtn.click()
+      // composer-send morphs to \u25a0 only while busyish (triggered by assistant-text event) and
+      // the textarea is empty.
+      const sendBtn = mode.panelRoot.querySelector('.composer-send') as HTMLButtonElement
+      expect(sendBtn).not.toBeNull()
+      expect(sendBtn.textContent).toBe('\u25a0')
+      sendBtn.click()
 
       const calls = fetchMock.mock.calls.filter(
         (c: unknown[]) => c[0] === '/__the-forge/session/interrupt'

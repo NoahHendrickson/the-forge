@@ -525,9 +525,10 @@ describe('Overlay CSS panel-prompt anchor (prompt-mode, floating prompt popup re
   })
 })
 
-describe('Overlay CSS chat input cluster / element chip / config bar (Task 6)', () => {
-  it('styles the config bar, model picker, chip, and input cluster as test-hook classes', () => {
-    expect(CSS).toContain('.session-config-bar')
+describe('Overlay CSS chat composer / element chip / controls (composer consolidation Task 1)', () => {
+  it('styles the composer, controls row, model picker, chip, and input cluster as test-hook classes', () => {
+    expect(CSS).toContain('.chat-composer')
+    expect(CSS).toContain('.composer-controls')
     expect(CSS).toContain('.session-model')
     expect(CSS).toContain('.chat-chip')
     expect(CSS).toContain('.chat-input')
@@ -537,16 +538,16 @@ describe('Overlay CSS chat input cluster / element chip / config bar (Task 6)', 
 
   // SessionFeed mounts INSIDE #panel (unlike the old floating prompt popup, which mounted as a shadow-
   // root sibling) — but there is still no generic `#panel button` dark-token fallback, so
-  // .chat-send needs the same explicit dark styling as .session-stop/.prompt-send used to.
-  it('styles .chat-send with the dark control tokens, not the light base button fallback', () => {
-    expect(CSS).toMatch(/\.chat-send\s*{[^}]*background:\s*var\(--control\)/s)
-    expect(CSS).toMatch(/\.chat-send:hover\s*{[^}]*background:\s*var\(--control-hover\)/s)
+  // .composer-send needs the same explicit dark styling as .session-approval-allow/.prompt-send used to.
+  it('styles .composer-send with the dark control tokens, not the light base button fallback', () => {
+    expect(CSS).toMatch(/\.composer-send\s*{[^}]*background:\s*var\(--control\)/s)
+    expect(CSS).toMatch(/\.composer-send:hover\s*{[^}]*background:\s*var\(--control-hover\)/s)
   })
 
   it('has no CSS-string comments (bundle-byte guard)', () => {
     // /* */ would parse, but it ships as bundle bytes — the whole point of the migration
     // (see the identical check earlier in this file).
-    const chatBlockStart = CSS.indexOf('.session-config-bar')
+    const chatBlockStart = CSS.indexOf('.chat-composer')
     expect(chatBlockStart).toBeGreaterThan(-1)
     expect(CSS.slice(chatBlockStart)).not.toContain('/*')
   })
@@ -588,12 +589,12 @@ describe('SessionFeed CSS hooks (Task 7)', () => {
     expect(CSS).toContain('.session-approval')
   })
 
-  it('CSS declares .session-stop as a test hook class', () => {
-    expect(CSS).toContain('.session-stop')
+  it('CSS declares .composer-send as a test hook class (composer consolidation Task 1 — retires .session-stop)', () => {
+    expect(CSS).toContain('.composer-send')
   })
 
-  it('CSS declares .session-status for the status row', () => {
-    expect(CSS).toContain('.session-status')
+  it('CSS declares .chat-composer for the composer card (composer consolidation Task 1 — retires the status row)', () => {
+    expect(CSS).toContain('.chat-composer')
   })
 
   it('CSS declares .session-error-row for error rows', () => {

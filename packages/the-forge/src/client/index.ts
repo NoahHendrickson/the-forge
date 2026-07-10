@@ -179,9 +179,10 @@ export class DesignMode {
         body: JSON.stringify({ id, allow }),
       }).catch(() => {})
     }
-    // The feed now AWAITS this result (trySend in session-feed.ts) and only clears its
-    // textarea/chip on a true resolution — the optimistic clear moved to the success path so
-    // a failed send never silently discards what the user typed (final-review fix 3). Every
+    // The onSend shim below AWAITS this result (composer consolidation Task 1 moved that round
+    // trip out of session-feed.ts's own trySend — see its updated doc-comment) and only clears
+    // the textarea/chip on a true resolution — the optimistic clear moved to the success path
+    // so a failed send never silently discards what the user typed (final-review fix 3). Every
     // non-ok response and every network failure renders a transient .session-error-row before
     // resolving false; 429 keeps its specific queue-full copy, everything else gets the
     // generic retry copy.
@@ -204,6 +205,22 @@ export class DesignMode {
           this.feed.renderTransientError('message failed to send — try again')
           return false
         })
+    }
+    // Task 3 replaces this shim with the send-everything verb. For now it reproduces the old
+    // text-only trySend behavior exactly, just relocated here now that the feed's send gesture
+    // is decoupled from onSay (composer consolidation Task 1): read the typed text + attached
+    // chip, call onSay, and on a true resolution clear both — same shape as trySend's old
+    // Promise.resolve(...).then(...) dance, minus the disable/re-enable (no test — old or new —
+    // depends on it, and Task 3 will own the real in-flight UX for the combined send verb).
+    this.feed.onSend = () => {
+      const text = this.feed.getText()
+      const chip = this.feed.getChip()
+      Promise.resolve(this.feed.onSay(text, chip ?? undefined)).then((ok) => {
+        if (ok) {
+          this.feed.clearText()
+          this.feed.setChip(null)
+        }
+      })
     }
     this.feed.onConfig = (cfg) => {
       void fetch('/__the-forge/session/config', {

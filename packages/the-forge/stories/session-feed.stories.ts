@@ -42,6 +42,19 @@ function makeFeedInstance(lines: string[]): { feed: SessionFeed; host: HTMLEleme
   feed.onInterrupt = () => alert('Stop requested')
   feed.onDecide = (id, allow) => alert(`Decision: ${id} → ${allow ? 'Allow' : 'Deny'}`)
   feed.onSay = (text, element) => alert(`Say: "${text}"${element ? ` (${element.tag} · ${element.source})` : ''}`)
+  // composer-send/Cmd-Enter now fire onSend (composer consolidation Task 1) — this story wires
+  // the same read-text/read-chip/call-onSay/clear-on-success shape as index.ts's shim so the
+  // catalog's Send control stays functional (Task 3 will replace both with the real verb).
+  feed.onSend = () => {
+    const text = feed.getText()
+    const chip = feed.getChip()
+    Promise.resolve(feed.onSay(text, chip ?? undefined)).then((ok) => {
+      if (ok) {
+        feed.clearText()
+        feed.setChip(null)
+      }
+    })
+  }
   feed.onConfig = (cfg) => alert(`Config: ${JSON.stringify(cfg)}`)
   feed.start()
   return { feed, host: mountInShadow(feed.root, 'panel') }
