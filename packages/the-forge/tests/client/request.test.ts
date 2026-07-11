@@ -10,6 +10,7 @@ import {
   REMOVE_AUTO_LAYOUT_INTENT,
 } from '../../src/client/request'
 import { resetTokensCache, type Theme } from '../../src/client/tokens'
+import type { TaggedElement } from '../../src/client/source'
 
 const TW: Theme = { rootFontPx: 16, spacingBasePx: 4, radiusScale: { lg: 8, xl: 12 } }
 const PLAIN: Theme = { rootFontPx: 16, spacingBasePx: null, radiusScale: {} }
