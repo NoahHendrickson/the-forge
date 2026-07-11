@@ -683,7 +683,6 @@ button {
 // from #toggle/#status rather than invented.
 `.canvas-toggle.on { color: var(--accent); }
 .zoom-pill-wrap { position: fixed; left: 16px; bottom: 16px; z-index: 2147483647; }
-.zoom-pill-wrap[hidden] { display: none; }
 .zoom-pill-wrap .menu-btn { min-width: 52px; padding: 6px 10px; border-radius: 8px; }
 .zoom-pill {
   background: var(--surface); color: var(--text-primary); border: 1px solid var(--border-strong);

@@ -351,6 +351,12 @@ export class DesignMode {
     this.zoomMenu.button.textContent = `${Math.round(this.canvas.scale() * 100)}%`
     this.panel.canvasButton.classList.toggle('on', this.canvas.isOn())
     this.panel.canvasButton.title = this.canvas.isOn() ? 'Exit canvas mode' : 'Canvas mode'
+    // Selection/hover outlines are fixed-position boxes positioned from getBoundingClientRect()
+    // and are normally re-measured by onReflow on scroll/resize. The canvas body transform moves
+    // every element's visual rect on every pan/zoom tick but fires neither — so in canvas mode
+    // this onChange IS the reflow trigger, or a selected element's outline goes stale until the
+    // next edit or re-click. onReflow is already rAF-coalesced, so the per-wheel-tick cost is fine.
+    this.onReflow()
   }
 
   /** Cancels the pending debounced draft-sync timer (if any) and runs syncDrafts()+persist()

@@ -2413,6 +2413,53 @@ describe('Canvas-mode chrome + lifecycle wiring (design-canvas-mode spec Task 7)
     expect(document.body.style.transform).not.toBe(before)
     mode.setActive(false)
   })
+
+  it('panning/zooming the canvas re-measures the selection outline (final-review fix)', () => {
+    // Queued (rather than the file-level immediate) rAF stub — the immediate stub resolves
+    // requestAnimationFrame() synchronously INSIDE the call that schedules it, so the id it
+    // returns overwrites reflowRaf back to non-zero right after the callback already reset it
+    // to 0, permanently wedging the rAF-coalescing guard shut. A queued stub matches real rAF
+    // semantics (id is live until the callback actually runs) so the guard behaves correctly
+    // across the canvas-toggle click's own reflow(s) and the wheel-triggered one under test.
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
+    const runRaf = (): void => queue.splice(0).forEach((cb) => cb(0))
+
+    const { overlay, mode } = fullSetup()
+    const btn = document.querySelector('.btn') as HTMLElement
+    // Stand-in for "the element's real rect moved because the body transform panned/zoomed" —
+    // jsdom's getBoundingClientRect is transform-blind, so a real canvas pan never changes it.
+    // Mutating this stub between select() and the wheel dispatch simulates that real-world move.
+    const rect = { x: 0, y: 0, width: 50, height: 20 }
+    btn.getBoundingClientRect = () => new DOMRect(rect.x, rect.y, rect.width, rect.height)
+
+    mode.setActive(true)
+    ;(mode.panelRoot.querySelector('.canvas-toggle') as HTMLButtonElement).click()
+    runRaf() // drain canvas-apply's own onChange-triggered reflow(s) before selecting
+    mode.select(btn as never)
+
+    const outlineEl = overlay.host.shadowRoot!.querySelector('#select-outline') as HTMLElement
+    const before = outlineEl.style.left
+    expect(before).toBe('-2px')
+
+    rect.x = 240
+    rect.y = 180
+    // Real ctrl-wheel zoom, composed so it crosses the shadow boundary like the real gesture.
+    const zoom = new WheelEvent('wheel', {
+      deltaY: -40, ctrlKey: true, cancelable: true, bubbles: true, composed: true,
+    })
+    document.body.dispatchEvent(zoom)
+    runRaf()
+
+    // The body transform moved the element's visual rect but fired no scroll/resize — canvas's
+    // onChange must be the reflow trigger, or the outline is left showing the stale pre-pan rect.
+    expect(outlineEl.style.left).toBe('238px')
+    expect(outlineEl.style.left).not.toBe(before)
+    mode.setActive(false)
+  })
 })
 
 describe('lifecycle persistence', () => {
