@@ -64,7 +64,10 @@ export const CLAUDE_ARGS: string[] = [
 // the CLI still has the real file on disk regardless of what the panel shows.
 export const EDIT_PAYLOAD_CAP = 1_500
 
-function truncateEditSide(s: string): string {
+// Exported so CursorAdapter (and any future harness adapter) reuses the ONE truncation
+// policy instead of copying it — the cap is a shared wire/ring-buffer budget, not a
+// Claude-specific detail.
+export function truncateEditSide(s: string): string {
   return s.length > EDIT_PAYLOAD_CAP ? s.slice(0, EDIT_PAYLOAD_CAP) + '…' : s
 }
 
