@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   clampScale, zoomAt, panBy, fitState, loadCanvasPrefs, saveCanvasPrefs,
   MIN_SCALE, MAX_SCALE, CANVAS_STORAGE_KEY, FIT_MARGIN,
+  CanvasMode, type CanvasModeOpts,
 } from '../../src/client/canvas'
 
 describe('clampScale', () => {
@@ -69,5 +70,104 @@ describe('canvas prefs', () => {
     expect(p.state).toEqual({ x: 0, y: 0, scale: MAX_SCALE })
     sessionStorage.setItem(CANVAS_STORAGE_KEY, 'not json')
     expect(loadCanvasPrefs().on).toBe(false)
+  })
+})
+
+function makeCanvas(over: Partial<CanvasModeOpts> = {}): { canvas: CanvasMode; dockCalls: boolean[] } {
+  const dockCalls: boolean[] = []
+  const canvas = new CanvasMode({
+    dock: { setCanvasActive: (on) => dockCalls.push(on), mode: () => 'docked', width: () => 320 },
+    hostContains: () => false,
+    onChange: () => {},
+    ...over,
+  })
+  return { canvas, dockCalls }
+}
+
+describe('CanvasMode enter/exit', () => {
+  // jsdom doesn't implement window.scrollTo — unapply() always calls it, so tests that
+  // don't stub it themselves (test 3 does, via vi.stubGlobal + vi.unstubAllGlobals) need
+  // a shared stub here or jsdom logs a "Not implemented" error and pollutes test output.
+  beforeEach(() => {
+    sessionStorage.clear()
+    document.documentElement.removeAttribute('style')
+    document.body.removeAttribute('style')
+    vi.stubGlobal('scrollTo', vi.fn())
+  })
+
+  it('setOn(true) freezes scroll, transforms body, tells the dock; setOn(false) restores verbatim', () => {
+    document.body.style.transform = 'skew(1deg)'      // page's own inline styles must survive
+    document.documentElement.style.overflow = 'auto'
+    const { canvas, dockCalls } = makeCanvas()
+    canvas.setOn(true)
+    expect(document.documentElement.style.overflow).toBe('hidden')
+    expect(document.body.style.transform).toMatch(/translate\(.*\) scale\(1\)/)
+    expect(document.body.style.transformOrigin).toBe('0 0')
+    expect(dockCalls).toEqual([true])
+    canvas.setOn(false)
+    expect(document.body.style.transform).toBe('skew(1deg)')
+    expect(document.documentElement.style.overflow).toBe('auto')
+    expect(dockCalls).toEqual([true, false])
+  })
+
+  it('entry is seeded from the current scroll position (pixel-identical)', () => {
+    Object.defineProperty(window, 'scrollY', { value: 250, configurable: true })
+    Object.defineProperty(window, 'scrollX', { value: 0, configurable: true })
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    expect(document.body.style.transform).toBe('translate(0px, -250px) scale(1)')
+    canvas.setOn(false)
+  })
+
+  it('exit scrolls to the page-point at the viewport top-left', () => {
+    const scrollTo = vi.fn()
+    vi.stubGlobal('scrollTo', scrollTo)
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    canvas.setZoomCentered(0.5) // some non-trivial state
+    canvas.setOn(false)
+    const [x, y] = scrollTo.mock.calls[0] as [number, number]
+    expect(x).toBeGreaterThanOrEqual(0)
+    expect(y).toBeGreaterThanOrEqual(0)
+    vi.unstubAllGlobals()
+  })
+
+  it('suspend() restores the page but keeps the pref; resume() re-applies it', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    canvas.suspend()
+    expect(document.body.style.transform).toBe('')
+    expect(canvas.isOn()).toBe(true)
+    expect(canvas.isApplied()).toBe(false)
+    canvas.resume()
+    expect(canvas.isApplied()).toBe(true)
+    canvas.setOn(false)
+  })
+
+  it('resume() with the pref off does nothing', () => {
+    const { canvas } = makeCanvas()
+    canvas.resume()
+    expect(canvas.isApplied()).toBe(false)
+    expect(document.body.style.transform).toBe('')
+  })
+
+  it('persists on/state so a reload restores the same view', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    canvas.setZoomCentered(2)
+    const saved = loadCanvasPrefs()
+    expect(saved.on).toBe(true)
+    expect(saved.state.scale).toBe(2)
+    canvas.setOn(false)
+  })
+
+  it('copies the html background onto a transparent body so the artboard is not gray', () => {
+    document.documentElement.style.backgroundColor = 'rgb(20, 20, 30)'
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    expect(document.body.style.backgroundColor).toBe('rgb(20, 20, 30)')
+    canvas.setOn(false)
+    expect(document.body.style.backgroundColor).toBe('')
+    document.documentElement.style.backgroundColor = ''
   })
 })

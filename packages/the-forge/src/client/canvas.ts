@@ -78,3 +78,136 @@ export function saveCanvasPrefs(p: CanvasPrefs): void {
     // Persistence is a nicety — a full/blocked storage must never break the session.
   }
 }
+
+export const CANVAS_BG = '#3c3c3c'
+const ARTBOARD_SHADOW = '0 4px 32px rgba(0,0,0,0.35)'
+
+export interface CanvasModeOpts {
+  dock: { setCanvasActive(on: boolean): void; mode(): 'docked' | 'floating'; width(): number }
+  hostContains: (t: EventTarget | null) => boolean
+  onChange: () => void
+}
+
+interface SavedStyles {
+  bodyTransform: string
+  bodyTransformOrigin: string
+  bodyBoxShadow: string
+  bodyBackgroundColor: string
+  htmlOverflow: string
+  htmlBackgroundColor: string
+}
+
+export class CanvasMode {
+  private prefs: CanvasPrefs
+  private state: CanvasState = { x: 0, y: 0, scale: 1 }
+  private saved: SavedStyles | null = null
+
+  constructor(private opts: CanvasModeOpts) {
+    this.prefs = loadCanvasPrefs()
+  }
+
+  isOn(): boolean { return this.prefs.on }
+  isApplied(): boolean { return this.saved !== null }
+  scale(): number { return this.state.scale }
+
+  setOn(on: boolean): void {
+    if (on === this.prefs.on) return
+    this.prefs = { ...this.prefs, on }
+    saveCanvasPrefs(this.prefs)
+    // Fresh toggle-on seeds pixel-identical from the live scroll — NOT from the persisted
+    // state (that path is resume()/reload, where the page scroll is gone but the canvas
+    // view survives in prefs).
+    if (on) this.apply({ x: -window.scrollX, y: -window.scrollY, scale: 1 })
+    else this.unapply()
+    this.opts.onChange()
+  }
+
+  /** Design mode turned on — re-enter canvas if this session had it on. */
+  resume(): void {
+    if (this.prefs.on && !this.isApplied()) {
+      this.apply(this.prefs.state)
+      this.opts.onChange()
+    }
+  }
+
+  /** Design mode turned off — every page mutation undone, preference kept. */
+  suspend(): void {
+    if (this.isApplied()) {
+      this.unapply()
+      this.opts.onChange()
+    }
+  }
+
+  setZoomCentered(scale: number): void {
+    this.setState(zoomAt(this.state, window.innerWidth / 2, window.innerHeight / 2, scale))
+  }
+
+  zoomToFit(): void {
+    const panelW = this.opts.dock.mode() === 'docked' ? this.opts.dock.width() : 0
+    this.setState(
+      fitState(
+        window.innerWidth, window.innerHeight,
+        document.body.scrollWidth, document.body.scrollHeight, panelW
+      )
+    )
+  }
+
+  private apply(seed: CanvasState): void {
+    if (this.saved !== null) return
+    const html = document.documentElement
+    const body = document.body
+    this.saved = {
+      bodyTransform: body.style.transform,
+      bodyTransformOrigin: body.style.transformOrigin,
+      bodyBoxShadow: body.style.boxShadow,
+      bodyBackgroundColor: body.style.backgroundColor,
+      htmlOverflow: html.style.overflow,
+      htmlBackgroundColor: html.style.backgroundColor,
+    }
+    // Read the html background BEFORE painting it gray — if the page's background lives
+    // on <html> and body is transparent, the artboard must keep the page's color or the
+    // whole page reads as canvas-gray.
+    const bodyBg = getComputedStyle(body).backgroundColor
+    const htmlBg = getComputedStyle(html).backgroundColor
+    const transparent = bodyBg === 'transparent' || bodyBg === 'rgba(0, 0, 0, 0)' || bodyBg === ''
+    html.style.overflow = 'hidden'
+    html.style.backgroundColor = CANVAS_BG
+    if (transparent) body.style.backgroundColor = htmlBg === '' ? '#ffffff' : htmlBg
+    body.style.boxShadow = ARTBOARD_SHADOW
+    body.style.transformOrigin = '0 0'
+    this.setState(seed)
+    this.addListeners()
+    this.opts.dock.setCanvasActive(true)
+  }
+
+  private unapply(): void {
+    if (this.saved === null) return
+    this.removeListeners()
+    // Where to land the real scroll: the page-point currently at the viewport top-left.
+    const sx = Math.max(0, -this.state.x / this.state.scale)
+    const sy = Math.max(0, -this.state.y / this.state.scale)
+    const html = document.documentElement
+    const body = document.body
+    body.style.transform = this.saved.bodyTransform
+    body.style.transformOrigin = this.saved.bodyTransformOrigin
+    body.style.boxShadow = this.saved.bodyBoxShadow
+    body.style.backgroundColor = this.saved.bodyBackgroundColor
+    html.style.overflow = this.saved.htmlOverflow
+    html.style.backgroundColor = this.saved.htmlBackgroundColor
+    this.saved = null
+    this.opts.dock.setCanvasActive(false)
+    window.scrollTo(sx, sy)
+  }
+
+  private setState(next: CanvasState): void {
+    this.state = next
+    document.body.style.transform =
+      `translate(${next.x}px, ${next.y}px) scale(${next.scale})`
+    this.prefs = { ...this.prefs, state: next }
+    saveCanvasPrefs(this.prefs)
+    this.opts.onChange()
+  }
+
+  private addListeners(): void {}   // Task 5
+  private removeListeners(): void {} // Task 5
+}
