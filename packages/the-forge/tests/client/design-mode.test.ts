@@ -2385,8 +2385,33 @@ describe('Canvas-mode chrome + lifecycle wiring (design-canvas-mode spec Task 7)
     expect(wrap.hidden).toBe(false)
     const pill = wrap.querySelector('.zoom-pill') as HTMLButtonElement
     expect(pill.textContent).toBe('100%')
+    // '100%' alone can't prove syncCanvasUi repaints — it's also the constructor label. A real
+    // zoom change must flow back into the pill text through the onChange -> syncCanvasUi path.
+    ;(mode as never as { canvas: { setZoomCentered(s: number): void } }).canvas.setZoomCentered(0.5)
+    expect(pill.textContent).toBe('50%')
     mode.setActive(false)
     expect(wrap.hidden).toBe(true)
+  })
+
+  it('wheel over the panel (inside the shadow tree) scrolls the panel, not the artboard', () => {
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    ;(mode.panelRoot.querySelector('.canvas-toggle') as HTMLButtonElement).click()
+    const before = document.body.style.transform
+    // Real wheel events are composed: true, so composedPath()[0] crosses the shadow boundary
+    // and hands CanvasMode the real INNER node — host.contains() can never match that node
+    // (Node.contains stops at the shadow boundary), which is exactly the trap containsDeep
+    // exists for. Dispatch from inside the panel root to walk that whole path.
+    const inPanel = new WheelEvent('wheel', { deltaY: 40, cancelable: true, bubbles: true, composed: true })
+    mode.panelRoot.dispatchEvent(inPanel)
+    expect(inPanel.defaultPrevented).toBe(false)
+    expect(document.body.style.transform).toBe(before)
+    // Control: the same wheel over the page itself must still pan the artboard.
+    const onPage = new WheelEvent('wheel', { deltaY: 40, cancelable: true, bubbles: true, composed: true })
+    document.body.dispatchEvent(onPage)
+    expect(onPage.defaultPrevented).toBe(true)
+    expect(document.body.style.transform).not.toBe(before)
+    mode.setActive(false)
   })
 })
 

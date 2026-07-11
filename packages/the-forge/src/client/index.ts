@@ -171,7 +171,11 @@ export class DesignMode {
     this.dock = dock ?? new Dock(overlay.host, this.panel, overlay.status, overlay.toggle)
     this.canvas = new CanvasMode({
       dock: this.dock,
-      hostContains: (t) => this.overlay.contains(t),
+      // containsDeep, NOT contains: CanvasMode un-retargets events via composedPath()[0], so
+      // its guard sees the real node INSIDE the overlay's shadow tree — which host.contains()
+      // can never match (Node.contains stops at the shadow boundary). Plain contains() here
+      // would make a wheel over the docked panel pan the artboard instead of scrolling it.
+      hostContains: (t) => this.overlay.containsDeep(t),
       onChange: () => this.syncCanvasUi(),
     })
     this.zoomPillWrap.className = 'zoom-pill-wrap'

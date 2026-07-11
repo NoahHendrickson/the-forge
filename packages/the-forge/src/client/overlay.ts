@@ -763,6 +763,16 @@ export class Overlay {
     return target instanceof Node && this.host.contains(target)
   }
 
+  /** Like contains(), but also true for nodes INSIDE the host's shadow tree. Node.contains
+   * never crosses a shadow boundary, so plain contains() only works for callers passing a
+   * RETARGETED event target (which the shadow boundary collapses to `host` itself — the
+   * document-level listeners in index.ts). A caller that un-retargets via composedPath()[0]
+   * (CanvasMode.realTarget) gets the real inner node back and needs this variant, or every
+   * wheel/keydown over the panel would read as "not ours" and hijack panel scrolling. */
+  containsDeep(target: EventTarget | null): boolean {
+    return this.contains(target) || (target instanceof Node && !!this.host.shadowRoot?.contains(target))
+  }
+
   setActive(on: boolean): void {
     this.toggle.classList.toggle('active', on)
     if (!on) {
