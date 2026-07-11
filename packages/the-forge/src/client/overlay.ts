@@ -542,6 +542,16 @@ button {
   flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--text-muted);
 }
+` +
+// .change-detail: one line per drafted property (2026-07-11 draft-badge spec — replaces the
+// "+N more"/title collapse on draft rows). flex-basis: 100% wraps each line full-width inside
+// the flex row, same trick .change-note uses; the 22px left pad aligns under .change-el past
+// the chip.
+`
+.change-detail {
+  flex-basis: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-muted); font: 400 var(--text-xs) var(--font-ui); padding: 0 6px 0 22px;
+}
 .change-note { flex-basis: 100%; color: #F87171; font-size: 10.5px; padding: 0 6px 2px 22px; white-space: normal; }
 .change-note-mismatch { color: var(--ripple); }
 .change-actions { display: flex; gap: 4px; flex-basis: 100%; padding: 0 6px 2px 22px; }
@@ -645,12 +655,18 @@ button {
 // itself sits ABOVE .composer-chips in .chat-composer so opening it (it hosts the unmodified
 // ChangeList, whose own .changes-section rules cap it at max-height 180px) never pushes the
 // textarea/controls rows around — it grows upward into free panel space instead.
+// 2026-07-11 draft-badge spec: the pill's .open class is mirrored alongside the disclosure's
+// (session-feed.ts's setDisclosureOpen) purely so .draft-pill-chevron has a same-element CSS
+// hook to rotate on — the disclosure itself is a sibling, not an ancestor, of the pill.
 // CSS class names here are test hooks — extend, don't rename.
 `.draft-pill {
-  flex: none; padding: 4px 8px; border-radius: 6px; background: var(--control); border: none;
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 8px; border-radius: 6px; background: var(--control); border: none;
   font: 500 var(--text-xs) var(--font-ui); color: var(--text-secondary);
 }
 .draft-pill:hover { background: var(--control-hover); }
+.draft-pill-chevron { transition: transform 120ms ease; }
+.draft-pill.open .draft-pill-chevron { transform: rotate(180deg); }
 .draft-disclosure { display: none; }
 .draft-disclosure.open { display: block; }
 ` +

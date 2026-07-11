@@ -227,7 +227,7 @@ describe('drafts pill + disclosure', () => {
     feed.setDraftState({ count: 2, applying: false })
     const pill = feed.root.querySelector('.draft-pill') as HTMLElement
     expect(pill.hidden).toBe(false)
-    expect(pill.textContent).toBe('2 edits drafted')
+    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('2 changes drafted')
   })
 
   it('setDraftState(1, false) uses the singular copy', () => {
@@ -235,7 +235,7 @@ describe('drafts pill + disclosure', () => {
     document.body.appendChild(feed.root)
     feed.setDraftState({ count: 1, applying: false })
     const pill = feed.root.querySelector('.draft-pill') as HTMLElement
-    expect(pill.textContent).toBe('1 edit drafted')
+    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('1 change drafted')
   })
 
   it('applying:true shows "applying…" and wins over a nonzero count', () => {
@@ -244,7 +244,7 @@ describe('drafts pill + disclosure', () => {
     feed.setDraftState({ count: 3, applying: true })
     const pill = feed.root.querySelector('.draft-pill') as HTMLElement
     expect(pill.hidden).toBe(false)
-    expect(pill.textContent).toBe('applying…')
+    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('applying…')
   })
 
   it('applying:true with count 0 still shows the pill', () => {
@@ -253,7 +253,7 @@ describe('drafts pill + disclosure', () => {
     feed.setDraftState({ count: 0, applying: true })
     const pill = feed.root.querySelector('.draft-pill') as HTMLElement
     expect(pill.hidden).toBe(false)
-    expect(pill.textContent).toBe('applying…')
+    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('applying…')
   })
 
   it('count===0 && !applying hides the pill and force-closes the disclosure', () => {
@@ -264,9 +264,11 @@ describe('drafts pill + disclosure', () => {
     feed.setDraftState({ count: 2, applying: false })
     pill.click()
     expect(disclosure.classList.contains('open')).toBe(true)
+    expect(pill.classList.contains('open')).toBe(true)
     feed.setDraftState({ count: 0, applying: false })
     expect(pill.hidden).toBe(true)
     expect(disclosure.classList.contains('open')).toBe(false)
+    expect(pill.classList.contains('open')).toBe(false)
   })
 
   it('clicking the pill toggles .draft-disclosure open/closed', () => {
@@ -279,6 +281,29 @@ describe('drafts pill + disclosure', () => {
     pill.click()
     expect(disclosure.classList.contains('open')).toBe(true)
     pill.click()
+    expect(disclosure.classList.contains('open')).toBe(false)
+  })
+
+  it('pill carries a chevron span that never pollutes the label', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setDraftState({ count: 2, applying: false })
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    expect(pill.querySelector('.draft-pill-chevron')!.textContent).toBe('▾')
+    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('2 changes drafted')
+  })
+
+  it('clicking the pill mirrors .open onto pill and disclosure together', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    feed.setDraftState({ count: 1, applying: false })
+    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
+    const disclosure = feed.root.querySelector('.draft-disclosure') as HTMLElement
+    pill.click()
+    expect(pill.classList.contains('open')).toBe(true)
+    expect(disclosure.classList.contains('open')).toBe(true)
+    pill.click()
+    expect(pill.classList.contains('open')).toBe(false)
     expect(disclosure.classList.contains('open')).toBe(false)
   })
 })

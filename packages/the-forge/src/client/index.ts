@@ -180,8 +180,8 @@ export class DesignMode {
     // NOT modified; feed.draftSlot is just a new parent for the same root element.
     this.feed.draftSlot.appendChild(this.changeList.root)
     this.panel.feedSlot.appendChild(this.feed.root)
-    // Drafts pill state (composer consolidation Task 2): count comes from the DraftStore (the
-    // same elementCount() refreshStatus already reads), applying is true while any lifecycle
+    // Drafts pill state (composer consolidation Task 2): count comes from changeCount(), applying
+    // is true while any lifecycle
     // row is still sent/applying — the same stage predicate ChangeList's own inFlightProps
     // uses to decide which draft rows are already represented by an in-flight row. Pushed from
     // TWO independent triggers below: drafts.onChange (count can change) and session.onChange
@@ -291,7 +291,7 @@ export class DesignMode {
       // "quiet window" debounce the layout-ripple logic already uses for the same reason.
       this.refreshStatus()
       // updateDraftPill() stays immediate (not debounced) alongside refreshStatus() — it only
-      // reads drafts.elementCount() (a Map size), nothing scan/stringify-shaped.
+      // reads drafts.changeCount() (summed Map sizes), nothing scan/stringify-shaped.
       this.updateDraftPill()
       if (this.draftSyncTimer) clearTimeout(this.draftSyncTimer)
       this.draftSyncTimer = setTimeout(() => this.flushDraftSync(), RIPPLE_DEBOUNCE_MS)
@@ -300,10 +300,11 @@ export class DesignMode {
 
   /** Pushes {count, applying} to the SessionFeed's drafts pill (composer consolidation Task 2)
    * — called from drafts.onChange (constructor) and session.onChange (constructor). count is
-   * the DraftStore's live element count; applying mirrors ChangeList's own inFlightProps stage
-   * predicate ('sent' | 'applying' rows are still in flight). */
+   * the DraftStore's live change count (drafted properties summed across elements — the
+   * 2026-07-11 draft-badge spec: "7 changes", not "2 elements"); applying mirrors ChangeList's
+   * own inFlightProps stage predicate ('sent' | 'applying' rows are still in flight). */
   private updateDraftPill(): void {
-    const count = this.drafts.elementCount()
+    const count = this.drafts.changeCount()
     const applying = this.session.records().some((r) => r.stage === 'sent' || r.stage === 'applying')
     this.feed.setDraftState({ count, applying })
   }

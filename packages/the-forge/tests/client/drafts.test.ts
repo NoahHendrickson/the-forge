@@ -226,4 +226,22 @@ describe('DraftStore', () => {
     expect(store.elementCount()).toBe(0)
     expect(d.style.getPropertyValue('margin-top')).toBe('')
   })
+
+  it('changeCount() sums drafted properties across elements', () => {
+    const store = new DraftStore()
+    const a = el()
+    const b = el()
+    expect(store.changeCount()).toBe(0)
+    store.apply(a, 'padding-top', '24px')
+    store.apply(a, 'gap', '16px')
+    store.apply(a, 'padding-top', '32px') // re-editing the same prop is still ONE change
+    store.apply(b, 'background-color', 'rgb(255, 0, 0)')
+    expect(store.changeCount()).toBe(3)
+    store.discard(a, ['gap'])
+    expect(store.changeCount()).toBe(2)
+    store.commit(a)
+    expect(store.changeCount()).toBe(1)
+    store.discardAll()
+    expect(store.changeCount()).toBe(0)
+  })
 })
