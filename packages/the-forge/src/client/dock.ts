@@ -70,6 +70,11 @@ export class Dock {
    * only undo what was actually applied (a floating-mode exit() re-appending #status
    * to the shadow root would needlessly reorder DOM it never touched). */
   private dockedApplied = false
+  /** True while canvas mode owns the page: the margin push is suspended (the artboard
+   * lays out full-width and pans behind the panel) but docked layout is otherwise
+   * unchanged. The saved original margin is what gets written back — not '' — so a
+   * page's own inline margin survives the whole canvas session. */
+  private canvasActive = false
 
   constructor(
     private host: HTMLElement,
@@ -122,6 +127,12 @@ export class Dock {
     else this.removeDocked()
   }
 
+  setCanvasActive(on: boolean): void {
+    if (on === this.canvasActive) return
+    this.canvasActive = on
+    if (this.active && this.prefs.mode === 'docked') this.syncWidth()
+  }
+
   /** The width actually painted/pushed: the stored DESIRED width, clamped against the
    * LIVE viewport. Kept separate from prefs.width so a transient window shrink never
    * destroys the user's wider choice (PR #2 final review). */
@@ -134,7 +145,9 @@ export class Dock {
     const width = this.appliedWidth()
     this.host.style.setProperty('--forge-dock-w', `${width}px`)
     if (this.active && this.prefs.mode === 'docked') {
-      document.documentElement.style.marginRight = `${width}px`
+      document.documentElement.style.marginRight = this.canvasActive
+        ? (this.savedHtmlMarginRight ?? '')
+        : `${width}px`
     }
   }
 

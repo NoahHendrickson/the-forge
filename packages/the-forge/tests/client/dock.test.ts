@@ -248,3 +248,27 @@ describe('Dock polish (PR #2 follow-ups)', () => {
     expect(loadPrefs().width).toBe(MIN_WIDTH)
   })
 })
+
+describe('Dock canvas mode', () => {
+  it('setCanvasActive(true) writes the page original margin back while docked; false repaints the push', () => {
+    document.documentElement.style.marginRight = '7px' // page's own inline margin
+    const { dock } = dockSetup()
+    dock.enter()
+    expect(document.documentElement.style.marginRight).toBe(`${dock.width()}px`)
+    dock.setCanvasActive(true)
+    expect(document.documentElement.style.marginRight).toBe('7px')
+    dock.setCanvasActive(false)
+    expect(document.documentElement.style.marginRight).toBe(`${dock.width()}px`)
+    dock.exit()
+    expect(document.documentElement.style.marginRight).toBe('7px')
+  })
+
+  it('exit() while canvas is active still restores the original margin verbatim', () => {
+    document.documentElement.style.marginRight = ''
+    const { dock } = dockSetup()
+    dock.enter()
+    dock.setCanvasActive(true)
+    dock.exit()
+    expect(document.documentElement.style.marginRight).toBe('')
+  })
+})
