@@ -55,10 +55,12 @@ One new file implementing the existing `SessionAdapter` interface. Spawn, at `re
 
 ### 3.2 Approvals — native, registry unchanged, posture adapter-side
 
-`session/request_permission` requests are split by the tool call's kind (decision 4):
+`session/request_permission` requests are split by the tool call's kind (decision 4; spike-corrected 2026-07-11 — the live CLI auto-runs built-in read/edit with NO permission request; only shell/execute and MCP tool calls prompt):
 
-- **edit-kind** → answered allow immediately, no overlay round-trip (the ratified "project file edits auto" posture — Claude expresses it as `--allowedTools`, Cursor as kind-based auto-allow).
-- **everything else** (execute/fetch/unknown) → parked in the existing `ApprovalRegistry` (same overlay Allow/Deny UI, same `APPROVAL_HOLD_MS` timeout-to-deny, same watchdog suspension). The adapter answers with the allow-once / reject-once option when the registry resolves; never allow-always.
+- **edit-kind** (defensive — none observed live) and **the-forge's own MCP tools** (`pull_design_edits`/`mark_applied` — mirrors Claude's static `mcp__the-forge__*` allows; without it every pull turn would park an approval) → answered allow immediately, no overlay round-trip.
+- **everything else** (shell/execute, other MCP tools, unknown) → parked in the existing `ApprovalRegistry` (same overlay Allow/Deny UI, same `APPROVAL_HOLD_MS` timeout-to-deny, same watchdog suspension). The adapter answers with the allow-once / reject-once option when the registry resolves; never allow-always.
+
+Fixture-pinned nuance: a rejected tool call still completes with status `completed` / stopReason `end_turn` — rejection is visible to the agent in-band only, never mapped to an error turn.
 
 The `approve` MCP tool and `--permission-prompt-tool` remain **Claude-only**.
 
