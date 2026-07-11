@@ -1293,6 +1293,72 @@ describe('composer send-everything verb + watch strip gating (Task 3)', () => {
       expect(setHarnessSpy).toHaveBeenCalledTimes(1)
     })
   })
+
+  describe('failed /session/config POST reverts the composer pickers (Task 5 follow-up)', () => {
+    /** Flushes the config POST's .then/.catch chain — plain microtasks, no timers involved. */
+    async function flushConfig(): Promise<void> {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    }
+
+    function stubConfigPost(result: 'ok' | '409' | 'reject') {
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/session/config') {
+          if (result === 'reject') return Promise.reject(new TypeError('network down'))
+          return Promise.resolve({ ok: result === 'ok', status: result === 'ok' ? 200 : 409 })
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      return fetchMock
+    }
+
+    it('a 409 harness POST reverts the harness select to the prior confirmed value', async () => {
+      const fetchMock = stubConfigPost('409')
+      const { panel } = fullSetup()
+      const harnessSelect = panel.root.querySelector('.session-harness') as HTMLSelectElement
+      expect(harnessSelect.value).toBe('claude-code')
+      harnessSelect.value = 'cursor'
+      harnessSelect.dispatchEvent(new Event('change'))
+      expect(fetchMock).toHaveBeenCalledWith('/__the-forge/session/config', expect.objectContaining({ method: 'POST' }))
+      await flushConfig()
+      expect(harnessSelect.value).toBe('claude-code')
+    })
+
+    it('a 409 effort POST reverts the effort select', async () => {
+      stubConfigPost('409')
+      const { panel } = fullSetup()
+      const effortSelect = panel.root.querySelector('.session-effort') as HTMLSelectElement
+      effortSelect.value = 'xhigh'
+      effortSelect.dispatchEvent(new Event('change'))
+      await flushConfig()
+      // No confirmed effort yet (no config-changed seeded one) — reverts to the placeholder.
+      expect(effortSelect.value).toBe('')
+    })
+
+    it('a rejected (network-failure) POST reverts too', async () => {
+      stubConfigPost('reject')
+      const { panel } = fullSetup()
+      const permSelect = panel.root.querySelector('.session-permission') as HTMLSelectElement
+      permSelect.value = 'plan'
+      permSelect.dispatchEvent(new Event('change'))
+      await flushConfig()
+      expect(permSelect.value).toBe('')
+    })
+
+    it('a successful POST does NOT revert — the optimistic value stands until config-changed confirms', async () => {
+      stubConfigPost('ok')
+      const { panel } = fullSetup()
+      const harnessSelect = panel.root.querySelector('.session-harness') as HTMLSelectElement
+      const effortSelect = panel.root.querySelector('.session-effort') as HTMLSelectElement
+      harnessSelect.value = 'cursor'
+      harnessSelect.dispatchEvent(new Event('change'))
+      effortSelect.value = 'low'
+      effortSelect.dispatchEvent(new Event('change'))
+      await flushConfig()
+      expect(harnessSelect.value).toBe('cursor')
+      expect(effortSelect.value).toBe('low')
+    })
+  })
 })
 
 describe('change list wiring', () => {

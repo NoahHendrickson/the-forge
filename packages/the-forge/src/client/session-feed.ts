@@ -45,6 +45,11 @@ const MODEL_ALIASES: Record<HarnessId, readonly string[]> = {
   cursor: [],
 }
 
+/** The model select's unseeded state — shared by the constructor and setHarness's model reset
+ * (a harness switch returns the select to exactly this state until the new session reports its
+ * own model), so the two can't drift. */
+const MODEL_PLACEHOLDER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [{ value: '', label: 'model…' }]
+
 // ---------------------------------------------------------------------------
 // Stream line types (NDJSON, one object per line)
 // ---------------------------------------------------------------------------
@@ -249,7 +254,7 @@ export class SessionFeed {
     })
     this.modelSelect = createSelect({
       className: 'session-model',
-      options: [{ value: '', label: 'model…' }],
+      options: MODEL_PLACEHOLDER_OPTIONS,
       value: '',
       onChange: (value) => {
         if (value === '') return
@@ -549,7 +554,11 @@ export class SessionFeed {
    * same as a fresh `started`) and hides a select entirely when the harness has no vocabulary
    * for it — HARNESS_VOCAB's efforts/permissionModes are BOTH empty for cursor today, so both
    * selects disappear rather than rendering an all-placeholder, unusable picker. Also updates
-   * currentHarness, which seedModelOptions reads to pick the right MODEL_ALIASES list. */
+   * currentHarness, which seedModelOptions reads to pick the right MODEL_ALIASES list, and
+   * resets the model select to its unseeded placeholder state (final-review finding): the
+   * previous harness's model + aliases are meaningless under the new harness — the new session
+   * reports its own model via started/config-changed, at which point seedModelOptions rebuilds
+   * with THIS harness's alias list. */
   setHarness(h: HarnessId): void {
     this.currentHarness = h
     this.harnessSelect.value = h
@@ -560,6 +569,27 @@ export class SessionFeed {
     this.setSelectOptions(this.permissionSelect, permissionOptionsFor(h))
     this.permissionSelect.value = ''
     this.permissionSelect.hidden = vocab.permissionModes.length === 0
+    this.setSelectOptions(this.modelSelect, MODEL_PLACEHOLDER_OPTIONS)
+    this.modelSelect.value = ''
+  }
+
+  /** Snaps every config picker back to its last CONFIRMED value — index.ts calls this when its
+   * POST /__the-forge/session/config fails (409 while the session is busy — harness and effort
+   * switches — or a network failure). The selects update optimistically on click, so a failed
+   * POST would otherwise leave a never-applied value showing indefinitely: index.ts's poll-seed
+   * guard compares against CONFIRMED state (getHarness()), which the click never touched, so
+   * nothing else snaps the DOM back. Reads only state the seed paths already maintain — no
+   * parallel bookkeeping: currentHarness (only setHarness writes it), the model select's own
+   * first option (seedModelOptions puts the confirmed model first; the unseeded state's only
+   * option is the '' placeholder), and lastEffort/lastPermission (the same values a respawn's
+   * `started` re-applies). Reverting ALL four rather than just the failed key is deliberate:
+   * onConfig carries only the changed key, so the other three already sit at their confirmed
+   * values and the extra writes are no-ops. */
+  revertConfig(): void {
+    this.harnessSelect.value = this.currentHarness
+    this.modelSelect.value = this.modelSelect.options[0]?.value ?? ''
+    this.effortSelect.value = this.lastEffort ?? ''
+    this.permissionSelect.value = this.lastPermission ?? ''
   }
 
   /** The harness the pickers currently reflect — see currentHarness's own doc comment for why

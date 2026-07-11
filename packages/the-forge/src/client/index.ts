@@ -220,7 +220,17 @@ export class DesignMode {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
         body: JSON.stringify(cfg),
-      }).catch(() => {})
+      })
+        .then((res) => {
+          // A non-ok response (409 while the session is busy — harness/effort switches — or
+          // any other failure) means the value the select optimistically shows was never
+          // applied: snap the pickers back to their last confirmed state. Without this the
+          // stale value would show indefinitely — the status-poll seed's guard below compares
+          // against CONFIRMED state (feed.getHarness()), which the failed click never touched,
+          // so no later poll tick corrects the DOM.
+          if (!res.ok) this.feed.revertConfig()
+        })
+        .catch(() => this.feed.revertConfig())
     }
     // Prompt button's job now: attach the selected element as a chip to the persistent chat
     // input and focus it — replacing the old floating prompt popup's open(anchor) (retired Task 6).

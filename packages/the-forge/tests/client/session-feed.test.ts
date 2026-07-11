@@ -1487,6 +1487,71 @@ describe('harness picker', () => {
     feed.setHarness('cursor')
     expect(feed.getHarness()).toBe('cursor')
   })
+
+  it("setHarness('cursor') resets the model select to its placeholder (no stale sonnet/opus/haiku aliases)", async () => {
+    // Seed the model select under claude-code first — options are [current, ...aliases].
+    const lines = [feedLine(1, { kind: 'config-changed', model: 'claude-opus-4-5' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    expect([...modelSelect.options].map((o) => o.value)).toEqual(['claude-opus-4-5', 'sonnet', 'opus', 'haiku'])
+
+    feed.setHarness('cursor')
+    // Placeholder-only: the previous harness's model + aliases are meaningless under the new
+    // harness; the new session reports its own model via started/config-changed later.
+    expect([...modelSelect.options].map((o) => o.value)).toEqual([''])
+    expect(modelSelect.options[0].textContent).toBe('model…')
+    expect(modelSelect.value).toBe('')
+    feed.stop()
+  })
+})
+
+describe('revertConfig (failed /session/config POST recovery)', () => {
+  it('snaps all pickers back to their last confirmed values', async () => {
+    const lines = [feedLine(1, { kind: 'config-changed', model: 'claude-opus-4-5', effort: 'high', permissionMode: 'plan' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const harnessSelect = feed.root.querySelector('.session-harness') as HTMLSelectElement
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    const effortSelect = feed.root.querySelector('.session-effort') as HTMLSelectElement
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+
+    // Optimistic user clicks whose POSTs (hypothetically) all failed — the selects show
+    // never-applied values; only the DOM moved, confirmed state didn't.
+    harnessSelect.value = 'cursor'
+    modelSelect.value = 'sonnet'
+    effortSelect.value = 'low'
+    permSelect.value = 'default'
+
+    feed.revertConfig()
+    expect(harnessSelect.value).toBe('claude-code')
+    expect(modelSelect.value).toBe('claude-opus-4-5')
+    expect(effortSelect.value).toBe('high')
+    expect(permSelect.value).toBe('plan')
+    feed.stop()
+  })
+
+  it('before anything is confirmed, reverts to the defaults/placeholders', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const harnessSelect = feed.root.querySelector('.session-harness') as HTMLSelectElement
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    const effortSelect = feed.root.querySelector('.session-effort') as HTMLSelectElement
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+    harnessSelect.value = 'cursor'
+    effortSelect.value = 'max'
+    permSelect.value = 'plan'
+
+    feed.revertConfig()
+    expect(harnessSelect.value).toBe('claude-code')
+    expect(modelSelect.value).toBe('')
+    expect(effortSelect.value).toBe('')
+    expect(permSelect.value).toBe('')
+  })
 })
 
 describe('row cap', () => {
