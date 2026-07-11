@@ -1622,6 +1622,35 @@ describe('SessionManager', () => {
       expect(adapters[0]!.startCalls[0]!.resumeId).toBe('legacy-id')
       void mgr
     })
+
+    it('the first write migrates a legacy flat file to the nested shape on disk', () => {
+      // Pins the WRITE side of the one-release compat promise (plan Task 2 contract: "first
+      // write migrates the shape"): readSessionFile normalizes the legacy flat form only in
+      // memory; it's writeSessionSlot's full rewrite on the first `started` that actually
+      // rewrites the file. No `selected` key is expected — the legacy form never had a
+      // selection, and JSON.stringify drops the undefined field; selection is only ever
+      // persisted by an explicit setConfig({harness}).
+      fs.writeFileSync(
+        path.join(dir, 'session.json'),
+        JSON.stringify({ sessionId: 'legacy-id', updatedAt: 'x' }),
+      )
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits() // resumes with 'legacy-id' (read-compat, pinned above)
+      adapters[0]!.emit({ kind: 'started', sessionId: 'fresh-new-id', model: 'claude', mcpLoaded: true })
+
+      const raw = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as Record<
+        string,
+        unknown
+      >
+      // Wrong-on-purpose sanity check was run once during authoring (asserted a surviving
+      // top-level sessionId) and failed as expected — the assertions below are live.
+      expect(raw['sessionId']).toBeUndefined() // no top-level legacy key remains
+      expect(raw['selected']).toBeUndefined()
+      expect(raw['sessions']).toMatchObject({ 'claude-code': { sessionId: 'fresh-new-id' } })
+      void mgr
+    })
   })
 
   describe('per-harness session.json slots', () => {
