@@ -96,7 +96,7 @@ codex app-server \
 
 ### 3.6 Riders
 
-- **Spec-noted milestone-C cleanup** (chat-surface spec, post-review follow-up): delete `buildPromptRequest` (`src/client/request.ts`) and the legacy `seed.prompt` resend path (`changelist.ts`, `lifecycle.ts`).
+- ~~Spec-noted milestone-C cleanup (delete `buildPromptRequest` + the legacy `seed.prompt` resend path)~~ — **already shipped in PR #28 (2026-07-10)**; only the deliberate `v.prompt` drop-guard in `lifecycle-store.ts` remains, and it stays (it drops retired persisted sends rather than resurrecting them). Correction recorded 2026-07-11 during planning.
 - Docs: CLAUDE.md/AGENTS.md module tables (+`codex.ts` row, adapter-selection notes), gotchas (Cursor's inverse error-surfacing gotcha recorded now so C2 doesn't rediscover it).
 
 ### Out of scope for C1
