@@ -147,6 +147,22 @@ describe('ensureSidecar', () => {
     expect(res.text).not.toContain(FAKE_CLIENT_JS)
   })
 
+  it('GET /__the-forge/client.js with a cross-site Origin is rejected with 403 and never leaks the secret', async () => {
+    // 2026-07-10 security review, finding 4: the bundle route must sit behind the same
+    // Origin-vs-Host check as every other /__the-forge/* route, not rely on the absence of
+    // ACAO headers alone to keep a permissive-CORS reader away from the embedded secret.
+    const { ensureSidecar } = await importSidecar()
+    const handle = await ensureSidecar(baseOpts())
+    closers.push(() => handle.close())
+
+    const res = await fetchJson(handle.port, '/__the-forge/client.js', {
+      headers: { Origin: 'https://evil.example' },
+    })
+    expect(res.status).toBe(403)
+    expect(res.text).not.toContain('secret')
+    expect(res.text).not.toContain(FAKE_CLIENT_JS)
+  })
+
   it('POST /__the-forge/queue without X-Forge-Secret is rejected with 403 (middleware wiring intact)', async () => {
     const { ensureSidecar } = await importSidecar()
     const handle = await ensureSidecar(baseOpts())
@@ -210,6 +226,27 @@ describe('ensureSidecar', () => {
       expect(warnSpy).toHaveBeenCalledTimes(1)
       expect(warnSpy.mock.calls[0][0]).toContain('design mode never loaded')
       expect(warnSpy.mock.calls[0][0]).toContain("from 'forge-mode/design-mode'")
+      warnSpy.mockRestore()
+    })
+
+    it('still warns when the only client.js fetch was cross-origin (403 must not count as "design mode loaded")', async () => {
+      // PR #29 review: the old URL-peek cleared the timer on any allowed-Host request, so a
+      // cross-origin probe the middleware was about to 403 silently suppressed the hint. The
+      // clear now rides the middleware's clientBundle() call, which only happens on the fully
+      // gated 200 path.
+      const { ensureSidecar } = await importSidecar()
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const handle = await ensureSidecar(baseOpts({ hintDelayMs: 30 }))
+      closers.push(() => handle.close())
+
+      const res = await fetchJson(handle.port, '/__the-forge/client.js', {
+        headers: { Origin: 'https://evil.example' },
+      })
+      expect(res.status).toBe(403)
+      await new Promise((r) => setTimeout(r, 60))
+
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      expect(warnSpy.mock.calls[0][0]).toContain('design mode never loaded')
       warnSpy.mockRestore()
     })
 

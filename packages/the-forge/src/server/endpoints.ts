@@ -13,6 +13,15 @@ import { EFFORT_LEVELS, PERMISSION_MODES, CHAT_TEXT_MAX } from '../shared/chat-c
  * Exported so next/index.ts imports this constant rather than duplicating the string. */
 export const DEVTOOLS_JSON_PATH = '/.well-known/appspecific/com.chrome.devtools.json'
 
+/** The one URL the client bundle is served from, on BOTH frameworks (2026-07-10 security
+ * review, finding 4). The served script embeds the per-start secret in its bootstrap line,
+ * so it must live under the /__the-forge/ prefix where createForgeMiddleware's Host gate and
+ * Origin-vs-Host check apply — previously Vite served it as an ungated virtual module
+ * (/@the-forge/client) whose CORS posture belonged to Vite, not us, and the Next sidecar's
+ * hand-rolled route checked Host but never Origin. Exported for src/vite.ts's
+ * transformIndexHtml, src/next/sidecar.ts's hint-timer peek, and tests. */
+export const CLIENT_JS_PATH = '/__the-forge/client.js'
+
 const MAX_BODY = 1024 * 1024
 
 const KNOWN_AGENTS = new Set<DispatchOpts['agent']>(['claude-code', 'cursor', 'codex'])
@@ -85,11 +94,11 @@ function hostnameOf(host: string): string {
   return colon === -1 ? h : h.slice(0, colon)
 }
 
-/** DNS-rebinding defense: is this request's Host header one we trust? Exported because the
- * Next sidecar's client.js route (src/next/sidecar.ts) is the one route that isn't wrapped by
- * createForgeMiddleware below and must apply the same gate itself before serving the bundle —
- * it embeds the per-start secret in its bootstrap line. */
-export function isAllowedHost(host: string | undefined, allowedHosts: string[]): boolean {
+/** DNS-rebinding defense: is this request's Host header one we trust? Module-private since
+ * PR #29: the Next sidecar's hand-rolled client.js route was the one external consumer, and
+ * that route is gone — the bundle now rides this middleware's own CLIENT_JS_PATH route, so
+ * every forge route (both frameworks) reaches this check through rejectDisallowedHost. */
+function isAllowedHost(host: string | undefined, allowedHosts: string[]): boolean {
   if (!host) return false
   const hostname = hostnameOf(host)
   if (hostname === 'localhost' || hostname.endsWith('.localhost')) return true
@@ -177,7 +186,13 @@ export function createForgeMiddleware(
   // Optional so existing callers/tests stand unchanged — same pattern as the optional hub
   // param above. The plugin (src/vite.ts / src/next/sidecar.ts) passes one explicitly once
   // Task 5 wires it; until then all callers that omit it get 404s on the new session paths.
-  session?: ForgeSessionHandles
+  session?: ForgeSessionHandles,
+  // Reads the built client bundle for GET CLIENT_JS_PATH. A function, not a string, so the
+  // bundle is re-read per request — a rebuild lands on the next browser reload instead of
+  // being pinned for the dev server's lifetime. Optional so legacy callers/tests stand
+  // unchanged (the route 404s without it); both framework entries pass their own resolver
+  // because the dist/client.js lookup is relative to THEIR built module location.
+  clientBundle?: () => string
 ) {
   // Optional param so existing callers/tests stand unchanged; the plugin (src/index.ts)
   // constructs and passes one explicitly so the wiring is visible at the composition root.
@@ -253,6 +268,22 @@ export function createForgeMiddleware(
       if (provided !== secret) {
         return send(res, 403, { error: 'missing or invalid X-Forge-Secret' })
       }
+    }
+
+    // GET CLIENT_JS_PATH — the client bundle with the per-start secret prepended. Reached
+    // only AFTER the Host gate and Origin-vs-Host check above (finding 4's hardening): a
+    // DNS-rebound Host 403s, and a cross-origin fetch/module load presenting an Origin
+    // header 403s before the secret is ever written out, regardless of the server's CORS
+    // posture. It cannot require X-Forge-Secret itself — this response is where the browser
+    // client gets the secret FROM — so those two gates (plus no ACAO ever being set here,
+    // and the bundle's trailing export breaking classic-script loads) are the whole defense.
+    if (pathname === CLIENT_JS_PATH && clientBundle) {
+      if (req.method !== 'GET') return send(res, 405, { error: 'use GET' })
+      const bootstrap = `globalThis.__THE_FORGE__ = ${JSON.stringify({ secret: secret ?? '', agent: dispatchConfig.agent })};\n`
+      res.statusCode = 200
+      res.setHeader('Content-Type', 'text/javascript')
+      res.end(bootstrap + clientBundle())
+      return
     }
 
     // GET /session/events — secret-gated despite being a GET. Events carry file paths and

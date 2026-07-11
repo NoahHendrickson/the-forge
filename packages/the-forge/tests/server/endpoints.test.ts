@@ -22,7 +22,7 @@ vi.mock('../../src/server/dispatch', async () => {
   return { ...actual, dispatch: dispatchSpy }
 })
 
-const { createForgeMiddleware, writeEndpointFile, removeEndpointFile, DEVTOOLS_JSON_PATH } = await import(
+const { createForgeMiddleware, writeEndpointFile, removeEndpointFile, DEVTOOLS_JSON_PATH, CLIENT_JS_PATH } = await import(
   '../../src/server/endpoints'
 )
 
@@ -1936,5 +1936,114 @@ describe('chat endpoints (say/config)', () => {
       const body = JSON.parse(res.body)
       expect(body.sessionEnabled).toBe(false)
     })
+  })
+})
+
+describe('GET /__the-forge/client.js (secret-bearing bundle behind the shared gates — 2026-07-10 security review, finding 4)', () => {
+  const SECRET = 'client-route-secret'
+  const BUNDLE = '/* fake client bundle */\nexport {}\n'
+  let served: ReturnType<typeof createForgeMiddleware>
+
+  beforeEach(() => {
+    served = createForgeMiddleware(
+      queue,
+      [],
+      SECRET,
+      { agent: 'claude-code', channelsFlag: false },
+      undefined,
+      undefined,
+      () => BUNDLE
+    )
+  })
+
+  it('exports the exact shared route constant both frameworks serve from', () => {
+    expect(CLIENT_JS_PATH).toBe('/__the-forge/client.js')
+  })
+
+  it('serves the bootstrap line + bundle as text/javascript for an allowed Host', async () => {
+    const res = fakeRes()
+    await run(served, fakeReq('GET', CLIENT_JS_PATH, undefined, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['Content-Type']).toMatch(/javascript/)
+    expect(res.body.startsWith('globalThis.__THE_FORGE__ = ')).toBe(true)
+    expect(res.body).toContain(BUNDLE)
+  })
+
+  it('embeds the configured secret + agent in the bootstrap line', async () => {
+    const cursorServed = createForgeMiddleware(
+      queue,
+      [],
+      SECRET,
+      { agent: 'cursor', channelsFlag: false },
+      undefined,
+      undefined,
+      () => BUNDLE
+    )
+    const res = fakeRes()
+    await run(cursorServed, fakeReq('GET', CLIENT_JS_PATH, undefined, { host: 'localhost:5173' }), res)
+    const bootstrapLine = res.body.split('\n')[0]
+    const embedded = JSON.parse(bootstrapLine.replace('globalThis.__THE_FORGE__ = ', '').replace(/;$/, ''))
+    expect(embedded).toEqual({ secret: SECRET, agent: 'cursor' })
+  })
+
+  it('403s a disallowed Host (DNS rebinding) and never leaks the secret or bundle', async () => {
+    const res = fakeRes()
+    await run(served, fakeReq('GET', CLIENT_JS_PATH, undefined, { host: 'evil.example' }), res)
+    expect(res.statusCode).toBe(403)
+    expect(res.body).not.toContain(SECRET)
+    expect(res.body).not.toContain(BUNDLE)
+  })
+
+  it('403s a cross-origin request (Origin ≠ Host) and never leaks the secret or bundle', async () => {
+    // The hardening this route exists for: a permissive-CORS fetch/module load from another
+    // origin presents Origin: <attacker> against an allowed Host — the same Origin-vs-Host
+    // check every /__the-forge/* route gets must reject it before the secret is written out.
+    const res = fakeRes()
+    await run(
+      served,
+      fakeReq('GET', CLIENT_JS_PATH, undefined, { origin: 'https://evil.example', host: 'localhost:5173' }),
+      res
+    )
+    expect(res.statusCode).toBe(403)
+    expect(res.body).not.toContain(SECRET)
+    expect(res.body).not.toContain(BUNDLE)
+  })
+
+  it('allows a same-origin request that carries an Origin header', async () => {
+    const res = fakeRes()
+    await run(
+      served,
+      fakeReq('GET', CLIENT_JS_PATH, undefined, { origin: 'http://localhost:5173', host: 'localhost:5173' }),
+      res
+    )
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain(BUNDLE)
+  })
+
+  it('allows a Next-proxied same-origin request (Host rewritten to loopback, X-Forwarded-Host preserved)', async () => {
+    const res = fakeRes()
+    await run(
+      served,
+      fakeReq('GET', CLIENT_JS_PATH, undefined, {
+        origin: 'http://localhost:3000',
+        host: '127.0.0.1:55836',
+        'x-forwarded-host': 'localhost:3000',
+      }),
+      res
+    )
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain(BUNDLE)
+  })
+
+  it('405s non-GET methods', async () => {
+    const res = fakeRes()
+    await run(served, fakeReq('POST', CLIENT_JS_PATH, {}, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(405)
+  })
+
+  it('404s when no clientBundle provider is configured (legacy callers unchanged)', async () => {
+    const res = fakeRes()
+    await run(mw, fakeReq('GET', CLIENT_JS_PATH, undefined, { host: 'localhost:5173' }), res)
+    expect(res.statusCode).toBe(404)
   })
 })

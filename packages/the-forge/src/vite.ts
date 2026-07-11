@@ -1,14 +1,12 @@
-import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vite'
 import { tagJsxSource } from './transform'
-import { createForgeMiddleware, writeEndpointFile, removeEndpointFile } from './server/endpoints'
+import { createForgeMiddleware, writeEndpointFile, removeEndpointFile, CLIENT_JS_PATH } from './server/endpoints'
+import { readClientBundle } from './server/client-bundle'
 import { setupProjectConfig, resolveProjectRoot } from './server/setup'
 import { createForgeRuntime } from './server/runtime'
 import type { DispatchOpts } from './server/dispatch'
-
-export const CLIENT_ID = '/@the-forge/client'
 
 export interface TheForgeOptions {
   /** Which agent CLI's RUNNING session the dispatch ladder should reach for on Send.
@@ -28,13 +26,6 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
   const experimentalChannels = options.experimentalChannels ?? false
   const embedded = options.embedded ?? true
   let root = process.cwd()
-  // Generated once per server start — belt-and-braces against cross-origin/DNS-rebinding
-  // bypasses of the Origin/Host checks in the middleware; same-origin page scripts are the
-  // user's own app and not the adversary. Threaded to the client via the load() bootstrap
-  // below, and to the MCP bin via the endpoint file (writeEndpointFile). Assigned inside
-  // configureServer (createForgeRuntime mints it) but read from load(), which runs outside
-  // configureServer — so it lives in this outer closure rather than that function's scope.
-  let secret = ''
 
   return {
     name: 'the-forge',
@@ -64,11 +55,25 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       // the root cause of "dev server not running": the plugin wrote the endpoint file (and its
       // shared secret) at the vite root while the MCP bin only ever looked at the resolved root.
       const resolvedRoot = resolveProjectRoot(root)
-      const { queue, hub, secret: runtimeSecret, forgeDir, session } = createForgeRuntime(resolvedRoot, root)
-      secret = runtimeSecret
+      // The secret is generated once per server start (createForgeRuntime mints it) —
+      // belt-and-braces against cross-origin/DNS-rebinding bypasses of the Origin/Host checks
+      // in the middleware; same-origin page scripts are the user's own app and not the
+      // adversary. Threaded to the client via the middleware's CLIENT_JS_PATH bootstrap
+      // (2026-07-10 security review, finding 4: the bundle route must sit behind the same
+      // Host/Origin gates as every other forge endpoint — never an ungated virtual module),
+      // and to the MCP bin via the endpoint file (writeEndpointFile).
+      const { queue, hub, secret, forgeDir, session } = createForgeRuntime(resolvedRoot, root)
       const allowedHosts = Array.isArray(server.config.server.allowedHosts) ? server.config.server.allowedHosts : []
       server.middlewares.use(
-        createForgeMiddleware(queue, allowedHosts, secret, { agent, channelsFlag: experimentalChannels, cwd: resolvedRoot, embedded }, hub, session)
+        createForgeMiddleware(
+          queue,
+          allowedHosts,
+          secret,
+          { agent, channelsFlag: experimentalChannels, cwd: resolvedRoot, embedded },
+          hub,
+          session,
+          readClientBundle
+        )
       )
       server.httpServer?.once('listening', () => {
         const address = server.httpServer?.address()
@@ -96,38 +101,11 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       return tagJsxSource(code, rel)
     },
 
-    resolveId(id) {
-      if (id === CLIENT_ID) return CLIENT_ID
-      return undefined
-    },
-
-    load(id) {
-      if (id !== CLIENT_ID) return null
-      const dir = path.dirname(fileURLToPath(import.meta.url))
-      // In the built package, client.js sits next to this module (dist/).
-      // Under vitest, this module resolves from src/, where client.js is never
-      // emitted — fall back to the built dist/client.js in that case.
-      const nextToModule = path.join(dir, 'client.js')
-      const builtFallback = path.join(dir, '..', 'dist', 'client.js')
-      const clientPath = fs.existsSync(nextToModule)
-        ? nextToModule
-        : fs.existsSync(builtFallback)
-          ? builtFallback
-          : null
-      if (!clientPath) {
-        throw new Error(
-          'the-forge: client bundle not found — run "npm run build -w forge-mode"'
-        )
-      }
-      const bootstrap = `globalThis.__THE_FORGE__ = ${JSON.stringify({ secret, agent })};\n`
-      return bootstrap + fs.readFileSync(clientPath, 'utf8')
-    },
-
     transformIndexHtml() {
       return [
         {
           tag: 'script',
-          attrs: { type: 'module', src: CLIENT_ID },
+          attrs: { type: 'module', src: CLIENT_JS_PATH },
           injectTo: 'body',
         },
       ]
