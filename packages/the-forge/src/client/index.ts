@@ -704,6 +704,17 @@ export class DesignMode {
     // Piggybacks on the same three triggers refreshStatus already runs from — do NOT add a
     // second poller for this.
     this.feed.setSessionState(this.watch.sessionState())
+    // Harness seeding (Task 5, C1): a status-poll harness value seeds the composer's harness
+    // picker via feed.setHarness — but ONLY when it differs from what the picker already shows.
+    // setHarness resets the effort/permission selects to their placeholder, which must happen
+    // on a genuine harness change and nothing else — every unguarded poll tick (WATCH_POLL_MS)
+    // would otherwise clobber a harness the user just picked (or one already confirmed by an
+    // in-flight config-changed) before the next confirming event arrives. undefined (older
+    // server, field not yet landed server-side) is a no-op, same as sessionEnabled's tolerance.
+    const harness = this.watch.harness()
+    if (harness !== undefined && harness !== this.feed.getHarness()) {
+      this.feed.setHarness(harness)
+    }
   }
 
   /** Serializes the full lifecycle to sessionStorage. Called only from state-change hooks

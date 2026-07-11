@@ -4,26 +4,46 @@
 import { createButton } from './ui/button'
 import { createSelect } from './ui/select'
 import { basename } from './source'
-import { EFFORT_LEVELS, PERMISSION_MODES, CHAT_TEXT_MAX } from '../shared/chat-constants'
+import { CHAT_TEXT_MAX, EMBEDDED_HARNESSES, HARNESS_VOCAB, type HarnessId } from '../shared/chat-constants'
+import { AGENT_DISPLAY_NAME } from './agent'
 import { type SessionState } from './watch'
 
-// Fixed vocabularies for the effort/permission pickers — built from the shared
-// EFFORT_LEVELS/PERMISSION_MODES arrays (src/shared/chat-constants.ts), the single source of
-// truth also consumed by server/endpoints.ts's validation sets (task-6 brief).
-const EFFORT_OPTIONS = [{ value: '', label: 'effort…' }, ...EFFORT_LEVELS.map((v) => ({ value: v, label: v }))] as const
+/** True for a value that is one of EMBEDDED_HARNESSES — the untyped-JSON guard shared by
+ * seedConfigBar (picking the field off a config-changed event) and makeConfigRow (looking up
+ * its display name), same "unknown + manual checks at I/O boundaries" posture as the rest of
+ * this module's event parsing. */
+function isHarnessId(v: unknown): v is HarnessId {
+  return typeof v === 'string' && (EMBEDDED_HARNESSES as readonly string[]).includes(v)
+}
 
-const PERMISSION_OPTIONS = [
-  { value: '', label: 'permissions…' },
-  ...PERMISSION_MODES.map((v) => ({ value: v, label: v })),
-] as const
+// Per-harness vocabularies for the effort/permission pickers — built from HARNESS_VOCAB
+// (src/shared/chat-constants.ts), the single source of truth also consumed by
+// server/endpoints.ts's validation sets (task-6 brief). Cursor's arrays are empty (see
+// HARNESS_VOCAB's own comments), which setHarness reads to hide both selects entirely rather
+// than rendering an all-placeholder, unusable picker. Placeholder-first, and picking the
+// placeholder itself is a no-op (see the '' guards in the onChange handlers below) — a select
+// stays on it until a started/config-changed event seeds a real value.
+function effortOptionsFor(h: HarnessId): ReadonlyArray<{ value: string; label: string }> {
+  return [{ value: '', label: 'effort…' }, ...HARNESS_VOCAB[h].efforts.map((v) => ({ value: v, label: v }))]
+}
+
+function permissionOptionsFor(h: HarnessId): ReadonlyArray<{ value: string; label: string }> {
+  return [{ value: '', label: 'permissions…' }, ...HARNESS_VOCAB[h].permissionModes.map((v) => ({ value: v, label: v }))]
+}
 
 // The model picker's option set is NOT a fixed vocabulary like effort/permissions: the CLI
 // exposes no enumerable model list, so the select offers the started/config-changed-reported
 // model (the only ground truth for "current") PLUS these aliases — the CLI's own documented
 // shorthands, resolved server-side by set_model (spike-verified in Task 1 with a full model
 // id). Deduped when the current value IS one of the aliases; rebuilt on every seed so a
-// config-changed to a model outside the list still renders as the selected option.
-const MODEL_ALIASES = ['sonnet', 'opus', 'haiku'] as const
+// config-changed to a model outside the list still renders as the selected option. Per-harness
+// (Task 5, C1): Cursor has no documented model shorthands, so its select offers the
+// session-reported value only — the same "no vocabulary" posture as its empty
+// efforts/permissionModes arrays in HARNESS_VOCAB.
+const MODEL_ALIASES: Record<HarnessId, readonly string[]> = {
+  'claude-code': ['sonnet', 'opus', 'haiku'],
+  cursor: [],
+}
 
 // ---------------------------------------------------------------------------
 // Stream line types (NDJSON, one object per line)
@@ -44,7 +64,10 @@ type SessionEvent =
   | { kind: 'tool-started'; toolId: string; name: string; detail: string; edit?: { file: string; before: string; after: string } }
   | { kind: 'tool-finished'; toolId: string }
   | { kind: 'turn-complete'; isError: boolean; errorText?: string; costUsd?: number }
-  | { kind: 'config-changed'; model?: string; permissionMode?: string; effort?: string }
+  // harness mirrors adapter.ts's server-side SessionEvent (Task 2) — a deliberately separate
+  // copy, not a shared import, so a stale client bundle stays tolerant of a rebuilt server
+  // (see the untyped-JSON guards throughout this module's event parsing).
+  | { kind: 'config-changed'; model?: string; permissionMode?: string; effort?: string; harness?: HarnessId }
   | { kind: 'session-error'; text: string }
   | { kind: 'ended' }
 
@@ -90,16 +113,24 @@ export class SessionFeed {
    * the send succeeded (composer consolidation Task 1; Task 3 wires the real send-everything
    * verb — drafts + say, one gesture — via ComposerSend). */
   onSend: () => void = () => {}
-  /** Called when the effort or permission picker changes, with ONLY the changed key — host
-   * wires to POST /__the-forge/session/config. */
-  onConfig: (cfg: { model?: string; permissionMode?: string; effort?: string }) => void = () => {}
+  /** Called when the harness, model, effort, or permission picker changes, with ONLY the
+   * changed key — host wires to POST /__the-forge/session/config (index.ts forwards the whole
+   * object unchanged, so widening this union is the only wiring index.ts needs for a new key). */
+  onConfig: (cfg: { model?: string; permissionMode?: string; effort?: string; harness?: HarnessId }) => void = () => {}
 
   private readonly list: HTMLElement
 
-  // --- config pickers: model, effort, and permission — live in .composer-controls ---
+  // --- config pickers: harness, model, effort, and permission — live in .composer-controls ---
+  private readonly harnessSelect: HTMLSelectElement
   private readonly modelSelect: HTMLSelectElement
   private readonly effortSelect: HTMLSelectElement
   private readonly permissionSelect: HTMLSelectElement
+  /** Which harness the pickers currently reflect — mirrors harnessSelect.value but typed
+   * (HarnessId) for HARNESS_VOCAB/MODEL_ALIASES lookups. getHarness() exposes it read-only so
+   * index.ts's status-poll seed can skip a re-apply when the server-reported value already
+   * matches (setHarness resets the effort/permission selects, which must only happen on a
+   * genuine harness change — see setHarness's own doc comment). */
+  private currentHarness: HarnessId = 'claude-code'
 
   // --- chat composer (composer consolidation Task 1): the single bordered card holding the
   // chip row, textarea, and controls row ---
@@ -196,13 +227,26 @@ export class SessionFeed {
     this.list = document.createElement('div')
     this.list.className = 'session-list'
 
-    // Config pickers: model, effort, and permission — each stays on a placeholder option
-    // until a started/config-changed event seeds it; picking the placeholder itself is a
-    // no-op (see the '' guards in the onChange handlers). The model select's options are
-    // rebuilt per seed (seedModelOptions) rather than fixed like the other two — see the
-    // MODEL_ALIASES why-comment above. They used to live in their own header bar
-    // (.session-config-bar, retired); composer consolidation (Task 1) moves them into the
-    // composer's .composer-controls row instead — assembled further down.
+    // Config pickers: harness, model, effort, and permission — each of the LAST three stays
+    // on a placeholder option until a started/config-changed event seeds it; picking the
+    // placeholder itself is a no-op (see the '' guards in the onChange handlers). The harness
+    // select is different: it has no placeholder — a session always has a definite harness, so
+    // it starts on 'claude-code' (this.currentHarness's own default) rather than an empty
+    // option. The model select's options are rebuilt per seed (seedModelOptions) rather than
+    // fixed like effort/permission — see the MODEL_ALIASES why-comment above. They used to live
+    // in their own header bar (.session-config-bar, retired); composer consolidation (Task 1)
+    // moves them into the composer's .composer-controls row instead — assembled further down.
+    this.harnessSelect = createSelect({
+      className: 'session-harness',
+      options: EMBEDDED_HARNESSES.map((h) => ({ value: h, label: AGENT_DISPLAY_NAME[h] })),
+      value: this.currentHarness,
+      // Deliberately does NOT call setHarness() itself — same posture as the effort/permission
+      // selects below, which only POST the change and wait for the round-trip config-changed
+      // event to actually re-render (seedConfigBar -> setHarness). Switching harness respawns
+      // the session server-side, so the picker following the confirmed state (not the optimistic
+      // click) keeps it honest if the respawn fails.
+      onChange: (value) => this.onConfig({ harness: value as HarnessId }),
+    })
     this.modelSelect = createSelect({
       className: 'session-model',
       options: [{ value: '', label: 'model…' }],
@@ -214,7 +258,7 @@ export class SessionFeed {
     })
     this.effortSelect = createSelect({
       className: 'session-effort',
-      options: EFFORT_OPTIONS,
+      options: effortOptionsFor(this.currentHarness),
       value: '',
       onChange: (value) => {
         if (value === '') return
@@ -223,7 +267,7 @@ export class SessionFeed {
     })
     this.permissionSelect = createSelect({
       className: 'session-permission',
-      options: PERMISSION_OPTIONS,
+      options: permissionOptionsFor(this.currentHarness),
       value: '',
       onChange: (value) => {
         if (value === '') return
@@ -315,7 +359,14 @@ export class SessionFeed {
     composerSpacer.className = 'composer-spacer'
     this.composerControls = document.createElement('div')
     this.composerControls.className = 'composer-controls'
-    this.composerControls.append(this.modelSelect, this.effortSelect, this.permissionSelect, composerSpacer, this.sendBtn)
+    this.composerControls.append(
+      this.harnessSelect,
+      this.modelSelect,
+      this.effortSelect,
+      this.permissionSelect,
+      composerSpacer,
+      this.sendBtn
+    )
 
     // The single bordered composer card (composer consolidation Task 1) — replaces the retired
     // status row, standalone Stop button, and .session-config-bar. draftDisclosure sits ABOVE
@@ -479,28 +530,68 @@ export class SessionFeed {
   /** Seeds the config pickers from a started/config-changed event — only the keys present in
    * the event are applied, matching the "each select shows a placeholder until seeded"
    * contract. Programmatic .value / option rebuilds don't fire 'change', so this never loops
-   * back into onConfig. */
+   * back into onConfig. harness is applied FIRST (via setHarness) so that a single event
+   * carrying both `harness` and `model`/`effort`/`permissionMode` together already has the new
+   * harness's MODEL_ALIASES/vocab in effect before those fields seed — setHarness's own
+   * placeholder reset would otherwise stomp values this same call is about to set. */
   private seedConfigBar(e: Record<string, unknown>): void {
+    if (isHarnessId(e.harness)) this.setHarness(e.harness)
     if (typeof e.model === 'string') this.seedModelOptions(e.model)
     if (typeof e.effort === 'string') this.effortSelect.value = e.effort
     if (typeof e.permissionMode === 'string') this.permissionSelect.value = e.permissionMode
   }
 
-  /** Rebuilds the model select's options as [current, ...MODEL_ALIASES] (deduped, current
-   * first) and selects the current model. Rebuilt — not appended to — on every seed, so the
-   * placeholder disappears once a real model is known and a config-changed to a model outside
-   * the alias list still renders as the selected option instead of silently failing to match. */
+  /** Switches the composer's effort/permission pickers to a new harness's vocabulary (Task 5,
+   * C1) — called both from seedConfigBar (a config-changed event confirming a harness the user
+   * or the server picked) and from index.ts's status-poll seed (discovering an already-switched
+   * harness, e.g. on a fresh page load). Resets both dependent selects to their placeholder
+   * (the new/current session reports its own effort/permissionMode on its next config-changed,
+   * same as a fresh `started`) and hides a select entirely when the harness has no vocabulary
+   * for it — HARNESS_VOCAB's efforts/permissionModes are BOTH empty for cursor today, so both
+   * selects disappear rather than rendering an all-placeholder, unusable picker. Also updates
+   * currentHarness, which seedModelOptions reads to pick the right MODEL_ALIASES list. */
+  setHarness(h: HarnessId): void {
+    this.currentHarness = h
+    this.harnessSelect.value = h
+    const vocab = HARNESS_VOCAB[h]
+    this.setSelectOptions(this.effortSelect, effortOptionsFor(h))
+    this.effortSelect.value = ''
+    this.effortSelect.hidden = vocab.efforts.length === 0
+    this.setSelectOptions(this.permissionSelect, permissionOptionsFor(h))
+    this.permissionSelect.value = ''
+    this.permissionSelect.hidden = vocab.permissionModes.length === 0
+  }
+
+  /** The harness the pickers currently reflect — see currentHarness's own doc comment for why
+   * index.ts's status-poll seed needs this before calling setHarness. */
+  getHarness(): HarnessId {
+    return this.currentHarness
+  }
+
+  /** Rebuilds the model select's options as [current, ...MODEL_ALIASES[currentHarness]]
+   * (deduped, current first) and selects the current model. Rebuilt — not appended to — on
+   * every seed, so the placeholder disappears once a real model is known and a config-changed
+   * to a model outside the list still renders as the selected option instead of silently
+   * failing to match. */
   private seedModelOptions(current: string): void {
-    const values = [current, ...MODEL_ALIASES.filter((a) => a !== current)]
-    this.modelSelect.replaceChildren(
-      ...values.map((v) => {
+    const aliases = MODEL_ALIASES[this.currentHarness]
+    const values = [current, ...aliases.filter((a) => a !== current)]
+    this.setSelectOptions(this.modelSelect, values.map((v) => ({ value: v, label: v })))
+    this.modelSelect.value = current
+  }
+
+  /** Shared option-rebuild for the model/effort/permission selects — replaces (not appends to)
+   * a select's <option> children. Programmatic option rebuilds don't fire 'change', matching
+   * seedConfigBar's own "never loops back into onConfig" contract. */
+  private setSelectOptions(select: HTMLSelectElement, options: ReadonlyArray<{ value: string; label: string }>): void {
+    select.replaceChildren(
+      ...options.map((o) => {
         const opt = document.createElement('option')
-        opt.value = v
-        opt.textContent = v
+        opt.value = o.value
+        opt.textContent = o.label
         return opt
       })
     )
-    this.modelSelect.value = current
   }
 
   /** Open the NDJSON stream — called when design mode turns on. Re-entrant guard: if a fetch
@@ -859,6 +950,9 @@ export class SessionFeed {
 
   private makeConfigRow(e: Record<string, unknown>): HTMLElement {
     const parts: string[] = []
+    // Renders the harness's DISPLAY NAME (AGENT_DISPLAY_NAME), not the wire id — same rule as
+    // the watch strip's "Linked to Claude Code" copy, never the raw 'claude-code'/'cursor'.
+    if (isHarnessId(e.harness)) parts.push(`harness → ${AGENT_DISPLAY_NAME[e.harness]}`)
     if (typeof e.model === 'string') parts.push(`model → ${e.model}`)
     if (typeof e.permissionMode === 'string') parts.push(`permissions → ${e.permissionMode}`)
     if (typeof e.effort === 'string') parts.push(`effort → ${e.effort}`)

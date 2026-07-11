@@ -1259,6 +1259,40 @@ describe('composer send-everything verb + watch strip gating (Task 3)', () => {
       expect(textarea.placeholder).toBe('Starting session…')
     })
   })
+
+  describe('harness seeding off the watch poll tick (Task 5, C1)', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('a /status harness value seeds the feed picker; a matching value on a later poll is not re-applied', async () => {
+      let harness: string | undefined = undefined
+      const fetchMock = vi.fn((url: string) => {
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        if (url === '/__the-forge/status?ids=') return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', harness }) })
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, panel } = fullSetup()
+      const feed = (mode as never as { feed: SessionFeed }).feed
+      const setHarnessSpy = vi.spyOn(feed, 'setHarness')
+      mode.setActive(true)
+      await vi.advanceTimersByTimeAsync(0)
+      // harness undefined on the first poll (older/not-yet-landed server field) -> no seed.
+      expect(setHarnessSpy).not.toHaveBeenCalled()
+
+      harness = 'cursor'
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(setHarnessSpy).toHaveBeenCalledTimes(1)
+      expect(setHarnessSpy).toHaveBeenCalledWith('cursor')
+      const harnessSelect = panel.root.querySelector('.session-harness') as HTMLSelectElement
+      expect(harnessSelect.value).toBe('cursor')
+
+      // Same harness reported again on the next tick — must not re-invoke setHarness, or a
+      // user's own picker click would get clobbered by a routine stale poll.
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(setHarnessSpy).toHaveBeenCalledTimes(1)
+    })
+  })
 })
 
 describe('change list wiring', () => {

@@ -975,6 +975,16 @@ describe('config-changed row', () => {
     expect(feed.root.querySelector('.session-row.session-config')?.textContent).toBe('effort → high')
     feed.stop()
   })
+
+  it('renders harness using the display name, not the id, and joins with other keys', async () => {
+    const lines = [feedLine(1, { kind: 'config-changed', harness: 'cursor', model: 'gpt-5' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.session-row.session-config')?.textContent).toBe('harness → Cursor · model → gpt-5')
+    feed.stop()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1361,6 +1371,121 @@ describe('config bar pickers', () => {
     permSelect.value = 'plan'
     permSelect.dispatchEvent(new Event('change'))
     expect(fired).toEqual([{ permissionMode: 'plan' }])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Harness picker + per-harness vocab-driven pickers (Task 5, C1)
+// ---------------------------------------------------------------------------
+
+describe('harness picker', () => {
+  it('renders first in composer controls with Claude Code/Cursor options, defaulting to claude-code', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const controls = feed.root.querySelector('.composer-controls') as HTMLElement
+    const harnessSelect = controls.children[0] as HTMLSelectElement
+    expect(harnessSelect.className.split(' ')).toContain('session-harness')
+    const options = [...harnessSelect.options].map((o) => ({ value: o.value, label: o.textContent }))
+    expect(options).toEqual([
+      { value: 'claude-code', label: 'Claude Code' },
+      { value: 'cursor', label: 'Cursor' },
+    ])
+    // No placeholder option — harness always has a definite value.
+    expect(harnessSelect.value).toBe('claude-code')
+  })
+
+  it('changing harness fires onConfig({harness: "cursor"})', () => {
+    const fired: Array<Record<string, string>> = []
+    const feed = new SessionFeed()
+    feed.onConfig = (cfg) => fired.push(cfg as Record<string, string>)
+    document.body.appendChild(feed.root)
+    const harnessSelect = feed.root.querySelector('.session-harness') as HTMLSelectElement
+    harnessSelect.value = 'cursor'
+    harnessSelect.dispatchEvent(new Event('change'))
+    expect(fired).toEqual([{ harness: 'cursor' }])
+  })
+
+  it("setHarness('cursor') hides the effort AND permission selects (empty vocab); back to claude-code shows them with claude options", () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const effortSelect = feed.root.querySelector('.session-effort') as HTMLSelectElement
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+    expect(effortSelect.hidden).toBe(false)
+    expect(permSelect.hidden).toBe(false)
+
+    feed.setHarness('cursor')
+    expect(effortSelect.hidden).toBe(true)
+    expect(permSelect.hidden).toBe(true)
+
+    feed.setHarness('claude-code')
+    expect(effortSelect.hidden).toBe(false)
+    expect(permSelect.hidden).toBe(false)
+    expect([...effortSelect.options].map((o) => o.value)).toEqual(['', 'low', 'medium', 'high', 'xhigh', 'max'])
+    expect([...permSelect.options].map((o) => o.value)).toEqual(['', 'default', 'acceptEdits', 'plan'])
+    // Reset to placeholder, not re-seeded — the new/current session reports its own config.
+    expect(effortSelect.value).toBe('')
+    expect(permSelect.value).toBe('')
+  })
+
+  it('cursor hides model aliases (options = the current model only)', async () => {
+    const lines = [
+      feedLine(1, { kind: 'config-changed', harness: 'cursor' }),
+      feedLine(2, { kind: 'config-changed', model: 'gpt-5-high' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    expect(modelSelect.value).toBe('gpt-5-high')
+    expect([...modelSelect.options].map((o) => o.value)).toEqual(['gpt-5-high'])
+    feed.stop()
+  })
+
+  it('claude-code model select still offers the sonnet/opus/haiku aliases', async () => {
+    const lines = [feedLine(1, { kind: 'config-changed', model: 'claude-opus-4-5' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    expect([...modelSelect.options].map((o) => o.value)).toEqual(['claude-opus-4-5', 'sonnet', 'opus', 'haiku'])
+    feed.stop()
+  })
+
+  it('config-changed {harness} event seeds the picker + renders a config row with the display name', async () => {
+    const lines = [feedLine(1, { kind: 'config-changed', harness: 'cursor' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const harnessSelect = feed.root.querySelector('.session-harness') as HTMLSelectElement
+    expect(harnessSelect.value).toBe('cursor')
+    const effortSelect = feed.root.querySelector('.session-effort') as HTMLSelectElement
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+    expect(effortSelect.hidden).toBe(true)
+    expect(permSelect.hidden).toBe(true)
+    expect(feed.root.querySelector('.session-row.session-config')?.textContent).toBe('harness → Cursor')
+    feed.stop()
+  })
+
+  it('seeding harness via config-changed never fires onConfig (no echo loop)', async () => {
+    const fired: Array<Record<string, string>> = []
+    const lines = [feedLine(1, { kind: 'config-changed', harness: 'cursor' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    feed.onConfig = (cfg) => fired.push(cfg as Record<string, string>)
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(fired).toEqual([])
+    feed.stop()
+  })
+
+  it('getHarness() reflects the current picker value, defaulting to claude-code', () => {
+    const feed = new SessionFeed()
+    expect(feed.getHarness()).toBe('claude-code')
+    feed.setHarness('cursor')
+    expect(feed.getHarness()).toBe('cursor')
   })
 })
 

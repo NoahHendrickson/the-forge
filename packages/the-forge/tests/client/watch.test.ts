@@ -6,6 +6,7 @@ import {
   watchIndicatorFor,
   queuedLineFor,
   isSessionActive,
+  parseHarness,
   type SessionState,
 } from '../../src/client/watch'
 
@@ -499,5 +500,66 @@ describe('WatchStatus — sessionEnabled parsing (Task 6)', () => {
     resolveFetch({ ok: true, json: async () => ({ items: [], watcher: 'none' }) })
     await vi.advanceTimersByTimeAsync(0)
     expect(ticks).toEqual([])
+  })
+})
+
+describe('parseHarness', () => {
+  it('accepts known harness ids (EMBEDDED_HARNESSES)', () => {
+    expect(parseHarness('claude-code')).toBe('claude-code')
+    expect(parseHarness('cursor')).toBe('cursor')
+  })
+
+  it('missing/garbage input -> undefined', () => {
+    expect(parseHarness(undefined)).toBeUndefined()
+    expect(parseHarness(null)).toBeUndefined()
+    expect(parseHarness(123)).toBeUndefined()
+    expect(parseHarness('')).toBeUndefined()
+    expect(parseHarness('codex')).toBeUndefined() // AgentName, but not an EMBEDDED_HARNESSES member
+    expect(parseHarness('nonsense')).toBeUndefined()
+  })
+})
+
+describe('WatchStatus — harness field parsing (Task 5, C1)', () => {
+  function stubStatusWithHarness(harness: unknown) {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [], watcher: 'none', harness }) })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('harness undefined before the first poll answers', () => {
+    const watch = new WatchStatus(() => {})
+    expect(watch.harness()).toBeUndefined()
+  })
+
+  it('a recognized harness is parsed verbatim', async () => {
+    stubStatusWithHarness('cursor')
+    const watch = new WatchStatus(() => {})
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.harness()).toBe('cursor')
+    watch.stop()
+  })
+
+  it('unknown-shape harness (absent field / garbage) is tolerated without crash — stays at the last known-good value', async () => {
+    const fetchMock = stubStatusWithHarness('cursor')
+    const watch = new WatchStatus(() => {})
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.harness()).toBe('cursor')
+
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ items: [], watcher: 'none', harness: 'nonsense' }) })
+    await vi.advanceTimersByTimeAsync(WATCH_POLL_MS)
+    expect(watch.harness()).toBe('cursor')
+    watch.stop()
+  })
+
+  it('stop() resets harness to undefined', async () => {
+    stubStatusWithHarness('cursor')
+    const watch = new WatchStatus(() => {})
+    watch.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(watch.harness()).toBe('cursor')
+    watch.stop()
+    expect(watch.harness()).toBeUndefined()
   })
 })
