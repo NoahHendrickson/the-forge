@@ -186,12 +186,12 @@ describe('Overlay CSS design tokens (Task 1)', () => {
 })
 
 describe('Overlay (M2 additions)', () => {
-  it('attachPanel mounts an external panel root into the shadow root', () => {
+  it('attach mounts an external panel root into the shadow root', () => {
     const overlay = new Overlay()
     overlay.mount()
     const panelRoot = document.createElement('div')
     panelRoot.id = 'panel'
-    overlay.attachPanel(panelRoot)
+    overlay.attach(panelRoot)
     expect(overlay.host.shadowRoot!.getElementById('panel')).toBe(panelRoot)
   })
 

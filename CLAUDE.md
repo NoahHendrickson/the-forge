@@ -72,6 +72,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `overlay.ts` | shadow-DOM host, hover/selection outlines, the whole CSS design system (string const) |
 | `dock.ts` | panel docked/floating prefs: width clamps, sessionStorage persistence (`STORAGE_KEY 'the-forge:panel'`); `setCanvasActive` suspends the margin push while canvas mode owns the page |
 | `canvas.ts` | `CanvasMode` — Figma-style canvas: full-page artboard via `<body>` transform, pan/zoom (wheel, ctrl-wheel-to-cursor, space-drag, Shift+0/1, 10%–400%), verbatim style save/restore, sessionStorage persistence (`'the-forge:canvas'`); plus the pure zoom/pan/fit math |
+| `canvas-chrome.ts` | `buildCanvasChrome` — the zoom-pill DOM assembly + menu (extracted out of index.ts, 2026-07-11 review); presentation only, CanvasMode itself stays headless with zero ui/ imports |
 | `inspector.ts` | reads an element's computed-style snapshot for the panel |
 | `panel.ts` | the properties panel orchestrator (Panel class); `feedDivider`/`feedSplit()` are thin pass-throughs to `feed-divider.ts` |
 | `feed-divider.ts` | the panel↔chat drag divider: clamps, dblclick reset, sessionStorage persistence (`FEED_SPLIT_KEY`) |

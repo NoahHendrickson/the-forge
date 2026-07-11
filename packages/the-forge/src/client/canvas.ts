@@ -120,33 +120,35 @@ export class CanvasMode {
   setOn(on: boolean): void {
     if (on === this.prefs.on) return
     this.prefs = { ...this.prefs, on }
-    saveCanvasPrefs(this.prefs)
     // Fresh toggle-on seeds pixel-identical from the live scroll — NOT from the persisted
     // state (that path is resume()/reload, where the page scroll is gone but the canvas
     // view survives in prefs).
     if (on) this.apply({ x: -window.scrollX, y: -window.scrollY, scale: 1 })
     else this.unapply()
-    this.opts.onChange()
+    // setState (via apply) and unapply() are the only onChange notify sites (single-site
+    // notification, 2026-07-11 review) — no explicit call here, or this fires twice per toggle.
+    this.persist()
   }
 
   /** Design mode turned on — re-enter canvas if this session had it on. */
   resume(): void {
     if (this.prefs.on && !this.isApplied()) {
+      // apply() -> setState() is the sole notify site here (single-site notification).
       this.apply(this.prefs.state)
-      this.opts.onChange()
     }
   }
 
   /** Design mode turned off — every page mutation undone, preference kept. */
   suspend(): void {
     if (this.isApplied()) {
+      // unapply() notifies and persists itself (single-site notification).
       this.unapply()
-      this.opts.onChange()
     }
   }
 
   setZoomCentered(scale: number): void {
     this.setState(zoomAt(this.state, window.innerWidth / 2, window.innerHeight / 2, scale))
+    this.persist()
   }
 
   zoomToFit(): void {
@@ -157,6 +159,7 @@ export class CanvasMode {
         document.body.scrollWidth, document.body.scrollHeight, panelW
       )
     )
+    this.persist()
   }
 
   private apply(seed: CanvasState): void {
@@ -208,6 +211,21 @@ export class CanvasMode {
     this.saved = null
     this.opts.dock.setCanvasActive(false)
     window.scrollTo(sx, sy)
+    // unapply() is a discrete action (suspend/design-off/exit) AND the single notify site
+    // for the "turned off" transition (single-site onChange, 2026-07-11 review) — persist
+    // the final state (covers suspend, so a reload after suspend restores the last view)
+    // and notify exactly once here, not at every caller (setOn(false)/suspend()).
+    this.persist()
+    this.opts.onChange()
+  }
+
+  /** Splits paint from persist: setState (called on every wheel tick / pointermove) must
+   *  stay a pure, cheap DOM write — synchronous JSON.stringify + sessionStorage.setItem on
+   *  every tick would jank a trackpad pan. Gesture ends and discrete actions (setZoomCentered,
+   *  zoomToFit, setOn, unapply) call persist() directly; wheel has no end event, so onWheel
+   *  debounces it instead (Dock persists on gesture-end for the same reason — dock.ts onUp). */
+  private persist(): void {
+    saveCanvasPrefs(this.prefs)
   }
 
   private setState(next: CanvasState): void {
@@ -215,7 +233,6 @@ export class CanvasMode {
     document.body.style.transform =
       `translate(${next.x}px, ${next.y}px) scale(${next.scale})`
     this.prefs = { ...this.prefs, state: next }
-    saveCanvasPrefs(this.prefs)
     this.opts.onChange()
   }
 
@@ -231,6 +248,12 @@ export class CanvasMode {
     return e.composedPath?.()[0] ?? e.target
   }
 
+  /** Trailing debounce for wheel's persist() — wheel has no gesture-end event (unlike
+   *  pointerup/setZoomCentered/zoomToFit), so a full trackpad pan would otherwise never
+   *  persist until the NEXT discrete action. Idle-zero holds: the timer only exists while
+   *  actively wheeling — armed here, cleared (and flushed) in removeListeners(). */
+  private wheelPersistTimer: ReturnType<typeof setTimeout> | null = null
+
   private onWheel = (e: WheelEvent): void => {
     if (this.opts.hostContains(this.realTarget(e))) return // panel scrolls itself
     e.preventDefault()
@@ -242,6 +265,11 @@ export class CanvasMode {
     } else {
       this.setState(panBy(this.state, -e.deltaX, -e.deltaY))
     }
+    if (this.wheelPersistTimer) clearTimeout(this.wheelPersistTimer)
+    this.wheelPersistTimer = setTimeout(() => {
+      this.wheelPersistTimer = null
+      this.persist()
+    }, 250)
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -284,6 +312,7 @@ export class CanvasMode {
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onCancel)
       this.dragTeardown = null
+      this.persist() // drag ended — a discrete gesture-end, persist regardless of squelch path
       // The click that follows a pan-drag would land as a selection click — squelch
       // exactly one. window-capture beats index.ts's document-capture click handler.
       // Only pointerup gets one: pointercancel (and forced teardown) means the browser
@@ -310,6 +339,11 @@ export class CanvasMode {
 
   private removeListeners(): void {
     this.dragTeardown?.() // a drag in flight must not outlive canvas mode
+    if (this.wheelPersistTimer) {
+      clearTimeout(this.wheelPersistTimer)
+      this.wheelPersistTimer = null
+      this.persist() // a pending debounced write must not be dropped by teardown
+    }
     window.removeEventListener('wheel', this.onWheel, true)
     window.removeEventListener('keydown', this.onKeyDown, true)
     window.removeEventListener('keyup', this.onKeyUp, true)

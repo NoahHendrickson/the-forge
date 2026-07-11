@@ -339,3 +339,64 @@ describe('CanvasMode interactions', () => {
     expect(bodyTransform()).toBe('')
   })
 })
+
+describe('CanvasMode gesture-end persistence (2026-07-11 review: split paint from persist)', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+    document.documentElement.removeAttribute('style')
+    document.body.removeAttribute('style')
+    vi.stubGlobal('scrollTo', vi.fn())
+  })
+
+  it('wheel pan does not persist synchronously; a trailing debounce persists it at rest', () => {
+    vi.useFakeTimers()
+    const { canvas } = makeCanvas()
+    canvas.setOn(true) // discrete action — persists synchronously
+    const beforePan = loadCanvasPrefs()
+    const pan = new WheelEvent('wheel', { deltaX: 10, deltaY: 40, cancelable: true, bubbles: true })
+    window.dispatchEvent(pan)
+    // The tick itself paints (setState) but must not have written storage yet.
+    expect(loadCanvasPrefs()).toEqual(beforePan)
+    vi.advanceTimersByTime(250)
+    const after = loadCanvasPrefs()
+    expect(after.state.x).toBe(-10)
+    expect(after.state.y).toBe(-40)
+    canvas.setOn(false)
+    vi.useRealTimers()
+  })
+
+  it('suspend() flushes an un-flushed wheel debounce and persists the latest state', () => {
+    vi.useFakeTimers()
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    const pan = new WheelEvent('wheel', { deltaX: 10, deltaY: 40, cancelable: true, bubbles: true })
+    window.dispatchEvent(pan) // setState fires, wheel's trailing debounce armed but NOT yet fired
+    canvas.suspend() // removeListeners() must flush the pending debounce; unapply() persists too
+    const saved = loadCanvasPrefs()
+    expect(saved.state.x).toBe(-10)
+    expect(saved.state.y).toBe(-40)
+    vi.useRealTimers()
+  })
+})
+
+describe('CanvasMode onChange notifies exactly once per action (2026-07-11 review: single-site notification)', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+    document.documentElement.removeAttribute('style')
+    document.body.removeAttribute('style')
+    vi.stubGlobal('scrollTo', vi.fn())
+  })
+
+  it('setOn(true), suspend(), resume(), setOn(false) each fire onChange exactly once', () => {
+    let calls = 0
+    const { canvas } = makeCanvas({ onChange: () => { calls++ } })
+    canvas.setOn(true)
+    expect(calls).toBe(1)
+    canvas.suspend()
+    expect(calls).toBe(2)
+    canvas.resume()
+    expect(calls).toBe(3)
+    canvas.setOn(false)
+    expect(calls).toBe(4)
+  })
+})

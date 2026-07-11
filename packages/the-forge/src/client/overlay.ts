@@ -750,11 +750,10 @@ export class Overlay {
     document.documentElement.appendChild(this.host)
   }
 
-  attachPanel(panelRoot: HTMLElement): void {
-    this.host.shadowRoot!.appendChild(panelRoot)
-  }
-
-  attachChrome(el: HTMLElement): void {
+  /** Mounts an external element (the panel root, the zoom-pill chrome, …) into the shadow
+   * root — every overlay-adjacent DOM node lives inside the same shadow tree as #toggle/#status
+   * so app CSS can never reach in and so contains()/containsDeep() see it as part of the host. */
+  attach(el: HTMLElement): void {
     this.host.shadowRoot!.appendChild(el)
   }
 

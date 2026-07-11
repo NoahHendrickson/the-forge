@@ -5,7 +5,7 @@ import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { Dock } from './dock'
 import { CanvasMode } from './canvas'
-import { createMenuButton, type MenuButton } from './ui/menu'
+import { buildCanvasChrome, type CanvasChrome } from './canvas-chrome'
 import {
   buildChangeRequestWithElements,
   renderMarkdown,
@@ -72,10 +72,9 @@ export class DesignMode {
   private panel: Panel
   private dock: Dock
   private canvas: CanvasMode
-  /** Bottom-left zoom affordance (mirrors #toggle/#status's bottom-right cluster) — hidden
-   * until canvas mode is actually applied (design mode off ⇒ suspended ⇒ hidden too). */
-  private zoomPillWrap = document.createElement('div')
-  private zoomMenu: MenuButton
+  /** The zoom-pill DOM assembly + its repaint hook (canvas-chrome.ts) — presentation only,
+   * constructed once this.canvas/this.panel exist. */
+  private canvasChrome: CanvasChrome
   private verifier: Verifier
   private verifierSummary = ''
   private changeList: ChangeList
@@ -178,24 +177,8 @@ export class DesignMode {
       hostContains: (t) => this.overlay.containsDeep(t),
       onChange: () => this.syncCanvasUi(),
     })
-    this.zoomPillWrap.className = 'zoom-pill-wrap'
-    this.zoomPillWrap.hidden = true
-    this.zoomMenu = createMenuButton({
-      label: '100%',
-      opensUp: true,
-      popoverHost: this.zoomPillWrap,
-      items: () => [
-        { value: 'fit', label: 'Zoom to fit' },
-        { value: '0.5', label: '50%', checked: this.canvas.scale() === 0.5, separator: true },
-        { value: '1', label: '100%', checked: this.canvas.scale() === 1 },
-        { value: '2', label: '200%', checked: this.canvas.scale() === 2 },
-      ],
-      onSelect: (v) => (v === 'fit' ? this.canvas.zoomToFit() : this.canvas.setZoomCentered(Number(v))),
-    })
-    this.zoomMenu.button.classList.add('zoom-pill')
-    this.zoomPillWrap.appendChild(this.zoomMenu.button)
-    this.overlay.attachChrome(this.zoomPillWrap)
-    this.panel.canvasButton.addEventListener('click', () => this.canvas.setOn(!this.canvas.isOn()))
+    this.canvasChrome = buildCanvasChrome(this.canvas, this.panel)
+    this.overlay.attach(this.canvasChrome.wrap)
     this.verifier = new Verifier(this.session, this.drafts, (summary) => {
       this.verifierSummary = summary
       this.refreshStatus()
@@ -343,14 +326,11 @@ export class DesignMode {
   }
 
   /** CanvasMode's onChange fires on every state change (setOn, resume, suspend, pan/zoom) —
-   * this must stay an IDEMPOTENT full repaint, not an incremental toggle, since a single user
-   * action (e.g. setOn(true)) can fire onChange more than once per call. */
+   * this must stay an IDEMPOTENT full repaint, not an incremental toggle, since it's cheap
+   * to call on every tick and a repaint-from-scratch can never drift out of sync with the
+   * canvas's actual state. */
   private syncCanvasUi(): void {
-    const applied = this.canvas.isApplied()
-    this.zoomPillWrap.hidden = !applied
-    this.zoomMenu.button.textContent = `${Math.round(this.canvas.scale() * 100)}%`
-    this.panel.canvasButton.classList.toggle('on', this.canvas.isOn())
-    this.panel.canvasButton.title = this.canvas.isOn() ? 'Exit canvas mode' : 'Canvas mode'
+    this.canvasChrome.sync()
     // Selection/hover outlines are fixed-position boxes positioned from getBoundingClientRect()
     // and are normally re-measured by onReflow on scroll/resize. The canvas body transform moves
     // every element's visual rect on every pan/zoom tick but fires neither — so in canvas mode
@@ -616,10 +596,10 @@ export class DesignMode {
       this.pendingRestore = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
-      // Must run BEFORE dock.exit(): suspend() clears the dock's canvasActive flag while the
-      // dock is still active, so the margin-push repaint stays coherent. Clearing it after
-      // exit() would leave the flag stale for the next enter() and silently suspend the
-      // margin push on re-entry.
+      // Ordering is no longer load-bearing (2026-07-11 review: Dock.exit() now clears its own
+      // canvasActive flag) — suspend() before exit() is kept because it's the natural order:
+      // suspend() restores the page's saved styles and persists the canvas view, exit() undoes
+      // the dock's own margin push. Either order now leaves both objects in a clean state.
       this.canvas.suspend()
       this.dock.exit()
       this.verifier.stop()
@@ -969,7 +949,7 @@ function boot(): void {
   const overlay = new Overlay()
   overlay.mount()
   const mode = new DesignMode(overlay)
-  overlay.attachPanel(mode.panelRoot)
+  overlay.attach(mode.panelRoot)
   // The server-injected bootstrap (prepended to this bundle's source, see index.ts load())
   // sets globalThis.__THE_FORGE__ = { secret, agent } BEFORE this module runs — preserve it
   // rather than clobbering it when we attach `mode`.

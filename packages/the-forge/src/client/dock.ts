@@ -115,6 +115,12 @@ export class Dock {
     this.active = false
     window.removeEventListener('resize', this.onWindowResize)
     this.removeDocked()
+    // A feature flag that outlives exit() forces ordering contracts on callers (the old
+    // contract: canvas.suspend() had to run BEFORE dock.exit() or the next enter() would
+    // silently inherit a stale suspended margin). removeDocked() above already restored the
+    // margin verbatim, so clearing the flag here needs no repaint of its own — it just means
+    // the next enter() always starts from a clean, non-suspended push (2026-07-11 review).
+    this.canvasActive = false
   }
 
   setMode(mode: PanelMode): void {

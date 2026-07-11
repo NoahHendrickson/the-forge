@@ -43,7 +43,7 @@ function fullSetup() {
   overlay.mount()
   const drafts = new DraftStore()
   const panel = new Panel(drafts, () => {})
-  overlay.attachPanel(panel.root)
+  overlay.attach(panel.root)
   const mode = new DesignMode(overlay, panel, drafts)
   liveModes.push(mode)
   return { overlay, drafts, panel, mode }
@@ -354,7 +354,7 @@ describe('DesignMode multi-select (B6)', () => {
     overlay.mount()
     const drafts = new DraftStore()
     const panel = new Panel(drafts, () => {})
-    overlay.attachPanel(panel.root)
+    overlay.attach(panel.root)
     const mode = new DesignMode(overlay, panel, drafts)
     liveModes.push(mode)
     return { overlay, drafts, panel, mode }
@@ -1273,7 +1273,7 @@ describe('change list wiring', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     expect(mode.panelRoot.querySelector('.changes-section')).not.toBeNull()
   })
 
@@ -1285,7 +1285,7 @@ describe('change list wiring', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const disclosure = mode.panelRoot.querySelector('.draft-disclosure')
     expect(disclosure).not.toBeNull()
     expect(disclosure?.querySelector('.changes-section')).not.toBeNull()
@@ -1307,7 +1307,7 @@ describe('change list wiring', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const el = document.createElement('div')
     el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
     document.body.appendChild(el)
@@ -1342,7 +1342,7 @@ describe('change list wiring', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const el = document.createElement('div')
     el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
     document.body.appendChild(el)
@@ -2470,7 +2470,7 @@ describe('lifecycle persistence', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const el = document.createElement('div')
     el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
     document.body.appendChild(el)
@@ -2508,7 +2508,7 @@ describe('lifecycle persistence', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.setActive(true)
     ;(mode as never as { drafts: DraftStore }).drafts.apply(second as never, 'padding-top', '24px')
     ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
@@ -2523,7 +2523,7 @@ describe('lifecycle persistence', () => {
     overlay2.mount()
     const mode2 = new DesignMode(overlay2)
     liveModes.push(mode2)
-    overlay2.attachPanel(mode2.panelRoot)
+    overlay2.attach(mode2.panelRoot)
     mode2.restoreLifecycle(persisted!)
 
     const reRoundTripped = loadLifecycle()
@@ -2537,7 +2537,7 @@ describe('lifecycle persistence', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.restoreLifecycle({
       v: 1,
       designModeOn: true,
@@ -2578,7 +2578,7 @@ describe('lifecycle persistence', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.restoreLifecycle({
       v: 1,
       designModeOn: true,
@@ -2610,7 +2610,7 @@ describe('lifecycle persistence', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const saved = loadLifecycle()
     if (saved?.designModeOn) mode.restoreLifecycle(saved) // mirrors boot()
     expect(mode.active).toBe(false)
@@ -2726,7 +2726,7 @@ describe('lifecycle restore races the framework mount', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.restoreLifecycle(savedState)
     expect(mode.active).toBe(true)
     expect(mode.selection).toHaveLength(0) // nothing to locate yet
@@ -2749,7 +2749,7 @@ describe('lifecycle restore races the framework mount', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.restoreLifecycle(savedState)
 
     // Before the element ever appears, storage must still carry the pending draft — persist()
@@ -2763,7 +2763,7 @@ describe('lifecycle restore races the framework mount', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.restoreLifecycle(savedState)
 
     mode.setActive(false)
@@ -2783,7 +2783,7 @@ describe('lifecycle restore races the framework mount', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     expect(() => {
       mode.restoreLifecycle(savedState)
       vi.advanceTimersByTime(13000)
@@ -2834,7 +2834,7 @@ describe('lifecycle restore: unified per-item drain (R2 F-B)', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.restoreLifecycle(twoElementSelectionState)
 
     expect(mode.selection).toHaveLength(1)
@@ -2862,7 +2862,7 @@ describe('lifecycle restore: unified per-item drain (R2 F-B)', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     // Neither element exists at boot — both selection entries are pending.
     mode.restoreLifecycle(twoElementSelectionState)
     expect(mode.selection).toHaveLength(0)
@@ -2911,7 +2911,7 @@ describe('resend persistence (final-review F1)', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const el = document.createElement('div')
     el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
     document.body.appendChild(el)
@@ -2976,7 +2976,7 @@ describe('resend re-entrancy guard (R2 F-A)', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const el = document.createElement('div')
     el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
     document.body.appendChild(el)
@@ -3077,7 +3077,7 @@ describe('boot restore guard against corrupt storage (final-review F3)', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const saved = loadLifecycle()
     // R1: loadLifecycle now validates and drops invalid items PER ENTRY — a corrupt array
     // element (missing `id`/`elements`, here `{}`) is dropped by loadLifecycle itself and never
@@ -3197,7 +3197,7 @@ describe('SessionFeed wiring', () => {
       overlay.mount()
       const mode = new DesignMode(overlay)
       liveModes.push(mode)
-      overlay.attachPanel(mode.panelRoot)
+      overlay.attach(mode.panelRoot)
       mode.setActive(true)
 
       await flushMicrotasks()
@@ -3232,7 +3232,7 @@ describe('SessionFeed wiring', () => {
       overlay.mount()
       const mode = new DesignMode(overlay)
       liveModes.push(mode)
-      overlay.attachPanel(mode.panelRoot)
+      overlay.attach(mode.panelRoot)
       mode.setActive(true)
 
       await flushMicrotasks()
