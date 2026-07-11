@@ -151,23 +151,20 @@ export class ChangeList {
     return row
   }
 
-  private label(tag: string, dcSource: string | null): [HTMLElement, HTMLElement] {
+  private elLabel(tag: string, dcSource: string | null): HTMLElement {
     const elLabel = document.createElement('span')
     elLabel.className = 'change-el'
     // shortSource takes a non-null source (it's the shared src/client/source.ts export, also
     // used by index.ts/panel.ts/session-feed.ts) — the null case (no dcSource at all) is
     // handled here, matching shortSource's own '(no source)' fallback for an unparseable one.
     elLabel.textContent = `${tag} · ${dcSource ? shortSource(dcSource) : '(no source)'}`
-    const summary = document.createElement('span')
-    summary.className = 'change-summary'
-    return [elLabel, summary]
+    return elLabel
   }
 
   private renderDraftRow(el: TaggedElement, props: Array<[string, { original: string; value: string }]>): HTMLElement {
     const row = this.baseRow('draft', el)
     const dcSource = el.dataset?.dcSource ?? null
-    const [elLabel] = this.label(el.tagName.toLowerCase(), dcSource)
-    row.appendChild(elLabel)
+    row.appendChild(this.elLabel(el.tagName.toLowerCase(), dcSource))
     // Draft rows list EVERY drafted property (2026-07-11 draft-badge spec) — the disclosure
     // is already the user's opt-in to detail, so nothing hides behind "+N more"/title here.
     // The value shown is the inline draft (`prop → value`, no "before"): the DraftStore's
@@ -186,7 +183,11 @@ export class ChangeList {
     const dom = this.baseRow(row.stage, row.seed.el)
     const source = row.seed.change.source
     const dcSource = source ? `${source.file}:${source.line}:${source.col}` : row.seed.dcSource
-    const [elLabel, summary] = this.label(row.seed.change.tag, dcSource)
+    const elLabel = this.elLabel(row.seed.change.tag, dcSource)
+    // .change-summary is a sent/history-row affair only — draft rows itemize per property
+    // (.change-detail) instead, which is why the span is built here and not in elLabel().
+    const summary = document.createElement('span')
+    summary.className = 'change-summary'
     const { text, full } = summarize(row.seed.change.changes)
     summary.textContent = text
     summary.title = full
