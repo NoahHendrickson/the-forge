@@ -1,4 +1,4 @@
-import type { SentChange } from './sent'
+import type { SentChange } from './lifecycle'
 import type { ElementChange } from './request'
 import type { TaggedElement } from './source'
 
@@ -17,8 +17,6 @@ export interface PersistedSentElement {
   draftProps: string[]
   changes: SentChange[]
   change: ElementChange
-  /** Free-form prompt text for kind:'prompt' sends — see SentSeed.prompt in lifecycle.ts. */
-  prompt?: string
 }
 
 export interface PersistedLifecycle {
@@ -113,7 +111,11 @@ function isValidSentElement(v: unknown): v is PersistedSentElement {
   if (!Array.isArray(v.draftProps) || !v.draftProps.every((p) => typeof p === 'string')) return false
   if (!Array.isArray(v.changes) || !v.changes.every(isValidSentChange)) return false
   if (!isValidElementChange(v.change)) return false
-  if (v.prompt !== undefined && typeof v.prompt !== 'string') return false
+  // A persisted `prompt` marks a retired kind:'prompt' send (pre-composer-consolidation
+  // sessionStorage) — DROP it here rather than restore it: the prompt request kind is gone,
+  // so restoring would resurrect a blank-summary row whose resend queues a no-op request.
+  // Per-item drop (see loadLifecycle) keeps the rest of the snapshot intact.
+  if (v.prompt !== undefined) return false
   return true
 }
 

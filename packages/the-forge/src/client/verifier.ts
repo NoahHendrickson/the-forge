@@ -1,9 +1,8 @@
-import type { SentEntry } from './sent'
-import type { SentStore } from './lifecycle'
+import type { SentEntry, SentStore } from './lifecycle'
 import type { DraftStore } from './drafts'
 import type { TaggedElement } from './source'
 import { AGENT_DISPLAY_NAME, currentAgent } from './agent'
-import { queuedLineFor, type WatcherState } from './watch'
+import { parseSessionState, parseWatcherState, queuedLineFor, type SessionState, type WatcherState } from './watch'
 import { resolveElement } from './lifecycle-store'
 
 const POLL_MS = 2000
@@ -132,6 +131,7 @@ const MAX_NOTE_CHARS = 120
 interface StatusResponse {
   items: Array<{ id: string; status: string; note: string | null }>
   watcher?: unknown
+  session?: unknown
 }
 
 /**
@@ -142,17 +142,21 @@ interface StatusResponse {
  * has been claimed does "N applying…" (N = claimed count) become accurate.
  *
  * Watch mode refines the pending copy via queuedLineFor — the live/asleep/none message
- * matrix lives in watch.ts alongside the other watcher copy, not here.
+ * matrix lives in watch.ts alongside the other watcher copy, not here. An active embedded
+ * session (parsed from the same /status body as the watcher field) takes precedence inside
+ * queuedLineFor — without it, a pending item queued for the embedded session would falsely
+ * instruct the user to type /forge-watch.
  */
 function renderSummary(
   counters: Counters,
   claimed: number,
   pendingManual: number,
   agentDisplayName: string,
-  watcherState: WatcherState = 'none'
+  watcherState: WatcherState = 'none',
+  sessionState: SessionState = 'unavailable'
 ): string {
   const parts: string[] = []
-  if (pendingManual > 0) parts.push(queuedLineFor(pendingManual, agentDisplayName, watcherState))
+  if (pendingManual > 0) parts.push(queuedLineFor(pendingManual, agentDisplayName, watcherState, sessionState))
   else if (claimed > 0) parts.push(`${claimed} applying…`)
   if (counters.implemented) parts.push(`${counters.implemented} implemented ✓`)
   if (counters.mismatch) parts.push(`${counters.mismatch} mismatch ⚠`)
@@ -262,9 +266,12 @@ export class Verifier {
         }
         if (this.sent.size() === 0) this.stop()
         const agentDisplayName = AGENT_DISPLAY_NAME[currentAgent()]
-        const watcherState: WatcherState =
-          body.watcher === 'live' || body.watcher === 'asleep' ? body.watcher : 'none'
-        this.onUpdate(renderSummary(this.counters, claimed, pendingManual, agentDisplayName, watcherState))
+        // Shared /status-body parsers live in watch.ts (the allowlists' one home). Unknown
+        // watcher collapses to 'none' here — this is a one-shot summary line, not WatchStatus's
+        // stateful blip handling, so there's no standing 'asleep' to preserve.
+        const watcherState: WatcherState = parseWatcherState(body.watcher) ?? 'none'
+        const sessionState: SessionState = parseSessionState(body.session)
+        this.onUpdate(renderSummary(this.counters, claimed, pendingManual, agentDisplayName, watcherState, sessionState))
       })
       .catch(() => {
         // Transient blips retry silently at the base cadence; a RUN of failures means the dev

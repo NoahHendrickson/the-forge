@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Verifier, verifyEntry, PAUSE_AFTER_FAILURES, MAX_POLL_MS, type StageEvent } from '../../src/client/verifier'
-import type { SentEntry } from '../../src/client/sent'
+import type { SentEntry } from '../../src/client/lifecycle'
 import { LifecycleSession, type SentSeed } from '../../src/client/lifecycle'
 import type { ElementChange } from '../../src/client/request'
 import { DraftStore } from '../../src/client/drafts'
@@ -595,14 +595,14 @@ describe('Verifier polling lifecycle', () => {
   })
 
   describe('watcher-aware pending copy (watch mode)', () => {
-    function pendingVerifier(watcher: unknown) {
+    function pendingVerifier(watcher: unknown, session?: unknown) {
       const sent = new SentRegistry()
       const drafts = new DraftStore()
       const onUpdate = vi.fn()
       sent.add('q1', makeEntry([{ el: el(), dcSource: null, draftProps: [], changes: [] }]))
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ items: [{ id: 'q1', status: 'pending', note: null }], watcher }),
+        json: async () => ({ items: [{ id: 'q1', status: 'pending', note: null }], watcher, session }),
       })
       vi.stubGlobal('fetch', fetchMock)
       vi.stubGlobal('__THE_FORGE__', { agent: 'claude-code' })
@@ -629,6 +629,26 @@ describe('Verifier polling lifecycle', () => {
       expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-watch in Claude Code to link & apply')
 
       const onUpdate2 = pendingVerifier('something-new')
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(onUpdate2.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-watch in Claude Code to link & apply')
+    })
+
+    it('active embedded session in the same status body wins over every watcher state', async () => {
+      // Without the session field threaded through, a pending item queued for the embedded
+      // session would falsely instruct the user to type /forge-watch.
+      for (const watcher of ['live', 'asleep', undefined]) {
+        const onUpdate = pendingVerifier(watcher, 'busy')
+        await vi.advanceTimersByTimeAsync(2000)
+        expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — applying in the embedded session…')
+      }
+    })
+
+    it('inactive/unknown session values fall through to watcher copy', async () => {
+      const onUpdate = pendingVerifier('live', 'idle')
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(onUpdate.mock.calls.at(-1)![0]).toBe('1 queued — delivering to your Claude Code session…')
+
+      const onUpdate2 = pendingVerifier(undefined, 'something-new')
       await vi.advanceTimersByTimeAsync(2000)
       expect(onUpdate2.mock.calls.at(-1)![0]).toBe('1 queued — type /forge-watch in Claude Code to link & apply')
     })

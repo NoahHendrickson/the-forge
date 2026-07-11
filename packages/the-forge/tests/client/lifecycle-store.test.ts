@@ -245,7 +245,10 @@ describe('loadLifecycle — per-item boundary validation', () => {
     expect(loaded!.sent).toHaveLength(0)
   })
 
-  it('accepts an optional string prompt and drops a non-string one', () => {
+  it('drops retired prompt-send elements (pre-consolidation persisted state) without touching the rest', () => {
+    // kind:'prompt' sends died with the composer consolidation — a persisted element carrying
+    // `prompt` must be dropped at the load boundary (not restored as a blank no-op row), while
+    // sibling draft-send entries in the same snapshot survive.
     const base = validSentElement()
     sessionStorage.setItem(
       LIFECYCLE_KEY,
@@ -255,13 +258,13 @@ describe('loadLifecycle — per-item boundary validation', () => {
         selection: [],
         drafts: [],
         sent: [
-          { id: 'ok', elements: [{ ...base, prompt: 'hi' }] },
-          { id: 'bad', elements: [{ ...base, prompt: 42 }] },
+          { id: 'legacy-prompt', elements: [{ ...base, prompt: 'hi' }] },
+          { id: 'still-good', elements: [base] },
         ],
       })
     )
     const loaded = loadLifecycle()!
     expect(loaded.sent).toHaveLength(1)
-    expect(loaded.sent[0].elements[0].prompt).toBe('hi')
+    expect(loaded.sent[0].id).toBe('still-good')
   })
 })

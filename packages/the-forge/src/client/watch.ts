@@ -9,10 +9,6 @@ import { AGENT_DISPLAY_NAME, type AgentName } from './agent'
  * the upfront "not linked" hint rather than zero UI change. */
 export type WatcherState = 'live' | 'asleep' | 'none'
 
-/** Dispatch rungs as they arrive over the network from /dispatch (untyped JSON — see the
- * allowlist note in sentLabelFor). Mirrors server/dispatch.ts. */
-export type Rung = 'watcher' | 'channels' | 'tmux' | 'applescript' | 'deeplink' | 'manual' | 'embedded'
-
 /** Embedded-session lifecycle as reported by GET /__the-forge/status (server/session.ts):
  * 'idle' — session manager exists but no session is running;
  * 'starting' — session is being spawned;
@@ -24,24 +20,43 @@ export type SessionState = 'idle' | 'starting' | 'ready' | 'busy' | 'failed' | '
 
 export const WATCH_POLL_MS = 5_000
 
+/** Parses the untyped `watcher` field of a /status body — the ONE allowlist both /status
+ * consumers (WatchStatus.poll here, the Verifier's poll) share. Returns null for an
+ * absent/unrecognized value instead of picking a fallback, because the two consumers
+ * deliberately differ there: WatchStatus.poll must degrade() (asymmetric — drop a claimed
+ * 'live', keep a standing 'asleep' through blips) while the verifier's one-shot summary
+ * collapses unknown to 'none'. */
+export function parseWatcherState(raw: unknown): WatcherState | null {
+  return raw === 'live' || raw === 'asleep' || raw === 'none' ? raw : null
+}
+
+/** Parses the untyped `session` field of a /status body — only the five known states are
+ * accepted; absent (older server) or unrecognized (a future server) → 'unavailable'. Shared
+ * by both /status consumers so the allowlist can't drift when a state is added. */
+export function parseSessionState(raw: unknown): SessionState {
+  return raw === 'idle' || raw === 'starting' || raw === 'ready' || raw === 'busy' || raw === 'failed'
+    ? raw
+    : 'unavailable'
+}
+
 // ---------------------------------------------------------------------------
-// Watcher copy — the ONE home for the live/asleep/none message matrix. The Send
-// flash (sentLabelFor), the strip indicator (watchIndicatorFor), and the
-// verifier's queued prefix (queuedLineFor) all encode the same rules: a live
-// watcher means delivery (never an instruction to type), an asleep watcher
-// means wake it with /forge-watch (the queued items deliver on wake — nothing
-// is lost), and no watcher means the upfront "not linked" hint steering to
-// /forge-watch (the 2026-07-05 watcher-unlink spec deliberately REVERSED the
-// original "none renders nothing" rule — the user wants link state visible
-// before Send, and /forge-watch as the one advertised flow). Keep all three
-// here so the matrix can't drift across modules.
+// Watcher copy — the ONE home for the live/asleep/none message matrix. The
+// strip indicator (watchIndicatorFor) and the verifier's queued prefix
+// (queuedLineFor) both encode the same rules: a live watcher means delivery
+// (never an instruction to type), an asleep watcher means wake it with
+// /forge-watch (the queued items deliver on wake — nothing is lost), and no
+// watcher means the upfront "not linked" hint steering to /forge-watch (the
+// 2026-07-05 watcher-unlink spec deliberately REVERSED the original "none
+// renders nothing" rule — the user wants link state visible before Send, and
+// /forge-watch as the one advertised flow). Keep both here so the matrix can't
+// drift across modules. (A third encoding — sentLabelFor, the old standalone
+// Send button's flash label — retired with that button in the composer
+// consolidation; the ↑ send has no per-rung flash.)
 //
 // Embedded-session layer (2026-07-09): an active embedded session
 // (isSessionActive) is the HIGHEST-PRECEDENCE state in the indicator and
 // queued-line branches — it beats watcher state, mirroring the dispatch rung
-// order where 'embedded' is tried first. sentLabelFor('embedded') is its own
-// explicit allowlist entry; it does NOT depend on watcher/session state because
-// the server already told the client which rung delivered the request.
+// order where 'embedded' is tried first.
 // ---------------------------------------------------------------------------
 
 /** Returns true for session states that mean "the embedded session is alive and
@@ -49,28 +64,6 @@ export const WATCH_POLL_MS = 5_000
  * short-circuit watcher copy with the embedded indicator. */
 export function isSessionActive(s: SessionState): boolean {
   return s === 'starting' || s === 'ready' || s === 'busy'
-}
-
-/** Maps a dispatch rung to the Send button's flash label. Request content never appears
- * here — only the fixed per-rung copy and (for manual-family rungs) the configured
- * agent's display name. */
-export function sentLabelFor(rung: Rung, agent: AgentName, watcherState: WatcherState = 'none'): string {
-  if (rung === 'deeplink') return 'Sent — opened in Cursor'
-  // Explicit allowlist for the "typed into your session" / "delivered" copy — the rung
-  // value actually arrives over the network as untyped JSON (see the /dispatch fetch
-  // handler in index.ts), so any value that isn't recognizably watcher/tmux/applescript
-  // (a typo, a future rung, a server bug) must default to the manual label rather than
-  // falsely claiming delivery.
-  if (rung === 'watcher') return `Sent — delivered to your ${AGENT_DISPLAY_NAME[agent]} session`
-  if (rung === 'tmux' || rung === 'applescript') return 'Sent — typed /forge-design into your session'
-  if (rung === 'embedded') return 'Sent — applying in the embedded session'
-  // Manual family + ANY known watcher ('asleep' OR a possibly-stale client-side 'live'):
-  // the server is authoritative that the watcher did NOT take this Send — if it were
-  // live server-side we'd have the watcher rung. The wake copy is the honest instruction
-  // either way: the request is safely queued, and /forge-watch delivers everything
-  // pending on wake.
-  if (watcherState !== 'none') return `Sent — watcher asleep, type /forge-watch in ${AGENT_DISPLAY_NAME[agent]} to apply`
-  return `Sent — queued. Type /forge-watch in ${AGENT_DISPLAY_NAME[agent]} to link & apply`
 }
 
 export interface WatchIndicator {
@@ -220,22 +213,10 @@ export class WatchStatus {
         // 'none' is a legitimate, AUTHORITATIVE server answer (e.g. a fresh hub after a
         // Vite restart) — it must clear a cached 'asleep', not fall into the degrade
         // path with failures. Only truly unrecognized values (a future server) degrade.
-        const raw = body.watcher
-        if (raw === 'live' || raw === 'asleep' || raw === 'none') this.update(raw)
+        const watcher = parseWatcherState(body.watcher)
+        if (watcher !== null) this.update(watcher)
         else this.degrade()
-        // Session field: only the five known states are accepted; absent/unknown → 'unavailable'.
-        const rawSession = body.session
-        if (
-          rawSession === 'idle' ||
-          rawSession === 'starting' ||
-          rawSession === 'ready' ||
-          rawSession === 'busy' ||
-          rawSession === 'failed'
-        ) {
-          this.updateSession(rawSession)
-        } else {
-          this.updateSession('unavailable')
-        }
+        this.updateSession(parseSessionState(body.session))
       })
       .catch(() => {
         if (gen !== this.generation) return

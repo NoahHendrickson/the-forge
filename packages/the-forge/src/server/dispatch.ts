@@ -6,7 +6,9 @@ import { SCOPE_GUARDRAIL, NO_PREVIEW_GUARDRAIL } from '../shared/guardrails'
 /** 'embedded' and 'watcher' are produced by the /dispatch endpoint's short-circuits (see
  * endpoints.ts + server/watchers.ts), never by the ladder below. 'embedded' means the change
  * request was delivered to the in-process headless session (notifyDesignEdits), and 'watcher'
- * means it was delivered over the authenticated /wait channel of a linked terminal session. */
+ * means it was delivered over the authenticated /wait channel of a linked terminal session.
+ * 'channels' is RESERVED and never produced yet — tryChannels is deliberately inert until
+ * real Channels delivery is wired (see its comments). */
 export type Rung = 'embedded' | 'watcher' | 'channels' | 'tmux' | 'applescript' | 'deeplink' | 'manual'
 
 export interface DispatchResult {
@@ -300,8 +302,11 @@ async function tryChannels(cwd: string): Promise<DispatchResult | null> {
     // support later, once the Claude Code preview is available.
     return null
   }
-  // Unreachable in practice tonight (marker is never created by anything), but kept as the
-  // real check so this rung "just works" once a companion starts writing the marker.
+  // Marker exists (unreachable in practice tonight — nothing creates it) but we STILL fall
+  // through: returning { rung: 'channels' } here would tell the client "delivered" without
+  // any actual delivery having happened — a false delivery claim. Whoever wires up real
+  // Channels support replaces this return with the actual channel send + the 'channels'
+  // rung (the Rung member above is reserved for exactly that).
   return null
 }
 

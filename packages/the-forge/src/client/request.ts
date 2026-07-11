@@ -330,83 +330,20 @@ export function renderMarkdown(req: ChangeRequest): string {
 export function renderStandaloneMarkdown(req: ChangeRequest): string {
   return `${renderMarkdown(req)}\n${SCOPE_GUARDRAIL}\n${NO_PREVIEW_GUARDRAIL}`
 }
-
-export interface PromptRequest {
-  kind: 'prompt'
-  createdAt: string
-  viewport: { width: number; height: number }
-  prompt: string
-  elements: ElementChange[]
-}
-
-export function buildPromptRequest(
-  els: TaggedElement[],
-  prompt: string
-): { request: PromptRequest; pairs: Array<[TaggedElement, ElementChange]> } {
-  const pairs: Array<[TaggedElement, ElementChange]> = els.map((el) => [el, elementContext(el, [])])
-  return {
-    request: {
-      kind: 'prompt',
-      createdAt: new Date().toISOString(),
-      viewport: { width: window.innerWidth, height: window.innerHeight },
-      prompt,
-      elements: pairs.map(([, c]) => c),
-    },
-    pairs,
-  }
-}
-
-export function renderPromptMarkdown(req: PromptRequest): string {
-  const lines: string[] = []
-  lines.push('# Design prompt')
-  lines.push('')
-  lines.push(
-    `The user selected the element(s) below in the running app and typed a free-form instruction. Apply it to the identified source location(s). Written at viewport ${req.viewport.width}×${req.viewport.height}.`
-  )
-  lines.push('')
-  req.elements.forEach((el, i) => {
-    const loc = el.source ? `${el.source.file}:${el.source.line}:${el.source.col}` : '(no source tag — locate by selector/text)'
-    lines.push(`## ${i + 1}. <${el.tag}> — ${loc}`)
-    if (el.text) lines.push(`Text: "${el.text}"`)
-    if (el.className) lines.push(`Current classes: \`${el.className}\``)
-    lines.push(`Selector: \`${el.selector}\``)
-    lines.push('')
-  })
-  lines.push('## Instruction')
-  lines.push('')
-  lines.push(req.prompt.trim())
-  lines.push('')
-  lines.push(SCOPE_GUARDRAIL)
-  // Unlike renderMarkdown's closing line, this one does NOT say The Forge verifies the result —
-  // free-form prompts have no expected computed styles, so nothing is verified (spec: terminal
-  // state comes from mark_applied alone). The don't-preview instruction still applies verbatim.
-  lines.push('Do not run the app, take screenshots, or preview the result — the user is watching the live app.')
-  return lines.join('\n')
-}
-
 /** Rebuilds a single-element request + markdown from a failed seed for resend() — the one
- * place that reconstructs the shape `buildChangeRequestWithElements`/`buildPromptRequest`
- * produce fresh, so a future change to either request's fields only needs updating here, not
- * separately in resend(). `seed.prompt !== undefined` is the same mode discriminator used
- * everywhere else a seed is inspected (ChangeList, persistence). */
-export function rebuildRequestFromSeed(seed: {
-  change: ElementChange
-  prompt?: string
-}): { request: ChangeRequest | PromptRequest; markdown: string } {
-  const viewport = { width: window.innerWidth, height: window.innerHeight }
-  if (seed.prompt !== undefined) {
-    const request: PromptRequest = {
-      kind: 'prompt',
-      createdAt: new Date().toISOString(),
-      viewport,
-      prompt: seed.prompt,
-      elements: [seed.change],
-    }
-    return { request, markdown: renderPromptMarkdown(request) }
-  }
+ * place that reconstructs the shape `buildChangeRequestWithElements` produces fresh, so a
+ * future change to the request's fields only needs updating here, not separately in
+ * resend(). (This used to also rebuild kind:'prompt' requests for prompt-marked seeds — that
+ * whole request kind died with the composer consolidation: free-form text rides POST
+ * /session/say as a chat turn now, and lifecycle-store drops any pre-consolidation persisted
+ * prompt seed at the load boundary, so no prompt seed can reach resend() anymore.) */
+export function rebuildRequestFromSeed(seed: { change: ElementChange }): {
+  request: ChangeRequest
+  markdown: string
+} {
   const request: ChangeRequest = {
     createdAt: new Date().toISOString(),
-    viewport,
+    viewport: { width: window.innerWidth, height: window.innerHeight },
     tailwind: readTheme().spacingBasePx !== null,
     elements: [seed.change],
   }

@@ -3,7 +3,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   WatchStatus,
   WATCH_POLL_MS,
-  sentLabelFor,
   watchIndicatorFor,
   queuedLineFor,
   isSessionActive,
@@ -146,47 +145,6 @@ describe('WatchStatus poller', () => {
   })
 })
 
-describe('sentLabelFor watcher copy', () => {
-  it('watcher rung reads as delivered to the agent session', () => {
-    expect(sentLabelFor('watcher', 'claude-code')).toBe('Sent — delivered to your Claude Code session')
-  })
-
-  it('manual rung with an asleep watcher reads as the wake instruction', () => {
-    expect(sentLabelFor('manual', 'claude-code', 'asleep')).toBe(
-      'Sent — watcher asleep, type /forge-watch in Claude Code to apply'
-    )
-  })
-
-  it('manual rung with a STALE client-side live also reads as the wake instruction (server is authoritative)', () => {
-    // The 5s poller can lag the server: dispatch said manual, so the watcher did NOT
-    // take this Send regardless of what the client last observed.
-    expect(sentLabelFor('manual', 'claude-code', 'live')).toBe(
-      'Sent — watcher asleep, type /forge-watch in Claude Code to apply'
-    )
-  })
-
-  it('manual rung with no watcher steers to /forge-watch (link CTA)', () => {
-    expect(sentLabelFor('manual', 'claude-code')).toBe('Sent — queued. Type /forge-watch in Claude Code to link & apply')
-    expect(sentLabelFor('manual', 'claude-code', 'none')).toBe(
-      'Sent — queued. Type /forge-watch in Claude Code to link & apply'
-    )
-  })
-
-  it('unrecognized rungs still default to the manual family (allowlist regression)', () => {
-    expect(sentLabelFor('totally-new-rung' as never, 'claude-code')).toBe(
-      'Sent — queued. Type /forge-watch in Claude Code to link & apply'
-    )
-    expect(sentLabelFor('totally-new-rung' as never, 'claude-code', 'asleep')).toBe(
-      'Sent — watcher asleep, type /forge-watch in Claude Code to apply'
-    )
-  })
-
-  it('tmux/applescript/deeplink copy is untouched by watcher state', () => {
-    expect(sentLabelFor('tmux', 'claude-code', 'asleep')).toBe('Sent — typed /forge-design into your session')
-    expect(sentLabelFor('deeplink', 'cursor', 'asleep')).toBe('Sent — opened in Cursor')
-  })
-})
-
 describe('queuedLineFor (verifier pending prefix — same matrix, same module)', () => {
   it('live → delivering; asleep → wake; none → pre-watch-mode copy', () => {
     expect(queuedLineFor(2, 'Claude Code', 'live')).toBe('2 queued — delivering to your Claude Code session…')
@@ -262,24 +220,6 @@ describe('watchIndicatorFor', () => {
       live: true,
       unlinkable: true,
     })
-  })
-})
-
-describe('sentLabelFor — embedded rung', () => {
-  it('embedded rung → applying in the embedded session (allowlisted explicitly)', () => {
-    expect(sentLabelFor('embedded', 'claude-code')).toBe('Sent — applying in the embedded session')
-  })
-
-  it('embedded rung ignores watcher state — server already told us the rung', () => {
-    expect(sentLabelFor('embedded', 'claude-code', 'none')).toBe('Sent — applying in the embedded session')
-    expect(sentLabelFor('embedded', 'claude-code', 'asleep')).toBe('Sent — applying in the embedded session')
-    expect(sentLabelFor('embedded', 'claude-code', 'live')).toBe('Sent — applying in the embedded session')
-  })
-
-  it('unrecognized rungs still default to the manual family (allowlist regression — embedded is explicit, not "any new rung")', () => {
-    expect(sentLabelFor('totally-new-rung' as never, 'claude-code')).toBe(
-      'Sent — queued. Type /forge-watch in Claude Code to link & apply'
-    )
   })
 })
 

@@ -1,9 +1,36 @@
-import type { SentChange, SentEntry } from './sent'
 import type { ElementChange } from './request'
 import type { TaggedElement } from './source'
 import type { StageEvent, LifecycleStage } from './verifier'
 import { resolveElement } from './lifecycle-store'
 import type { PersistedLifecycle, PersistedSentElement } from './lifecycle-store'
+
+// SentChange/SentEntry lived in sent.ts (the SentRegistry's home) until the registry class
+// was absorbed into LifecycleSession below — the two leftover types followed it here.
+
+/** One sent property delta — named once so SentEntry and isDuplicate can't drift apart. */
+export interface SentChange {
+  property: string
+  afterCss: string
+}
+
+export interface SentEntry {
+  id: string
+  elements: Array<{
+    el: TaggedElement
+    dcSource: string | null
+    /** Position among querySelectorAll('[data-dc-source="..."]') matches at send time — passed
+     * through to lifecycle-store's resolveElement() so re-locating a disconnected element picks
+     * the SAME list instance, not always the first match. Optional and defaults to 0 so existing
+     * construction sites (and tests) that never set it keep compiling and behaving exactly as
+     * before — first-match was already the historical fallback. */
+    index?: number
+    /** the DraftStore's actual keys for this element at send time — used for targeted commit,
+     * since `changes` may use collapsed shorthand property names (see COLLAPSE in request.ts)
+     * that don't match any DraftStore key. */
+    draftProps: string[]
+    changes: SentChange[]
+  }>
+}
 
 /** One sent element's payload — unchanged shape from pre-refactor changelist.ts. */
 export interface SentSeed {
@@ -15,11 +42,6 @@ export interface SentSeed {
   index: number
   draftProps: string[]
   change: ElementChange
-  /** Free-form prompt text for kind:'prompt' sends (spec 2026-07-05-prompt-mode). Presence of
-   * this field is what marks a seed as a prompt send everywhere downstream: ChangeList renders
-   * it as the row summary instead of property deltas, and resend() rebuilds a prompt request
-   * from it. Absent on draft sends. */
-  prompt?: string
 }
 
 /** Stages a row can no longer leave via poll events — a late 'sent'/'applying' tick for an
@@ -264,7 +286,6 @@ export class LifecycleSession implements SentStore {
           draftProps: seed.draftProps,
           changes: seed.change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
           change: seed.change,
-          prompt: seed.prompt,
         })),
       })
     }
@@ -282,7 +303,6 @@ export class LifecycleSession implements SentStore {
         index: pe.index,
         draftProps: pe.draftProps,
         change: pe.change,
-        prompt: pe.prompt,
       }))
       this.entries.set(s.id, seeds.map((seed) => ({ seed, stage: 'sent' as LifecycleStage })))
       this.resolvedIds.delete(s.id)

@@ -11,7 +11,6 @@ import {
   rebuildRequestFromSeed,
   type ChangeRequest,
   type ElementChange,
-  type PromptRequest,
 } from './request'
 import { LifecycleSession, type SentSeed } from './lifecycle'
 import { Verifier } from './verifier'
@@ -19,7 +18,7 @@ import { snapshotRects, diffRects } from './ripple'
 import { resetTokensCache } from './tokens'
 import { ChangeList } from './changelist'
 import { type AgentName } from './agent'
-import { WatchStatus, watchIndicatorFor, type Rung } from './watch'
+import { WatchStatus, watchIndicatorFor } from './watch'
 import { SessionFeed } from './session-feed'
 import { saveLifecycle, loadLifecycle, sourceIndex, locateBySource, type PersistedLifecycle } from './lifecycle-store'
 import { ComposerSend } from './composer-send'
@@ -62,12 +61,6 @@ export class DesignMode {
    * projection — replacing the old SentRegistry + sentSeeds + ChangeList.sentRows trio. */
   session = new LifecycleSession()
   onSendComplete?: () => void
-
-  /** Back-compat alias: `.sent` used to be a separate SentRegistry; the session implements
-   * that same SentStore surface directly now. */
-  get sent() {
-    return this.session
-  }
 
   private moveRaf = 0
   private reflowRaf = 0
@@ -384,7 +377,7 @@ export class DesignMode {
    * comes back (or the POST fails), which is exactly what onOk/onFail are for.
    * Nesting is deliberate, matching the pre-extraction Send handler: the send tests count
    * microtask ticks — re-check them before flattening to a flat .then chain or async/await. */
-  private queueRequest(request: ChangeRequest | PromptRequest, markdown: string, onOk: (id: string) => void, onFail: () => void): void {
+  private queueRequest(request: ChangeRequest, markdown: string, onOk: (id: string) => void, onFail: () => void): void {
     fetch('/__the-forge/queue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
@@ -401,21 +394,18 @@ export class DesignMode {
   }
 
   /** Fire-and-forget dispatch POST shared by Send and resend() — a failure here must never
-   * undo the send, only downgrade to the manual rung. */
-  private postDispatch(onSettled: (rung: Rung | null) => void): void {
+   * undo the send, only downgrade to the manual rung. The response's rung is deliberately
+   * ignored: the per-rung Send-button flash it used to feed retired with that button in the
+   * composer consolidation, so all callers care about is WHEN the round trip settles (guard
+   * release / onSendComplete), never HOW the request was delivered. */
+  private postDispatch(onSettled: () => void): void {
     fetch('/__the-forge/dispatch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
       body: JSON.stringify({}),
     })
-      .then((res) => {
-        if (!res.ok) return onSettled(null)
-        res
-          .json()
-          .then((body: { rung: Rung }) => onSettled(body.rung))
-          .catch(() => onSettled(null))
-      })
-      .catch(() => onSettled(null))
+      .then(() => onSettled())
+      .catch(() => onSettled())
   }
 
   /** Host-injected POST helper handed to ComposerSend (composer-send.ts) as `postJson` — shares
@@ -497,10 +487,8 @@ export class DesignMode {
   private resend(seed: SentSeed): void {
     if (this.resendsInFlight.has(seed)) return // re-entrancy guard: this seed's re-queue POST is already in flight
     this.resendsInFlight.add(seed)
-    // A failed PROMPT seed re-queues as a fresh prompt request, not a ChangeRequest — its
-    // change.changes is empty, so renderMarkdown would produce a bullet-less no-op request.
-    // rebuildRequestFromSeed is the single place that shapes either request — resend no longer
-    // maintains its own copy of that contract.
+    // rebuildRequestFromSeed is the single place that shapes the rebuilt request — resend
+    // doesn't maintain its own copy of that contract.
     const { request, markdown } = rebuildRequestFromSeed(seed)
     this.queueRequest(
       request,

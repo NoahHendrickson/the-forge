@@ -181,12 +181,7 @@ export class ChangeList {
     const source = row.seed.change.source
     const dcSource = source ? `${source.file}:${source.line}:${source.col}` : row.seed.dcSource
     const [elLabel, summary] = this.label(row.seed.change.tag, dcSource)
-    // A prompt seed has no property deltas — its summary IS the prompt text (spec: truncate at
-    // 80 chars, same bound as the element-text trim; full text in the title tooltip).
-    const { text, full } =
-      row.seed.prompt !== undefined
-        ? { text: row.seed.prompt.length > 80 ? `${row.seed.prompt.slice(0, 80)}…` : row.seed.prompt, full: row.seed.prompt }
-        : summarize(row.seed.change.changes)
+    const { text, full } = summarize(row.seed.change.changes)
     summary.textContent = text
     summary.title = full
     dom.append(elLabel, summary)
