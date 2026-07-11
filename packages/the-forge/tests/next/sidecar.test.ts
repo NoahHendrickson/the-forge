@@ -229,6 +229,27 @@ describe('ensureSidecar', () => {
       warnSpy.mockRestore()
     })
 
+    it('still warns when the only client.js fetch was cross-origin (403 must not count as "design mode loaded")', async () => {
+      // PR #29 review: the old URL-peek cleared the timer on any allowed-Host request, so a
+      // cross-origin probe the middleware was about to 403 silently suppressed the hint. The
+      // clear now rides the middleware's clientBundle() call, which only happens on the fully
+      // gated 200 path.
+      const { ensureSidecar } = await importSidecar()
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const handle = await ensureSidecar(baseOpts({ hintDelayMs: 30 }))
+      closers.push(() => handle.close())
+
+      const res = await fetchJson(handle.port, '/__the-forge/client.js', {
+        headers: { Origin: 'https://evil.example' },
+      })
+      expect(res.status).toBe(403)
+      await new Promise((r) => setTimeout(r, 60))
+
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      expect(warnSpy.mock.calls[0][0]).toContain('design mode never loaded')
+      warnSpy.mockRestore()
+    })
+
     it('does not warn when client.js was fetched before the hint delay elapses', async () => {
       const { ensureSidecar } = await importSidecar()
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})

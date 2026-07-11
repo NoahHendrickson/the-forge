@@ -1,9 +1,9 @@
-import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vite'
 import { tagJsxSource } from './transform'
 import { createForgeMiddleware, writeEndpointFile, removeEndpointFile, CLIENT_JS_PATH } from './server/endpoints'
+import { readClientBundle } from './server/client-bundle'
 import { setupProjectConfig, resolveProjectRoot } from './server/setup'
 import { createForgeRuntime } from './server/runtime'
 import type { DispatchOpts } from './server/dispatch'
@@ -19,27 +19,6 @@ export interface TheForgeOptions {
    * nothing ever spawns a headless CLI). Default true — see DispatchConfig.embedded for why
    * this escape hatch exists. */
   embedded?: boolean
-}
-
-/** Reads the built client bundle per request. In the built package, client.js sits next to
- * this module (dist/). Under vitest, this module resolves from src/, where client.js is never
- * emitted — fall back to the built dist/client.js in that case. Loud error naming the build
- * command if neither is found. */
-function readClientBundle(): string {
-  const dir = path.dirname(fileURLToPath(import.meta.url))
-  const nextToModule = path.join(dir, 'client.js')
-  const builtFallback = path.join(dir, '..', 'dist', 'client.js')
-  const clientPath = fs.existsSync(nextToModule)
-    ? nextToModule
-    : fs.existsSync(builtFallback)
-      ? builtFallback
-      : null
-  if (!clientPath) {
-    throw new Error(
-      'the-forge: client bundle not found — run "npm run build -w forge-mode"'
-    )
-  }
-  return fs.readFileSync(clientPath, 'utf8')
 }
 
 export function theForge(options: TheForgeOptions = {}): Plugin {

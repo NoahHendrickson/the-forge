@@ -94,11 +94,11 @@ function hostnameOf(host: string): string {
   return colon === -1 ? h : h.slice(0, colon)
 }
 
-/** DNS-rebinding defense: is this request's Host header one we trust? Exported because the
- * Next sidecar's client.js route (src/next/sidecar.ts) is the one route that isn't wrapped by
- * createForgeMiddleware below and must apply the same gate itself before serving the bundle —
- * it embeds the per-start secret in its bootstrap line. */
-export function isAllowedHost(host: string | undefined, allowedHosts: string[]): boolean {
+/** DNS-rebinding defense: is this request's Host header one we trust? Module-private since
+ * PR #29: the Next sidecar's hand-rolled client.js route was the one external consumer, and
+ * that route is gone — the bundle now rides this middleware's own CLIENT_JS_PATH route, so
+ * every forge route (both frameworks) reaches this check through rejectDisallowedHost. */
+function isAllowedHost(host: string | undefined, allowedHosts: string[]): boolean {
   if (!host) return false
   const hostname = hostnameOf(host)
   if (hostname === 'localhost' || hostname.endsWith('.localhost')) return true

@@ -1,8 +1,8 @@
-import fs from 'node:fs'
 import path from 'node:path'
 import http, { type Server } from 'node:http'
 import { fileURLToPath } from 'node:url'
-import { createForgeMiddleware, writeEndpointFile, removeEndpointFile, isAllowedHost, CLIENT_JS_PATH } from '../server/endpoints'
+import { createForgeMiddleware, writeEndpointFile, removeEndpointFile } from '../server/endpoints'
+import { readClientBundle } from '../server/client-bundle'
 import { setupProjectConfig } from '../server/setup'
 import { createForgeRuntime } from '../server/runtime'
 import type { DispatchOpts } from '../server/dispatch'
@@ -20,35 +20,15 @@ export interface SidecarOpts {
   embedded?: boolean
   /** resolveProjectRoot()'d project root. */
   root: string
-  /** Injectable for tests; prod impl reads dist/client.js next to this module. Optional —
-   * withForge (N4) passes only { agent, channelsFlag, root } in production and relies on
-   * the default. */
+  /** Injectable for tests; prod impl is the shared readClientBundle (server/client-bundle.ts).
+   * Optional — withForge (N4) passes only { agent, channelsFlag, root } in production and
+   * relies on the default. */
   clientBundle?: () => string
   /** default '127.0.0.1' */
   listenHost?: string
   /** One-shot missing-ForgeDesignMode hint delay, ms — default 60_000. Injectable so tests
    * don't need to wait out a real 60s timer. */
   hintDelayMs?: number
-}
-
-/** Reads the built client bundle the same way src/vite.ts's readClientBundle does: client.js
- * sits next to the built module in dist/; under vitest this module resolves from src/, where
- * client.js is never emitted, so fall back to the built dist/client.js. Loud error naming
- * the build command if neither is found. (Two copies because the lookup is relative to each
- * entry's own built module location.) */
-function defaultClientBundle(): string {
-  const dir = path.dirname(fileURLToPath(import.meta.url))
-  const nextToModule = path.join(dir, 'client.js')
-  const builtFallback = path.join(dir, '..', 'dist', 'client.js')
-  const clientPath = fs.existsSync(nextToModule)
-    ? nextToModule
-    : fs.existsSync(builtFallback)
-      ? builtFallback
-      : null
-  if (!clientPath) {
-    throw new Error('the-forge: client bundle not found — run "npm run build -w forge-mode"')
-  }
-  return fs.readFileSync(clientPath, 'utf8')
 }
 
 let singleton: Promise<SidecarHandle> | null = null
@@ -72,9 +52,32 @@ export function ensureSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
 async function createSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
   const listenHost = opts.listenHost ?? '127.0.0.1'
   const hintDelayMs = opts.hintDelayMs ?? 60_000
-  const clientBundle = opts.clientBundle ?? defaultClientBundle
+  const clientBundle = opts.clientBundle ?? readClientBundle
 
   const { queue, hub, secret, forgeDir, session } = createForgeRuntime(opts.root)
+
+  let hintTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    hintTimer = null
+    console.warn(
+      "[the-forge] design mode never loaded — add <ForgeDesignMode /> from 'forge-mode/design-mode' to your root layout (or _app.tsx)"
+    )
+  }, hintDelayMs)
+  hintTimer.unref() // must never hold the process open on its own
+
+  // The middleware only invokes its clientBundle provider on the fully gated 200 path of the
+  // CLIENT_JS_PATH route (after the Host gate, Origin-vs-Host check, and method check), so
+  // this wrapper doubles as the "design mode actually loaded" signal: clear the
+  // missing-ForgeDesignMode hint on the first real serve. A DNS-rebound or cross-origin probe
+  // the middleware 403s never reaches the provider and thus never false-clears the hint (PR
+  // #29 review — the previous URL-peek here cleared on any allowed-Host request, including
+  // ones about to be rejected for cross-origin).
+  const serveClientBundle = (): string => {
+    if (hintTimer) {
+      clearTimeout(hintTimer)
+      hintTimer = null
+    }
+    return clientBundle()
+  }
 
   // Next's rewrites proxy presents `Host: 127.0.0.1:<sidecar-port>` to this server (the N0
   // spike) — never the original external host, which only ever shows up in
@@ -85,31 +88,14 @@ async function createSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
   // DNS-rebound origin spoof its way past the Host check — the very attack the check
   // exists to stop. A direct (non-proxied) connection from such an origin still presents
   // the attacker's real Host and is correctly rejected.
-  // clientBundle is passed through to the middleware's CLIENT_JS_PATH route (2026-07-10
-  // security review, finding 4): the bundle embeds the per-start secret in its bootstrap
-  // line, so serving it from inside createForgeMiddleware puts it behind the same Host gate
-  // AND Origin-vs-Host check as every other forge route — the previous hand-rolled route
-  // here checked Host but never Origin.
-  const middleware = createForgeMiddleware(queue, [], secret, { agent: opts.agent, channelsFlag: opts.channelsFlag, cwd: opts.root, embedded: opts.embedded }, hub, session, clientBundle)
-
-  let hintTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-    hintTimer = null
-    console.warn(
-      "[the-forge] design mode never loaded — add <ForgeDesignMode /> from 'forge-mode/design-mode' to your root layout (or _app.tsx)"
-    )
-  }, hintDelayMs)
-  hintTimer.unref() // must never hold the process open on its own
+  // The client bundle rides the middleware's CLIENT_JS_PATH route (2026-07-10 security
+  // review, finding 4): the bundle embeds the per-start secret in its bootstrap line, so
+  // serving it from inside createForgeMiddleware puts it behind the same Host gate AND
+  // Origin-vs-Host check as every other forge route — the previous hand-rolled route here
+  // checked Host but never Origin.
+  const middleware = createForgeMiddleware(queue, [], secret, { agent: opts.agent, channelsFlag: opts.channelsFlag, cwd: opts.root, embedded: opts.embedded }, hub, session, serveClientBundle)
 
   const server: Server = http.createServer((req, res) => {
-    // The bundle itself is served by the middleware's CLIENT_JS_PATH route (behind its Host +
-    // Origin gates) — this peek only owns the hint timer: clear the missing-ForgeDesignMode
-    // hint the first time the client bundle is legitimately fetched, proof the page loaded
-    // ForgeDesignMode and is talking to the sidecar. Still gated on isAllowedHost so a
-    // DNS-rebound probe the middleware is about to 403 doesn't count as "design mode loaded".
-    if (req.method === 'GET' && req.url === CLIENT_JS_PATH && hintTimer && isAllowedHost(req.headers.host, [])) {
-      clearTimeout(hintTimer)
-      hintTimer = null
-    }
     middleware(req, res, () => {
       res.statusCode = 404
       res.end()
