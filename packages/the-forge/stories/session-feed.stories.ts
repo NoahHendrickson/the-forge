@@ -205,6 +205,15 @@ export const ConfigBarSeeded: Story = {
     ]),
 }
 
+/** Composer with Cursor selected (Task 5, C1) — HARNESS_VOCAB['cursor'] has empty
+ * efforts/permissionModes, so setHarness hides both selects entirely; only the harness picker
+ * itself and the model select (offering the session-reported model only — cursor has no
+ * documented MODEL_ALIASES) remain in .composer-controls. */
+export const ComposerHarnessCursor: Story = {
+  render: () =>
+    makeFeed([feedLine(1, { kind: 'config-changed', harness: 'cursor', model: 'gpt-5-high' })]),
+}
+
 /** Disabled input — setAvailability(false, reason), as index.ts drives it when the server's
  * /status reports sessionEnabled: false (DispatchConfig.embedded opted out). */
 export const InputDisabled: Story = {

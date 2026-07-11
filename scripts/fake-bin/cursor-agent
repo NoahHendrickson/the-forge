@@ -1,0 +1,190 @@
+#!/usr/bin/env node
+/**
+ * Fake `cursor-agent` binary for the C1 Task 6 harness-switch E2E (embedded-session feed
+ * without a live Cursor CLI). Drop this directory at the front of PATH so CursorAdapter's
+ * spawn('cursor-agent', ['acp'], …) finds us — same PATH-fronting contract as the fake
+ * `claude` next door.
+ *
+ * Protocol: ACP — JSON-RPC 2.0, newline-delimited, over stdio (protocol on stdout, nothing
+ * on stderr — the live CLI's stderr was empty for every recorded scenario). Every canned
+ * line below is byte-copied from the recorded ground truth in
+ * packages/the-forge/tests/server/session/fixtures/cursor-acp-jsonrpc.ts (Task 1 spike,
+ * CLI 2026.07.09); the only runtime adjustments are the JSON-RPC `id` (must echo the
+ * request's id) and `params.sessionId` on notifications (patched to the live session).
+ *
+ * Turn script (one session/prompt): agent_thought_chunk → agent_message_chunk ("ping") →
+ * tool_call (kind:execute, `touch /tmp/forge-spike-probe`) → session/request_permission
+ * (server→client REQUEST, id 0) → wait for the client's answer → tool_call_update
+ * (status:completed — the Scenario 6 gotcha: a REJECTED tool still reports completed) →
+ * prompt response {stopReason:"end_turn"} (a rejected turn still resolves end_turn).
+ *
+ * Receipt log (FORGE_FAKE_CURSOR_LOG — mirrors FORGE_FAKE_CLAUDE_LOG): the adapter answers
+ * permission requests on our stdin, which nothing server-side records, so the E2E's "the
+ * reject-once answer actually landed in the CLI" assertion needs a record the FAKE owns.
+ * One JSON line per notable inbound message. Sidecar only — never touches the protocol.
+ *
+ * Stays alive until SIGTERM/SIGINT (SessionManager.stop / harness switch / process exit).
+ */
+'use strict'
+
+const readline = require('node:readline')
+
+const RECEIPT_LOG = process.env.FORGE_FAKE_CURSOR_LOG || ''
+
+// ---------------------------------------------------------------------------------------
+// Canned wire lines — byte-copied from cursor-acp-jsonrpc.ts (see header). Do not hand-edit;
+// if the fixtures change, re-copy.
+// ---------------------------------------------------------------------------------------
+
+const INIT_RESPONSE = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":{\"loadSession\":true,\"mcpCapabilities\":{\"http\":true,\"sse\":true},\"promptCapabilities\":{\"audio\":false,\"embeddedContext\":false,\"image\":true},\"sessionCapabilities\":{\"list\":{}}},\"authMethods\":[{\"id\":\"cursor_login\",\"name\":\"Cursor Login\",\"description\":\"Authenticate using existing Cursor login credentials. Run 'agent login' first if not logged in.\"}]}}"
+
+const SESSION_NEW_RESPONSE = "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"0d66f7c5-8dd6-4639-9480-03ee52d077ca\",\"modes\":{\"currentModeId\":\"agent\",\"availableModes\":[{\"id\":\"agent\",\"name\":\"Agent\",\"description\":\"Full agent capabilities with tool access\"},{\"id\":\"plan\",\"name\":\"Plan\",\"description\":\"Read-only mode for planning and designing before implementation\"},{\"id\":\"ask\",\"name\":\"Ask\",\"description\":\"Q&A mode - no edits or command execution\"}]},\"models\":{\"currentModelId\":\"default[]\",\"availableModels\":[{\"modelId\":\"default[]\",\"name\":\"Auto\"},{\"modelId\":\"grok-4.5[effort=high,fast=true]\",\"name\":\"grok-4.5\"},{\"modelId\":\"composer-2.5[fast=true]\",\"name\":\"composer-2.5\"},{\"modelId\":\"claude-opus-4-8[thinking=true,context=300k,effort=high,fast=false]\",\"name\":\"claude-opus-4-8\"},{\"modelId\":\"gpt-5.6-sol[context=272k,reasoning=medium,fast=false]\",\"name\":\"gpt-5.6-sol\"},{\"modelId\":\"gpt-5.5[context=272k,reasoning=medium,fast=false]\",\"name\":\"gpt-5.5\"},{\"modelId\":\"claude-fable-5[thinking=true,context=300k,effort=high]\",\"name\":\"claude-fable-5\"},{\"modelId\":\"claude-sonnet-5[thinking=true,context=300k,effort=high]\",\"name\":\"claude-sonnet-5\"},{\"modelId\":\"gpt-5.6-terra[context=272k,reasoning=medium,fast=false]\",\"name\":\"gpt-5.6-terra\"},{\"modelId\":\"claude-sonnet-4-6[thinking=true,context=200k,effort=medium]\",\"name\":\"claude-sonnet-4-6\"},{\"modelId\":\"gpt-5.3-codex[reasoning=medium,fast=false]\",\"name\":\"gpt-5.3-codex\"},{\"modelId\":\"claude-opus-4-7[thinking=true,context=300k,effort=xhigh,fast=false]\",\"name\":\"claude-opus-4-7\"},{\"modelId\":\"gpt-5.4[context=272k,reasoning=medium,fast=false]\",\"name\":\"gpt-5.4\"},{\"modelId\":\"claude-opus-4-6[thinking=true,context=200k,effort=high]\",\"name\":\"claude-opus-4-6\"},{\"modelId\":\"claude-opus-4-5[thinking=true]\",\"name\":\"claude-opus-4-5\"},{\"modelId\":\"gpt-5.2[reasoning=medium,fast=false]\",\"name\":\"gpt-5.2\"},{\"modelId\":\"gpt-5.6-luna[context=272k,reasoning=medium,fast=false]\",\"name\":\"gpt-5.6-luna\"},{\"modelId\":\"gemini-3.1-pro[]\",\"name\":\"gemini-3.1-pro\"},{\"modelId\":\"gpt-5.4-mini[reasoning=medium]\",\"name\":\"gpt-5.4-mini\"},{\"modelId\":\"gpt-5.4-nano[reasoning=medium]\",\"name\":\"gpt-5.4-nano\"},{\"modelId\":\"claude-haiku-4-5[thinking=true]\",\"name\":\"claude-haiku-4-5\"},{\"modelId\":\"claude-sonnet-4-5[thinking=true,context=200k]\",\"name\":\"claude-sonnet-4-5\"},{\"modelId\":\"gpt-5.2-codex[reasoning=medium,fast=false]\",\"name\":\"gpt-5.2-codex\"},{\"modelId\":\"gpt-5.1-codex-max[reasoning=medium,fast=false]\",\"name\":\"gpt-5.1-codex-max\"},{\"modelId\":\"gpt-5.1[reasoning=medium]\",\"name\":\"gpt-5.1\"},{\"modelId\":\"gemini-3-flash[]\",\"name\":\"gemini-3-flash\"},{\"modelId\":\"gemini-3.5-flash[]\",\"name\":\"gemini-3.5-flash\"},{\"modelId\":\"gpt-5.1-codex-mini[reasoning=medium]\",\"name\":\"gpt-5.1-codex-mini\"},{\"modelId\":\"claude-sonnet-4[thinking=false,context=200k]\",\"name\":\"claude-sonnet-4\"},{\"modelId\":\"gpt-5-mini[]\",\"name\":\"gpt-5-mini\"},{\"modelId\":\"gemini-2.5-flash[]\",\"name\":\"gemini-2.5-flash\"},{\"modelId\":\"kimi-k2.7-code[]\",\"name\":\"kimi-k2.7-code\"},{\"modelId\":\"glm-5.2[reasoning=high]\",\"name\":\"glm-5.2\"}]},\"configOptions\":[{\"id\":\"mode\",\"name\":\"Mode\",\"description\":\"Controls how the agent executes tasks\",\"category\":\"mode\",\"type\":\"select\",\"currentValue\":\"agent\",\"options\":[{\"value\":\"agent\",\"name\":\"Agent\",\"description\":\"Full agent capabilities with tool access\"},{\"value\":\"plan\",\"name\":\"Plan\",\"description\":\"Read-only mode for planning and designing before implementation\"},{\"value\":\"ask\",\"name\":\"Ask\",\"description\":\"Q&A mode - no edits or command execution\"}]},{\"id\":\"model\",\"name\":\"Model\",\"description\":\"Controls which model variant is used for responses\",\"category\":\"model\",\"type\":\"select\",\"currentValue\":\"default[]\",\"options\":[{\"value\":\"default[]\",\"name\":\"Auto\"},{\"value\":\"grok-4.5[effort=high,fast=true]\",\"name\":\"grok-4.5\"},{\"value\":\"composer-2.5[fast=true]\",\"name\":\"composer-2.5\"},{\"value\":\"claude-opus-4-8[thinking=true,context=300k,effort=high,fast=false]\",\"name\":\"claude-opus-4-8\"},{\"value\":\"gpt-5.6-sol[context=272k,reasoning=medium,fast=false]\",\"name\":\"gpt-5.6-sol\"},{\"value\":\"gpt-5.5[context=272k,reasoning=medium,fast=false]\",\"name\":\"gpt-5.5\"},{\"value\":\"claude-fable-5[thinking=true,context=300k,effort=high]\",\"name\":\"claude-fable-5\"},{\"value\":\"claude-sonnet-5[thinking=true,context=300k,effort=high]\",\"name\":\"claude-sonnet-5\"},{\"value\":\"gpt-5.6-terra[context=272k,reasoning=medium,fast=false]\",\"name\":\"gpt-5.6-terra\"},{\"value\":\"claude-sonnet-4-6[thinking=true,context=200k,effort=medium]\",\"name\":\"claude-sonnet-4-6\"},{\"value\":\"gpt-5.3-codex[reasoning=medium,fast=false]\",\"name\":\"gpt-5.3-codex\"},{\"value\":\"claude-opus-4-7[thinking=true,context=300k,effort=xhigh,fast=false]\",\"name\":\"claude-opus-4-7\"},{\"value\":\"gpt-5.4[context=272k,reasoning=medium,fast=false]\",\"name\":\"gpt-5.4\"},{\"value\":\"claude-opus-4-6[thinking=true,context=200k,effort=high]\",\"name\":\"claude-opus-4-6\"},{\"value\":\"claude-opus-4-5[thinking=true]\",\"name\":\"claude-opus-4-5\"},{\"value\":\"gpt-5.2[reasoning=medium,fast=false]\",\"name\":\"gpt-5.2\"},{\"value\":\"gpt-5.6-luna[context=272k,reasoning=medium,fast=false]\",\"name\":\"gpt-5.6-luna\"},{\"value\":\"gemini-3.1-pro[]\",\"name\":\"gemini-3.1-pro\"},{\"value\":\"gpt-5.4-mini[reasoning=medium]\",\"name\":\"gpt-5.4-mini\"},{\"value\":\"gpt-5.4-nano[reasoning=medium]\",\"name\":\"gpt-5.4-nano\"},{\"value\":\"claude-haiku-4-5[thinking=true]\",\"name\":\"claude-haiku-4-5\"},{\"value\":\"claude-sonnet-4-5[thinking=true,context=200k]\",\"name\":\"claude-sonnet-4-5\"},{\"value\":\"gpt-5.2-codex[reasoning=medium,fast=false]\",\"name\":\"gpt-5.2-codex\"},{\"value\":\"gpt-5.1-codex-max[reasoning=medium,fast=false]\",\"name\":\"gpt-5.1-codex-max\"},{\"value\":\"gpt-5.1[reasoning=medium]\",\"name\":\"gpt-5.1\"},{\"value\":\"gemini-3-flash[]\",\"name\":\"gemini-3-flash\"},{\"value\":\"gemini-3.5-flash[]\",\"name\":\"gemini-3.5-flash\"},{\"value\":\"gpt-5.1-codex-mini[reasoning=medium]\",\"name\":\"gpt-5.1-codex-mini\"},{\"value\":\"claude-sonnet-4[thinking=false,context=200k]\",\"name\":\"claude-sonnet-4\"},{\"value\":\"gpt-5-mini[]\",\"name\":\"gpt-5-mini\"},{\"value\":\"gemini-2.5-flash[]\",\"name\":\"gemini-2.5-flash\"},{\"value\":\"kimi-k2.7-code[]\",\"name\":\"kimi-k2.7-code\"},{\"value\":\"glm-5.2[reasoning=high]\",\"name\":\"glm-5.2\"}]}]}}"
+
+const AGENT_THOUGHT_CHUNK = "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"0d66f7c5-8dd6-4639-9480-03ee52d077ca\",\"update\":{\"sessionUpdate\":\"agent_thought_chunk\",\"content\":{\"type\":\"text\",\"text\":\"The user requested a\"}}}}"
+
+const AGENT_MESSAGE_CHUNK = "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"0d66f7c5-8dd6-4639-9480-03ee52d077ca\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"ping\"}}}}"
+
+const TOOL_CALL_STARTED_EXECUTE = "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"ba821580-f92a-4bd1-a9f6-ce55b314c370\",\"update\":{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"call-fe28c4b2-5b90-4a74-8e94-b52133ed3f44-0\\nfc_4c1726fb-e520-9e0b-8185-d48833aa0b01_0\",\"title\":\"`touch /tmp/forge-spike-probe`\",\"kind\":\"execute\",\"status\":\"pending\",\"rawInput\":{\"command\":\"touch /tmp/forge-spike-probe\"}}}}"
+
+const PERMISSION_REQUEST_EXECUTE = "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"session/request_permission\",\"params\":{\"sessionId\":\"ba821580-f92a-4bd1-a9f6-ce55b314c370\",\"toolCall\":{\"toolCallId\":\"call-fe28c4b2-5b90-4a74-8e94-b52133ed3f44-0\\nfc_4c1726fb-e520-9e0b-8185-d48833aa0b01_0\",\"title\":\"`touch /tmp/forge-spike-probe`\",\"kind\":\"execute\",\"status\":\"pending\",\"content\":[{\"type\":\"content\",\"content\":{\"type\":\"text\",\"text\":\"Not in allowlist: touch\"}}]},\"options\":[{\"optionId\":\"allow-once\",\"name\":\"Allow once\",\"kind\":\"allow_once\"},{\"optionId\":\"allow-always\",\"name\":\"Allow always\",\"kind\":\"allow_always\"},{\"optionId\":\"reject-once\",\"name\":\"Reject\",\"kind\":\"reject_once\"}]}}"
+
+const TOOL_CALL_UPDATE_AFTER_REJECT = "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"ba821580-f92a-4bd1-a9f6-ce55b314c370\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"call-fe28c4b2-5b90-4a74-8e94-b52133ed3f44-0\\nfc_4c1726fb-e520-9e0b-8185-d48833aa0b01_0\",\"status\":\"completed\"}}}"
+
+// PROMPT_RESPONSE_END_TURN === PROMPT_RESPONSE_END_TURN_AFTER_REJECT in the fixtures — a
+// rejected turn still resolves end_turn (Scenario 6); one constant serves both.
+const PROMPT_RESPONSE_END_TURN = "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"stopReason\":\"end_turn\"}}"
+
+const PROMPT_RESPONSE_CANCELLED = "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"stopReason\":\"cancelled\"}}"
+
+// session/load with an unknown sessionId (this fake persists nothing across spawns, so every
+// resume id is stale by definition) → the recorded -32602 stale-session error. The manager's
+// stale-resume branch then clears the slot and retries fresh via session/new — so a leftover
+// session.json can never wedge the E2E.
+const LOAD_STALE_ERROR = "{\"jsonrpc\":\"2.0\",\"id\":3,\"error\":{\"code\":-32602,\"message\":\"Invalid params\",\"data\":{\"message\":\"Session \\\"00000000-0000-0000-0000-000000000000\\\" not found\"}}}"
+
+// ---------------------------------------------------------------------------------------
+
+function writeLine(json) {
+  process.stdout.write(json + '\n')
+}
+
+/** Emit a canned line, echoing the request's JSON-RPC id and/or patching params.sessionId
+ * to the live session — the ONLY permitted adjustments to the byte-copied fixtures. */
+function emitCanned(canned, patch) {
+  const obj = JSON.parse(canned)
+  if (patch && patch.id !== undefined) obj.id = patch.id
+  if (patch && patch.sessionId !== undefined && obj.params && typeof obj.params === 'object') {
+    obj.params.sessionId = patch.sessionId
+  }
+  writeLine(JSON.stringify(obj))
+}
+
+function logReceipt(obj) {
+  if (!RECEIPT_LOG) return
+  try {
+    require('node:fs').appendFileSync(RECEIPT_LOG, JSON.stringify(obj) + '\n')
+  } catch {
+    // Best-effort — a failed receipt write must never break the protocol.
+  }
+}
+
+// Live state: the sessionId handed out by session/new, the in-flight prompt's request id
+// (so the prompt response can echo it), and whether our server→client permission request
+// (id 0 — the recorded server reuses 0 per turn) is awaiting the client's answer.
+let sessionId = ''
+let pendingPromptId = null
+let permissionOutstanding = false
+
+function handlePrompt(msg) {
+  pendingPromptId = msg.id
+  logReceipt({ received: 'session/prompt' })
+  emitCanned(AGENT_THOUGHT_CHUNK, { sessionId })
+  emitCanned(AGENT_MESSAGE_CHUNK, { sessionId })
+  emitCanned(TOOL_CALL_STARTED_EXECUTE, { sessionId })
+  // Brief pause so the feed can render the in-flight tool row before the permission
+  // request parks the turn (same 50ms convention as the fake claude's tool_result delay).
+  permissionOutstanding = true
+  setTimeout(() => {
+    if (!permissionOutstanding) return // cancelled in the window
+    emitCanned(PERMISSION_REQUEST_EXECUTE, { sessionId })
+  }, 50)
+}
+
+function handlePermissionAnswer(msg) {
+  permissionOutstanding = false
+  const outcome = msg.result && msg.result.outcome ? msg.result.outcome : {}
+  logReceipt({ received: 'permission_response', outcome: outcome.outcome, optionId: outcome.optionId })
+  emitCanned(TOOL_CALL_UPDATE_AFTER_REJECT, { sessionId })
+  if (pendingPromptId !== null) {
+    emitCanned(PROMPT_RESPONSE_END_TURN, { id: pendingPromptId })
+    pendingPromptId = null
+  }
+}
+
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
+rl.on('line', (line) => {
+  const trimmed = line.trim()
+  if (!trimmed) return
+  let msg
+  try {
+    msg = JSON.parse(trimmed)
+  } catch {
+    return
+  }
+  if (!msg || typeof msg !== 'object') return
+
+  if (msg.method === 'initialize') {
+    logReceipt({ received: 'initialize' })
+    emitCanned(INIT_RESPONSE, { id: msg.id })
+    return
+  }
+  if (msg.method === 'session/new') {
+    const mcpServers = Array.isArray(msg.params && msg.params.mcpServers)
+      ? msg.params.mcpServers.map((s) => s && s.name)
+      : []
+    logReceipt({ received: 'session/new', mcpServers })
+    const resp = JSON.parse(SESSION_NEW_RESPONSE)
+    resp.id = msg.id
+    sessionId = resp.result.sessionId
+    writeLine(JSON.stringify(resp))
+    return
+  }
+  if (msg.method === 'session/load') {
+    // Never resumable (see LOAD_STALE_ERROR's why-comment).
+    logReceipt({ received: 'session/load' })
+    emitCanned(LOAD_STALE_ERROR, { id: msg.id })
+    return
+  }
+  if (msg.method === 'session/prompt') {
+    handlePrompt(msg)
+    return
+  }
+  if (msg.method === 'session/cancel') {
+    logReceipt({ received: 'session/cancel' })
+    permissionOutstanding = false
+    if (pendingPromptId !== null) {
+      emitCanned(PROMPT_RESPONSE_CANCELLED, { id: pendingPromptId })
+      pendingPromptId = null
+    }
+    return
+  }
+  // No method → a response to OUR server→client request. The only one we send is the
+  // permission request (id 0).
+  if (msg.method === undefined && msg.id === 0 && permissionOutstanding) {
+    handlePermissionAnswer(msg)
+  }
+})
+
+function shutdown() {
+  try {
+    rl.close()
+  } catch {
+    /* ignore */
+  }
+  process.exit(0)
+}
+process.on('SIGTERM', shutdown)
+process.on('SIGINT', shutdown)
+
+// Keep the event loop alive even if stdin closes unexpectedly.
+setInterval(() => {}, 60_000)

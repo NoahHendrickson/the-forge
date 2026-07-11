@@ -2,28 +2,41 @@
 // requires X-Forge-Secret for auth (same as all mutating endpoints), so we use
 // fetch + ReadableStream + manual NDJSON parsing instead.
 import { createButton } from './ui/button'
-import { createSelect } from './ui/select'
 import { basename } from './source'
-import { EFFORT_LEVELS, PERMISSION_MODES, CHAT_TEXT_MAX } from '../shared/chat-constants'
+import { CHAT_TEXT_MAX, isHarnessId, type HarnessId } from '../shared/chat-constants'
+import { AGENT_DISPLAY_NAME } from './agent'
+import { ComposerConfig } from './composer-config'
 import { type SessionState } from './watch'
 
-// Fixed vocabularies for the effort/permission pickers — built from the shared
-// EFFORT_LEVELS/PERMISSION_MODES arrays (src/shared/chat-constants.ts), the single source of
-// truth also consumed by server/endpoints.ts's validation sets (task-6 brief).
-const EFFORT_OPTIONS = [{ value: '', label: 'effort…' }, ...EFFORT_LEVELS.map((v) => ({ value: v, label: v }))] as const
+// Shared untyped-JSON guard for the edit payload carried by tool-started AND (Cursor's
+// late-diff path) tool-finished — the wire outlives any one bundle build, so shape is checked
+// at runtime, never trusted from the type.
+function parseEditPayload(raw: unknown): { file: string; before: string; after: string } | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const e = raw as Record<string, unknown>
+  return typeof e.file === 'string' && typeof e.before === 'string' && typeof e.after === 'string'
+    ? { file: e.file, before: e.before, after: e.after }
+    : undefined
+}
 
-const PERMISSION_OPTIONS = [
-  { value: '', label: 'permissions…' },
-  ...PERMISSION_MODES.map((v) => ({ value: v, label: v })),
-] as const
-
-// The model picker's option set is NOT a fixed vocabulary like effort/permissions: the CLI
-// exposes no enumerable model list, so the select offers the started/config-changed-reported
-// model (the only ground truth for "current") PLUS these aliases — the CLI's own documented
-// shorthands, resolved server-side by set_model (spike-verified in Task 1 with a full model
-// id). Deduped when the current value IS one of the aliases; rebuilt on every seed so a
-// config-changed to a model outside the list still renders as the selected option.
-const MODEL_ALIASES = ['sonnet', 'opus', 'haiku'] as const
+// Hand-rolled before/after disclosure — no diff library. Collapsed by default (native
+// <details> behavior); summary is just the basename so long paths don't blow out the row.
+// One builder for both attachment points: rows opened WITH a diff (tool-started, Claude) and
+// rows upgraded later (tool-finished, Cursor's terminal tool_call_update).
+function makeDiffDetails(edit: { file: string; before: string; after: string }): HTMLElement {
+  const details = document.createElement('details')
+  details.className = 'session-diff'
+  const summary = document.createElement('summary')
+  summary.textContent = basename(edit.file)
+  const before = document.createElement('pre')
+  before.className = 'diff-before'
+  before.textContent = edit.before
+  const after = document.createElement('pre')
+  after.className = 'diff-after'
+  after.textContent = edit.after
+  details.append(summary, before, after)
+  return details
+}
 
 // ---------------------------------------------------------------------------
 // Stream line types (NDJSON, one object per line)
@@ -42,9 +55,15 @@ type SessionEvent =
   // (see parseLine's seq-tracking below).
   | { kind: 'assistant-delta'; text: string }
   | { kind: 'tool-started'; toolId: string; name: string; detail: string; edit?: { file: string; before: string; after: string } }
-  | { kind: 'tool-finished'; toolId: string }
+  // tool-finished's edit mirrors the server union's late-arriving-diff extension: Cursor
+  // delivers an edit's before/after on the terminal tool_call_update, so the diff can only
+  // ride tool-finished there; Claude's diffs always arrive on tool-started.
+  | { kind: 'tool-finished'; toolId: string; edit?: { file: string; before: string; after: string } }
   | { kind: 'turn-complete'; isError: boolean; errorText?: string; costUsd?: number }
-  | { kind: 'config-changed'; model?: string; permissionMode?: string; effort?: string }
+  // harness mirrors adapter.ts's server-side SessionEvent (Task 2) — a deliberately separate
+  // copy, not a shared import, so a stale client bundle stays tolerant of a rebuilt server
+  // (see the untyped-JSON guards throughout this module's event parsing).
+  | { kind: 'config-changed'; model?: string; permissionMode?: string; effort?: string; harness?: HarnessId }
   | { kind: 'session-error'; text: string }
   | { kind: 'ended' }
 
@@ -90,16 +109,17 @@ export class SessionFeed {
    * the send succeeded (composer consolidation Task 1; Task 3 wires the real send-everything
    * verb — drafts + say, one gesture — via ComposerSend). */
   onSend: () => void = () => {}
-  /** Called when the effort or permission picker changes, with ONLY the changed key — host
-   * wires to POST /__the-forge/session/config. */
-  onConfig: (cfg: { model?: string; permissionMode?: string; effort?: string }) => void = () => {}
+  /** Called when the harness, model, effort, or permission picker changes, with ONLY the
+   * changed key — host wires to POST /__the-forge/session/config (index.ts forwards the whole
+   * object unchanged, so widening this union is the only wiring index.ts needs for a new key). */
+  onConfig: (cfg: { model?: string; permissionMode?: string; effort?: string; harness?: HarnessId }) => void = () => {}
 
   private readonly list: HTMLElement
 
-  // --- config pickers: model, effort, and permission — live in .composer-controls ---
-  private readonly modelSelect: HTMLSelectElement
-  private readonly effortSelect: HTMLSelectElement
-  private readonly permissionSelect: HTMLSelectElement
+  // --- config pickers: harness, model, effort, and permission — live in .composer-controls,
+  // owned by ComposerConfig (composer-config.ts, extracted PR #32); SessionFeed mounts its
+  // selects and drives its seed methods from the stream handlers. ---
+  private readonly config: ComposerConfig
 
   // --- chat composer (composer consolidation Task 1): the single bordered card holding the
   // chip row, textarea, and controls row ---
@@ -147,14 +167,6 @@ export class SessionFeed {
   private readonly approvalRows = new Map<string, HTMLElement>()
   /** All rows appended to this.list, in insertion order; capped at MAX_ROWS (oldest removed). */
   private readonly rowList: HTMLElement[] = []
-  /** Last-user-chosen effort/permissionMode seen via config-changed rows — re-applied to the
-   * pickers on every `started` event (final-review fix 2). The manager now re-applies these
-   * server-side on every respawn too (a respawned child otherwise silently reverts them), so
-   * this keeps the UI honest about that reality instead of relying on DOM inertia (a `started`
-   * event's payload carries no effort/permissionMode field to seed from directly). Undefined
-   * until the first config-changed for that key — the pickers stay on their placeholder. */
-  private lastEffort: string | undefined = undefined
-  private lastPermission: string | undefined = undefined
   /** The single in-progress .chat-streaming bubble, if any — the first seq-0 delta after a
    * non-delta event creates it; subsequent deltas append to it; the next final assistant-text
    * replaces its content and clears this back to null (no duplicate bubble). */
@@ -197,40 +209,13 @@ export class SessionFeed {
     this.list = document.createElement('div')
     this.list.className = 'session-list'
 
-    // Config pickers: model, effort, and permission — each stays on a placeholder option
-    // until a started/config-changed event seeds it; picking the placeholder itself is a
-    // no-op (see the '' guards in the onChange handlers). The model select's options are
-    // rebuilt per seed (seedModelOptions) rather than fixed like the other two — see the
-    // MODEL_ALIASES why-comment above. They used to live in their own header bar
-    // (.session-config-bar, retired); composer consolidation (Task 1) moves them into the
-    // composer's .composer-controls row instead — assembled further down.
-    this.modelSelect = createSelect({
-      className: 'session-model',
-      options: [{ value: '', label: 'model…' }],
-      value: '',
-      onChange: (value) => {
-        if (value === '') return
-        this.onConfig({ model: value })
-      },
-    })
-    this.effortSelect = createSelect({
-      className: 'session-effort',
-      options: EFFORT_OPTIONS,
-      value: '',
-      onChange: (value) => {
-        if (value === '') return
-        this.onConfig({ effort: value })
-      },
-    })
-    this.permissionSelect = createSelect({
-      className: 'session-permission',
-      options: PERMISSION_OPTIONS,
-      value: '',
-      onChange: (value) => {
-        if (value === '') return
-        this.onConfig({ permissionMode: value })
-      },
-    })
+    // Config pickers (harness/model/effort/permission) — owned by ComposerConfig
+    // (composer-config.ts, extracted PR #32). It forwards each picker's onChange through the
+    // SessionFeed.onConfig arrow below (read lazily, so index.ts reassigning onConfig after
+    // construction still takes effect); its `selects` are mounted into .composer-controls
+    // further down. They used to live in their own header bar (.session-config-bar, retired);
+    // composer consolidation (Task 1) moved them into the composer's .composer-controls row.
+    this.config = new ComposerConfig((cfg) => this.onConfig(cfg))
 
     // Element chip: Prompt-button / host sets it via setChip(); the × clears it locally
     // (no host callback — a host's onSend implementation reads it via getChip(), same as the
@@ -326,7 +311,10 @@ export class SessionFeed {
     composerSpacer.className = 'composer-spacer'
     this.composerControls = document.createElement('div')
     this.composerControls.className = 'composer-controls'
-    this.composerControls.append(this.modelSelect, this.effortSelect, this.permissionSelect, composerSpacer, this.sendBtn)
+    // Spread ComposerConfig's four selects directly (not a wrapper) so they stay direct flex
+    // children of .composer-controls in harness/model/effort/permission order, byte-identical
+    // to the pre-extraction DOM.
+    this.composerControls.append(...this.config.selects, composerSpacer, this.sendBtn)
 
     // The single bordered composer card (composer consolidation Task 1) — replaces the retired
     // status row, standalone Stop button, and .session-config-bar. draftDisclosure sits ABOVE
@@ -495,31 +483,23 @@ export class SessionFeed {
     this.sendBtn.setAttribute('aria-label', this.sendIsStop ? 'Stop' : 'Send')
   }
 
-  /** Seeds the config pickers from a started/config-changed event — only the keys present in
-   * the event are applied, matching the "each select shows a placeholder until seeded"
-   * contract. Programmatic .value / option rebuilds don't fire 'change', so this never loops
-   * back into onConfig. */
-  private seedConfigBar(e: Record<string, unknown>): void {
-    if (typeof e.model === 'string') this.seedModelOptions(e.model)
-    if (typeof e.effort === 'string') this.effortSelect.value = e.effort
-    if (typeof e.permissionMode === 'string') this.permissionSelect.value = e.permissionMode
+  /** Switches the composer's config pickers to a harness — thin delegate to ComposerConfig
+   * (composer-config.ts), kept on SessionFeed so index.ts's status-poll seed and the tests can
+   * reach it via the feed instance, same access path as before the extraction. */
+  setHarness(h: HarnessId): void {
+    this.config.setHarness(h)
   }
 
-  /** Rebuilds the model select's options as [current, ...MODEL_ALIASES] (deduped, current
-   * first) and selects the current model. Rebuilt — not appended to — on every seed, so the
-   * placeholder disappears once a real model is known and a config-changed to a model outside
-   * the alias list still renders as the selected option instead of silently failing to match. */
-  private seedModelOptions(current: string): void {
-    const values = [current, ...MODEL_ALIASES.filter((a) => a !== current)]
-    this.modelSelect.replaceChildren(
-      ...values.map((v) => {
-        const opt = document.createElement('option')
-        opt.value = v
-        opt.textContent = v
-        return opt
-      })
-    )
-    this.modelSelect.value = current
+  /** Snaps the config pickers back to their last confirmed values — thin delegate to
+   * ComposerConfig; index.ts calls it when a POST /__the-forge/session/config fails. */
+  revertConfig(): void {
+    this.config.revertConfig()
+  }
+
+  /** The harness the pickers currently reflect — thin delegate to ComposerConfig; index.ts's
+   * status-poll seed reads it before calling setHarness. */
+  getHarness(): HarnessId {
+    return this.config.getHarness()
   }
 
   /** Open the NDJSON stream — called when design mode turns on. Re-entrant guard: if a fetch
@@ -675,13 +655,10 @@ export class SessionFeed {
         // is no status ROW to write it to anymore, but the composer/list must still become
         // visible the moment a session actually starts.
         this.root.hidden = false
-        // Model re-seeds from the event itself, as before — the started payload IS the source
-        // of truth for which model actually booted. Effort/permission carry no such field
-        // (control-request-only, or spawn-flag-only for effort), so re-apply the last
-        // user-chosen values instead of leaving them at whatever the DOM happened to hold.
-        this.seedConfigBar(e)
-        this.effortSelect.value = this.lastEffort ?? ''
-        this.permissionSelect.value = this.lastPermission ?? ''
+        // Config pickers re-seed from the started event (model from the payload, effort/
+        // permission re-applied from the last user-chosen values) — see seedFromStarted's own
+        // doc comment (composer-config.ts) for the rationale.
+        this.config.seedFromStarted(e)
         break
       }
       case 'assistant-text': {
@@ -706,11 +683,7 @@ export class SessionFeed {
         const toolId = typeof e.toolId === 'string' ? e.toolId : ''
         const name = typeof e.name === 'string' ? e.name : ''
         const detail = typeof e.detail === 'string' ? e.detail : ''
-        const editRaw = typeof e.edit === 'object' && e.edit !== null ? (e.edit as Record<string, unknown>) : null
-        const edit =
-          editRaw && typeof editRaw.file === 'string' && typeof editRaw.before === 'string' && typeof editRaw.after === 'string'
-            ? { file: editRaw.file, before: editRaw.before, after: editRaw.after }
-            : undefined
+        const edit = parseEditPayload(e.edit)
         const row = this.makeToolRow(toolId, name, detail, edit)
         this.toolRows.set(toolId, row)
         this.addRow(row)
@@ -719,9 +692,9 @@ export class SessionFeed {
       }
       case 'config-changed': {
         this.addRow(this.makeConfigRow(e))
-        this.seedConfigBar(e)
-        if (typeof e.effort === 'string') this.lastEffort = e.effort
-        if (typeof e.permissionMode === 'string') this.lastPermission = e.permissionMode
+        // Seeds the pickers AND records the last user-chosen effort/permission for a later
+        // respawn's `started` to re-apply — see seedFromConfigChanged (composer-config.ts).
+        this.config.seedFromConfigChanged(e)
         break
       }
       case 'tool-finished': {
@@ -730,6 +703,15 @@ export class SessionFeed {
         if (row) {
           const spinner = row.querySelector('.session-spinner')
           if (spinner) spinner.textContent = '✓'
+          // Late-arriving diff (Cursor delivers it on the terminal tool_call_update): upgrade
+          // the row with the same collapsed disclosure a started-edit gets. Started-payload
+          // wins when both carry one — the started diff was rendered when the row opened and
+          // may already be expanded/read by the user; silently swapping content under an open
+          // disclosure would be a rug-pull, and the payloads describe the same edit anyway.
+          const edit = parseEditPayload(e.edit)
+          if (edit && !row.querySelector('.session-diff')) {
+            row.append(makeDiffDetails(edit))
+          }
         }
         break
       }
@@ -858,26 +840,16 @@ export class SessionFeed {
     label.textContent = ` ${name} ${detail}`.trimEnd()
     row.append(spinner, label)
     if (edit) {
-      // Hand-rolled before/after disclosure — no diff library. Collapsed by default (native
-      // <details> behavior); summary is just the basename so long paths don't blow out the row.
-      const details = document.createElement('details')
-      details.className = 'session-diff'
-      const summary = document.createElement('summary')
-      summary.textContent = basename(edit.file)
-      const before = document.createElement('pre')
-      before.className = 'diff-before'
-      before.textContent = edit.before
-      const after = document.createElement('pre')
-      after.className = 'diff-after'
-      after.textContent = edit.after
-      details.append(summary, before, after)
-      row.append(details)
+      row.append(makeDiffDetails(edit))
     }
     return row
   }
 
   private makeConfigRow(e: Record<string, unknown>): HTMLElement {
     const parts: string[] = []
+    // Renders the harness's DISPLAY NAME (AGENT_DISPLAY_NAME), not the wire id — same rule as
+    // the watch strip's "Linked to Claude Code" copy, never the raw 'claude-code'/'cursor'.
+    if (isHarnessId(e.harness)) parts.push(`harness → ${AGENT_DISPLAY_NAME[e.harness]}`)
     if (typeof e.model === 'string') parts.push(`model → ${e.model}`)
     if (typeof e.permissionMode === 'string') parts.push(`permissions → ${e.permissionMode}`)
     if (typeof e.effort === 'string') parts.push(`effort → ${e.effort}`)

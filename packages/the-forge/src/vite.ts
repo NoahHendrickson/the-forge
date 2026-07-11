@@ -62,7 +62,7 @@ export function theForge(options: TheForgeOptions = {}): Plugin {
       // (2026-07-10 security review, finding 4: the bundle route must sit behind the same
       // Host/Origin gates as every other forge endpoint — never an ungated virtual module),
       // and to the MCP bin via the endpoint file (writeEndpointFile).
-      const { queue, hub, secret, forgeDir, session } = createForgeRuntime(resolvedRoot, root)
+      const { queue, hub, secret, forgeDir, session } = createForgeRuntime(resolvedRoot, root, { defaultAgent: agent })
       const allowedHosts = Array.isArray(server.config.server.allowedHosts) ? server.config.server.allowedHosts : []
       server.middlewares.use(
         createForgeMiddleware(

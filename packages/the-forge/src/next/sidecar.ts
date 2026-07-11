@@ -54,7 +54,7 @@ async function createSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
   const hintDelayMs = opts.hintDelayMs ?? 60_000
   const clientBundle = opts.clientBundle ?? readClientBundle
 
-  const { queue, hub, secret, forgeDir, session } = createForgeRuntime(opts.root)
+  const { queue, hub, secret, forgeDir, session } = createForgeRuntime(opts.root, undefined, { defaultAgent: opts.agent })
 
   let hintTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
     hintTimer = null

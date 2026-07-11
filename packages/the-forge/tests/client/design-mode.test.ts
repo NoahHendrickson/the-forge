@@ -1259,6 +1259,106 @@ describe('composer send-everything verb + watch strip gating (Task 3)', () => {
       expect(textarea.placeholder).toBe('Starting session…')
     })
   })
+
+  describe('harness seeding off the watch poll tick (Task 5, C1)', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('a /status harness value seeds the feed picker; a matching value on a later poll is not re-applied', async () => {
+      let harness: string | undefined = undefined
+      const fetchMock = vi.fn((url: string) => {
+        if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+        if (url === '/__the-forge/status?ids=') return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', harness }) })
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const { mode, panel } = fullSetup()
+      const feed = (mode as never as { feed: SessionFeed }).feed
+      const setHarnessSpy = vi.spyOn(feed, 'setHarness')
+      mode.setActive(true)
+      await vi.advanceTimersByTimeAsync(0)
+      // harness undefined on the first poll (older/not-yet-landed server field) -> no seed.
+      expect(setHarnessSpy).not.toHaveBeenCalled()
+
+      harness = 'cursor'
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(setHarnessSpy).toHaveBeenCalledTimes(1)
+      expect(setHarnessSpy).toHaveBeenCalledWith('cursor')
+      const harnessSelect = panel.root.querySelector('.session-harness') as HTMLSelectElement
+      expect(harnessSelect.value).toBe('cursor')
+
+      // Same harness reported again on the next tick — must not re-invoke setHarness, or a
+      // user's own picker click would get clobbered by a routine stale poll.
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(setHarnessSpy).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('failed /session/config POST reverts the composer pickers (Task 5 follow-up)', () => {
+    /** Flushes the config POST's .then/.catch chain — plain microtasks, no timers involved. */
+    async function flushConfig(): Promise<void> {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    }
+
+    function stubConfigPost(result: 'ok' | '409' | 'reject') {
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/__the-forge/session/config') {
+          if (result === 'reject') return Promise.reject(new TypeError('network down'))
+          return Promise.resolve({ ok: result === 'ok', status: result === 'ok' ? 200 : 409 })
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      return fetchMock
+    }
+
+    it('a 409 harness POST reverts the harness select to the prior confirmed value', async () => {
+      const fetchMock = stubConfigPost('409')
+      const { panel } = fullSetup()
+      const harnessSelect = panel.root.querySelector('.session-harness') as HTMLSelectElement
+      expect(harnessSelect.value).toBe('claude-code')
+      harnessSelect.value = 'cursor'
+      harnessSelect.dispatchEvent(new Event('change'))
+      expect(fetchMock).toHaveBeenCalledWith('/__the-forge/session/config', expect.objectContaining({ method: 'POST' }))
+      await flushConfig()
+      expect(harnessSelect.value).toBe('claude-code')
+    })
+
+    it('a 409 effort POST reverts the effort select', async () => {
+      stubConfigPost('409')
+      const { panel } = fullSetup()
+      const effortSelect = panel.root.querySelector('.session-effort') as HTMLSelectElement
+      effortSelect.value = 'xhigh'
+      effortSelect.dispatchEvent(new Event('change'))
+      await flushConfig()
+      // No confirmed effort yet (no config-changed seeded one) — reverts to the placeholder.
+      expect(effortSelect.value).toBe('')
+    })
+
+    it('a rejected (network-failure) POST reverts too', async () => {
+      stubConfigPost('reject')
+      const { panel } = fullSetup()
+      const permSelect = panel.root.querySelector('.session-permission') as HTMLSelectElement
+      permSelect.value = 'plan'
+      permSelect.dispatchEvent(new Event('change'))
+      await flushConfig()
+      expect(permSelect.value).toBe('')
+    })
+
+    it('a successful POST does NOT revert — the optimistic value stands until config-changed confirms', async () => {
+      stubConfigPost('ok')
+      const { panel } = fullSetup()
+      const harnessSelect = panel.root.querySelector('.session-harness') as HTMLSelectElement
+      const effortSelect = panel.root.querySelector('.session-effort') as HTMLSelectElement
+      harnessSelect.value = 'cursor'
+      harnessSelect.dispatchEvent(new Event('change'))
+      effortSelect.value = 'low'
+      effortSelect.dispatchEvent(new Event('change'))
+      await flushConfig()
+      expect(harnessSelect.value).toBe('cursor')
+      expect(effortSelect.value).toBe('low')
+    })
+  })
 })
 
 describe('change list wiring', () => {

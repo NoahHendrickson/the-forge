@@ -5,10 +5,47 @@
 // would break the node bundles. Keep this file free of imports and side effects.
 
 // /session/say + /session/config validation constants (Task 4). The effort allowlist is
-// spike-pinned (spec §2.4) — verbatim, not derived.
-export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+// spike-pinned (spec §2.4) — verbatim, not derived. Split per-harness (Task 2, C1): each
+// embedded harness gets its own effort/permission-mode vocabulary — the manager (and the
+// endpoints/UI code that validate against it) never invents a wire spelling an adapter
+// doesn't actually support.
+export type HarnessId = 'claude-code' | 'cursor'
 
-// bypassPermissions is deliberately absent — it would disable the overlay approve gate.
-export const PERMISSION_MODES = ['default', 'acceptEdits', 'plan'] as const
+export const EMBEDDED_HARNESSES = ['claude-code', 'cursor'] as const
+
+// Single canonical harness-id guard, shared client+server — was duplicated byte-identical
+// across manager.ts, session-feed.ts, and watch.ts (PR #32 dedup); runtime.ts's inline
+// includes+cast collapses to a call too. A pure type-guard adds no imports — the no-imports
+// rule (see header) is about module dependencies leaking across the server/browser boundary,
+// not about function exports.
+export function isHarnessId(v: unknown): v is HarnessId {
+  return typeof v === 'string' && (EMBEDDED_HARNESSES as readonly string[]).includes(v)
+}
+
+export interface HarnessVocab {
+  efforts: readonly string[] // [] means unsupported → picker hidden (cursor today; a knob-less future harness)
+  liveEffort: boolean // true: effort applies to the live session, no respawn
+  permissionModes: readonly string[] // OUR mode ids; adapters own the wire spelling
+}
+
+export const HARNESS_VOCAB: Record<HarnessId, HarnessVocab> = {
+  'claude-code': {
+    // spike-pinned (spec §2.4) — verbatim, not derived.
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    // No set_effort control request exists (spike, Task 1, confirmed live CLI 2.1.201) —
+    // effort is spawn-flag-only, so a change is a manager-owned respawn, not a live write.
+    liveEffort: false,
+    // bypassPermissions is deliberately absent — it would disable the overlay approve gate.
+    permissionModes: ['default', 'acceptEdits', 'plan'],
+  },
+  cursor: {
+    // Cursor has NO effort knob and no verified ACP permission-mode control — empty tables
+    // hide both pickers (client) and reject every value (endpoint validation). The ratified
+    // permission posture is enforced adapter-side instead (edit-kind auto-allow; see cursor.ts).
+    efforts: [],
+    liveEffort: true, // moot with an empty list; true = never trigger the Claude respawn dance
+    permissionModes: [],
+  },
+}
 
 export const CHAT_TEXT_MAX = 4000

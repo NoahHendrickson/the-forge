@@ -1,4 +1,5 @@
 import { AGENT_DISPLAY_NAME, type AgentName } from './agent'
+import { isHarnessId, type HarnessId } from '../shared/chat-constants'
 
 /** Watcher lifecycle as reported by GET /__the-forge/status (server/watchers.ts):
  * 'live' — a session is parked on (or freshly cycling) the /wait long-poll;
@@ -37,6 +38,17 @@ export function parseSessionState(raw: unknown): SessionState {
   return raw === 'idle' || raw === 'starting' || raw === 'ready' || raw === 'busy' || raw === 'failed'
     ? raw
     : 'unavailable'
+}
+
+/** Parses the untyped `harness` field of a /status body (Task 5, C1) — same guard style as
+ * parseSessionState/parseWatcherState: only a recognized HarnessId (EMBEDDED_HARNESSES) is
+ * accepted; absent, malformed, or an unrecognized value (a future harness a cached client
+ * bundle doesn't know about yet) all return undefined rather than a fallback — the caller
+ * (WatchStatus.poll) treats undefined as "no answer this tick" and keeps the last known-good
+ * value, same tolerance as sessionEnabled's parse. Exported standalone (like its siblings) so
+ * tests can exercise the guard directly without a poll cycle. */
+export function parseHarness(raw: unknown): HarnessId | undefined {
+  return isHarnessId(raw) ? raw : undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +138,12 @@ export class WatchStatus {
    * the field) — the host (index.ts) treats undefined the same as `true` (available by
    * default), only `false` disables the chat input. */
   private _sessionEnabled: boolean | undefined = undefined
+  /** Task 5, C1: which embedded harness the server currently reports (the field lands on
+   * /status in a later server-side task; older servers simply never populate it and this stays
+   * undefined). Same "ignore malformed rather than reset" tolerance as _sessionEnabled — a
+   * confirmed harness shouldn't flicker to undefined on a single blip or unrecognized value.
+   * `undefined` until the first successful poll answers with a recognized HarnessId. */
+  private _harness: HarnessId | undefined = undefined
   /** Bumped by every start()/stop(): a fetch resolving under an older generation must not
    * touch state or reschedule (same stale-chain guard as the Verifier's poll loop). */
   private generation = 0
@@ -155,6 +173,10 @@ export class WatchStatus {
     return this._sessionEnabled
   }
 
+  harness(): HarnessId | undefined {
+    return this._harness
+  }
+
   start(): void {
     if (this.timer) return
     this.generation++
@@ -181,6 +203,9 @@ export class WatchStatus {
     // Same for the config-derived enabled flag — a fresh design-mode entry re-probes it
     // rather than trusting a value from a previous cycle (or a previous dev server).
     this._sessionEnabled = undefined
+    // Same rationale again for harness — a fresh design-mode entry re-probes it rather than
+    // seeding the composer's picker from a previous cycle's (possibly now-stale) value.
+    this._harness = undefined
   }
 
   /** Applies a state a mutating endpoint already told us authoritatively in its response
@@ -198,7 +223,12 @@ export class WatchStatus {
   private poll(gen: number): void {
     if (gen !== this.generation) return
     fetch('/__the-forge/status?ids=')
-      .then((res) => (res.ok ? (res.json() as Promise<{ watcher?: unknown; session?: unknown; sessionEnabled?: unknown }>) : null))
+      .then(
+        (res) =>
+          res.ok
+            ? (res.json() as Promise<{ watcher?: unknown; session?: unknown; sessionEnabled?: unknown; harness?: unknown }>)
+            : null
+      )
       .then((body) => {
         if (gen !== this.generation) return
         if (body === null) return this.degrade()
@@ -210,6 +240,11 @@ export class WatchStatus {
         // field (older server) or a malformed value is ignored rather than reset, since this is
         // static config (not a liveness claim) with no "degrade on blip" need.
         if (typeof body.sessionEnabled === 'boolean') this._sessionEnabled = body.sessionEnabled
+        // Same tolerance for harness (Task 5, C1) — only a recognized HarnessId updates the
+        // field; an absent field (server-side task not yet landed) or a malformed value is
+        // ignored rather than reset, so a blip never clobbers a confirmed harness.
+        const harness = parseHarness(body.harness)
+        if (harness !== undefined) this._harness = harness
         // 'none' is a legitimate, AUTHORITATIVE server answer (e.g. a fresh hub after a
         // Vite restart) — it must clear a cached 'asleep', not fall into the degrade
         // path with failures. Only truly unrecognized values (a future server) degrade.

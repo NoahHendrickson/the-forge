@@ -976,6 +976,87 @@ describe('diff disclosure', () => {
     expect(feed.root.querySelector('.session-diff')).toBeNull()
     feed.stop()
   })
+
+  it('tool-finished with an edit payload upgrades the matching row with the diff disclosure (Cursor late diff)', async () => {
+    // Cursor delivers edit diffs on the TERMINAL tool_call_update — the row opened plain by
+    // tool-started must gain the same collapsed disclosure tool-started edits get.
+    const lines = [
+      feedLine(1, { kind: 'tool-started', toolId: 't1', name: 'edit', detail: 'Edit File' }),
+      feedLine(2, {
+        kind: 'tool-finished',
+        toolId: 't1',
+        edit: { file: '/abs/src/App.tsx', before: 'py-2.5', after: 'py-6' },
+      }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const row = feed.root.querySelector('[data-tool-id="t1"]')
+    expect(row?.querySelector('.session-spinner')?.textContent).toBe('✓')
+    const details = row?.querySelector('.session-diff') as HTMLDetailsElement | null
+    expect(details).not.toBeNull()
+    expect(details?.open).toBe(false) // same collapsed-by-default as the started path
+    expect(details?.querySelector('summary')?.textContent).toBe('App.tsx')
+    expect(details?.querySelector('.diff-before')?.textContent).toBe('py-2.5')
+    expect(details?.querySelector('.diff-after')?.textContent).toBe('py-6')
+    feed.stop()
+  })
+
+  it('tool-finished without an edit payload leaves the row diff-free (today\'s behavior pinned)', async () => {
+    const lines = [
+      feedLine(1, { kind: 'tool-started', toolId: 't1', name: 'Read', detail: 'x.ts' }),
+      feedLine(2, { kind: 'tool-finished', toolId: 't1' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.session-diff')).toBeNull()
+    feed.stop()
+  })
+
+  it('a row that already has a started-edit diff keeps it — the started payload wins', async () => {
+    const lines = [
+      feedLine(1, {
+        kind: 'tool-started',
+        toolId: 't1',
+        name: 'Edit',
+        detail: 'src/App.tsx',
+        edit: { file: 'src/App.tsx', before: 'started-before', after: 'started-after' },
+      }),
+      feedLine(2, {
+        kind: 'tool-finished',
+        toolId: 't1',
+        edit: { file: 'src/App.tsx', before: 'finished-before', after: 'finished-after' },
+      }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const row = feed.root.querySelector('[data-tool-id="t1"]')
+    const diffs = row?.querySelectorAll('.session-diff')
+    expect(diffs?.length).toBe(1) // never two disclosures on one row
+    expect(row?.querySelector('.diff-before')?.textContent).toBe('started-before')
+    expect(row?.querySelector('.diff-after')?.textContent).toBe('started-after')
+    feed.stop()
+  })
+
+  it('tool-finished with an edit but no matching row does not crash (ghost id)', async () => {
+    const lines = [
+      feedLine(1, {
+        kind: 'tool-finished',
+        toolId: 'ghost',
+        edit: { file: 'x.ts', before: 'a', after: 'b' },
+      }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    expect(() => feed.start()).not.toThrow()
+    await flush()
+    feed.stop()
+  })
 })
 
 describe('config-changed row', () => {
@@ -998,6 +1079,16 @@ describe('config-changed row', () => {
     feed.start()
     await flush()
     expect(feed.root.querySelector('.session-row.session-config')?.textContent).toBe('effort → high')
+    feed.stop()
+  })
+
+  it('renders harness using the display name, not the id, and joins with other keys', async () => {
+    const lines = [feedLine(1, { kind: 'config-changed', harness: 'cursor', model: 'gpt-5' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.session-row.session-config')?.textContent).toBe('harness → Cursor · model → gpt-5')
     feed.stop()
   })
 })
@@ -1386,6 +1477,186 @@ describe('config bar pickers', () => {
     permSelect.value = 'plan'
     permSelect.dispatchEvent(new Event('change'))
     expect(fired).toEqual([{ permissionMode: 'plan' }])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Harness picker + per-harness vocab-driven pickers (Task 5, C1)
+// ---------------------------------------------------------------------------
+
+describe('harness picker', () => {
+  it('renders first in composer controls with Claude Code/Cursor options, defaulting to claude-code', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const controls = feed.root.querySelector('.composer-controls') as HTMLElement
+    const harnessSelect = controls.children[0] as HTMLSelectElement
+    expect(harnessSelect.className.split(' ')).toContain('session-harness')
+    const options = [...harnessSelect.options].map((o) => ({ value: o.value, label: o.textContent }))
+    expect(options).toEqual([
+      { value: 'claude-code', label: 'Claude Code' },
+      { value: 'cursor', label: 'Cursor' },
+    ])
+    // No placeholder option — harness always has a definite value.
+    expect(harnessSelect.value).toBe('claude-code')
+  })
+
+  it('changing harness fires onConfig({harness: "cursor"})', () => {
+    const fired: Array<Record<string, string>> = []
+    const feed = new SessionFeed()
+    feed.onConfig = (cfg) => fired.push(cfg as Record<string, string>)
+    document.body.appendChild(feed.root)
+    const harnessSelect = feed.root.querySelector('.session-harness') as HTMLSelectElement
+    harnessSelect.value = 'cursor'
+    harnessSelect.dispatchEvent(new Event('change'))
+    expect(fired).toEqual([{ harness: 'cursor' }])
+  })
+
+  it("setHarness('cursor') hides the effort AND permission selects (empty vocab); back to claude-code shows them with claude options", () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const effortSelect = feed.root.querySelector('.session-effort') as HTMLSelectElement
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+    expect(effortSelect.hidden).toBe(false)
+    expect(permSelect.hidden).toBe(false)
+
+    feed.setHarness('cursor')
+    expect(effortSelect.hidden).toBe(true)
+    expect(permSelect.hidden).toBe(true)
+
+    feed.setHarness('claude-code')
+    expect(effortSelect.hidden).toBe(false)
+    expect(permSelect.hidden).toBe(false)
+    expect([...effortSelect.options].map((o) => o.value)).toEqual(['', 'low', 'medium', 'high', 'xhigh', 'max'])
+    expect([...permSelect.options].map((o) => o.value)).toEqual(['', 'default', 'acceptEdits', 'plan'])
+    // Reset to placeholder, not re-seeded — the new/current session reports its own config.
+    expect(effortSelect.value).toBe('')
+    expect(permSelect.value).toBe('')
+  })
+
+  it('cursor hides model aliases (options = the current model only)', async () => {
+    const lines = [
+      feedLine(1, { kind: 'config-changed', harness: 'cursor' }),
+      feedLine(2, { kind: 'config-changed', model: 'gpt-5-high' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    expect(modelSelect.value).toBe('gpt-5-high')
+    expect([...modelSelect.options].map((o) => o.value)).toEqual(['gpt-5-high'])
+    feed.stop()
+  })
+
+  it('claude-code model select still offers the sonnet/opus/haiku aliases', async () => {
+    const lines = [feedLine(1, { kind: 'config-changed', model: 'claude-opus-4-5' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    expect([...modelSelect.options].map((o) => o.value)).toEqual(['claude-opus-4-5', 'sonnet', 'opus', 'haiku'])
+    feed.stop()
+  })
+
+  it('config-changed {harness} event seeds the picker + renders a config row with the display name', async () => {
+    const lines = [feedLine(1, { kind: 'config-changed', harness: 'cursor' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const harnessSelect = feed.root.querySelector('.session-harness') as HTMLSelectElement
+    expect(harnessSelect.value).toBe('cursor')
+    const effortSelect = feed.root.querySelector('.session-effort') as HTMLSelectElement
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+    expect(effortSelect.hidden).toBe(true)
+    expect(permSelect.hidden).toBe(true)
+    expect(feed.root.querySelector('.session-row.session-config')?.textContent).toBe('harness → Cursor')
+    feed.stop()
+  })
+
+  it('seeding harness via config-changed never fires onConfig (no echo loop)', async () => {
+    const fired: Array<Record<string, string>> = []
+    const lines = [feedLine(1, { kind: 'config-changed', harness: 'cursor' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    feed.onConfig = (cfg) => fired.push(cfg as Record<string, string>)
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(fired).toEqual([])
+    feed.stop()
+  })
+
+  it('getHarness() reflects the current picker value, defaulting to claude-code', () => {
+    const feed = new SessionFeed()
+    expect(feed.getHarness()).toBe('claude-code')
+    feed.setHarness('cursor')
+    expect(feed.getHarness()).toBe('cursor')
+  })
+
+  it("setHarness('cursor') resets the model select to its placeholder (no stale sonnet/opus/haiku aliases)", async () => {
+    // Seed the model select under claude-code first — options are [current, ...aliases].
+    const lines = [feedLine(1, { kind: 'config-changed', model: 'claude-opus-4-5' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    expect([...modelSelect.options].map((o) => o.value)).toEqual(['claude-opus-4-5', 'sonnet', 'opus', 'haiku'])
+
+    feed.setHarness('cursor')
+    // Placeholder-only: the previous harness's model + aliases are meaningless under the new
+    // harness; the new session reports its own model via started/config-changed later.
+    expect([...modelSelect.options].map((o) => o.value)).toEqual([''])
+    expect(modelSelect.options[0].textContent).toBe('model…')
+    expect(modelSelect.value).toBe('')
+    feed.stop()
+  })
+})
+
+describe('revertConfig (failed /session/config POST recovery)', () => {
+  it('snaps all pickers back to their last confirmed values', async () => {
+    const lines = [feedLine(1, { kind: 'config-changed', model: 'claude-opus-4-5', effort: 'high', permissionMode: 'plan' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const harnessSelect = feed.root.querySelector('.session-harness') as HTMLSelectElement
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    const effortSelect = feed.root.querySelector('.session-effort') as HTMLSelectElement
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+
+    // Optimistic user clicks whose POSTs (hypothetically) all failed — the selects show
+    // never-applied values; only the DOM moved, confirmed state didn't.
+    harnessSelect.value = 'cursor'
+    modelSelect.value = 'sonnet'
+    effortSelect.value = 'low'
+    permSelect.value = 'default'
+
+    feed.revertConfig()
+    expect(harnessSelect.value).toBe('claude-code')
+    expect(modelSelect.value).toBe('claude-opus-4-5')
+    expect(effortSelect.value).toBe('high')
+    expect(permSelect.value).toBe('plan')
+    feed.stop()
+  })
+
+  it('before anything is confirmed, reverts to the defaults/placeholders', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const harnessSelect = feed.root.querySelector('.session-harness') as HTMLSelectElement
+    const modelSelect = feed.root.querySelector('select.session-model') as HTMLSelectElement
+    const effortSelect = feed.root.querySelector('.session-effort') as HTMLSelectElement
+    const permSelect = feed.root.querySelector('.session-permission') as HTMLSelectElement
+    harnessSelect.value = 'cursor'
+    effortSelect.value = 'max'
+    permSelect.value = 'plan'
+
+    feed.revertConfig()
+    expect(harnessSelect.value).toBe('claude-code')
+    expect(modelSelect.value).toBe('')
+    expect(effortSelect.value).toBe('')
+    expect(permSelect.value).toBe('')
   })
 })
 
