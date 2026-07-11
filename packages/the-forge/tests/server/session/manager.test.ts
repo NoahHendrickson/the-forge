@@ -1752,6 +1752,49 @@ describe('SessionManager', () => {
       expect(adapters[1]!.sendTurnCalls).toEqual(['go'])
     })
 
+    it("a pre-started death after a harness switch respawns with the NEW harness's own slot id, never the old harness's live session id", () => {
+      // Cross-harness resume leak (whole-branch review): setConfig({harness}) must clear
+      // _lastSessionId (recorded at `started` under the PREVIOUS harness) — _respawn()
+      // prefers `_lastSessionId ?? readSlot(..., _harness)`, so after a switch, a send that
+      // goes busy-before-started and then dies pre-`started` would otherwise respawn the NEW
+      // harness's CLI with the OLD harness's session id. Compounding: that resume fails
+      // in-band pre-`started`, so the stale-resume branch would then clear the NEW harness's
+      // slot — deleting a legitimate resume id that was never even tried.
+      fs.writeFileSync(
+        path.join(dir, 'session.json'),
+        JSON.stringify({
+          selected: 'claude-code',
+          sessions: { cursor: { sessionId: 'cursor-own-id', updatedAt: 'x' } },
+        }),
+      )
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 'claude-1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // -> ready
+
+      mgr.setConfig({ harness: 'cursor' }) // -> idle, selection switched
+
+      mgr.say('go') // auto-start: busy-before-started (send-at-spawn)
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.startCalls[0]!.resumeId).toBe('cursor-own-id')
+
+      // The first cursor spawn dies before ever emitting `started` → _respawn().
+      adapters[1]!.emit({ kind: 'ended' })
+
+      expect(adapters).toHaveLength(3)
+      // The recovery spawn resumes from the CURSOR slot — NEVER the old harness's 'claude-1'.
+      expect(adapters[2]!.startCalls[0]!.resumeId).toBe('cursor-own-id')
+      expect(adapters[2]!.harnessReceived).toBe<HarnessId>('cursor')
+
+      // And the cursor slot survives — no stale-resume clear of an id that was never tried.
+      const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
+        sessions: Record<string, { sessionId: string } | undefined>
+      }
+      expect(json.sessions['cursor']!.sessionId).toBe('cursor-own-id')
+    })
+
     it("stop() does not clear the persisted selection — a restart keeps the user's harness", () => {
       const { adapters, opts } = makeHarness(dir)
       const mgr = new SessionManager(opts)

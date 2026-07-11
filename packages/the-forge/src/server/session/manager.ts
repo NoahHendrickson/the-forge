@@ -442,6 +442,14 @@ export class SessionManager {
       this._cancelWatchdog()
       this._discardAdapter()?.stop()
       this._state = 'idle'
+      // _lastSessionId belongs to the harness we just left — _respawn() prefers it over the
+      // slot read (`_lastSessionId ?? readSlot(...)`), so leaving it set would feed the OLD
+      // harness's session id to the NEW harness's CLI if the first post-switch spawn dies
+      // pre-`started` (send-at-spawn goes busy before init). Worse, that doomed resume fails
+      // in-band pre-`started`, so the stale-resume branch would then clear the NEW harness's
+      // slot — deleting a legitimate resume id that was never even tried. Cross-harness
+      // resume ids must never leak; the new harness resumes from its OWN slot only.
+      this._lastSessionId = undefined
       this._harness = cfg.harness
       writeSelectedHarness(this._opts.forgeDir, cfg.harness)
     }
