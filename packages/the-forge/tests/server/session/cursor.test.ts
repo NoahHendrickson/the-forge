@@ -15,6 +15,7 @@ import {
   MCP_TOOL_CALL_STARTED,
   MCP_TOOL_CALL_IN_PROGRESS,
   MCP_TOOL_CALL_COMPLETED,
+  TOOL_CALL_COMPLETED_EDIT,
   PERMISSION_REQUEST_MCP,
   PERMISSION_REQUEST_EXECUTE,
   PROMPT_RESPONSE_END_TURN,
@@ -450,6 +451,92 @@ describe('CursorAdapter', () => {
         expect(ev.edit?.before.length).toBe(EDIT_PAYLOAD_CAP + 1)
         expect(ev.edit?.before.endsWith('…')).toBe(true)
         expect(ev.edit?.after.length).toBe(EDIT_PAYLOAD_CAP + 1)
+      }
+    })
+
+    it('terminal tool_call_update carrying diff content (live fixture) → tool-finished with the edit payload', () => {
+      // Live Cursor edits deliver the diff on the TERMINAL tool_call_update, not the opening
+      // tool_call (fixture TOOL_CALL_COMPLETED_EDIT) — tool-finished must carry it or cursor
+      // edit rows never get before/after previews.
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/abs/project' })
+      bootFresh(lastChild())
+      adapter.sendTurn('go')
+      events.length = 0
+
+      pushLine(lastChild(), TOOL_CALL_COMPLETED_EDIT)
+
+      const rendered = events.filter((e) => e.kind !== 'activity')
+      expect(rendered).toHaveLength(1)
+      const ev = rendered[0]
+      expect(ev.kind).toBe('tool-finished')
+      if (ev.kind === 'tool-finished') {
+        expect(ev.toolId).toBe(
+          'call-9f12b0bb-7dc6-402b-9895-57247fb4b780-2\nfc_9d2799d3-6676-9efe-9588-6fa3c671bdc7_0',
+        )
+        expect(ev.edit).toEqual({
+          file: '/Users/noey/Developer/the-forge/.claude/worktrees/keen-goodall-592785/SPIKE_SCRATCH.md',
+          before: '# Spike scratch\n\nLine one.\n',
+          after: '# Spike scratch\n\nLine one.\nspike-edit\n',
+        })
+      }
+    })
+
+    it('terminal tool_call_update diff sides are truncated at EDIT_PAYLOAD_CAP', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/abs/project' })
+      bootFresh(lastChild())
+      adapter.sendTurn('go')
+      events.length = 0
+
+      const before = 'b'.repeat(EDIT_PAYLOAD_CAP + 50)
+      const after = 'a'.repeat(EDIT_PAYLOAD_CAP + 50)
+      pushLine(
+        lastChild(),
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: {
+            sessionId: 's',
+            update: {
+              sessionUpdate: 'tool_call_update',
+              toolCallId: 'call-big-edit',
+              status: 'completed',
+              content: [{ type: 'diff', path: '/abs/App.tsx', oldText: before, newText: after }],
+            },
+          },
+        }),
+      )
+
+      const ev = events.find((e) => e.kind === 'tool-finished')
+      expect(ev).toBeDefined()
+      if (ev?.kind === 'tool-finished') {
+        expect(ev.edit?.before.length).toBe(EDIT_PAYLOAD_CAP + 1)
+        expect(ev.edit?.before.endsWith('…')).toBe(true)
+        expect(ev.edit?.after.length).toBe(EDIT_PAYLOAD_CAP + 1)
+      }
+    })
+
+    it('terminal tool_call_update WITHOUT diff content → tool-finished with no edit field (pinned)', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/abs/project' })
+      bootFresh(lastChild())
+      adapter.sendTurn('go')
+      events.length = 0
+
+      pushLine(lastChild(), MCP_TOOL_CALL_COMPLETED) // rawOutput only, no diff content
+
+      const ev = events.find((e) => e.kind === 'tool-finished')
+      expect(ev).toBeDefined()
+      if (ev?.kind === 'tool-finished') {
+        expect(ev.edit).toBeUndefined()
+        expect('edit' in ev).toBe(false)
       }
     })
 

@@ -14,7 +14,11 @@ export type SessionEvent =
       detail: string
       edit?: { file: string; before: string; after: string }
     }
-  | { kind: 'tool-finished'; toolId: string }
+  // `edit` here is for late-arriving diffs: Cursor (ACP) delivers an edit's before/after on the
+  // TERMINAL tool_call_update, after the tool row already opened — same payload shape and
+  // EDIT_PAYLOAD_CAP truncation as tool-started's. Claude never sets this (its diff rides the
+  // tool_use block, i.e. tool-started).
+  | { kind: 'tool-finished'; toolId: string; edit?: { file: string; before: string; after: string } }
   | { kind: 'turn-complete'; isError: boolean; errorText?: string; costUsd?: number }
   | { kind: 'config-changed'; model?: string; permissionMode?: string; effort?: string; harness?: HarnessId }
   | { kind: 'session-error'; text: string } // spawn failure, stderr chatter, unparseable protocol state

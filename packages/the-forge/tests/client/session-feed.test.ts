@@ -951,6 +951,87 @@ describe('diff disclosure', () => {
     expect(feed.root.querySelector('.session-diff')).toBeNull()
     feed.stop()
   })
+
+  it('tool-finished with an edit payload upgrades the matching row with the diff disclosure (Cursor late diff)', async () => {
+    // Cursor delivers edit diffs on the TERMINAL tool_call_update — the row opened plain by
+    // tool-started must gain the same collapsed disclosure tool-started edits get.
+    const lines = [
+      feedLine(1, { kind: 'tool-started', toolId: 't1', name: 'edit', detail: 'Edit File' }),
+      feedLine(2, {
+        kind: 'tool-finished',
+        toolId: 't1',
+        edit: { file: '/abs/src/App.tsx', before: 'py-2.5', after: 'py-6' },
+      }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const row = feed.root.querySelector('[data-tool-id="t1"]')
+    expect(row?.querySelector('.session-spinner')?.textContent).toBe('✓')
+    const details = row?.querySelector('.session-diff') as HTMLDetailsElement | null
+    expect(details).not.toBeNull()
+    expect(details?.open).toBe(false) // same collapsed-by-default as the started path
+    expect(details?.querySelector('summary')?.textContent).toBe('App.tsx')
+    expect(details?.querySelector('.diff-before')?.textContent).toBe('py-2.5')
+    expect(details?.querySelector('.diff-after')?.textContent).toBe('py-6')
+    feed.stop()
+  })
+
+  it('tool-finished without an edit payload leaves the row diff-free (today\'s behavior pinned)', async () => {
+    const lines = [
+      feedLine(1, { kind: 'tool-started', toolId: 't1', name: 'Read', detail: 'x.ts' }),
+      feedLine(2, { kind: 'tool-finished', toolId: 't1' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.session-diff')).toBeNull()
+    feed.stop()
+  })
+
+  it('a row that already has a started-edit diff keeps it — the started payload wins', async () => {
+    const lines = [
+      feedLine(1, {
+        kind: 'tool-started',
+        toolId: 't1',
+        name: 'Edit',
+        detail: 'src/App.tsx',
+        edit: { file: 'src/App.tsx', before: 'started-before', after: 'started-after' },
+      }),
+      feedLine(2, {
+        kind: 'tool-finished',
+        toolId: 't1',
+        edit: { file: 'src/App.tsx', before: 'finished-before', after: 'finished-after' },
+      }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const row = feed.root.querySelector('[data-tool-id="t1"]')
+    const diffs = row?.querySelectorAll('.session-diff')
+    expect(diffs?.length).toBe(1) // never two disclosures on one row
+    expect(row?.querySelector('.diff-before')?.textContent).toBe('started-before')
+    expect(row?.querySelector('.diff-after')?.textContent).toBe('started-after')
+    feed.stop()
+  })
+
+  it('tool-finished with an edit but no matching row does not crash (ghost id)', async () => {
+    const lines = [
+      feedLine(1, {
+        kind: 'tool-finished',
+        toolId: 'ghost',
+        edit: { file: 'x.ts', before: 'a', after: 'b' },
+      }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    expect(() => feed.start()).not.toThrow()
+    await flush()
+    feed.stop()
+  })
 })
 
 describe('config-changed row', () => {

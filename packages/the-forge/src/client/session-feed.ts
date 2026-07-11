@@ -16,6 +16,36 @@ function isHarnessId(v: unknown): v is HarnessId {
   return typeof v === 'string' && (EMBEDDED_HARNESSES as readonly string[]).includes(v)
 }
 
+// Shared untyped-JSON guard for the edit payload carried by tool-started AND (Cursor's
+// late-diff path) tool-finished — the wire outlives any one bundle build, so shape is checked
+// at runtime, never trusted from the type.
+function parseEditPayload(raw: unknown): { file: string; before: string; after: string } | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const e = raw as Record<string, unknown>
+  return typeof e.file === 'string' && typeof e.before === 'string' && typeof e.after === 'string'
+    ? { file: e.file, before: e.before, after: e.after }
+    : undefined
+}
+
+// Hand-rolled before/after disclosure — no diff library. Collapsed by default (native
+// <details> behavior); summary is just the basename so long paths don't blow out the row.
+// One builder for both attachment points: rows opened WITH a diff (tool-started, Claude) and
+// rows upgraded later (tool-finished, Cursor's terminal tool_call_update).
+function makeDiffDetails(edit: { file: string; before: string; after: string }): HTMLElement {
+  const details = document.createElement('details')
+  details.className = 'session-diff'
+  const summary = document.createElement('summary')
+  summary.textContent = basename(edit.file)
+  const before = document.createElement('pre')
+  before.className = 'diff-before'
+  before.textContent = edit.before
+  const after = document.createElement('pre')
+  after.className = 'diff-after'
+  after.textContent = edit.after
+  details.append(summary, before, after)
+  return details
+}
+
 // Per-harness vocabularies for the effort/permission pickers — built from HARNESS_VOCAB
 // (src/shared/chat-constants.ts), the single source of truth also consumed by
 // server/endpoints.ts's validation sets (task-6 brief). Cursor's arrays are empty (see
@@ -67,7 +97,10 @@ type SessionEvent =
   // (see parseLine's seq-tracking below).
   | { kind: 'assistant-delta'; text: string }
   | { kind: 'tool-started'; toolId: string; name: string; detail: string; edit?: { file: string; before: string; after: string } }
-  | { kind: 'tool-finished'; toolId: string }
+  // tool-finished's edit mirrors the server union's late-arriving-diff extension: Cursor
+  // delivers an edit's before/after on the terminal tool_call_update, so the diff can only
+  // ride tool-finished there; Claude's diffs always arrive on tool-started.
+  | { kind: 'tool-finished'; toolId: string; edit?: { file: string; before: string; after: string } }
   | { kind: 'turn-complete'; isError: boolean; errorText?: string; costUsd?: number }
   // harness mirrors adapter.ts's server-side SessionEvent (Task 2) — a deliberately separate
   // copy, not a shared import, so a stale client bundle stays tolerant of a rebuilt server
@@ -808,11 +841,7 @@ export class SessionFeed {
         const toolId = typeof e.toolId === 'string' ? e.toolId : ''
         const name = typeof e.name === 'string' ? e.name : ''
         const detail = typeof e.detail === 'string' ? e.detail : ''
-        const editRaw = typeof e.edit === 'object' && e.edit !== null ? (e.edit as Record<string, unknown>) : null
-        const edit =
-          editRaw && typeof editRaw.file === 'string' && typeof editRaw.before === 'string' && typeof editRaw.after === 'string'
-            ? { file: editRaw.file, before: editRaw.before, after: editRaw.after }
-            : undefined
+        const edit = parseEditPayload(e.edit)
         const row = this.makeToolRow(toolId, name, detail, edit)
         this.toolRows.set(toolId, row)
         this.addRow(row)
@@ -832,6 +861,15 @@ export class SessionFeed {
         if (row) {
           const spinner = row.querySelector('.session-spinner')
           if (spinner) spinner.textContent = '✓'
+          // Late-arriving diff (Cursor delivers it on the terminal tool_call_update): upgrade
+          // the row with the same collapsed disclosure a started-edit gets. Started-payload
+          // wins when both carry one — the started diff was rendered when the row opened and
+          // may already be expanded/read by the user; silently swapping content under an open
+          // disclosure would be a rug-pull, and the payloads describe the same edit anyway.
+          const edit = parseEditPayload(e.edit)
+          if (edit && !row.querySelector('.session-diff')) {
+            row.append(makeDiffDetails(edit))
+          }
         }
         break
       }
@@ -960,20 +998,7 @@ export class SessionFeed {
     label.textContent = ` ${name} ${detail}`.trimEnd()
     row.append(spinner, label)
     if (edit) {
-      // Hand-rolled before/after disclosure — no diff library. Collapsed by default (native
-      // <details> behavior); summary is just the basename so long paths don't blow out the row.
-      const details = document.createElement('details')
-      details.className = 'session-diff'
-      const summary = document.createElement('summary')
-      summary.textContent = basename(edit.file)
-      const before = document.createElement('pre')
-      before.className = 'diff-before'
-      before.textContent = edit.before
-      const after = document.createElement('pre')
-      after.className = 'diff-after'
-      after.textContent = edit.after
-      details.append(summary, before, after)
-      row.append(details)
+      row.append(makeDiffDetails(edit))
     }
     return row
   }

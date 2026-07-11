@@ -467,7 +467,11 @@ export class CursorAdapter implements SessionAdapter {
         // never in the tool status, so 'completed' is a normal finish here, not a failure signal.
         if (status === 'completed' || status === 'failed') {
           const toolId = typeof update['toolCallId'] === 'string' ? update['toolCallId'] : ''
-          this.onEvent({ kind: 'tool-finished', toolId })
+          // Live edits carry their {type:'diff'} block HERE, on the terminal update (fixture
+          // TOOL_CALL_COMPLETED_EDIT) — not on the opening tool_call. Attach it so the overlay
+          // can upgrade the already-open tool row with the before/after preview.
+          const edit = buildEditFromContent(update['content'])
+          this.onEvent({ kind: 'tool-finished', toolId, ...(edit ? { edit } : {}) })
           return
         }
         // Non-terminal (in_progress, pending) → liveness only.
