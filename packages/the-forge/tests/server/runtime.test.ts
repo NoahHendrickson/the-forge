@@ -2,14 +2,62 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { PassThrough } from 'node:stream'
+import { spawn } from 'node:child_process'
 import { createForgeRuntime } from '../../src/server/runtime'
 import { SessionManager } from '../../src/server/session/manager'
 import { ApprovalRegistry } from '../../src/server/session/approvals'
+import { CursorAdapter } from '../../src/server/session/cursor'
+import { INIT_RESPONSE, SESSION_NEW_RESPONSE, PERMISSION_REQUEST_EXECUTE } from './session/fixtures/cursor-acp-jsonrpc'
+
+// Never spawns a real cursor-agent/claude process — createForgeRuntime's factory (Task 4)
+// unconditionally constructs adapters with the default (real) spawnFn, so the makeAdapter
+// factory tests below intercept node:child_process's own spawn, the same seam
+// ClaudeAdapter/CursorAdapter's defaultSpawnFn calls through.
+vi.mock('node:child_process', () => ({ spawn: vi.fn() }))
+const spawnMock = vi.mocked(spawn)
+
+/** In-memory fake child (PassThrough stdio, no real process) — mirrors tests/server/session/
+ * cursor.test.ts's makeChild/makeFakeSpawn exactly, just wired through the module mock above
+ * instead of an injected SpawnFn (createForgeRuntime never exposes one to inject). */
+function makeFakeChild() {
+  const stdin = new PassThrough()
+  const stdout = new PassThrough()
+  const stderr = new PassThrough()
+  return {
+    stdin,
+    stdout,
+    stderr,
+    kill: vi.fn(),
+    on: vi.fn(),
+  }
+}
+
+function pushLine(child: ReturnType<typeof makeFakeChild>, line: string) {
+  child.stdout.write(line + '\n')
+}
+
+/** Synchronously drains every JSON line written to the fake child's stdin so far. */
+function readWrites(child: ReturnType<typeof makeFakeChild>): Array<Record<string, unknown>> {
+  const raw: string[] = []
+  let chunk: Buffer | string | null
+  while ((chunk = child.stdin.read() as Buffer | string | null) !== null) {
+    raw.push(typeof chunk === 'string' ? chunk : chunk.toString())
+  }
+  return raw
+    .join('')
+    .split('\n')
+    .filter((l) => l.trim().length > 0)
+    .map((l) => JSON.parse(l) as Record<string, unknown>)
+}
+
+const tick = () => new Promise((r) => setImmediate(r))
 
 let root: string
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-runtime-'))
+  spawnMock.mockReset()
 })
 
 describe('createForgeRuntime', () => {
@@ -150,5 +198,79 @@ describe('createForgeRuntime — session group (Task 4)', () => {
     runtime.session.approvals.decide(id, true)
     expect(resolvedSpy).toHaveBeenCalledTimes(1)
     expect(resolvedSpy).toHaveBeenCalledWith(true)
+  })
+})
+
+describe('createForgeRuntime — harness-keyed adapter factory (Task 4)', () => {
+  it("defaultAgent 'cursor' -> manager.harness() is 'cursor'", () => {
+    const runtime = createForgeRuntime(root, undefined, { defaultAgent: 'cursor' })
+    expect(runtime.session.manager.harness()).toBe('cursor')
+  })
+
+  it("defaultAgent 'codex' -> manager.harness() falls back to 'claude-code' (no embedded codex adapter until C2)", () => {
+    const runtime = createForgeRuntime(root, undefined, { defaultAgent: 'codex' })
+    expect(runtime.session.manager.harness()).toBe('claude-code')
+  })
+
+  it('opts omitted entirely -> manager.harness() defaults to claude-code', () => {
+    const runtime = createForgeRuntime(root)
+    expect(runtime.session.manager.harness()).toBe('claude-code')
+  })
+
+  it('makeAdapter constructs a CursorAdapter for harness cursor, spawning cursor-agent acp', () => {
+    const child = makeFakeChild()
+    spawnMock.mockReturnValue(child as never)
+
+    const runtime = createForgeRuntime(root, undefined, { defaultAgent: 'cursor' })
+    runtime.session.manager.notifyDesignEdits() // idle -> _start() -> makeAdapter({harness:'cursor'})
+
+    expect(spawnMock).toHaveBeenCalledWith('cursor-agent', ['acp'], expect.objectContaining({ cwd: root }))
+  })
+
+  it('makeAdapter constructs a ClaudeAdapter (not cursor-agent) for harness claude-code', () => {
+    const child = makeFakeChild()
+    spawnMock.mockReturnValue(child as never)
+
+    const runtime = createForgeRuntime(root) // defaultHarness claude-code
+    runtime.session.manager.notifyDesignEdits()
+
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    expect(spawnMock.mock.calls[0][0]).toBe('claude')
+  })
+
+  it('cursor onApproval is wired to the SAME ApprovalRegistry the runtime exposes: request -> decide(allow) resolves the adapter round trip (allow_once answered on the wire)', async () => {
+    const child = makeFakeChild()
+    spawnMock.mockReturnValue(child as never)
+
+    const runtime = createForgeRuntime(root, undefined, { defaultAgent: 'cursor' })
+    runtime.session.manager.notifyDesignEdits() // spawns the CursorAdapter, sends the pull turn
+
+    // Drive the adapter through the ACP boot handshake (fresh session/new — no resumeId yet).
+    pushLine(child, INIT_RESPONSE)
+    pushLine(child, SESSION_NEW_RESPONSE)
+    await tick()
+
+    expect(runtime.session.approvals.pending()).toHaveLength(0)
+
+    // An execute-kind tool_call triggers session/request_permission — NOT edit-kind and NOT
+    // the-forge's own MCP tool, so it's the one kind CursorAdapter routes to onApproval rather
+    // than auto-allowing (see cursor.ts's kind-split why-comment).
+    pushLine(child, PERMISSION_REQUEST_EXECUTE)
+    await tick()
+
+    const pending = runtime.session.approvals.pending()
+    expect(pending).toHaveLength(1)
+    expect(pending[0].toolName).toBe('execute')
+    expect(pending[0].detail).toBe('`touch /tmp/forge-spike-probe`')
+
+    // decide(allow) on the runtime's OWN registry resolves the adapter's onApproval promise —
+    // proving makeAdapter wired a.onApproval to THIS registry, not a disconnected one.
+    runtime.session.approvals.decide(pending[0].id, true)
+    await tick()
+
+    const writes = readWrites(child)
+    const answer = writes.find((m) => m.id === 0 && 'result' in m)
+    expect(answer).toBeDefined()
+    expect(answer!.result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
   })
 })

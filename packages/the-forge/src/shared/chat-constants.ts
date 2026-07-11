@@ -39,10 +39,4 @@ export const HARNESS_VOCAB: Record<HarnessId, HarnessVocab> = {
   },
 }
 
-// Temporary re-export aliases so endpoints.ts / session-feed.ts (not yet migrated to
-// HARNESS_VOCAB lookups) keep compiling — both move to `HARNESS_VOCAB['claude-code']`
-// lookups in Tasks 4/5, at which point these aliases are deleted.
-export const EFFORT_LEVELS = HARNESS_VOCAB['claude-code'].efforts
-export const PERMISSION_MODES = HARNESS_VOCAB['claude-code'].permissionModes
-
 export const CHAT_TEXT_MAX = 4000

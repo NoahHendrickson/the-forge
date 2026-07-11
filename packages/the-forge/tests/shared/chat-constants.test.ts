@@ -6,8 +6,6 @@ import {
   EMBEDDED_HARNESSES,
   type HarnessVocab,
   HARNESS_VOCAB,
-  EFFORT_LEVELS,
-  PERMISSION_MODES,
   CHAT_TEXT_MAX,
 } from '../../src/shared/chat-constants'
 
@@ -53,16 +51,6 @@ describe('HARNESS_VOCAB', () => {
       expect(typeof vocab.liveEffort).toBe('boolean')
       expect(Array.isArray(vocab.permissionModes)).toBe(true)
     }
-  })
-})
-
-describe('temporary re-export aliases (deleted in Tasks 4/5 when consumers move to HARNESS_VOCAB lookups)', () => {
-  it('EFFORT_LEVELS aliases the claude-code effort vocab', () => {
-    expect(EFFORT_LEVELS).toEqual(HARNESS_VOCAB['claude-code'].efforts)
-  })
-
-  it('PERMISSION_MODES aliases the claude-code permission-mode vocab', () => {
-    expect(PERMISSION_MODES).toEqual(HARNESS_VOCAB['claude-code'].permissionModes)
   })
 })
 

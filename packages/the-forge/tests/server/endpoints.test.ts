@@ -675,22 +675,24 @@ describe('POST /__the-forge/dispatch', () => {
       waitRes.emitClose()
     })
 
-    it('body agent override to cursor skips the embedded rung even when config agent is claude-code', async () => {
+    it('body agent override to cursor now TAKES the embedded rung (Task 4 — cursor is embedded-capable)', async () => {
       // resolvedAgent (body override wins over config) is what gates the embedded rung —
-      // a cursor-targeted Send must never be delivered to the claude-code embedded session.
+      // cursor is in EMBEDDED_HARNESSES (Task 4), so a cursor-targeted Send is delivered to
+      // the embedded session exactly like claude-code, even when the configured default
+      // agent is claude-code. The ladder must NOT run.
       queue.add({}, 'pending markdown')
       const calls = { notify: 0 }
       const session = fakeDispatchSession('ready', calls)
       const mwEmbed = createForgeMiddleware(queue, [], undefined, {
         agent: 'claude-code',
         channelsFlag: false,
-        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'ladder ran for cursor override' }),
+        dispatchFn: async () => ({ rung: 'manual' as const, detail: 'should never reach ladder' }),
       }, undefined, session)
       const res = fakeRes()
       await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', { agent: 'cursor' }, { host: 'localhost:5173' }), res)
       expect(res.statusCode).toBe(200)
-      expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'ladder ran for cursor override' })
-      expect(calls.notify).toBe(0)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'embedded', detail: 'delivered to the embedded session' })
+      expect(calls.notify).toBe(1)
     })
 
     it('agent=codex skips the embedded rung entirely → falls through to ladder', async () => {
@@ -1575,6 +1577,31 @@ describe('session endpoints (Task 4)', () => {
       expect(JSON.parse(res.body).session).toBe('busy')
     })
   })
+
+  describe('GET /__the-forge/status harness field (Task 4)', () => {
+    it('carries harness=manager.harness() when session is wired', async () => {
+      const res = fakeRes()
+      await run(mwSession, fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.body)
+      expect(body.harness).toBe(manager.harness()) // 'claude-code' initially
+    })
+
+    it('reflects a harness switch via setConfig', async () => {
+      manager.setConfig({ harness: 'cursor' })
+      const res = fakeRes()
+      await run(mwSession, fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }), res)
+      expect(JSON.parse(res.body).harness).toBe('cursor')
+    })
+
+    it('omits harness when no session param is wired', async () => {
+      const res = fakeRes()
+      await run(mw, fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }), res)
+      expect(res.statusCode).toBe(200)
+      const body = JSON.parse(res.body)
+      expect('harness' in body).toBe(false)
+    })
+  })
 })
 
 describe('chat endpoints (say/config)', () => {
@@ -1911,6 +1938,73 @@ describe('chat endpoints (say/config)', () => {
       await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { effort: 'high' }, { host: 'localhost:5173' }), res)
       expect(res.statusCode).toBe(409)
       expect(JSON.parse(res.body)).toEqual({ error: 'session is busy' })
+    })
+
+    describe('harness field (Task 4)', () => {
+      it('accepts harness=cursor -> 200, manager.setConfig receives it', async () => {
+        const setConfigSpy = vi.spyOn(manager, 'setConfig')
+        const res = fakeRes()
+        await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { harness: 'cursor' }, { host: 'localhost:5173' }), res)
+        expect(res.statusCode).toBe(200)
+        expect(JSON.parse(res.body)).toEqual({ ok: true })
+        expect(setConfigSpy).toHaveBeenCalledWith({ harness: 'cursor' })
+      })
+
+      it('400s on harness=codex (not an embedded harness yet)', async () => {
+        const res = fakeRes()
+        await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { harness: 'codex' }, { host: 'localhost:5173' }), res)
+        expect(res.statusCode).toBe(400)
+        expect(JSON.parse(res.body)).toEqual({ error: 'harness must be one of claude-code, cursor' })
+      })
+
+      it('400s on an unknown harness string', async () => {
+        const res = fakeRes()
+        await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { harness: 'not-a-harness' }, { host: 'localhost:5173' }), res)
+        expect(res.statusCode).toBe(400)
+      })
+
+      it('effort=low with cursor selected (current session harness) -> 400, empty-table variant', async () => {
+        // Switch the session's current harness to cursor first (no busy turn in flight).
+        manager.setConfig({ harness: 'cursor' })
+        const res = fakeRes()
+        await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { effort: 'low' }, { host: 'localhost:5173' }), res)
+        expect(res.statusCode).toBe(400)
+        expect(JSON.parse(res.body)).toEqual({ error: 'effort is not supported for this harness' })
+      })
+
+      it('permissionMode=default with cursor selected -> 400; with claude-code selected -> 200', async () => {
+        manager.setConfig({ harness: 'cursor' })
+        const cursorRes = fakeRes()
+        await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { permissionMode: 'default' }, { host: 'localhost:5173' }), cursorRes)
+        expect(cursorRes.statusCode).toBe(400)
+        expect(JSON.parse(cursorRes.body)).toEqual({ error: 'permissionMode is not supported for this harness' })
+
+        manager.setConfig({ harness: 'claude-code' })
+        const claudeRes = fakeRes()
+        await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { permissionMode: 'default' }, { host: 'localhost:5173' }), claudeRes)
+        expect(claudeRes.statusCode).toBe(200)
+      })
+
+      it('effort validates against the TARGET harness (body.harness), not the current session harness', async () => {
+        // Session is still claude-code; switching to cursor AND setting an effort in the SAME
+        // call must validate against cursor's (empty) table, not claude-code's.
+        const res = fakeRes()
+        await run(
+          mwSession,
+          fakeReq('POST', '/__the-forge/session/config', { harness: 'cursor', effort: 'low' }, { host: 'localhost:5173' }),
+          res
+        )
+        expect(res.statusCode).toBe(400)
+        expect(JSON.parse(res.body)).toEqual({ error: 'effort is not supported for this harness' })
+      })
+
+      it('409s when manager.setConfig rejects a busy harness switch', async () => {
+        vi.spyOn(manager, 'setConfig').mockReturnValue({ ok: false, reason: 'busy' })
+        const res = fakeRes()
+        await run(mwSession, fakeReq('POST', '/__the-forge/session/config', { harness: 'cursor' }, { host: 'localhost:5173' }), res)
+        expect(res.statusCode).toBe(409)
+        expect(JSON.parse(res.body)).toEqual({ error: 'session is busy' })
+      })
     })
   })
 

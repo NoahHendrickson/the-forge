@@ -6,6 +6,8 @@ import { migrateLegacyForgeDir } from './setup'
 import { SessionManager } from './session/manager'
 import { ApprovalRegistry, type ApprovalFeedItem } from './session/approvals'
 import { ClaudeAdapter } from './session/claude'
+import { CursorAdapter } from './session/cursor'
+import { EMBEDDED_HARNESSES, type HarnessId } from '../shared/chat-constants'
 
 /** Per-connection session handles exposed to the middleware. The fan-out broadcaster
  * (`onApproval`) bridges the registry's single constructor-injected onChange callback
@@ -34,7 +36,11 @@ export interface ForgeRuntime {
  * Endpoint-file lifecycle deliberately stays with each caller — listen/close hooks differ
  * per server (Vite's httpServer events vs. the sidecar's own http.Server).
  */
-export function createForgeRuntime(resolvedRoot: string, viteRoot?: string): ForgeRuntime {
+export function createForgeRuntime(
+  resolvedRoot: string,
+  viteRoot?: string,
+  opts?: { defaultAgent?: 'claude-code' | 'cursor' | 'codex' }
+): ForgeRuntime {
   const forgeDir = path.join(resolvedRoot, '.the-forge')
   const queue = new Queue(forgeDir)
   if (viteRoot !== undefined) migrateLegacyForgeDir(resolvedRoot, viteRoot, queue)
@@ -73,17 +79,35 @@ export function createForgeRuntime(resolvedRoot: string, viteRoot?: string): For
       for (const fn of approvalListeners) fn(e)
     },
   })
+  // defaultAgent is the plugin's `agent` option (or the sidecar's equivalent), which spans a
+  // third value ('codex') this manager can't yet drive embedded (C2). Narrow it to a HarnessId
+  // here — a codex-configured project chats via Claude until C2, same posture as the dispatch
+  // ladder's embedded-rung gate below.
+  const defaultHarness: HarnessId =
+    opts?.defaultAgent !== undefined && (EMBEDDED_HARNESSES as readonly string[]).includes(opts.defaultAgent)
+      ? (opts.defaultAgent as HarnessId)
+      : 'claude-code'
   const manager = new SessionManager({
-    // Production default: ClaudeAdapter regardless of opts.harness. Task 4 makes this
-    // factory actually key off opts.harness (ClaudeAdapter vs CursorAdapter); for now (C1
-    // Task 2 — vocab/manager/adapter-type groundwork only) opts.harness is ignored so the
-    // factory keeps compiling against the now-required field. `opts.effort` (threaded by
-    // SessionManager on every spawn) becomes ClaudeAdapter's constructor-time spawn flag —
-    // see ClaudeAdapter's constructor why-comment (spike: spawn-flag-only, no set_effort
-    // control request).
-    makeAdapter: (opts) => new ClaudeAdapter(undefined, opts),
+    // Keyed off opts.harness (ClaudeAdapter vs CursorAdapter) — every spawn is FOR a specific
+    // harness, never ambiguous (see SessionManagerOpts.makeAdapter's own why-comment).
+    // `opts.effort` (threaded by SessionManager on every spawn) becomes ClaudeAdapter's
+    // constructor-time spawn flag — see ClaudeAdapter's constructor why-comment (spike:
+    // spawn-flag-only, no set_effort control request); CursorAdapter accepts-and-ignores it
+    // (no effort control surface — see cursor.ts's own why-comment).
+    makeAdapter: (adapterOpts) => {
+      if (adapterOpts.harness === 'cursor') {
+        const a = new CursorAdapter(undefined, { effort: adapterOpts.effort })
+        // Non-edit ACP permission requests: same registry, same overlay UI, same timeout-to-deny —
+        // the approve MCP tool + --permission-prompt-tool remain Claude-only; edit-kind requests
+        // never reach here (adapter-side auto-allow, the ratified posture).
+        a.onApproval = (toolName, detail) => approvals.request(toolName, detail).promise
+        return a
+      }
+      return new ClaudeAdapter(undefined, adapterOpts)
+    },
     forgeDir,
     cwd: resolvedRoot,
+    defaultHarness,
   })
   const session: ForgeSessionHandles = {
     manager,

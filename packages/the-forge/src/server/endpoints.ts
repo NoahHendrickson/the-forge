@@ -6,7 +6,7 @@ import { dispatch as realDispatch, augmentDispatchMarkdown, type DispatchOpts, t
 import { WatcherHub } from './watchers'
 import { ensureDevtoolsUuid } from './setup'
 import type { ForgeSessionHandles } from './runtime'
-import { EFFORT_LEVELS, PERMISSION_MODES, CHAT_TEXT_MAX } from '../shared/chat-constants'
+import { EMBEDDED_HARNESSES, HARNESS_VOCAB, type HarnessId, CHAT_TEXT_MAX } from '../shared/chat-constants'
 
 /** Chrome DevTools' Automatic Workspace Folders well-known path (task A5) — served by
  * createForgeMiddleware below and proxied to it by src/next/index.ts's rewrites merge.
@@ -27,10 +27,11 @@ const MAX_BODY = 1024 * 1024
 const KNOWN_AGENTS = new Set<DispatchOpts['agent']>(['claude-code', 'cursor', 'codex'])
 
 // /session/say + /session/config validation constants (Task 4). Regexes are spike-pinned
-// (spec §2.4) — verbatim, not derived. CHAT_TEXT_MAX, PERMISSION_MODES and EFFORT_LEVELS
-// now live in src/shared/chat-constants.ts (the single source of truth shared with the
-// browser client's session-feed.ts pickers) — the arrays there are the shared truth; these
-// Sets are just this module's own lookup wrappers.
+// (spec §2.4) — verbatim, not derived. CHAT_TEXT_MAX and the per-harness effort/permission-mode
+// vocab now live in src/shared/chat-constants.ts (the single source of truth shared with the
+// browser client's session-feed.ts pickers) — HARNESS_VOCAB is looked up per-request below,
+// keyed off the target harness (the body's `harness` field when switching, else the session's
+// current harness), since claude-code and cursor support different value sets.
 // Length caps checked BEFORE the regexes below (cheaper) — CHAT_SOURCE_RE/CHAT_TAG_RE are
 // anchored but have unbounded quantifiers, so a well-shaped-but-huge string (e.g. ~1MB of
 // "a/") would otherwise pass the regex and ride the composed turn straight past the
@@ -40,8 +41,7 @@ const CHAT_TAG_MAX = 64
 const CHAT_SOURCE_RE = /^[\w./-]+:\d+:\d+$/
 const CHAT_TAG_RE = /^[a-z][a-z0-9-]*$/
 const CONFIG_MODEL_MAX = 100
-const PERMISSION_MODES_SET = new Set<string>(PERMISSION_MODES)
-const EFFORT_LEVELS_SET = new Set<string>(EFFORT_LEVELS)
+const EMBEDDED_HARNESSES_SET = new Set<string>(EMBEDDED_HARNESSES)
 
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -429,10 +429,13 @@ export function createForgeMiddleware(
           // everything, the loser burns a "No pending design edits" tick. Harmless
           // (pull is idempotent) but token-wasteful; acceptable for the rare dual setup.
           //
-          // cursor/codex skip this rung entirely — no embedded adapter yet for those agents
-          // (§3.4). They fall through to their own dispatch paths (deeplink / tmux).
+          // Gate is membership in EMBEDDED_HARNESSES (claude-code, cursor — C1), not a bare
+          // claude-code equality check: cursor now takes the embedded rung too, same as
+          // claude-code — deliberate, embedded is the primary path for every harness that has
+          // an adapter (§3.4). codex still skips this rung entirely — no embedded adapter for
+          // it yet (C2) — and falls through to its own dispatch paths (deeplink / tmux).
           // dispatchConfig.embedded === false is the consumer opt-out (see DispatchConfig).
-          if (session && resolvedAgent === 'claude-code' && dispatchConfig.embedded !== false) {
+          if (session && EMBEDDED_HARNESSES_SET.has(resolvedAgent) && dispatchConfig.embedded !== false) {
             const sessionState = session.manager.state()
             if (sessionState === 'ready' || sessionState === 'busy' || sessionState === 'starting') {
               session.manager.notifyDesignEdits()
@@ -547,27 +550,53 @@ export function createForgeMiddleware(
       if (!session) return send(res, 404, { error: 'embedded session unavailable' })
       readBody(req)
         .then((body) => {
-          const { model, permissionMode, effort } = (body ?? {}) as {
+          const { model, permissionMode, effort, harness } = (body ?? {}) as {
             model?: unknown
             permissionMode?: unknown
             effort?: unknown
+            harness?: unknown
           }
-          if (model === undefined && permissionMode === undefined && effort === undefined) {
-            return send(res, 400, { error: 'at least one of model, permissionMode, effort required' })
+          if (model === undefined && permissionMode === undefined && effort === undefined && harness === undefined) {
+            return send(res, 400, { error: 'at least one of model, permissionMode, effort, harness required' })
           }
           if (model !== undefined && (typeof model !== 'string' || model.length === 0 || model.length > CONFIG_MODEL_MAX)) {
             return send(res, 400, { error: `model must be a non-empty string of at most ${CONFIG_MODEL_MAX} characters` })
           }
-          if (permissionMode !== undefined && (typeof permissionMode !== 'string' || !PERMISSION_MODES_SET.has(permissionMode))) {
-            return send(res, 400, { error: 'permissionMode must be one of default, acceptEdits, plan' })
+          if (harness !== undefined && (typeof harness !== 'string' || !EMBEDDED_HARNESSES_SET.has(harness))) {
+            return send(res, 400, { error: `harness must be one of ${EMBEDDED_HARNESSES.join(', ')}` })
           }
-          if (effort !== undefined && (typeof effort !== 'string' || !EFFORT_LEVELS_SET.has(effort))) {
-            return send(res, 400, { error: 'effort must be one of low, medium, high, xhigh, max' })
+          // effort/permissionMode validate against the TARGET harness's vocab: the harness
+          // being switched TO in this same call (the body's `harness`), else the session's
+          // current harness — a switch-and-configure-in-one-call must validate against the
+          // NEW harness's tables, not the one being left behind. Empty tables (cursor today)
+          // reject every value; the error text distinguishes "wrong value" from "no such knob".
+          const vocabHarness: HarnessId = (harness as HarnessId | undefined) ?? session.manager.harness()
+          const vocab = HARNESS_VOCAB[vocabHarness]
+          if (permissionMode !== undefined) {
+            if (typeof permissionMode !== 'string' || !vocab.permissionModes.includes(permissionMode)) {
+              return send(res, 400, {
+                error:
+                  vocab.permissionModes.length === 0
+                    ? 'permissionMode is not supported for this harness'
+                    : `permissionMode must be one of ${vocab.permissionModes.join(', ')}`,
+              })
+            }
           }
-          const cfg: { model?: string; permissionMode?: string; effort?: string } = {}
+          if (effort !== undefined) {
+            if (typeof effort !== 'string' || !vocab.efforts.includes(effort)) {
+              return send(res, 400, {
+                error:
+                  vocab.efforts.length === 0
+                    ? 'effort is not supported for this harness'
+                    : `effort must be one of ${vocab.efforts.join(', ')}`,
+              })
+            }
+          }
+          const cfg: { model?: string; permissionMode?: string; effort?: string; harness?: HarnessId } = {}
           if (typeof model === 'string') cfg.model = model
           if (typeof permissionMode === 'string') cfg.permissionMode = permissionMode
           if (typeof effort === 'string') cfg.effort = effort
+          if (typeof harness === 'string') cfg.harness = harness as HarnessId
           const result = session.manager.setConfig(cfg)
           if (!result.ok) {
             return send(res, 409, { error: 'session is busy' })
@@ -629,6 +658,10 @@ export function createForgeMiddleware(
         // all — distinct from `session` (which reports the live adapter state) because it
         // reflects the DispatchConfig.embedded opt-out, not runtime session health.
         sessionEnabled: dispatchConfig.embedded !== false,
+        // The picker's reload seed (Task 5/6 client): which embedded harness this session is
+        // (or will be, on the next auto-start) driving. Omitted, not null/'unavailable', when
+        // no session is wired — mirrors `harness`'s absence from every other no-session field.
+        ...(session ? { harness: session.manager.harness() } : {}),
       })
       return
     }
