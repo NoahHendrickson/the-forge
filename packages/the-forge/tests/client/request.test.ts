@@ -6,8 +6,6 @@ import {
   buildChangeRequestWithElements,
   cssPath,
   renderMarkdown,
-  renderPromptMarkdown,
-  type PromptRequest,
   REMOVE_AUTO_LAYOUT_INTENT,
 } from '../../src/client/request'
 import { resetTokensCache, type Theme } from '../../src/client/tokens'
@@ -529,35 +527,3 @@ line2 \`code\`</button>`
   })
 })
 
-// renderPromptMarkdown is LEGACY restore-compat only (see PromptRequest in request.ts): it is
-// reachable solely through rebuildRequestFromSeed's prompt branch, i.e. resend() of a seed
-// restored from pre-consolidation sessionStorage. buildPromptRequest (the fresh-construction
-// half) was deleted with its last production caller — these tests hand-build the request.
-describe('renderPromptMarkdown (legacy restore-compat)', () => {
-  it('renders markdown with instruction, per-element context, and guardrails', () => {
-    const req: PromptRequest = {
-      kind: 'prompt', createdAt: 'now', viewport: { width: 1440, height: 900 },
-      prompt: 'make this more prominent',
-      elements: [{ tag: 'button', source: { file: 'src/App.tsx', line: 12, col: 4 },
-        className: 'px-4', text: 'Go', selector: 'div > button', changes: [] }],
-    }
-    const md = renderPromptMarkdown(req)
-    expect(md).toContain('# Design prompt')
-    expect(md).toContain('## 1. <button> — src/App.tsx:12:4')
-    expect(md).toContain('Selector: `div > button`')
-    expect(md).toContain('## Instruction')
-    expect(md).toContain('make this more prominent')
-    expect(md).toContain('Scope: apply to this call site only.')
-    // prompt flow has no style verifier — its no-preview line must NOT promise verification
-    expect(md).toContain('Do not run the app, take screenshots, or preview the result')
-    expect(md).not.toContain('verifies the changes automatically')
-  })
-
-  it('renders a no-source fallback header', () => {
-    const req: PromptRequest = {
-      kind: 'prompt', createdAt: 'now', viewport: { width: 800, height: 600 }, prompt: 'x',
-      elements: [{ tag: 'div', source: null, className: '', text: '', selector: 'div', changes: [] }],
-    }
-    expect(renderPromptMarkdown(req)).toContain('(no source tag — locate by selector/text)')
-  })
-})

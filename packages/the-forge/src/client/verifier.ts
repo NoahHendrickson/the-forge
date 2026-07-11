@@ -2,7 +2,7 @@ import type { SentEntry, SentStore } from './lifecycle'
 import type { DraftStore } from './drafts'
 import type { TaggedElement } from './source'
 import { AGENT_DISPLAY_NAME, currentAgent } from './agent'
-import { queuedLineFor, type SessionState, type WatcherState } from './watch'
+import { parseSessionState, parseWatcherState, queuedLineFor, type SessionState, type WatcherState } from './watch'
 import { resolveElement } from './lifecycle-store'
 
 const POLL_MS = 2000
@@ -266,19 +266,11 @@ export class Verifier {
         }
         if (this.sent.size() === 0) this.stop()
         const agentDisplayName = AGENT_DISPLAY_NAME[currentAgent()]
-        const watcherState: WatcherState =
-          body.watcher === 'live' || body.watcher === 'asleep' ? body.watcher : 'none'
-        // Same unknown-shape tolerance as WatchStatus.poll: only the five known states are
-        // accepted; absent/unknown (older server) → 'unavailable'. queuedLineFor only acts on
-        // the active subset (isSessionActive), so the conservative default changes nothing.
-        const sessionState: SessionState =
-          body.session === 'idle' ||
-          body.session === 'starting' ||
-          body.session === 'ready' ||
-          body.session === 'busy' ||
-          body.session === 'failed'
-            ? body.session
-            : 'unavailable'
+        // Shared /status-body parsers live in watch.ts (the allowlists' one home). Unknown
+        // watcher collapses to 'none' here — this is a one-shot summary line, not WatchStatus's
+        // stateful blip handling, so there's no standing 'asleep' to preserve.
+        const watcherState: WatcherState = parseWatcherState(body.watcher) ?? 'none'
+        const sessionState: SessionState = parseSessionState(body.session)
         this.onUpdate(renderSummary(this.counters, claimed, pendingManual, agentDisplayName, watcherState, sessionState))
       })
       .catch(() => {

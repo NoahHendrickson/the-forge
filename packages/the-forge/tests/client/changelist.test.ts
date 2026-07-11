@@ -127,16 +127,6 @@ describe('sent rows and stages', () => {
     expect(list.root.querySelector('.change-summary')!.textContent).toBe('pt-2 → pt-6 +1 more')
   })
 
-  it('renders a prompt seed row with the prompt text as summary, truncated at 80 chars', () => {
-    const long = 'p'.repeat(100)
-    const change = elementChange({ changes: [] })
-    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
-    list.addSent('q1', [{ ...seed(tagged(), change), draftProps: [], prompt: long }])
-    const summary = list.root.querySelector('.change-summary')!
-    expect(summary.textContent).toBe('p'.repeat(80) + '…')
-    expect(summary.getAttribute('title')).toBe(long)
-  })
-
   it('advances stages idempotently and allows applying → sent regression', () => {
     const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     list.addSent('q1', [seed(tagged())])

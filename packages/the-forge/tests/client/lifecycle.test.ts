@@ -287,29 +287,6 @@ describe('LifecycleSession: restore round-trip incl. placeholder + heal', () => 
     expect(persisted[0].elements[0].index).toBe(0)
   })
 
-  it('round-trips a prompt seed through toPersistedSent/restoreSent', () => {
-    const session = new LifecycleSession()
-    const target = el('button')
-    target.dataset.dcSource = 'src/App.tsx:5:2'
-    const change: ElementChange = {
-      tag: 'button',
-      source: { file: 'src/App.tsx', line: 5, col: 2 },
-      className: '',
-      text: '',
-      selector: 'button',
-      changes: [],
-    }
-    session.register('id-1', [
-      { el: target as never, dcSource: 'src/App.tsx:5:2', index: 0, draftProps: [], change, prompt: 'make it pop' },
-    ])
-    const persisted = session.toPersistedSent()
-    expect(persisted[0].elements[0].prompt).toBe('make it pop')
-
-    const restored = new LifecycleSession()
-    restored.restoreSent(persisted, () => null) // placeholder path
-    expect(restored.records()[0].seed.prompt).toBe('make it pop')
-  })
-
   it('gives an unlocatable element a detached placeholder, not a crash', () => {
     const session = new LifecycleSession()
     session.restoreSent(

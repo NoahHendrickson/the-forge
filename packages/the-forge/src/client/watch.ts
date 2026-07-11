@@ -20,6 +20,25 @@ export type SessionState = 'idle' | 'starting' | 'ready' | 'busy' | 'failed' | '
 
 export const WATCH_POLL_MS = 5_000
 
+/** Parses the untyped `watcher` field of a /status body — the ONE allowlist both /status
+ * consumers (WatchStatus.poll here, the Verifier's poll) share. Returns null for an
+ * absent/unrecognized value instead of picking a fallback, because the two consumers
+ * deliberately differ there: WatchStatus.poll must degrade() (asymmetric — drop a claimed
+ * 'live', keep a standing 'asleep' through blips) while the verifier's one-shot summary
+ * collapses unknown to 'none'. */
+export function parseWatcherState(raw: unknown): WatcherState | null {
+  return raw === 'live' || raw === 'asleep' || raw === 'none' ? raw : null
+}
+
+/** Parses the untyped `session` field of a /status body — only the five known states are
+ * accepted; absent (older server) or unrecognized (a future server) → 'unavailable'. Shared
+ * by both /status consumers so the allowlist can't drift when a state is added. */
+export function parseSessionState(raw: unknown): SessionState {
+  return raw === 'idle' || raw === 'starting' || raw === 'ready' || raw === 'busy' || raw === 'failed'
+    ? raw
+    : 'unavailable'
+}
+
 // ---------------------------------------------------------------------------
 // Watcher copy — the ONE home for the live/asleep/none message matrix. The
 // strip indicator (watchIndicatorFor) and the verifier's queued prefix
@@ -194,22 +213,10 @@ export class WatchStatus {
         // 'none' is a legitimate, AUTHORITATIVE server answer (e.g. a fresh hub after a
         // Vite restart) — it must clear a cached 'asleep', not fall into the degrade
         // path with failures. Only truly unrecognized values (a future server) degrade.
-        const raw = body.watcher
-        if (raw === 'live' || raw === 'asleep' || raw === 'none') this.update(raw)
+        const watcher = parseWatcherState(body.watcher)
+        if (watcher !== null) this.update(watcher)
         else this.degrade()
-        // Session field: only the five known states are accepted; absent/unknown → 'unavailable'.
-        const rawSession = body.session
-        if (
-          rawSession === 'idle' ||
-          rawSession === 'starting' ||
-          rawSession === 'ready' ||
-          rawSession === 'busy' ||
-          rawSession === 'failed'
-        ) {
-          this.updateSession(rawSession)
-        } else {
-          this.updateSession('unavailable')
-        }
+        this.updateSession(parseSessionState(body.session))
       })
       .catch(() => {
         if (gen !== this.generation) return

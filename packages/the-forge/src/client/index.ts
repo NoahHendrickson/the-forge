@@ -10,7 +10,6 @@ import {
   rebuildRequestFromSeed,
   type ChangeRequest,
   type ElementChange,
-  type PromptRequest,
 } from './request'
 import { LifecycleSession, type SentSeed } from './lifecycle'
 import { Verifier } from './verifier'
@@ -369,7 +368,7 @@ export class DesignMode {
    * comes back (or the POST fails), which is exactly what onOk/onFail are for.
    * Nesting is deliberate, matching the pre-extraction Send handler: the send tests count
    * microtask ticks — re-check them before flattening to a flat .then chain or async/await. */
-  private queueRequest(request: ChangeRequest | PromptRequest, markdown: string, onOk: (id: string) => void, onFail: () => void): void {
+  private queueRequest(request: ChangeRequest, markdown: string, onOk: (id: string) => void, onFail: () => void): void {
     fetch('/__the-forge/queue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
@@ -473,10 +472,8 @@ export class DesignMode {
   private resend(seed: SentSeed): void {
     if (this.resendsInFlight.has(seed)) return // re-entrancy guard: this seed's re-queue POST is already in flight
     this.resendsInFlight.add(seed)
-    // A failed PROMPT seed re-queues as a fresh prompt request, not a ChangeRequest — its
-    // change.changes is empty, so renderMarkdown would produce a bullet-less no-op request.
-    // rebuildRequestFromSeed is the single place that shapes either request — resend no longer
-    // maintains its own copy of that contract.
+    // rebuildRequestFromSeed is the single place that shapes the rebuilt request — resend
+    // doesn't maintain its own copy of that contract.
     const { request, markdown } = rebuildRequestFromSeed(seed)
     this.queueRequest(
       request,

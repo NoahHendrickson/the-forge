@@ -42,13 +42,6 @@ export interface SentSeed {
   index: number
   draftProps: string[]
   change: ElementChange
-  /** Free-form prompt text for kind:'prompt' sends (spec 2026-07-05-prompt-mode). Presence of
-   * this field is what marks a seed as a prompt send everywhere downstream: ChangeList renders
-   * it as the row summary instead of property deltas, and resend() rebuilds a prompt request
-   * from it. Absent on draft sends. LEGACY restore-compat: fresh seeds never set this since
-   * the composer consolidation (free-form text rides /session/say, not the queue) — only
-   * restoreSent() reading pre-consolidation sessionStorage still produces a prompt seed. */
-  prompt?: string
 }
 
 /** Stages a row can no longer leave via poll events — a late 'sent'/'applying' tick for an
@@ -293,7 +286,6 @@ export class LifecycleSession implements SentStore {
           draftProps: seed.draftProps,
           changes: seed.change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
           change: seed.change,
-          prompt: seed.prompt,
         })),
       })
     }
@@ -311,7 +303,6 @@ export class LifecycleSession implements SentStore {
         index: pe.index,
         draftProps: pe.draftProps,
         change: pe.change,
-        prompt: pe.prompt,
       }))
       this.entries.set(s.id, seeds.map((seed) => ({ seed, stage: 'sent' as LifecycleStage })))
       this.resolvedIds.delete(s.id)
