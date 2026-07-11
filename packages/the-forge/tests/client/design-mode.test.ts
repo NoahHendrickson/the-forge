@@ -1025,7 +1025,7 @@ describe('composer send-everything verb + watch strip gating (Task 3)', () => {
 
   // Final-review fix C1: embedded:false (chat unavailable) must gate the CHAT leg only —
   // drafts ride the queue/watcher path that opt-out deliberately preserves, so a terminal-only
-  // consumer who has drafted edits ('N edits drafted' pill) must still have a working send
+  // consumer who has drafted edits ('N changes drafted' pill) must still have a working send
   // surface to get them onto the queue.
   describe('drafts send survives embedded:false (final-review fix C1)', () => {
     it('sessionEnabled:false + drafts present: ↑ stays enabled, click sends queue+dispatch, never /session/say', async () => {
@@ -1299,7 +1299,7 @@ describe('change list wiring', () => {
     expect(pill.hidden).toBe(true)
     drafts.apply(btn, 'padding-top', '24px')
     expect(pill.hidden).toBe(false)
-    expect(pill.textContent).toBe('1 edit drafted')
+    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('1 change drafted')
   })
 
   it('seeds sent rows on a successful send and clears them on deactivate', async () => {

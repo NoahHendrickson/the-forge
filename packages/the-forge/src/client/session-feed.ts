@@ -112,6 +112,7 @@ export class SessionFeed {
   // details-free div toggle (no <details> semantics needed, there's only ever one thing to
   // show/hide). draftSlot (public) is the content host inside it. ---
   private readonly draftPill: HTMLButtonElement
+  private readonly draftPillLabel: HTMLSpanElement
   private readonly draftDisclosure: HTMLElement
 
   // --- element chip + input cluster ---
@@ -247,10 +248,19 @@ export class SessionFeed {
     // createButton (CLAUDE.md's ui/ factory rule), hidden until setDraftState says otherwise.
     // Its click toggles the sibling draftDisclosure's .open class — draftSlot is exposed
     // publicly so index.ts can append the (unmodified) ChangeList's root into it.
+    // Label + chevron are child spans (2026-07-11 draft-badge spec): setDraftState rewrites
+    // only the label span, and .open is mirrored onto the pill itself so the chevron can
+    // rotate with a same-element CSS hook (the disclosure is a sibling, not a parent).
     this.draftPill = createButton({ className: 'draft-pill' })
     this.draftPill.type = 'button'
     this.draftPill.hidden = true
-    this.draftPill.addEventListener('click', () => this.draftDisclosure.classList.toggle('open'))
+    this.draftPillLabel = document.createElement('span')
+    this.draftPillLabel.className = 'draft-pill-label'
+    const draftChevron = document.createElement('span')
+    draftChevron.className = 'draft-pill-chevron'
+    draftChevron.textContent = '▾'
+    this.draftPill.append(this.draftPillLabel, draftChevron)
+    this.draftPill.addEventListener('click', () => this.setDisclosureOpen(!this.draftDisclosure.classList.contains('open')))
 
     this.draftSlot = document.createElement('div')
     this.draftSlot.className = 'draft-slot'
@@ -360,13 +370,21 @@ export class SessionFeed {
     const visible = s.count > 0 || s.applying
     this.draftPill.hidden = !visible
     if (!visible) {
-      this.draftDisclosure.classList.remove('open')
+      this.setDisclosureOpen(false)
     } else {
-      this.draftPill.textContent = s.applying ? 'applying…' : s.count === 1 ? '1 edit drafted' : `${s.count} edits drafted`
+      this.draftPillLabel.textContent = s.applying ? 'applying…' : s.count === 1 ? '1 change drafted' : `${s.count} changes drafted`
     }
     // Draft count is one of the two independent signals that can license the send button —
     // see syncSendEnabled (final-review fix C1).
     this.syncSendEnabled()
+  }
+
+  /** Single owner of the disclosure's open state — mirrored onto the pill so the chevron
+   * rotation has a same-element CSS hook. Every open/close path (pill click, setDraftState's
+   * force-close) must come through here or pill and disclosure drift apart. */
+  private setDisclosureOpen(open: boolean): void {
+    this.draftDisclosure.classList.toggle('open', open)
+    this.draftPill.classList.toggle('open', open)
   }
 
   /** Enables/disables the input cluster and shows/hides the reason line. Availability

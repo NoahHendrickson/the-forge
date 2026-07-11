@@ -645,12 +645,18 @@ button {
 // itself sits ABOVE .composer-chips in .chat-composer so opening it (it hosts the unmodified
 // ChangeList, whose own .changes-section rules cap it at max-height 180px) never pushes the
 // textarea/controls rows around — it grows upward into free panel space instead.
+// 2026-07-11 draft-badge spec: the pill's .open class is mirrored alongside the disclosure's
+// (session-feed.ts's setDisclosureOpen) purely so .draft-pill-chevron has a same-element CSS
+// hook to rotate on — the disclosure itself is a sibling, not an ancestor, of the pill.
 // CSS class names here are test hooks — extend, don't rename.
 `.draft-pill {
-  flex: none; padding: 4px 8px; border-radius: 6px; background: var(--control); border: none;
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 8px; border-radius: 6px; background: var(--control); border: none;
   font: 500 var(--text-xs) var(--font-ui); color: var(--text-secondary);
 }
 .draft-pill:hover { background: var(--control-hover); }
+.draft-pill-chevron { transition: transform 120ms ease; }
+.draft-pill.open .draft-pill-chevron { transform: rotate(180deg); }
 .draft-disclosure { display: none; }
 .draft-disclosure.open { display: block; }
 ` +
