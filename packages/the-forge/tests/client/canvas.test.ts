@@ -161,6 +161,15 @@ describe('CanvasMode enter/exit', () => {
     canvas.setOn(false)
   })
 
+  it('falls back to white when NEITHER html nor body has a background (unset computes to rgba(0,0,0,0), never "")', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    // jsdom normalizes an inline '#ffffff' assignment to 'rgb(255, 255, 255)'
+    expect(document.body.style.backgroundColor).toBe('rgb(255, 255, 255)')
+    canvas.setOn(false)
+    expect(document.body.style.backgroundColor).toBe('')
+  })
+
   it('copies the html background onto a transparent body so the artboard is not gray', () => {
     document.documentElement.style.backgroundColor = 'rgb(20, 20, 30)'
     const { canvas } = makeCanvas()

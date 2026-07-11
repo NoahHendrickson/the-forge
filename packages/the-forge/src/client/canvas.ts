@@ -169,10 +169,14 @@ export class CanvasMode {
     // whole page reads as canvas-gray.
     const bodyBg = getComputedStyle(body).backgroundColor
     const htmlBg = getComputedStyle(html).backgroundColor
-    const transparent = bodyBg === 'transparent' || bodyBg === 'rgba(0, 0, 0, 0)' || bodyBg === ''
+    // An UNSET background computes to 'rgba(0, 0, 0, 0)' (never ''), so the fallback
+    // decision needs the same transparent check as body — a bare `htmlBg === ''` test
+    // would copy transparent onto body and leave the artboard canvas-gray.
+    const isTransparent = (c: string): boolean =>
+      c === 'transparent' || c === 'rgba(0, 0, 0, 0)' || c === ''
     html.style.overflow = 'hidden'
     html.style.backgroundColor = CANVAS_BG
-    if (transparent) body.style.backgroundColor = htmlBg === '' ? '#ffffff' : htmlBg
+    if (isTransparent(bodyBg)) body.style.backgroundColor = isTransparent(htmlBg) ? '#ffffff' : htmlBg
     body.style.boxShadow = ARTBOARD_SHADOW
     body.style.transformOrigin = '0 0'
     this.setState(seed)
