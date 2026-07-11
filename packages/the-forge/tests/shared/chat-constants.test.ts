@@ -30,17 +30,19 @@ describe('HARNESS_VOCAB', () => {
     expect(HARNESS_VOCAB['claude-code'].liveEffort).toBe(false)
   })
 
-  it('codex vocab is Task 1 fixture-pinned', () => {
-    expect(HARNESS_VOCAB.codex.efforts).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh'])
-    expect(HARNESS_VOCAB.codex.permissionModes).toEqual(['untrusted', 'on-request'])
+  it('cursor vocab is empty tables — no effort knob, no verified ACP permission-mode control', () => {
+    // Empty arrays hide both pickers (client) and reject every value (endpoint validation);
+    // the ratified permission posture is enforced adapter-side instead.
+    expect(HARNESS_VOCAB.cursor.efforts).toEqual([])
+    expect(HARNESS_VOCAB.cursor.permissionModes).toEqual([])
   })
 
-  it('codex has liveEffort: true (per-turn param, no respawn)', () => {
-    expect(HARNESS_VOCAB.codex.liveEffort).toBe(true)
+  it('cursor has liveEffort: true (moot with an empty efforts list; never triggers the Claude respawn dance)', () => {
+    expect(HARNESS_VOCAB.cursor.liveEffort).toBe(true)
   })
 
   it('EMBEDDED_HARNESSES lists both harnesses', () => {
-    expect(EMBEDDED_HARNESSES).toEqual(['claude-code', 'codex'])
+    expect(EMBEDDED_HARNESSES).toEqual(['claude-code', 'cursor'])
   })
 
   it('every HarnessId in EMBEDDED_HARNESSES has a HARNESS_VOCAB entry', () => {

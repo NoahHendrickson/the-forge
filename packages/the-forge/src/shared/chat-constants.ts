@@ -9,12 +9,12 @@
 // embedded harness gets its own effort/permission-mode vocabulary — the manager (and the
 // endpoints/UI code that validate against it) never invents a wire spelling an adapter
 // doesn't actually support.
-export type HarnessId = 'claude-code' | 'codex'
+export type HarnessId = 'claude-code' | 'cursor'
 
-export const EMBEDDED_HARNESSES = ['claude-code', 'codex'] as const
+export const EMBEDDED_HARNESSES = ['claude-code', 'cursor'] as const
 
 export interface HarnessVocab {
-  efforts: readonly string[] // [] would mean unsupported → picker hidden (C2/Cursor)
+  efforts: readonly string[] // [] means unsupported → picker hidden (cursor today; a knob-less future harness)
   liveEffort: boolean // true: effort applies to the live session, no respawn
   permissionModes: readonly string[] // OUR mode ids; adapters own the wire spelling
 }
@@ -29,14 +29,13 @@ export const HARNESS_VOCAB: Record<HarnessId, HarnessVocab> = {
     // bypassPermissions is deliberately absent — it would disable the overlay approve gate.
     permissionModes: ['default', 'acceptEdits', 'plan'],
   },
-  codex: {
-    // Task 1 fixture-pinned.
-    efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'],
-    // Codex threads effort as a per-turn param on turn/start — no respawn needed.
-    liveEffort: true,
-    // Our own mode ids; danger tiers (full-auto/yolo-equivalents) are deliberately absent —
-    // same overlay-gating posture as claude-code's missing bypassPermissions.
-    permissionModes: ['untrusted', 'on-request'],
+  cursor: {
+    // Cursor has NO effort knob and no verified ACP permission-mode control — empty tables
+    // hide both pickers (client) and reject every value (endpoint validation). The ratified
+    // permission posture is enforced adapter-side instead (edit-kind auto-allow; see cursor.ts).
+    efforts: [],
+    liveEffort: true, // moot with an empty list; true = never trigger the Claude respawn dance
+    permissionModes: [],
   },
 }
 

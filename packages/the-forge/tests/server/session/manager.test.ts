@@ -1581,19 +1581,19 @@ describe('SessionManager', () => {
     })
 
     it('respects opts.defaultHarness when no selection is persisted', () => {
-      const { opts } = makeHarness(dir, { defaultHarness: 'codex' })
+      const { opts } = makeHarness(dir, { defaultHarness: 'cursor' })
       const mgr = new SessionManager(opts)
-      expect(mgr.harness()).toBe<HarnessId>('codex')
+      expect(mgr.harness()).toBe<HarnessId>('cursor')
     })
 
     it('respects a persisted session.json selected over defaultHarness', () => {
       fs.writeFileSync(
         path.join(dir, 'session.json'),
-        JSON.stringify({ selected: 'codex', sessions: {} }),
+        JSON.stringify({ selected: 'cursor', sessions: {} }),
       )
       const { opts } = makeHarness(dir, { defaultHarness: 'claude-code' })
       const mgr = new SessionManager(opts)
-      expect(mgr.harness()).toBe<HarnessId>('codex')
+      expect(mgr.harness()).toBe<HarnessId>('cursor')
     })
 
     it('an unknown persisted selected value falls back to defaultHarness, never throws', () => {
@@ -1601,10 +1601,10 @@ describe('SessionManager', () => {
         path.join(dir, 'session.json'),
         JSON.stringify({ selected: 'some-future-harness', sessions: {} }),
       )
-      const { opts } = makeHarness(dir, { defaultHarness: 'codex' })
+      const { opts } = makeHarness(dir, { defaultHarness: 'cursor' })
       expect(() => new SessionManager(opts)).not.toThrow()
       const mgr = new SessionManager(opts)
-      expect(mgr.harness()).toBe<HarnessId>('codex')
+      expect(mgr.harness()).toBe<HarnessId>('cursor')
     })
   })
 
@@ -1625,8 +1625,8 @@ describe('SessionManager', () => {
   })
 
   describe('per-harness session.json slots', () => {
-    it('started under codex writes the codex slot without touching an existing claude-code slot', () => {
-      // No `selected` key — defaultHarness alone drives this session to codex; a pre-existing
+    it('started under cursor writes the cursor slot without touching an existing claude-code slot', () => {
+      // No `selected` key — defaultHarness alone drives this session to cursor; a pre-existing
       // claude-code slot (from an earlier claude-code session) must survive untouched.
       fs.writeFileSync(
         path.join(dir, 'session.json'),
@@ -1634,16 +1634,16 @@ describe('SessionManager', () => {
           sessions: { 'claude-code': { sessionId: 'claude-existing', updatedAt: 'x' } },
         }),
       )
-      const { adapters, opts } = makeHarness(dir, { defaultHarness: 'codex' })
+      const { adapters, opts } = makeHarness(dir, { defaultHarness: 'cursor' })
       const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapters[0]!.emit({ kind: 'started', sessionId: 'codex-sess-1', model: 'codex', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 'cursor-sess-1', model: 'cursor', mcpLoaded: true })
 
       const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
         sessions: Record<string, { sessionId: string }>
       }
-      expect(json.sessions['codex']!.sessionId).toBe('codex-sess-1')
+      expect(json.sessions['cursor']!.sessionId).toBe('cursor-sess-1')
       expect(json.sessions['claude-code']!.sessionId).toBe('claude-existing')
     })
 
@@ -1651,9 +1651,9 @@ describe('SessionManager', () => {
       fs.writeFileSync(
         path.join(dir, 'session.json'),
         JSON.stringify({
-          selected: 'codex',
+          selected: 'cursor',
           sessions: {
-            codex: { sessionId: 'stale-codex-id', updatedAt: 'x' },
+            cursor: { sessionId: 'stale-cursor-id', updatedAt: 'x' },
             'claude-code': { sessionId: 'claude-untouched', updatedAt: 'y' },
           },
         }),
@@ -1662,7 +1662,7 @@ describe('SessionManager', () => {
       const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      expect(adapters[0]!.startCalls[0]!.resumeId).toBe('stale-codex-id')
+      expect(adapters[0]!.startCalls[0]!.resumeId).toBe('stale-cursor-id')
       // CLI rejects the resume id in-band, before ever emitting init/started.
       adapters[0]!.emit({ kind: 'turn-complete', isError: true, errorText: 'not a UUID' })
 
@@ -1672,7 +1672,7 @@ describe('SessionManager', () => {
       const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
         sessions: Record<string, { sessionId: string } | undefined>
       }
-      expect(json.sessions['codex']).toBeUndefined()
+      expect(json.sessions['cursor']).toBeUndefined()
       expect(json.sessions['claude-code']!.sessionId).toBe('claude-untouched')
     })
   })
@@ -1688,7 +1688,7 @@ describe('SessionManager', () => {
       adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
       expect(mgr.state()).toBe<SessionState>('busy')
 
-      const result = mgr.setConfig({ harness: 'codex' })
+      const result = mgr.setConfig({ harness: 'cursor' })
 
       expect(result).toEqual({ ok: false, reason: 'busy' })
       expect(mgr.harness()).toBe<HarnessId>('claude-code')
@@ -1706,20 +1706,20 @@ describe('SessionManager', () => {
       adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
       adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // -> ready
 
-      const result = mgr.setConfig({ harness: 'codex' })
+      const result = mgr.setConfig({ harness: 'cursor' })
 
       expect(result).toEqual({ ok: true })
-      expect(mgr.harness()).toBe<HarnessId>('codex')
+      expect(mgr.harness()).toBe<HarnessId>('cursor')
       expect(adapters[0]!.stopCalls).toBe(1)
       expect(mgr.state()).toBe<SessionState>('idle')
 
       const row = events.find((fe) => fe.event.kind === 'config-changed')
-      expect(row?.event).toEqual({ kind: 'config-changed', harness: 'codex' })
+      expect(row?.event).toEqual({ kind: 'config-changed', harness: 'cursor' })
 
       const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
         selected: string
       }
-      expect(json.selected).toBe('codex')
+      expect(json.selected).toBe('cursor')
     })
 
     it("after a harness switch, the next say() spawns via makeAdapter with the new harness and that harness's own resumeId", () => {
@@ -1728,7 +1728,7 @@ describe('SessionManager', () => {
         JSON.stringify({
           selected: 'claude-code',
           sessions: {
-            codex: { sessionId: 'codex-own-id', updatedAt: 'x' },
+            cursor: { sessionId: 'cursor-own-id', updatedAt: 'x' },
             'claude-code': { sessionId: 'claude-own-id', updatedAt: 'y' },
           },
         }),
@@ -1741,14 +1741,14 @@ describe('SessionManager', () => {
       adapters[0]!.emit({ kind: 'started', sessionId: 'claude-own-id', model: 'claude', mcpLoaded: true })
       adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // -> ready
 
-      mgr.setConfig({ harness: 'codex' })
+      mgr.setConfig({ harness: 'cursor' })
       expect(mgr.state()).toBe<SessionState>('idle')
 
       mgr.say('go')
 
       expect(adapters).toHaveLength(2)
-      expect(adapters[1]!.harnessReceived).toBe<HarnessId>('codex')
-      expect(adapters[1]!.startCalls[0]!.resumeId).toBe('codex-own-id')
+      expect(adapters[1]!.harnessReceived).toBe<HarnessId>('cursor')
+      expect(adapters[1]!.startCalls[0]!.resumeId).toBe('cursor-own-id')
       expect(adapters[1]!.sendTurnCalls).toEqual(['go'])
     })
 
@@ -1759,24 +1759,30 @@ describe('SessionManager', () => {
       mgr.notifyDesignEdits()
       adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
       adapters[0]!.emit({ kind: 'turn-complete', isError: false })
-      mgr.setConfig({ harness: 'codex' })
+      mgr.setConfig({ harness: 'cursor' })
 
       mgr.stop()
 
       const second = makeHarness(dir)
       const mgr2 = new SessionManager(second.opts)
-      expect(mgr2.harness()).toBe<HarnessId>('codex')
+      expect(mgr2.harness()).toBe<HarnessId>('cursor')
       void mgr
     })
   })
 
   describe('setConfig({effort}) — capability-aware via HARNESS_VOCAB[harness].liveEffort', () => {
-    it('a liveEffort harness (codex): no stop, allowed while busy, calls adapter.setEffort, respawn still passes effort', () => {
-      const { adapters, opts } = makeHarness(dir, { defaultHarness: 'codex' })
+    it('a liveEffort harness (cursor): no stop, allowed while busy, calls adapter.setEffort, respawn still passes effort', () => {
+      // The manager consults ONLY the vocab's liveEffort flag — never `efforts` membership
+      // (that allowlist lives in the endpoint's validation, Task 4). Cursor's efforts list is
+      // EMPTY, so in production every effort value is rejected upstream and setEffort never
+      // fires for cursor — this test drives the liveEffort:true manager path directly because
+      // it's real, load-bearing manager code that C2's Codex harness (non-empty efforts,
+      // liveEffort: true) will exercise for real.
+      const { adapters, opts } = makeHarness(dir, { defaultHarness: 'cursor' })
       const mgr = new SessionManager(opts)
 
       mgr.notifyDesignEdits()
-      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'codex', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'cursor', mcpLoaded: true })
       expect(mgr.state()).toBe<SessionState>('busy')
 
       const result = mgr.setConfig({ effort: 'high' })
@@ -1790,7 +1796,7 @@ describe('SessionManager', () => {
       vi.advanceTimersByTime(35)
       expect(adapters).toHaveLength(2)
       expect(adapters[1]!.effortReceived).toBe('high')
-      expect(adapters[1]!.harnessReceived).toBe<HarnessId>('codex')
+      expect(adapters[1]!.harnessReceived).toBe<HarnessId>('cursor')
     })
 
     it('claude-code (liveEffort: false) keeps the existing stop/reject-while-busy behavior', () => {

@@ -75,7 +75,7 @@ export function createForgeRuntime(resolvedRoot: string, viteRoot?: string): For
   })
   const manager = new SessionManager({
     // Production default: ClaudeAdapter regardless of opts.harness. Task 4 makes this
-    // factory actually key off opts.harness (ClaudeAdapter vs CodexAdapter); for now (C1
+    // factory actually key off opts.harness (ClaudeAdapter vs CursorAdapter); for now (C1
     // Task 2 — vocab/manager/adapter-type groundwork only) opts.harness is ignored so the
     // factory keeps compiling against the now-required field. `opts.effort` (threaded by
     // SessionManager on every spawn) becomes ClaudeAdapter's constructor-time spawn flag —

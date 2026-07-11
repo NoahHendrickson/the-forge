@@ -64,7 +64,7 @@ export interface SessionManagerOpts {
    * ClaudeAdapter(undefined, opts). `opts.effort` threads the spike-confirmed spawn-flag-only
    * effort level (see ClaudeAdapter's constructor why-comment) into each fresh spawn.
    * `opts.harness` (Task 2, C1) is REQUIRED — every spawn is FOR a specific harness, never
-   * ambiguous; Task 4's factory keys off it to construct a ClaudeAdapter vs a CodexAdapter. */
+   * ambiguous; Task 4's factory keys off it to construct a ClaudeAdapter vs a CursorAdapter. */
   makeAdapter: (opts: { harness: HarnessId; effort?: string }) => SessionAdapter
   /** .the-forge/ dir — session.json home. Created lazily (mkdirSync recursive). */
   forgeDir: string
@@ -84,8 +84,8 @@ export interface SessionManagerOpts {
 // ---------------------------------------------------------------------------
 // session.json shape
 //
-// { "selected": "codex", "sessions": { "claude-code": {sessionId, updatedAt},
-//   "codex": {sessionId, updatedAt} } } — one slot per embedded harness, so switching
+// { "selected": "cursor", "sessions": { "claude-code": {sessionId, updatedAt},
+//   "cursor": {sessionId, updatedAt} } } — one slot per embedded harness, so switching
 // harnesses (setConfig({harness})) never clobbers the OTHER harness's resume id. Legacy
 // flat `{sessionId, updatedAt}` files (pre-Task-2) are read as the claude-code slot with no
 // `selected` — one-release read-compat; the first write migrates the file to this shape.
@@ -398,9 +398,12 @@ export class SessionManager {
    *   the NEXT say()/notifyDesignEdits auto-start with `--effort <level>` through the normal
    *   send-at-spawn path — `--resume <id>` (persisted in session.json) keeps the
    *   conversation intact.
-   * - effort on a `liveEffort: true` harness (Task 4's Codex): a live per-turn param — no
-   *   stop, no busy rejection (safe mid-turn, applies starting the next turn). `_spawnEffort`
-   *   is still recorded (kept in BOTH branches) so a later respawn re-applies it.
+   * - effort on a `liveEffort: true` harness: a live per-turn write — no stop, no busy
+   *   rejection (safe mid-turn, applies starting the next turn). `_spawnEffort` is still
+   *   recorded (kept in BOTH branches) so a later respawn re-applies it. Cursor sets
+   *   liveEffort: true with an EMPTY efforts list — the endpoint's allowlist rejects every
+   *   effort value for it upstream, so this branch stays dormant for cursor; it exists for a
+   *   future live-effort harness with real levels (C2's Codex).
    * - harness: busy is rejected the same way a non-live effort change is (a switch must not
    *   kill a live turn); otherwise the live adapter is stopped (state -> idle), the new
    *   harness is recorded and persisted to session.json's `selected`, and the NEXT

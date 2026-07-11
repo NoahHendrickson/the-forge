@@ -1,4 +1,4 @@
-// Harness-agnostic session contract. Codex/Cursor adapters implement this alongside ClaudeAdapter.
+// Harness-agnostic session contract. The Cursor adapter (C1) and later Codex (C2) implement this alongside ClaudeAdapter.
 
 import type { HarnessId } from '../../shared/chat-constants'
 
