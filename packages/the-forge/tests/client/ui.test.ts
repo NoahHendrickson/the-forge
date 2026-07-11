@@ -224,4 +224,32 @@ describe('createMenuButton', () => {
     mb.button.click()
     expect(host.querySelector('.menu-popover')).toBeNull()
   })
+
+  it('createMenuButton honors a custom label', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const menu = createMenuButton({ label: '100%', items: () => [], onSelect: () => {}, popoverHost: host })
+    expect(menu.button.textContent).toBe('100%')
+    host.remove()
+  })
+
+  it('opensUp positions the popover above the trigger', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const menu = createMenuButton({
+      opensUp: true,
+      items: () => [{ value: 'a', label: 'A' }],
+      onSelect: () => {},
+      popoverHost: host,
+    })
+    host.appendChild(menu.button)
+    menu.button.click()
+    const popover = host.querySelector('.menu-popover') as HTMLElement
+    expect(popover).toBeTruthy()
+    // jsdom has no layout (offsetTop/Height are 0) — assert the sign of the offset instead
+    // of real geometry: an opensUp popover's top must be <= the trigger's offsetTop.
+    expect(parseFloat(popover.style.top)).toBeLessThanOrEqual(menu.button.offsetTop)
+    menu.close()
+    host.remove()
+  })
 })

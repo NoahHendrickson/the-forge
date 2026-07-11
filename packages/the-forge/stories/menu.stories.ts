@@ -33,3 +33,29 @@ export const Sizing: Story = {
     return el
   },
 }
+
+// Zoom pill: custom label, opens above the trigger for bottom-anchored chrome.
+const zoomItems = () => [
+  { value: 'fit', label: 'Zoom to fit' },
+  { value: '50', label: '50%' },
+  { value: '100', label: '100%', checked: true },
+  { value: '200', label: '200%' },
+]
+
+export const ZoomPill: Story = {
+  render: () => {
+    const host = document.createElement('div')
+    host.className = 'panel-body'
+    const mb = createMenuButton({
+      label: '100%',
+      opensUp: true,
+      items: zoomItems,
+      onSelect: () => {},
+      popoverHost: host,
+    })
+    host.append(mb.button)
+    const el = mountInShadow(host, 'panel')
+    mb.button.click()
+    return el
+  },
+}

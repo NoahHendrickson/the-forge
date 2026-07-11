@@ -66,6 +66,10 @@ export class Panel {
    * whenever there's no live selection (docked "No selection" state included). Panel does
    * NOT know about the chat cluster itself; index.ts wires the click (Task 4/6). */
   promptButton = createButton({ label: 'Prompt', className: 'panel-prompt' })
+  /** Canvas-mode entry point (design-canvas-mode spec) — lives in the header, next to the
+   * dock-mode toggle. Panel does NOT know what canvas mode does; index.ts wires the click
+   * and toggles '.on' + the title text as CanvasMode's state changes (syncCanvasUi). */
+  canvasButton = createButton({ label: '⛶', title: 'Canvas mode', className: 'panel-mode canvas-toggle' })
   /** Mount slot for the SessionFeed (session-feed.ts) — the Changes lifecycle list (changelist.ts)
    * no longer gets its own dedicated slot here (composer consolidation Task 2): it now mounts
    * inside the SessionFeed's own drafts disclosure (feed.draftSlot), so this is the only slot
@@ -202,8 +206,9 @@ export class Panel {
     this.modeButton.type = 'button'
     this.promptButton.type = 'button'
     this.promptButton.hidden = true
+    this.canvasButton.type = 'button'
     this.headActions.className = 'panel-head-actions'
-    this.headActions.append(this.promptButton, this.modeButton)
+    this.headActions.append(this.promptButton, this.canvasButton, this.modeButton)
     this.head.append(this.headActions)
     this.feedSlot.className = 'panel-feed-slot'
     this.feedDividerHandle = installFeedDivider({ feedSlot: this.feedSlot, root: this.root, storage: this.storage })

@@ -70,6 +70,11 @@ export class Dock {
    * only undo what was actually applied (a floating-mode exit() re-appending #status
    * to the shadow root would needlessly reorder DOM it never touched). */
   private dockedApplied = false
+  /** True while canvas mode owns the page: the margin push is suspended (the artboard
+   * lays out full-width and pans behind the panel) but docked layout is otherwise
+   * unchanged. The saved original margin is what gets written back — not '' — so a
+   * page's own inline margin survives the whole canvas session. */
+  private canvasActive = false
 
   constructor(
     private host: HTMLElement,
@@ -110,6 +115,12 @@ export class Dock {
     this.active = false
     window.removeEventListener('resize', this.onWindowResize)
     this.removeDocked()
+    // A feature flag that outlives exit() forces ordering contracts on callers (the old
+    // contract: canvas.suspend() had to run BEFORE dock.exit() or the next enter() would
+    // silently inherit a stale suspended margin). removeDocked() above already restored the
+    // margin verbatim, so clearing the flag here needs no repaint of its own — it just means
+    // the next enter() always starts from a clean, non-suspended push (2026-07-11 review).
+    this.canvasActive = false
   }
 
   setMode(mode: PanelMode): void {
@@ -120,6 +131,12 @@ export class Dock {
     if (!this.active) return
     if (mode === 'docked') this.applyDocked()
     else this.removeDocked()
+  }
+
+  setCanvasActive(on: boolean): void {
+    if (on === this.canvasActive) return
+    this.canvasActive = on
+    if (this.active && this.prefs.mode === 'docked') this.syncWidth()
   }
 
   /** The width actually painted/pushed: the stored DESIRED width, clamped against the
@@ -134,7 +151,9 @@ export class Dock {
     const width = this.appliedWidth()
     this.host.style.setProperty('--forge-dock-w', `${width}px`)
     if (this.active && this.prefs.mode === 'docked') {
-      document.documentElement.style.marginRight = `${width}px`
+      document.documentElement.style.marginRight = this.canvasActive
+        ? (this.savedHtmlMarginRight ?? '')
+        : `${width}px`
     }
   }
 

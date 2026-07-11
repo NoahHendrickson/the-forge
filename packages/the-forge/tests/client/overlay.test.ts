@@ -186,12 +186,12 @@ describe('Overlay CSS design tokens (Task 1)', () => {
 })
 
 describe('Overlay (M2 additions)', () => {
-  it('attachPanel mounts an external panel root into the shadow root', () => {
+  it('attach mounts an external panel root into the shadow root', () => {
     const overlay = new Overlay()
     overlay.mount()
     const panelRoot = document.createElement('div')
     panelRoot.id = 'panel'
-    overlay.attachPanel(panelRoot)
+    overlay.attach(panelRoot)
     expect(overlay.host.shadowRoot!.getElementById('panel')).toBe(panelRoot)
   })
 
@@ -250,6 +250,13 @@ describe('Overlay (M2 additions)', () => {
     const status = overlay.host.shadowRoot!.getElementById('status')!
     const labels = [...status.querySelectorAll('button')].map((b) => b.textContent)
     expect(labels).not.toContain('Send to agent')
+  })
+
+  it('mounts the host on documentElement, not body — canvas mode transforms <body>, our chrome must stay out of the transformed subtree', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    expect(overlay.host.parentElement).toBe(document.documentElement)
+    expect(document.body.contains(overlay.host)).toBe(false)
   })
 })
 

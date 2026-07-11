@@ -692,6 +692,19 @@ button {
 .composer-send:hover { background: var(--control-hover); }
 .composer-send:disabled { opacity: 0.5; cursor: default; }
 .chat-disabled-reason { color: var(--text-faint); font: 400 var(--text-xs) var(--font-ui); padding: 0 2px; }
+` +
+// Canvas-mode chrome (design-canvas-mode spec): the header toggle just tints '.panel-mode'
+// like every other header button; the zoom pill is its own fixed-position affordance,
+// bottom-left (the panel/toggle/status cluster owns bottom-right). Colors/font copied
+// from #toggle/#status rather than invented.
+`.canvas-toggle.on { color: var(--accent); }
+.zoom-pill-wrap { position: fixed; left: 16px; bottom: 16px; z-index: 2147483647; }
+.zoom-pill-wrap .menu-btn { min-width: 52px; padding: 6px 10px; border-radius: 8px; }
+.zoom-pill {
+  background: var(--surface); color: var(--text-primary); border: 1px solid var(--border-strong);
+  font: 500 var(--text-md) var(--font-ui);
+}
+.zoom-pill:hover { background: var(--control-hover); }
 `
 
 export class Overlay {
@@ -747,15 +760,31 @@ export class Overlay {
   }
 
   mount(): void {
-    document.body.appendChild(this.host)
+    // On <html>, not <body>: canvas mode applies a transform to <body>, and a transformed
+    // ancestor hijacks position:fixed — every overlay outline/panel is fixed-positioned.
+    // Bonus: app CSS like `body > *` can no longer style the host.
+    document.documentElement.appendChild(this.host)
   }
 
-  attachPanel(panelRoot: HTMLElement): void {
-    this.host.shadowRoot!.appendChild(panelRoot)
+  /** Mounts an external element (the panel root, the zoom-pill chrome, …) into the shadow
+   * root — every overlay-adjacent DOM node lives inside the same shadow tree as #toggle/#status
+   * so app CSS can never reach in and so contains()/containsDeep() see it as part of the host. */
+  attach(el: HTMLElement): void {
+    this.host.shadowRoot!.appendChild(el)
   }
 
   contains(target: EventTarget | null): boolean {
     return target instanceof Node && this.host.contains(target)
+  }
+
+  /** Like contains(), but also true for nodes INSIDE the host's shadow tree. Node.contains
+   * never crosses a shadow boundary, so plain contains() only works for callers passing a
+   * RETARGETED event target (which the shadow boundary collapses to `host` itself — the
+   * document-level listeners in index.ts). A caller that un-retargets via composedPath()[0]
+   * (CanvasMode.realTarget) gets the real inner node back and needs this variant, or every
+   * wheel/keydown over the panel would read as "not ours" and hijack panel scrolling. */
+  containsDeep(target: EventTarget | null): boolean {
+    return this.contains(target) || (target instanceof Node && !!this.host.shadowRoot?.contains(target))
   }
 
   setActive(on: boolean): void {

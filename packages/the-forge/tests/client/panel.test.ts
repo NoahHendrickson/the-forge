@@ -1117,6 +1117,14 @@ describe('Panel', () => {
     expect(panel.promptButton.hidden).toBe(false)
   })
 
+  it('renders the canvas toggle in the header actions, before the dock-mode button', () => {
+    const { panel } = setup()
+    const btn = panel.root.querySelector('.canvas-toggle') as HTMLButtonElement
+    expect(btn).toBeTruthy()
+    expect(btn).toBe(panel.canvasButton)
+    expect(btn.nextElementSibling).toBe(panel.modeButton)
+  })
+
 })
 
 describe('min/max sizing disclosure (M-D)', () => {

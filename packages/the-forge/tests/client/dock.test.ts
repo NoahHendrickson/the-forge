@@ -62,7 +62,7 @@ function dockSetup() {
   const overlay = new Overlay()
   overlay.mount()
   const panel = new Panel(new DraftStore(), () => {})
-  overlay.attachPanel(panel.root)
+  overlay.attach(panel.root)
   const dock = new Dock(overlay.host, panel, overlay.status, overlay.toggle)
   return { overlay, panel, dock }
 }
@@ -233,7 +233,7 @@ describe('Dock polish (PR #2 follow-ups)', () => {
   it('exit() while floating does not re-append #status (only undoes what applyDocked applied)', () => {
     savePrefs({ width: 320, mode: 'floating' })
     const { overlay, dock } = dockSetup()
-    // attachPanel appended the panel root AFTER #status — if exit() re-appends the
+    // dockSetup's attach() appended the panel root AFTER #status — if exit() re-appends the
     // status, it would become the shadow root's last child. It must not move.
     expect(overlay.host.shadowRoot!.lastElementChild).not.toBe(overlay.status)
     dock.enter()
@@ -246,5 +246,40 @@ describe('Dock polish (PR #2 follow-ups)', () => {
     expect(loadPrefs().width).toBe(MIN_WIDTH)
     localStorage.setItem(STORAGE_KEY, '{corrupt')
     expect(loadPrefs().width).toBe(MIN_WIDTH)
+  })
+})
+
+describe('Dock canvas mode', () => {
+  it('setCanvasActive(true) writes the page original margin back while docked; false repaints the push', () => {
+    document.documentElement.style.marginRight = '7px' // page's own inline margin
+    const { dock } = dockSetup()
+    dock.enter()
+    expect(document.documentElement.style.marginRight).toBe(`${dock.width()}px`)
+    dock.setCanvasActive(true)
+    expect(document.documentElement.style.marginRight).toBe('7px')
+    dock.setCanvasActive(false)
+    expect(document.documentElement.style.marginRight).toBe(`${dock.width()}px`)
+    dock.exit()
+    expect(document.documentElement.style.marginRight).toBe('7px')
+  })
+
+  it('exit() while canvas is active still restores the original margin verbatim', () => {
+    document.documentElement.style.marginRight = ''
+    const { dock } = dockSetup()
+    dock.enter()
+    dock.setCanvasActive(true)
+    dock.exit()
+    expect(document.documentElement.style.marginRight).toBe('')
+  })
+
+  it('exit() clears canvasActive — the next enter() pushes the margin, not a stale suspension (2026-07-11 review)', () => {
+    document.documentElement.style.marginRight = ''
+    const { dock } = dockSetup()
+    dock.enter()
+    dock.setCanvasActive(true) // suspends the margin push while canvas mode owns the page
+    dock.exit() // must not leave canvasActive true for the next enter()
+    dock.enter()
+    expect(document.documentElement.style.marginRight).toBe(`${dock.width()}px`)
+    dock.exit()
   })
 })

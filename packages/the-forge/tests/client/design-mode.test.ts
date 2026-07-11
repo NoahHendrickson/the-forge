@@ -43,7 +43,7 @@ function fullSetup() {
   overlay.mount()
   const drafts = new DraftStore()
   const panel = new Panel(drafts, () => {})
-  overlay.attachPanel(panel.root)
+  overlay.attach(panel.root)
   const mode = new DesignMode(overlay, panel, drafts)
   liveModes.push(mode)
   return { overlay, drafts, panel, mode }
@@ -354,7 +354,7 @@ describe('DesignMode multi-select (B6)', () => {
     overlay.mount()
     const drafts = new DraftStore()
     const panel = new Panel(drafts, () => {})
-    overlay.attachPanel(panel.root)
+    overlay.attach(panel.root)
     const mode = new DesignMode(overlay, panel, drafts)
     liveModes.push(mode)
     return { overlay, drafts, panel, mode }
@@ -1273,7 +1273,7 @@ describe('change list wiring', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     expect(mode.panelRoot.querySelector('.changes-section')).not.toBeNull()
   })
 
@@ -1285,7 +1285,7 @@ describe('change list wiring', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const disclosure = mode.panelRoot.querySelector('.draft-disclosure')
     expect(disclosure).not.toBeNull()
     expect(disclosure?.querySelector('.changes-section')).not.toBeNull()
@@ -1307,7 +1307,7 @@ describe('change list wiring', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const el = document.createElement('div')
     el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
     document.body.appendChild(el)
@@ -1342,7 +1342,7 @@ describe('change list wiring', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const el = document.createElement('div')
     el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
     document.body.appendChild(el)
@@ -2350,6 +2350,118 @@ describe('Dock integration (docked-panel spec)', () => {
   })
 })
 
+describe('Canvas-mode chrome + lifecycle wiring (design-canvas-mode spec Task 7)', () => {
+  // CanvasMode persists on/state to sessionStorage (canvas.ts) — a prior test's setOn(true)
+  // would otherwise leak into the next test's fresh CanvasMode instance via loadCanvasPrefs().
+  beforeEach(() => {
+    sessionStorage.clear()
+    vi.stubGlobal('scrollTo', vi.fn())
+  })
+
+  it('design-mode off suspends canvas (page restored) and design-mode on resumes it', () => {
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    const btn = mode.panelRoot.querySelector('.canvas-toggle') as HTMLButtonElement
+    expect(btn).toBe(mode.panelRoot.querySelector('.panel-mode.canvas-toggle'))
+    btn.click()
+    expect(document.body.style.transform).toContain('scale(1)')
+    expect(btn.classList.contains('on')).toBe(true)
+
+    mode.setActive(false)
+    expect(document.body.style.transform).toBe('')
+
+    mode.setActive(true)
+    expect(document.body.style.transform).toContain('scale(')
+    mode.setActive(false)
+  })
+
+  it('the zoom pill is hidden until canvas mode is applied, then shows the live percentage', () => {
+    const { mode, overlay } = fullSetup()
+    mode.setActive(true)
+    const wrap = overlay.host.shadowRoot!.querySelector('.zoom-pill-wrap') as HTMLElement
+    expect(wrap.hidden).toBe(true)
+    const btn = mode.panelRoot.querySelector('.canvas-toggle') as HTMLButtonElement
+    btn.click()
+    expect(wrap.hidden).toBe(false)
+    const pill = wrap.querySelector('.zoom-pill') as HTMLButtonElement
+    expect(pill.textContent).toBe('100%')
+    // '100%' alone can't prove syncCanvasUi repaints — it's also the constructor label. A real
+    // zoom change must flow back into the pill text through the onChange -> syncCanvasUi path.
+    ;(mode as never as { canvas: { setZoomCentered(s: number): void } }).canvas.setZoomCentered(0.5)
+    expect(pill.textContent).toBe('50%')
+    mode.setActive(false)
+    expect(wrap.hidden).toBe(true)
+  })
+
+  it('wheel over the panel (inside the shadow tree) scrolls the panel, not the artboard', () => {
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    ;(mode.panelRoot.querySelector('.canvas-toggle') as HTMLButtonElement).click()
+    const before = document.body.style.transform
+    // Real wheel events are composed: true, so composedPath()[0] crosses the shadow boundary
+    // and hands CanvasMode the real INNER node — host.contains() can never match that node
+    // (Node.contains stops at the shadow boundary), which is exactly the trap containsDeep
+    // exists for. Dispatch from inside the panel root to walk that whole path.
+    const inPanel = new WheelEvent('wheel', { deltaY: 40, cancelable: true, bubbles: true, composed: true })
+    mode.panelRoot.dispatchEvent(inPanel)
+    expect(inPanel.defaultPrevented).toBe(false)
+    expect(document.body.style.transform).toBe(before)
+    // Control: the same wheel over the page itself must still pan the artboard.
+    const onPage = new WheelEvent('wheel', { deltaY: 40, cancelable: true, bubbles: true, composed: true })
+    document.body.dispatchEvent(onPage)
+    expect(onPage.defaultPrevented).toBe(true)
+    expect(document.body.style.transform).not.toBe(before)
+    mode.setActive(false)
+  })
+
+  it('panning/zooming the canvas re-measures the selection outline (final-review fix)', () => {
+    // Queued (rather than the file-level immediate) rAF stub — the immediate stub resolves
+    // requestAnimationFrame() synchronously INSIDE the call that schedules it, so the id it
+    // returns overwrites reflowRaf back to non-zero right after the callback already reset it
+    // to 0, permanently wedging the rAF-coalescing guard shut. A queued stub matches real rAF
+    // semantics (id is live until the callback actually runs) so the guard behaves correctly
+    // across the canvas-toggle click's own reflow(s) and the wheel-triggered one under test.
+    const queue: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      queue.push(cb)
+      return queue.length
+    })
+    const runRaf = (): void => queue.splice(0).forEach((cb) => cb(0))
+
+    const { overlay, mode } = fullSetup()
+    const btn = document.querySelector('.btn') as HTMLElement
+    // Stand-in for "the element's real rect moved because the body transform panned/zoomed" —
+    // jsdom's getBoundingClientRect is transform-blind, so a real canvas pan never changes it.
+    // Mutating this stub between select() and the wheel dispatch simulates that real-world move.
+    const rect = { x: 0, y: 0, width: 50, height: 20 }
+    btn.getBoundingClientRect = () => new DOMRect(rect.x, rect.y, rect.width, rect.height)
+
+    mode.setActive(true)
+    ;(mode.panelRoot.querySelector('.canvas-toggle') as HTMLButtonElement).click()
+    runRaf() // drain canvas-apply's own onChange-triggered reflow(s) before selecting
+    mode.select(btn as never)
+
+    const outlineEl = overlay.host.shadowRoot!.querySelector('#select-outline') as HTMLElement
+    const before = outlineEl.style.left
+    expect(before).toBe('-2px')
+
+    rect.x = 240
+    rect.y = 180
+    // Real ctrl-wheel zoom, composed so it crosses the shadow boundary like the real gesture.
+    const zoom = new WheelEvent('wheel', {
+      deltaY: -40, ctrlKey: true, cancelable: true, bubbles: true, composed: true,
+    })
+    document.body.dispatchEvent(zoom)
+    runRaf()
+
+    // The body transform moved the element's visual rect but fired no scroll/resize — canvas's
+    // onChange must be the reflow trigger, or the outline is left showing the stale pre-pan rect.
+    expect(outlineEl.style.left).toBe('238px')
+    expect(outlineEl.style.left).not.toBe(before)
+    mode.setActive(false)
+  })
+})
+
 describe('lifecycle persistence', () => {
   beforeEach(() => sessionStorage.clear())
 
@@ -2358,7 +2470,7 @@ describe('lifecycle persistence', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const el = document.createElement('div')
     el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
     document.body.appendChild(el)
@@ -2396,7 +2508,7 @@ describe('lifecycle persistence', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.setActive(true)
     ;(mode as never as { drafts: DraftStore }).drafts.apply(second as never, 'padding-top', '24px')
     ;(mode.panelRoot.querySelector('.chat-send') as HTMLButtonElement).click()
@@ -2411,7 +2523,7 @@ describe('lifecycle persistence', () => {
     overlay2.mount()
     const mode2 = new DesignMode(overlay2)
     liveModes.push(mode2)
-    overlay2.attachPanel(mode2.panelRoot)
+    overlay2.attach(mode2.panelRoot)
     mode2.restoreLifecycle(persisted!)
 
     const reRoundTripped = loadLifecycle()
@@ -2425,7 +2537,7 @@ describe('lifecycle persistence', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.restoreLifecycle({
       v: 1,
       designModeOn: true,
@@ -2466,7 +2578,7 @@ describe('lifecycle persistence', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.restoreLifecycle({
       v: 1,
       designModeOn: true,
@@ -2498,7 +2610,7 @@ describe('lifecycle persistence', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const saved = loadLifecycle()
     if (saved?.designModeOn) mode.restoreLifecycle(saved) // mirrors boot()
     expect(mode.active).toBe(false)
@@ -2614,7 +2726,7 @@ describe('lifecycle restore races the framework mount', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.restoreLifecycle(savedState)
     expect(mode.active).toBe(true)
     expect(mode.selection).toHaveLength(0) // nothing to locate yet
@@ -2637,7 +2749,7 @@ describe('lifecycle restore races the framework mount', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.restoreLifecycle(savedState)
 
     // Before the element ever appears, storage must still carry the pending draft — persist()
@@ -2651,7 +2763,7 @@ describe('lifecycle restore races the framework mount', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.restoreLifecycle(savedState)
 
     mode.setActive(false)
@@ -2671,7 +2783,7 @@ describe('lifecycle restore races the framework mount', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     expect(() => {
       mode.restoreLifecycle(savedState)
       vi.advanceTimersByTime(13000)
@@ -2722,7 +2834,7 @@ describe('lifecycle restore: unified per-item drain (R2 F-B)', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     mode.restoreLifecycle(twoElementSelectionState)
 
     expect(mode.selection).toHaveLength(1)
@@ -2750,7 +2862,7 @@ describe('lifecycle restore: unified per-item drain (R2 F-B)', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     // Neither element exists at boot — both selection entries are pending.
     mode.restoreLifecycle(twoElementSelectionState)
     expect(mode.selection).toHaveLength(0)
@@ -2799,7 +2911,7 @@ describe('resend persistence (final-review F1)', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const el = document.createElement('div')
     el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
     document.body.appendChild(el)
@@ -2864,7 +2976,7 @@ describe('resend re-entrancy guard (R2 F-A)', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const el = document.createElement('div')
     el.setAttribute('data-dc-source', 'src/App.tsx:3:3')
     document.body.appendChild(el)
@@ -2965,7 +3077,7 @@ describe('boot restore guard against corrupt storage (final-review F3)', () => {
     overlay.mount()
     const mode = new DesignMode(overlay)
     liveModes.push(mode)
-    overlay.attachPanel(mode.panelRoot)
+    overlay.attach(mode.panelRoot)
     const saved = loadLifecycle()
     // R1: loadLifecycle now validates and drops invalid items PER ENTRY — a corrupt array
     // element (missing `id`/`elements`, here `{}`) is dropped by loadLifecycle itself and never
@@ -3085,7 +3197,7 @@ describe('SessionFeed wiring', () => {
       overlay.mount()
       const mode = new DesignMode(overlay)
       liveModes.push(mode)
-      overlay.attachPanel(mode.panelRoot)
+      overlay.attach(mode.panelRoot)
       mode.setActive(true)
 
       await flushMicrotasks()
@@ -3120,7 +3232,7 @@ describe('SessionFeed wiring', () => {
       overlay.mount()
       const mode = new DesignMode(overlay)
       liveModes.push(mode)
-      overlay.attachPanel(mode.panelRoot)
+      overlay.attach(mode.panelRoot)
       mode.setActive(true)
 
       await flushMicrotasks()

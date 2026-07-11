@@ -4,6 +4,8 @@ import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { Dock } from './dock'
+import { CanvasMode } from './canvas'
+import { buildCanvasChrome, type CanvasChrome } from './canvas-chrome'
 import {
   buildChangeRequestWithElements,
   renderMarkdown,
@@ -69,6 +71,10 @@ export class DesignMode {
   private drafts: DraftStore
   private panel: Panel
   private dock: Dock
+  private canvas: CanvasMode
+  /** The zoom-pill DOM assembly + its repaint hook (canvas-chrome.ts) — presentation only,
+   * constructed once this.canvas/this.panel exist. */
+  private canvasChrome: CanvasChrome
   private verifier: Verifier
   private verifierSummary = ''
   private changeList: ChangeList
@@ -162,6 +168,17 @@ export class DesignMode {
         (el) => this.handleBeforeEdit(el)
       )
     this.dock = dock ?? new Dock(overlay.host, this.panel, overlay.status, overlay.toggle)
+    this.canvas = new CanvasMode({
+      dock: this.dock,
+      // containsDeep, NOT contains: CanvasMode un-retargets events via composedPath()[0], so
+      // its guard sees the real node INSIDE the overlay's shadow tree — which host.contains()
+      // can never match (Node.contains stops at the shadow boundary). Plain contains() here
+      // would make a wheel over the docked panel pan the artboard instead of scrolling it.
+      hostContains: (t) => this.overlay.containsDeep(t),
+      onChange: () => this.syncCanvasUi(),
+    })
+    this.canvasChrome = buildCanvasChrome(this.canvas, this.panel)
+    this.overlay.attach(this.canvasChrome.wrap)
     this.verifier = new Verifier(this.session, this.drafts, (summary) => {
       this.verifierSummary = summary
       this.refreshStatus()
@@ -307,6 +324,20 @@ export class DesignMode {
     const count = this.drafts.changeCount()
     const applying = this.session.records().some((r) => r.stage === 'sent' || r.stage === 'applying')
     this.feed.setDraftState({ count, applying })
+  }
+
+  /** CanvasMode's onChange fires on every state change (setOn, resume, suspend, pan/zoom) —
+   * this must stay an IDEMPOTENT full repaint, not an incremental toggle, since it's cheap
+   * to call on every tick and a repaint-from-scratch can never drift out of sync with the
+   * canvas's actual state. */
+  private syncCanvasUi(): void {
+    this.canvasChrome.sync()
+    // Selection/hover outlines are fixed-position boxes positioned from getBoundingClientRect()
+    // and are normally re-measured by onReflow on scroll/resize. The canvas body transform moves
+    // every element's visual rect on every pan/zoom tick but fires neither — so in canvas mode
+    // this onChange IS the reflow trigger, or a selected element's outline goes stale until the
+    // next edit or re-click. onReflow is already rAF-coalesced, so the per-wheel-tick cost is fine.
+    this.onReflow()
   }
 
   /** Cancels the pending debounced draft-sync timer (if any) and runs syncDrafts()+persist()
@@ -528,6 +559,7 @@ export class DesignMode {
     this.overlay.setActive(on)
     if (on) {
       this.dock.enter()
+      this.canvas.resume()
       // Tokens (colors, text scale) are memoized module-globally (readTokens) for cheap
       // repeat access during a session — but that means a theme edit made while design
       // mode was INACTIVE (author tweaks CSS, HMR reloads styles) would otherwise be
@@ -565,6 +597,11 @@ export class DesignMode {
       this.pendingRestore = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
+      // Ordering is no longer load-bearing (2026-07-11 review: Dock.exit() now clears its own
+      // canvasActive flag) — suspend() before exit() is kept because it's the natural order:
+      // suspend() restores the page's saved styles and persists the canvas view, exit() undoes
+      // the dock's own margin push. Either order now leaves both objects in a clean state.
+      this.canvas.suspend()
       this.dock.exit()
       this.verifier.stop()
       this.watch.stop()
@@ -913,7 +950,7 @@ function boot(): void {
   const overlay = new Overlay()
   overlay.mount()
   const mode = new DesignMode(overlay)
-  overlay.attachPanel(mode.panelRoot)
+  overlay.attach(mode.panelRoot)
   // The server-injected bootstrap (prepended to this bundle's source, see index.ts load())
   // sets globalThis.__THE_FORGE__ = { secret, agent } BEFORE this module runs — preserve it
   // rather than clobbering it when we attach `mode`.

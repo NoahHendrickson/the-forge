@@ -16,6 +16,10 @@ export interface MenuButtonOpts {
   onSelect: (value: string) => void
   /** Positioned ancestor the popover appends to — the panel body, same host as TokenPicker. */
   popoverHost: HTMLElement
+  /** Trigger label — defaults to the '▾' chevron. Call sites may update button.textContent live. */
+  label?: string
+  /** Open the popover ABOVE the trigger (for bottom-anchored chrome like the zoom pill). */
+  opensUp?: boolean
 }
 
 export interface MenuButton {
@@ -35,7 +39,7 @@ const MENU_WIDTH = 120
  * checkmarks and context-gated items can't go stale.
  */
 export function createMenuButton(opts: MenuButtonOpts): MenuButton {
-  const button = createButton({ label: '▾', title: opts.title, className: 'menu-btn' })
+  const button = createButton({ label: opts.label ?? '▾', title: opts.title, className: 'menu-btn' })
   button.type = 'button'
   let popover: HTMLElement | null = null
 
@@ -85,9 +89,12 @@ export function createMenuButton(opts: MenuButtonOpts): MenuButton {
     }
     // offsetTop/offsetLeft resolve against the popoverHost (the nearest positioned
     // ancestor) — nothing between the button and the host is positioned, by contract.
-    popover.style.top = `${button.offsetTop + button.offsetHeight + 2}px`
-    popover.style.left = `${Math.max(0, Math.min(button.offsetLeft, opts.popoverHost.clientWidth - MENU_WIDTH))}px`
+    // Append before measuring — offsetHeight is 0 until the popover is in the tree.
     opts.popoverHost.append(popover)
+    popover.style.top = opts.opensUp
+      ? `${button.offsetTop - popover.offsetHeight - 2}px`
+      : `${button.offsetTop + button.offsetHeight + 2}px`
+    popover.style.left = `${Math.max(0, Math.min(button.offsetLeft, opts.popoverHost.clientWidth - MENU_WIDTH))}px`
     document.addEventListener('mousedown', onDocDown, true)
     document.addEventListener('keydown', onDocKey, true)
   }
