@@ -501,7 +501,8 @@ describe('DesignMode multi-select (B6)', () => {
 // 'Send failed'/the per-rung 'Sent — …' labels) went away WITH the button — there is nothing
 // left to assert text content on, so those assertions are dropped; the underlying mechanics
 // (POST calls, duplicate filtering, registered ids, onSendComplete) are still asserted below.
-// sentLabelFor's own rung-copy matrix stays covered directly in watch.test.ts.
+// (sentLabelFor, the per-rung flash copy's source, was deleted outright once production-dead —
+// postDispatch no longer even parses the rung from the /dispatch response.)
 describe('DesignMode composer send verb — drafts (M4 / Task 3)', () => {
   /** Flushes enough microtasks for the /queue POST *and* the chained /dispatch POST to settle. */
   async function flushSend(): Promise<void> {
@@ -529,7 +530,7 @@ describe('DesignMode composer send verb — drafts (M4 / Task 3)', () => {
     await flushSend()
     // After wiring the SessionFeed, start() always fetches /session/events — check no /queue POST
     expect(fetchMock).not.toHaveBeenCalledWith('/__the-forge/queue', expect.anything())
-    expect(mode.sent.size()).toBe(0)
+    expect(mode.session.size()).toBe(0)
   })
 
   it('Copy for agent with only no-op drafts does not copy and flashes "No changes"', async () => {
@@ -585,7 +586,7 @@ describe('DesignMode composer send verb — drafts (M4 / Task 3)', () => {
 
     const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
     expect(queueCalls).toHaveLength(1)
-    expect(mode.sent.pendingIds()).toEqual(['q1'])
+    expect(mode.session.pendingIds()).toEqual(['q1'])
   })
 
   it('reverting all drafts while another send is in flight does not re-queue (agrees with Copy\'s "No changes")', async () => {
@@ -607,7 +608,7 @@ describe('DesignMode composer send verb — drafts (M4 / Task 3)', () => {
     await flushSend()
 
     expect(fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')).toHaveLength(1)
-    expect(mode.sent.pendingIds()).toEqual(['q1'])
+    expect(mode.session.pendingIds()).toEqual(['q1'])
   })
 
   it('re-editing an in-flight element to a NEW value sends again (not a duplicate)', async () => {
@@ -631,7 +632,7 @@ describe('DesignMode composer send verb — drafts (M4 / Task 3)', () => {
 
     const queueCalls = fetchMock.mock.calls.filter(([url]) => url === '/__the-forge/queue')
     expect(queueCalls).toHaveLength(2)
-    expect(mode.sent.pendingIds().sort()).toEqual(['q1', 'q2'])
+    expect(mode.session.pendingIds().sort()).toEqual(['q1', 'q2'])
   })
 
   it('send posts the request and registers pending ids', async () => {
@@ -652,7 +653,7 @@ describe('DesignMode composer send verb — drafts (M4 / Task 3)', () => {
     const queueCall = fetchMock.mock.calls.find(([url]) => url === '/__the-forge/queue') as unknown as [string, { body: string }]
     const body = JSON.parse(queueCall[1].body)
     expect(body.markdown).toContain('# Design change request')
-    expect(mode.sent.pendingIds()).toEqual(['q1'])
+    expect(mode.session.pendingIds()).toEqual(['q1'])
   })
 
   describe('dispatch chaining after a successful queue POST', () => {
@@ -692,7 +693,7 @@ describe('DesignMode composer send verb — drafts (M4 / Task 3)', () => {
       drafts.apply(btn, 'padding-top', '24px')
       clickSend(panel.root)
       await flushSend()
-      expect(mode.sent.pendingIds()).toEqual(['q1'])
+      expect(mode.session.pendingIds()).toEqual(['q1'])
     })
   })
 
@@ -736,7 +737,7 @@ describe('DesignMode composer send verb — drafts (M4 / Task 3)', () => {
     clickSend(panel.root)
     await Promise.resolve()
     await Promise.resolve()
-    const entry = mode.sent.take('q7')!
+    const entry = mode.session.take('q7')!
     expect(entry.elements).toHaveLength(1)
     expect(entry.elements[0].el).toBe(btn)
     expect(entry.elements[0].dcSource).toBe('src/Button.tsx:42:8')
@@ -754,7 +755,7 @@ describe('DesignMode composer send verb — drafts (M4 / Task 3)', () => {
     clickSend(panel.root)
     await Promise.resolve()
     await Promise.resolve()
-    expect(mode.sent.size()).toBe(0)
+    expect(mode.session.size()).toBe(0)
     expect(drafts.hasDrafts(btn)).toBe(true)
     expect(btn.style.getPropertyValue('padding-top')).toBe('24px')
   })
@@ -769,7 +770,7 @@ describe('DesignMode composer send verb — drafts (M4 / Task 3)', () => {
     clickSend(panel.root)
     await Promise.resolve()
     await Promise.resolve()
-    expect(mode.sent.size()).toBe(0)
+    expect(mode.session.size()).toBe(0)
   })
 
   it('calls onSendComplete after a successful send registers', async () => {
@@ -901,7 +902,7 @@ describe('composer send-everything verb + watch strip gating (Task 3)', () => {
     const errorRow = panel.root.querySelector('.session-error-row')
     expect(errorRow).not.toBeNull()
     expect(errorRow?.textContent).toBe('failed to queue changes — try again')
-    expect(mode.sent.size()).toBe(0)
+    expect(mode.session.size()).toBe(0)
   })
 
   it('a non-2xx /queue response also renders the transient queue-failure row', async () => {
@@ -1602,7 +1603,7 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
     ;(panel.root.querySelector('.chat-send') as HTMLButtonElement).click()
     await Promise.resolve()
     await Promise.resolve()
-    expect(mode.sent.size()).toBe(1)
+    expect(mode.session.size()).toBe(1)
 
     mode.setActive(false)
     fetchMock.mockClear()
@@ -1626,7 +1627,7 @@ describe('DesignMode verifier wiring (M4 Task 4)', () => {
     vi.stubGlobal('fetch', fetchMock)
     const { mode } = fullSetup()
     mode.setActive(true)
-    expect(mode.sent.size()).toBe(0)
+    expect(mode.session.size()).toBe(0)
     return vi.advanceTimersByTimeAsync(4000).then(() => {
       // Exclude session/events calls (the feed polls while design mode is on — that's correct)
       const urls = fetchMock.mock.calls.map((c) => c[0]).filter((u: string) => !u.startsWith('/__the-forge/session/events'))
@@ -2357,7 +2358,7 @@ describe('lifecycle persistence', () => {
     expect(mode.active).toBe(true)
     expect(target.style.getPropertyValue('padding-top')).toBe('24px') // draft preview re-applied
     expect(mode.selection).toHaveLength(1)
-    expect(mode.sent.size()).toBe(1) // verifier re-armed against the restored registry
+    expect(mode.session.size()).toBe(1) // verifier re-armed against the restored registry
     expect(mode.panelRoot.querySelector('.chip-sent')).not.toBeNull()
   })
 
@@ -3041,9 +3042,10 @@ describe('SessionFeed wiring', () => {
     }
   })
 
-  // sentLabelFor's 'embedded' rung copy is unit-tested directly in watch.test.ts — there is no
-  // button left to flash it onto (composer consolidation Task 3), so this proves the underlying
-  // mechanics instead: the queued send still registers when /dispatch answers rung 'embedded'.
+  // There is no button left to flash per-rung copy onto (composer consolidation Task 3 —
+  // sentLabelFor was later deleted outright, and postDispatch ignores the rung), so this
+  // proves the underlying mechanics instead: the queued send still registers when /dispatch
+  // answers rung 'embedded'.
   it('registers the queued send when /dispatch answers rung "embedded"', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
@@ -3058,6 +3060,6 @@ describe('SessionFeed wiring', () => {
     drafts.apply(btn, 'padding-top', '24px')
     ;(panel.root.querySelector('.chat-send') as HTMLButtonElement).click()
     for (let i = 0; i < 6; i++) await Promise.resolve()
-    expect(mode.sent.pendingIds()).toEqual(['q1'])
+    expect(mode.session.pendingIds()).toEqual(['q1'])
   })
 })

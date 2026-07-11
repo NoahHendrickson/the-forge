@@ -314,6 +314,13 @@ export function renderMarkdown(req: ChangeRequest): string {
   return lines.join('\n')
 }
 
+/** LEGACY (sessionStorage restore-compat only). Fresh prompt sends were retired by the
+ * composer consolidation (2026-07-09): free-form text now rides POST /session/say as a chat
+ * turn, never the queue, so nothing constructs a new prompt request anymore (the old
+ * buildPromptRequest was deleted with its last production caller). The one remaining
+ * producer of a prompt-marked seed is restoreSent() reading PRE-consolidation persisted
+ * state — resend() on such a seed rebuilds this shape via rebuildRequestFromSeed below.
+ * Delete this type + renderPromptMarkdown when that compat window is deemed closed. */
 export interface PromptRequest {
   kind: 'prompt'
   createdAt: string
@@ -322,23 +329,8 @@ export interface PromptRequest {
   elements: ElementChange[]
 }
 
-export function buildPromptRequest(
-  els: TaggedElement[],
-  prompt: string
-): { request: PromptRequest; pairs: Array<[TaggedElement, ElementChange]> } {
-  const pairs: Array<[TaggedElement, ElementChange]> = els.map((el) => [el, elementContext(el, [])])
-  return {
-    request: {
-      kind: 'prompt',
-      createdAt: new Date().toISOString(),
-      viewport: { width: window.innerWidth, height: window.innerHeight },
-      prompt,
-      elements: pairs.map(([, c]) => c),
-    },
-    pairs,
-  }
-}
-
+/** LEGACY — see PromptRequest above: only reachable via rebuildRequestFromSeed's prompt
+ * branch, i.e. resend() of a seed restored from pre-consolidation sessionStorage. */
 export function renderPromptMarkdown(req: PromptRequest): string {
   const lines: string[] = []
   lines.push('# Design prompt')
@@ -368,10 +360,12 @@ export function renderPromptMarkdown(req: PromptRequest): string {
 }
 
 /** Rebuilds a single-element request + markdown from a failed seed for resend() — the one
- * place that reconstructs the shape `buildChangeRequestWithElements`/`buildPromptRequest`
- * produce fresh, so a future change to either request's fields only needs updating here, not
- * separately in resend(). `seed.prompt !== undefined` is the same mode discriminator used
- * everywhere else a seed is inspected (ChangeList, persistence). */
+ * place that reconstructs the shape `buildChangeRequestWithElements` produces fresh, so a
+ * future change to the request's fields only needs updating here, not separately in
+ * resend(). `seed.prompt !== undefined` is the same mode discriminator used everywhere else
+ * a seed is inspected (ChangeList, persistence) — that branch is LEGACY restore-compat only
+ * (see PromptRequest above): fresh seeds never carry `prompt` since the composer
+ * consolidation, so it fires only for seeds restored from pre-consolidation sessionStorage. */
 export function rebuildRequestFromSeed(seed: {
   change: ElementChange
   prompt?: string

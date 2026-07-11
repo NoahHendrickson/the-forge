@@ -182,7 +182,10 @@ export class ChangeList {
     const dcSource = source ? `${source.file}:${source.line}:${source.col}` : row.seed.dcSource
     const [elLabel, summary] = this.label(row.seed.change.tag, dcSource)
     // A prompt seed has no property deltas — its summary IS the prompt text (spec: truncate at
-    // 80 chars, same bound as the element-text trim; full text in the title tooltip).
+    // 80 chars, same bound as the element-text trim; full text in the title tooltip). LEGACY
+    // restore-compat branch: fresh seeds never carry `prompt` since the composer consolidation
+    // (see PromptRequest in request.ts) — this fires only for seeds restored from
+    // pre-consolidation sessionStorage.
     const { text, full } =
       row.seed.prompt !== undefined
         ? { text: row.seed.prompt.length > 80 ? `${row.seed.prompt.slice(0, 80)}…` : row.seed.prompt, full: row.seed.prompt }

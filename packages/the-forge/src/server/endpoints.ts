@@ -368,6 +368,10 @@ export function createForgeMiddleware(
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
       readBody(req)
         .then((body) => {
+          // Body overrides are a test/escape-hatch surface only: the overlay client always
+          // POSTs {} (see postDispatch in client/index.ts), so in production `agent` comes
+          // from dispatchConfig and `markdown` from the newest pending queue item below.
+          // The endpoint tests exercise both overrides directly; keep them working.
           const { agent, markdown } = (body ?? {}) as { agent?: DispatchOpts['agent']; markdown?: string }
           if (agent !== undefined && !KNOWN_AGENTS.has(agent)) {
             return send(res, 400, { error: 'unknown agent' })

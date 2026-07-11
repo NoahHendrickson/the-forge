@@ -18,7 +18,7 @@ import { snapshotRects, diffRects } from './ripple'
 import { resetTokensCache } from './tokens'
 import { ChangeList } from './changelist'
 import { type AgentName } from './agent'
-import { WatchStatus, watchIndicatorFor, type Rung } from './watch'
+import { WatchStatus, watchIndicatorFor } from './watch'
 import { SessionFeed } from './session-feed'
 import { saveLifecycle, loadLifecycle, sourceIndex, locateBySource, type PersistedLifecycle } from './lifecycle-store'
 import { ComposerSend } from './composer-send'
@@ -61,12 +61,6 @@ export class DesignMode {
    * projection — replacing the old SentRegistry + sentSeeds + ChangeList.sentRows trio. */
   session = new LifecycleSession()
   onSendComplete?: () => void
-
-  /** Back-compat alias: `.sent` used to be a separate SentRegistry; the session implements
-   * that same SentStore surface directly now. */
-  get sent() {
-    return this.session
-  }
 
   private moveRaf = 0
   private reflowRaf = 0
@@ -392,21 +386,18 @@ export class DesignMode {
   }
 
   /** Fire-and-forget dispatch POST shared by Send and resend() — a failure here must never
-   * undo the send, only downgrade to the manual rung. */
-  private postDispatch(onSettled: (rung: Rung | null) => void): void {
+   * undo the send, only downgrade to the manual rung. The response's rung is deliberately
+   * ignored: the per-rung Send-button flash it used to feed retired with that button in the
+   * composer consolidation, so all callers care about is WHEN the round trip settles (guard
+   * release / onSendComplete), never HOW the request was delivered. */
+  private postDispatch(onSettled: () => void): void {
     fetch('/__the-forge/dispatch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
       body: JSON.stringify({}),
     })
-      .then((res) => {
-        if (!res.ok) return onSettled(null)
-        res
-          .json()
-          .then((body: { rung: Rung }) => onSettled(body.rung))
-          .catch(() => onSettled(null))
-      })
-      .catch(() => onSettled(null))
+      .then(() => onSettled())
+      .catch(() => onSettled())
   }
 
   /** Host-injected POST helper handed to ComposerSend (composer-send.ts) as `postJson` — shares

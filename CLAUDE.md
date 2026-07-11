@@ -84,8 +84,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `drafts.ts` | inline-style draft store: apply/current/commit, before-after compare |
 | `agent.ts` | which agent is targeted (`claude-code`/`cursor`/`codex`) + display names |
 | `ripple.ts` | measures which elements move when a draft lands; flashes ripple outlines |
-| `sent.ts` | `SentChange`/`SentEntry` types only (the registry class was absorbed into `lifecycle.ts`) |
-| `lifecycle.ts` | `LifecycleSession` — the single owner of in-flight send state: verifier store (`SentStore`), UI row state, persistence projection; `take()` resolves in place so terminal stage events still land |
+| `lifecycle.ts` | `LifecycleSession` — the single owner of in-flight send state: verifier store (`SentStore`), UI row state, persistence projection; `take()` resolves in place so terminal stage events still land; also home to the `SentChange`/`SentEntry` types (former `sent.ts`, folded in) |
 | `changelist.ts` | Changes lifecycle list (view over `LifecycleSession` + drafts): per-change rows `draft` → `sent` → `applying` → `done`/`failed`, re-send/dismiss; its `.changes-section` root now mounts inside the composer's draft disclosure (`feed.draftSlot`), not a panel slot of its own |
 | `lifecycle-store.ts` | sessionStorage persistence + the canonical element resolver (`resolveElement`/`locateBySource`) used by verifier, healing, and restore |
 | `request.ts` | change-request builder: before/after CSS + utility deltas, markdown |

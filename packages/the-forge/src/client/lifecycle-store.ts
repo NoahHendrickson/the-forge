@@ -1,4 +1,4 @@
-import type { SentChange } from './sent'
+import type { SentChange } from './lifecycle'
 import type { ElementChange } from './request'
 import type { TaggedElement } from './source'
 

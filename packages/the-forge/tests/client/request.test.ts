@@ -4,14 +4,12 @@ import { DraftStore } from '../../src/client/drafts'
 import {
   buildChangeRequest,
   buildChangeRequestWithElements,
-  buildPromptRequest,
   cssPath,
   renderMarkdown,
   renderPromptMarkdown,
   type PromptRequest,
   REMOVE_AUTO_LAYOUT_INTENT,
 } from '../../src/client/request'
-import type { TaggedElement } from '../../src/client/source'
 import { resetTokensCache, type Theme } from '../../src/client/tokens'
 
 const TW: Theme = { rootFontPx: 16, spacingBasePx: 4, radiusScale: { lg: 8, xl: 12 } }
@@ -531,28 +529,11 @@ line2 \`code\`</button>`
   })
 })
 
-describe('buildPromptRequest / renderPromptMarkdown', () => {
-  it('captures element context with an empty changes list', () => {
-    const el = document.createElement('button')
-    el.dataset.dcSource = 'src/App.tsx:12:4'
-    el.className = 'px-4 py-2'
-    el.textContent = 'Get started'
-    document.body.appendChild(el)
-    const { request, pairs } = buildPromptRequest([el as unknown as TaggedElement], 'make this more prominent')
-    expect(request.kind).toBe('prompt')
-    expect(request.prompt).toBe('make this more prominent')
-    expect(request.elements).toHaveLength(1)
-    expect(request.elements[0]).toMatchObject({
-      tag: 'button',
-      className: 'px-4 py-2',
-      text: 'Get started',
-      changes: [],
-    })
-    expect(request.elements[0].source).toEqual({ file: 'src/App.tsx', line: 12, col: 4 })
-    expect(pairs[0][0]).toBe(el)
-    el.remove()
-  })
-
+// renderPromptMarkdown is LEGACY restore-compat only (see PromptRequest in request.ts): it is
+// reachable solely through rebuildRequestFromSeed's prompt branch, i.e. resend() of a seed
+// restored from pre-consolidation sessionStorage. buildPromptRequest (the fresh-construction
+// half) was deleted with its last production caller — these tests hand-build the request.
+describe('renderPromptMarkdown (legacy restore-compat)', () => {
   it('renders markdown with instruction, per-element context, and guardrails', () => {
     const req: PromptRequest = {
       kind: 'prompt', createdAt: 'now', viewport: { width: 1440, height: 900 },
