@@ -3,7 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { EventEmitter } from 'node:events'
-import { theForge, CLIENT_ID } from '../src/vite'
+import { theForge } from '../src/vite'
+import { CLIENT_JS_PATH } from '../src/server/endpoints'
 
 type TransformHook = (code: string, id: string) => { code: string } | null
 
@@ -15,12 +16,16 @@ function getPlugin(root = '/proj', options?: Parameters<typeof theForge>[0]) {
   return { plugin, transform }
 }
 
+type Middleware = (req: unknown, res: unknown, next: () => void) => void
+
 interface FakeHttpServer extends EventEmitter {
   address(): { port: number; address: string } | null
 }
 
 interface FakeViteServer {
-  middlewares: { use: (...args: unknown[]) => void }
+  middlewares: { use: (mw: Middleware) => void }
+  /** the middleware configureServer registered — how these tests reach the served bundle */
+  used: Middleware[]
   httpServer: FakeHttpServer
   config: { server: { allowedHosts?: string[] | true } }
 }
@@ -28,11 +33,35 @@ interface FakeViteServer {
 function fakeServer(_root: string): FakeViteServer {
   const httpServer = new EventEmitter() as FakeHttpServer
   httpServer.address = () => ({ port: 5199, address: '127.0.0.1' })
+  const used: Middleware[] = []
   return {
-    middlewares: { use: () => undefined },
+    middlewares: { use: (mw: Middleware) => used.push(mw) },
+    used,
     httpServer,
     config: { server: {} },
   }
+}
+
+/** Drives the plugin-registered middleware with a GET and returns the response — the same
+ * fake req/res shape tests/server/endpoints.test.ts uses, trimmed to what a bundle GET needs. */
+function serveClientJs(server: FakeViteServer, headers: Record<string, string> = { host: 'localhost:5173' }) {
+  const req = { method: 'GET', url: CLIENT_JS_PATH, headers, on: () => undefined }
+  return new Promise<{ statusCode: number; body: string; headers: Record<string, string> }>((resolve) => {
+    const res = {
+      statusCode: 0,
+      body: '',
+      headers: {} as Record<string, string>,
+      on: () => undefined,
+      setHeader(k: string, v: string) {
+        this.headers[k] = v
+      },
+      end(s?: string) {
+        this.body = s ?? ''
+        resolve({ statusCode: this.statusCode, body: this.body, headers: this.headers })
+      },
+    }
+    server.used[0](req, res, () => resolve({ statusCode: -1, body: '', headers: {} }))
+  })
 }
 
 describe('theForge plugin', () => {
@@ -63,23 +92,22 @@ describe('theForge plugin', () => {
     expect(transform(`const x = <div />`, '/elsewhere/App.tsx')).toBeNull()
   })
 
-  it('injects the client script into index.html', () => {
+  it('injects the client script into index.html from the gated middleware route', () => {
     const { plugin } = getPlugin()
     const tags = (plugin.transformIndexHtml as () => unknown[])()
     expect(tags).toEqual([
       {
         tag: 'script',
-        attrs: { type: 'module', src: CLIENT_ID },
+        attrs: { type: 'module', src: CLIENT_JS_PATH },
         injectTo: 'body',
       },
     ])
   })
 
-  it('resolves the client virtual id', () => {
+  it('defines no virtual-module hooks — the secret-bearing bundle must only be reachable through the gated middleware route (2026-07-10 security review, finding 4)', () => {
     const { plugin } = getPlugin()
-    const resolveId = plugin.resolveId as unknown as (id: string) => string | undefined
-    expect(resolveId(CLIENT_ID)).toBe(CLIENT_ID)
-    expect(resolveId('/other')).toBeUndefined()
+    expect(plugin.resolveId).toBeUndefined()
+    expect(plugin.load).toBeUndefined()
   })
 
   describe('endpoint file lifecycle', () => {
@@ -122,22 +150,22 @@ describe('theForge plugin', () => {
       root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-plugin-agent-'))
     })
 
-    it('defaults to claude-code / experimentalChannels: false in the client bootstrap', () => {
+    it('defaults to claude-code / experimentalChannels: false in the client bootstrap', async () => {
       const { plugin } = getPlugin(root)
       const server = fakeServer(root)
       ;(plugin.configureServer as (s: unknown) => void)(server)
       server.httpServer.emit('listening')
-      const code = (plugin.load as (id: string) => string | null)(CLIENT_ID)!
-      expect(code).toContain('"agent":"claude-code"')
+      const { body } = await serveClientJs(server)
+      expect(body).toContain('"agent":"claude-code"')
     })
 
-    it('threads a configured agent/experimentalChannels into the client bootstrap', () => {
+    it('threads a configured agent/experimentalChannels into the client bootstrap', async () => {
       const { plugin } = getPlugin(root, { agent: 'cursor', experimentalChannels: true })
       const server = fakeServer(root)
       ;(plugin.configureServer as (s: unknown) => void)(server)
       server.httpServer.emit('listening')
-      const code = (plugin.load as (id: string) => string | null)(CLIENT_ID)!
-      expect(code).toContain('"agent":"cursor"')
+      const { body } = await serveClientJs(server)
+      expect(body).toContain('"agent":"cursor"')
     })
   })
 
@@ -264,7 +292,7 @@ describe('theForge plugin', () => {
       root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-plugin-load-'))
     })
 
-    it('prepends globalThis.__THE_FORGE__ with the session secret to the served client bundle', () => {
+    it('prepends globalThis.__THE_FORGE__ with the session secret to the served client bundle', async () => {
       const { plugin } = getPlugin(root)
       const server = fakeServer(root)
       ;(plugin.configureServer as (s: unknown) => void)(server)
@@ -273,9 +301,26 @@ describe('theForge plugin', () => {
       const filePath = path.join(root, '.the-forge', `endpoint-${process.pid}.json`)
       const { secret } = JSON.parse(fs.readFileSync(filePath, 'utf8'))
 
-      const code = (plugin.load as (id: string) => string | null)(CLIENT_ID)
-      expect(code).toBeTruthy()
-      expect(code!.startsWith(`globalThis.__THE_FORGE__ = ${JSON.stringify({ secret, agent: 'claude-code' })};\n`)).toBe(true)
+      const { statusCode, body } = await serveClientJs(server)
+      expect(statusCode).toBe(200)
+      expect(body.startsWith(`globalThis.__THE_FORGE__ = ${JSON.stringify({ secret, agent: 'claude-code' })};\n`)).toBe(true)
+    })
+
+    it('403s a cross-origin request for the bundle without leaking the secret (2026-07-10 security review, finding 4)', async () => {
+      const { plugin } = getPlugin(root)
+      const server = fakeServer(root)
+      ;(plugin.configureServer as (s: unknown) => void)(server)
+      server.httpServer.emit('listening')
+
+      const filePath = path.join(root, '.the-forge', `endpoint-${process.pid}.json`)
+      const { secret } = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+
+      const { statusCode, body } = await serveClientJs(server, {
+        origin: 'https://evil.example',
+        host: 'localhost:5173',
+      })
+      expect(statusCode).toBe(403)
+      expect(body).not.toContain(secret)
     })
   })
 

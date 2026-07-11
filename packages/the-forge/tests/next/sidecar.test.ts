@@ -147,6 +147,22 @@ describe('ensureSidecar', () => {
     expect(res.text).not.toContain(FAKE_CLIENT_JS)
   })
 
+  it('GET /__the-forge/client.js with a cross-site Origin is rejected with 403 and never leaks the secret', async () => {
+    // 2026-07-10 security review, finding 4: the bundle route must sit behind the same
+    // Origin-vs-Host check as every other /__the-forge/* route, not rely on the absence of
+    // ACAO headers alone to keep a permissive-CORS reader away from the embedded secret.
+    const { ensureSidecar } = await importSidecar()
+    const handle = await ensureSidecar(baseOpts())
+    closers.push(() => handle.close())
+
+    const res = await fetchJson(handle.port, '/__the-forge/client.js', {
+      headers: { Origin: 'https://evil.example' },
+    })
+    expect(res.status).toBe(403)
+    expect(res.text).not.toContain('secret')
+    expect(res.text).not.toContain(FAKE_CLIENT_JS)
+  })
+
   it('POST /__the-forge/queue without X-Forge-Secret is rejected with 403 (middleware wiring intact)', async () => {
     const { ensureSidecar } = await importSidecar()
     const handle = await ensureSidecar(baseOpts())
