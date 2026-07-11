@@ -180,3 +180,95 @@ describe('CanvasMode enter/exit', () => {
     document.documentElement.style.backgroundColor = ''
   })
 })
+
+function bodyTransform(): string { return document.body.style.transform }
+
+describe('CanvasMode interactions', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+    document.documentElement.removeAttribute('style')
+    document.body.removeAttribute('style')
+    vi.stubGlobal('scrollTo', vi.fn())
+    // A prior describe block's test redefines window.scrollY/scrollX (configurable: true)
+    // and never restores them — reset here so setOn(true)'s scroll-seed is deterministic
+    // regardless of run order within this file.
+    Object.defineProperty(window, 'scrollX', { value: 0, configurable: true })
+    Object.defineProperty(window, 'scrollY', { value: 0, configurable: true })
+  })
+
+  it('plain wheel pans; ctrl-wheel zooms toward the cursor; both prevented', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true) // seeds translate(0px, 0px) scale(1) at scroll 0
+    const pan = new WheelEvent('wheel', { deltaX: 10, deltaY: 40, cancelable: true, bubbles: true })
+    window.dispatchEvent(pan)
+    expect(pan.defaultPrevented).toBe(true)
+    expect(bodyTransform()).toBe('translate(-10px, -40px) scale(1)')
+    const zoom = new WheelEvent('wheel', { deltaY: -100, ctrlKey: true, clientX: 0, clientY: 0, cancelable: true, bubbles: true })
+    window.dispatchEvent(zoom)
+    expect(zoom.defaultPrevented).toBe(true)
+    expect(bodyTransform()).toContain('scale(') // scale changed
+    expect(canvas.scale()).toBeGreaterThan(1)
+    canvas.setOn(false)
+  })
+
+  it('wheel inside the overlay host passes through untouched', () => {
+    const { canvas } = makeCanvas({ hostContains: () => true })
+    canvas.setOn(true)
+    const e = new WheelEvent('wheel', { deltaY: 40, cancelable: true, bubbles: true })
+    window.dispatchEvent(e)
+    expect(e.defaultPrevented).toBe(false)
+    expect(bodyTransform()).toBe('translate(0px, 0px) scale(1)')
+    canvas.setOn(false)
+  })
+
+  it('Shift+0 → 100%, Shift+1 → fit; both skipped when focus is editable', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    canvas.setZoomCentered(2)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit0', shiftKey: true, bubbles: true }))
+    expect(canvas.scale()).toBe(1)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit1', shiftKey: true, bubbles: true }))
+    // jsdom has no layout: body scrollWidth/Height are 0, so fitState clamps to MAX_SCALE.
+    // This asserts the key ROUTED to zoomToFit (scale left 1) — fit geometry is E2E's job.
+    expect(canvas.scale()).toBe(MAX_SCALE)
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    canvas.setZoomCentered(2)
+    input.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit0', shiftKey: true, bubbles: true }))
+    expect(canvas.scale()).toBe(2)
+    input.remove()
+    canvas.setOn(false)
+  })
+
+  it('space+drag pans and squelches the click that would select', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    // jsdom (pinned ^25.0.0 here) has no PointerEvent constructor; dock.test.ts/panel.test.ts
+    // establish the codebase idiom for this — dispatch a MouseEvent with the pointer type
+    // string, since addEventListener('pointerdown', ...) matches by type, not constructor.
+    window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, bubbles: true, cancelable: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
+    expect(bodyTransform()).toBe('translate(30px, -20px) scale(1)')
+    // the click right after a pan-drag must not reach the page (selection would fire)
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true })
+    const reached = vi.fn()
+    document.addEventListener('click', reached, true)
+    window.dispatchEvent(click)
+    expect(reached).not.toHaveBeenCalled()
+    document.removeEventListener('click', reached, true)
+    canvas.setOn(false)
+  })
+
+  it('listeners are fully gone after setOn(false) — zero idle overhead', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    canvas.setOn(false)
+    const e = new WheelEvent('wheel', { deltaY: 40, cancelable: true, bubbles: true })
+    window.dispatchEvent(e)
+    expect(e.defaultPrevented).toBe(false)
+    expect(bodyTransform()).toBe('')
+  })
+})

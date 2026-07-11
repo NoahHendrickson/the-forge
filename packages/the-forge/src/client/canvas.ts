@@ -97,6 +97,13 @@ interface SavedStyles {
   htmlBackgroundColor: string
 }
 
+function isEditable(t: EventTarget | null): boolean {
+  return (
+    t instanceof HTMLElement &&
+    (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')
+  )
+}
+
 export class CanvasMode {
   private prefs: CanvasPrefs
   private state: CanvasState = { x: 0, y: 0, scale: 1 }
@@ -212,6 +219,84 @@ export class CanvasMode {
     this.opts.onChange()
   }
 
-  private addListeners(): void {}   // Task 5
-  private removeListeners(): void {} // Task 5
+  private spaceHeld = false
+  private didPan = false
+
+  /** composedPath()[0] over e.target — shadow DOM retargets, same convention as ui/menu. */
+  private realTarget(e: Event): EventTarget | null {
+    return e.composedPath?.()[0] ?? e.target
+  }
+
+  private onWheel = (e: WheelEvent): void => {
+    if (this.opts.hostContains(this.realTarget(e))) return // panel scrolls itself
+    e.preventDefault()
+    if (e.ctrlKey || e.metaKey) {
+      // Pinch arrives as ctrlKey wheel (Chrome/Safari/Firefox). Exponential factor keeps
+      // zoom speed feel constant across devices and directions.
+      const factor = Math.exp(-e.deltaY * 0.01)
+      this.setState(zoomAt(this.state, e.clientX, e.clientY, this.state.scale * factor))
+    } else {
+      this.setState(panBy(this.state, -e.deltaX, -e.deltaY))
+    }
+  }
+
+  private onKeyDown = (e: KeyboardEvent): void => {
+    const target = this.realTarget(e)
+    if (isEditable(target) || this.opts.hostContains(target)) return
+    if (e.code === 'Space') {
+      this.spaceHeld = true
+      e.preventDefault() // page can't scroll anyway; this stops button re-activation
+      return
+    }
+    if (e.shiftKey && e.code === 'Digit0') { e.preventDefault(); this.setZoomCentered(1) }
+    else if (e.shiftKey && e.code === 'Digit1') { e.preventDefault(); this.zoomToFit() }
+  }
+
+  private onKeyUp = (e: KeyboardEvent): void => {
+    if (e.code === 'Space') this.spaceHeld = false
+  }
+
+  private onPointerDown = (e: PointerEvent): void => {
+    if (!this.spaceHeld || e.button !== 0) return
+    if (this.opts.hostContains(this.realTarget(e))) return
+    e.preventDefault()
+    e.stopPropagation() // window-capture fires before index.ts's document-capture handlers
+    this.didPan = false
+    const startX = e.clientX
+    const startY = e.clientY
+    const start = this.state
+    const onMove = (ev: PointerEvent): void => {
+      this.didPan = true
+      this.setState(panBy(start, ev.clientX - startX, ev.clientY - startY))
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      // The click that follows a pan-drag would land as a selection click — squelch
+      // exactly one. window-capture beats index.ts's document-capture click handler.
+      if (this.didPan) {
+        const squelch = (ce: MouseEvent): void => { ce.stopPropagation(); ce.preventDefault() }
+        window.addEventListener('click', squelch, { capture: true, once: true })
+      }
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
+
+  private addListeners(): void {
+    window.addEventListener('wheel', this.onWheel, { capture: true, passive: false })
+    window.addEventListener('keydown', this.onKeyDown, true)
+    window.addEventListener('keyup', this.onKeyUp, true)
+    window.addEventListener('pointerdown', this.onPointerDown, true)
+  }
+
+  private removeListeners(): void {
+    window.removeEventListener('wheel', this.onWheel, true)
+    window.removeEventListener('keydown', this.onKeyDown, true)
+    window.removeEventListener('keyup', this.onKeyUp, true)
+    window.removeEventListener('pointerdown', this.onPointerDown, true)
+    this.spaceHeld = false
+  }
 }
