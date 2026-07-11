@@ -12,6 +12,11 @@
 #   7. (Task 7) /session/say drives a chat turn: user-text → assistant-delta (seq 0) →
 #      assistant-text → tool-started carrying an Edit before/after; /session/config round-trips
 #      a model change onto the stream as config-changed
+#   8. (C1 Task 6) harness switch: /session/config {harness:'cursor'} swaps the embedded
+#      adapter to the fake `cursor-agent` (scripted ACP JSON-RPC, scripts/fake-bin/cursor-agent);
+#      a dispatch drives a cursor turn onto the same feed, its execute-kind permission request
+#      round-trips through /approval/decide as a REJECT (receipt-logged by the fake), then a
+#      switch back to claude-code proves the original harness still turns.
 #
 # Usage: ./scripts/e2e-embedded-feed.sh
 # Requires: npm run build already done (or this script builds).
@@ -27,6 +32,10 @@ EVENTS_FILE="$(mktemp -t forge-e2e-events.XXXXXX)"
 # the adapter deliberately never logs control_responses, so asserting "the set_model ack
 # landed in the fake" needs a record the fake itself writes.
 FAKE_LOG="$(mktemp -t forge-e2e-fake-receipts.XXXXXX)"
+# Same contract for the fake cursor-agent (FORGE_FAKE_CURSOR_LOG in scripts/fake-bin/
+# cursor-agent): the adapter answers ACP permission requests on the fake's stdin, which no
+# server-side surface records — the fake's receipt log is the only proof the reject landed.
+FAKE_CURSOR_LOG="$(mktemp -t forge-e2e-fake-cursor-receipts.XXXXXX)"
 SERVER_PID=""
 CURL_PID=""
 
@@ -42,14 +51,26 @@ cleanup() {
     kill -9 "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
   fi
-  rm -f "$LOG" "$EVENTS_FILE" "$FAKE_LOG"
+  # SERVER_PID is the backgrounded subshell — killing it does NOT reach the npm→vite
+  # descendants, and a SIGKILL'd vite never SIGTERMs its embedded-session children. Reap
+  # both directly: the port listener (same lsof idiom as the startup stale-server kill)
+  # and any fake harness process spawned from OUR fake-bin dir (path-anchored pkill, so
+  # a real `claude`/`cursor-agent` elsewhere on the machine is never touched).
+  lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | xargs kill -9 2>/dev/null || true
+  pkill -9 -f "$FAKE_BIN/" 2>/dev/null || true
+  rm -f "$LOG" "$EVENTS_FILE" "$FAKE_LOG" "$FAKE_CURSOR_LOG"
 }
 trap cleanup EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok — $*"; }
 
-chmod +x "$FAKE_BIN/claude"
+chmod +x "$FAKE_BIN/claude" "$FAKE_BIN/cursor-agent"
+
+# Reset persisted harness selection/session slots — a prior run leaves session.json with
+# selected:'claude-code' (the switch-back below) and per-harness resume ids; starting from
+# a known-clean slate keeps both runs of this script byte-identical in behavior.
+rm -f "$ROOT/.the-forge/session.json"
 
 # Kill anything already on the demo port (stale servers cause phantom bugs).
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
@@ -85,6 +106,7 @@ echo "==> Starting demo-app with fake claude on PATH"
   PATH="$FAKE_BIN:$PATH" \
     FORGE_FAKE_CLAUDE_SCENARIO=chat \
     FORGE_FAKE_CLAUDE_LOG="$FAKE_LOG" \
+    FORGE_FAKE_CURSOR_LOG="$FAKE_CURSOR_LOG" \
     npm run dev -w demo-app -- --host 127.0.0.1 --port "$PORT" --strictPort
 ) >"$LOG" 2>&1 &
 SERVER_PID=$!
@@ -316,5 +338,198 @@ done
 (( have_receipt )) || fail "set_model(sonnet) receipt missing from fake log. receipts so far:\n$(cat "$FAKE_LOG")"
 pass "set_model(sonnet) ack receipt in fake log"
 
+# ---------------------------------------------------------------------------------------
+# C1 Task 6 — harness switch scenario (fake cursor-agent, ACP JSON-RPC)
+# ---------------------------------------------------------------------------------------
+
+# /session/config {harness} 409s while a turn is in flight — switch only from a settled state.
+wait_session_settled() {
+  local deadline=$((SECONDS + 15))
+  local st=""
+  while (( SECONDS < deadline )); do
+    st="$(curl -sf -H "Origin: $BASE" "$BASE/__the-forge/status" 2>/dev/null \
+      | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{process.stdout.write(JSON.parse(d).session||'')}catch{}})" \
+      || true)"
+    case "$st" in
+      ready|idle) return 0 ;;
+    esac
+    sleep 0.2
+  done
+  fail "session never settled to ready/idle for harness switch (last state: $st)"
+}
+
+echo "==> Harness switch: claude-code → cursor"
+wait_session_settled
+SWITCH_RES="$(curl -sf "${HDR[@]}" -d '{"harness":"cursor"}' "$BASE/__the-forge/session/config")" \
+  || fail "POST /session/config {harness:cursor} failed"
+SWITCH_OK="$(node -e "const j=JSON.parse(process.argv[1]); process.stdout.write(String(j.ok))" "$SWITCH_RES")"
+[[ "$SWITCH_OK" == "true" ]] || fail "harness switch returned ok≠true: $SWITCH_RES"
+pass "config {harness:cursor} → ok"
+
+deadline=$((SECONDS + 5))
+have_switch_evt=0
+while (( SECONDS < deadline )); do
+  if grep '"kind":"config-changed"' "$EVENTS_FILE" 2>/dev/null | grep -q '"harness":"cursor"'; then
+    have_switch_evt=1
+    break
+  fi
+  sleep 0.1
+done
+(( have_switch_evt )) || fail "missing config-changed(harness=cursor) on stream. feed so far:\n$(cat "$EVENTS_FILE")"
+pass "config-changed(harness=cursor) on stream"
+
+STATUS="$(curl -sf -H "Origin: $BASE" "$BASE/__the-forge/status")" || fail "GET /status failed"
+HARNESS_NOW="$(node -e "const j=JSON.parse(process.argv[1]); process.stdout.write(j.harness||'')" "$STATUS")"
+[[ "$HARNESS_NOW" == "cursor" ]] || fail "expected status.harness=cursor, got: $STATUS"
+pass "status.harness=cursor"
+
+echo "==> Queue + dispatch on cursor harness (auto-start fake cursor-agent)"
+# Baselines: the events file already carries the whole claude scenario — count, don't grep-once.
+COMPLETES_BEFORE="$(grep -c '"kind":"turn-complete"' "$EVENTS_FILE" || true)"
+QUEUE_BODY_2='{"request":{"kind":"change","createdAt":"2026-07-11T00:00:00.000Z","viewport":{"width":1280,"height":800},"tailwind":true,"elements":[]},"markdown":"# Design change request\n\nE2E fixture — fake cursor-agent will not apply this; we only assert the feed."}'
+QUEUE_RES_2="$(curl -sf "${HDR[@]}" -d "$QUEUE_BODY_2" "$BASE/__the-forge/queue")" \
+  || fail "POST /queue (cursor scenario) failed"
+QUEUE_ID_2="$(node -e "const j=JSON.parse(process.argv[1]); if(!j.id) process.exit(1); process.stdout.write(j.id)" "$QUEUE_RES_2")" \
+  || fail "queue response missing id: $QUEUE_RES_2"
+pass "queued id=$QUEUE_ID_2"
+
+DISPATCH_RES_2="$(curl -sf "${HDR[@]}" -d '{"agent":"cursor"}' "$BASE/__the-forge/dispatch")" \
+  || fail "POST /dispatch (cursor) failed"
+RUNG_2="$(node -e "const j=JSON.parse(process.argv[1]); process.stdout.write(j.rung||'')" "$DISPATCH_RES_2")"
+[[ "$RUNG_2" == "embedded" ]] || fail "expected rung=embedded, got: $DISPATCH_RES_2"
+pass "dispatch rung=embedded ($DISPATCH_RES_2)"
+
+echo "==> Waiting for cursor feed events"
+# The fake's session/new response carries the fixture sessionId — its presence on a started
+# row is the unambiguous "this spawn was the CURSOR adapter" signal (the claude scenario's
+# session ids never collide with it). assistant text: the fixture agent_message_chunk "ping",
+# flushed as assistant-text at the tool_call boundary. The tool row is the recorded execute
+# fixture (`touch /tmp/forge-spike-probe`).
+CURSOR_SESSION_ID="0d66f7c5-8dd6-4639-9480-03ee52d077ca"
+deadline=$((SECONDS + 15))
+have_cursor_started=0 have_cursor_text=0 have_cursor_tool=0
+while (( SECONDS < deadline )); do
+  if grep '"kind":"started"' "$EVENTS_FILE" 2>/dev/null | grep -q "$CURSOR_SESSION_ID"; then have_cursor_started=1; fi
+  if grep '"kind":"assistant-text"' "$EVENTS_FILE" 2>/dev/null | grep -q '"text":"ping"'; then have_cursor_text=1; fi
+  if grep '"kind":"tool-started"' "$EVENTS_FILE" 2>/dev/null | grep '"execute"' | grep -q 'forge-spike-probe'; then have_cursor_tool=1; fi
+  if (( have_cursor_started && have_cursor_text && have_cursor_tool )); then
+    break
+  fi
+  sleep 0.2
+done
+(( have_cursor_started )) || fail "missing cursor started event (sessionId $CURSOR_SESSION_ID). feed so far:\n$(cat "$EVENTS_FILE")"
+(( have_cursor_text ))    || fail "missing cursor assistant-text(ping). feed so far:\n$(cat "$EVENTS_FILE")"
+(( have_cursor_tool ))    || fail "missing cursor execute tool-started. feed so far:\n$(cat "$EVENTS_FILE")"
+pass "cursor feed: started($CURSOR_SESSION_ID…) → assistant-text(ping) → tool-started(execute)"
+
+echo "==> Cursor approval round-trip (park → decide REJECT)"
+# The execute-kind session/request_permission is bridged through CursorAdapter.onApproval →
+# ApprovalRegistry → the same {type:"approval"} stream line as the claude flow, with
+# toolName = the ACP tool kind ("execute") — distinct from the claude section's "Bash".
+deadline=$((SECONDS + 10))
+CURSOR_APPROVAL_ID=""
+while (( SECONDS < deadline )); do
+  CURSOR_APPROVAL_ID="$(node -e "
+    const fs=require('fs');
+    const lines=fs.readFileSync(process.argv[1],'utf8').split(/\n/).filter(Boolean);
+    for (const l of lines) {
+      try {
+        const j=JSON.parse(l);
+        if (j.type==='approval' && j.toolName==='execute') { process.stdout.write(j.id); process.exit(0); }
+      } catch {}
+    }
+  " "$EVENTS_FILE" || true)"
+  if [[ -n "$CURSOR_APPROVAL_ID" ]]; then break; fi
+  sleep 0.2
+done
+[[ -n "$CURSOR_APPROVAL_ID" ]] || fail "cursor approval-request never appeared on the event stream. feed so far:\n$(cat "$EVENTS_FILE")"
+pass "approval-request id=$CURSOR_APPROVAL_ID (toolName=execute) on stream"
+
+DECIDE_RES_2="$(curl -sf "${HDR[@]}" -d "{\"id\":\"$CURSOR_APPROVAL_ID\",\"allow\":false}" \
+  "$BASE/__the-forge/approval/decide")" || fail "POST /approval/decide (reject) failed"
+DECIDE_OK_2="$(node -e "const j=JSON.parse(process.argv[1]); process.stdout.write(String(j.ok))" "$DECIDE_RES_2")"
+[[ "$DECIDE_OK_2" == "true" ]] || fail "decide(reject) returned ok≠true: $DECIDE_RES_2"
+pass "decide(reject) → ok"
+
+deadline=$((SECONDS + 5))
+have_reject_resolved=0
+while (( SECONDS < deadline )); do
+  if grep '"type":"approval-resolved"' "$EVENTS_FILE" 2>/dev/null \
+    | grep -q "\"id\":\"$CURSOR_APPROVAL_ID\",\"allow\":false"; then
+    have_reject_resolved=1
+    break
+  fi
+  sleep 0.1
+done
+(( have_reject_resolved )) || fail "missing approval-resolved(allow=false) on stream. feed so far:\n$(cat "$EVENTS_FILE")"
+pass "approval-resolved(allow=false) on stream"
+
+# The reject must have actually reached the fake CLI as the reject_once ACP answer — the
+# adapter's reply rides the fake's stdin, so its receipt log is the only observable record.
+deadline=$((SECONDS + 5))
+have_reject_receipt=0
+while (( SECONDS < deadline )); do
+  if grep '"received":"permission_response"' "$FAKE_CURSOR_LOG" 2>/dev/null | grep -q '"optionId":"reject-once"'; then
+    have_reject_receipt=1
+    break
+  fi
+  sleep 0.1
+done
+(( have_reject_receipt )) || fail "reject-once receipt missing from fake cursor log. receipts so far:\n$(cat "$FAKE_CURSOR_LOG")"
+pass "reject-once answer receipt in fake cursor log"
+
+# The rejected turn still finishes cleanly: tool-finished + a NEW turn-complete (a rejected
+# turn resolves stopReason end_turn — never an error turn).
+deadline=$((SECONDS + 10))
+have_cursor_complete=0
+while (( SECONDS < deadline )); do
+  COMPLETES_NOW="$(grep -c '"kind":"turn-complete"' "$EVENTS_FILE" || true)"
+  if (( COMPLETES_NOW > COMPLETES_BEFORE )); then have_cursor_complete=1; break; fi
+  sleep 0.2
+done
+(( have_cursor_complete )) || fail "cursor turn never completed after reject. feed so far:\n$(cat "$EVENTS_FILE")"
+pass "cursor turn-complete after reject"
+
+echo "==> Harness switch back: cursor → claude-code"
+wait_session_settled
+SWITCH_BACK_RES="$(curl -sf "${HDR[@]}" -d '{"harness":"claude-code"}' "$BASE/__the-forge/session/config")" \
+  || fail "POST /session/config {harness:claude-code} failed"
+SWITCH_BACK_OK="$(node -e "const j=JSON.parse(process.argv[1]); process.stdout.write(String(j.ok))" "$SWITCH_BACK_RES")"
+[[ "$SWITCH_BACK_OK" == "true" ]] || fail "harness switch back returned ok≠true: $SWITCH_BACK_RES"
+pass "config {harness:claude-code} → ok"
+
+deadline=$((SECONDS + 5))
+have_switch_back_evt=0
+while (( SECONDS < deadline )); do
+  if grep '"kind":"config-changed"' "$EVENTS_FILE" 2>/dev/null | grep -q '"harness":"claude-code"'; then
+    have_switch_back_evt=1
+    break
+  fi
+  sleep 0.1
+done
+(( have_switch_back_evt )) || fail "missing config-changed(harness=claude-code) on stream. feed so far:\n$(cat "$EVENTS_FILE")"
+pass "config-changed(harness=claude-code) on stream"
+
+echo "==> Claude turn still works after switching back"
+COMPLETES_BEFORE="$(grep -c '"kind":"turn-complete"' "$EVENTS_FILE" || true)"
+SAY_RES_2="$(curl -sf "${HDR[@]}" -d '{"text":"hello again after switch"}' "$BASE/__the-forge/session/say")" \
+  || fail "POST /session/say (post-switch) failed"
+SAY_OK_2="$(node -e "const j=JSON.parse(process.argv[1]); process.stdout.write(String(j.ok))" "$SAY_RES_2")"
+[[ "$SAY_OK_2" == "true" ]] || fail "post-switch say returned ok≠true: $SAY_RES_2"
+pass "say → ok"
+
+deadline=$((SECONDS + 15))
+have_switch_user_text=0 have_switch_complete=0
+while (( SECONDS < deadline )); do
+  if grep '"kind":"user-text"' "$EVENTS_FILE" 2>/dev/null | grep -q 'hello again after switch'; then have_switch_user_text=1; fi
+  COMPLETES_NOW="$(grep -c '"kind":"turn-complete"' "$EVENTS_FILE" || true)"
+  if (( COMPLETES_NOW > COMPLETES_BEFORE )); then have_switch_complete=1; fi
+  if (( have_switch_user_text && have_switch_complete )); then break; fi
+  sleep 0.2
+done
+(( have_switch_user_text )) || fail "missing post-switch user-text. feed so far:\n$(cat "$EVENTS_FILE")"
+(( have_switch_complete )) || fail "post-switch claude turn never completed. feed so far:\n$(cat "$EVENTS_FILE")"
+pass "post-switch claude turn: user-text → turn-complete"
+
 echo
-echo "ALL CHECKS PASSED (fake-claude feed E2E (embedded session + chat))"
+echo "ALL CHECKS PASSED (fake-claude feed E2E (embedded session + chat) + fake-cursor harness switch)"
