@@ -252,14 +252,81 @@ describe('CanvasMode interactions', () => {
     window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
     window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
     expect(bodyTransform()).toBe('translate(30px, -20px) scale(1)')
-    // the click right after a pan-drag must not reach the page (selection would fire)
+    // the click right after a pan-drag must not reach the page (selection would fire).
+    // Body-dispatched so the path is window → document → body: the window-capture squelch
+    // must be what stops it before the document-capture spy (a window-dispatched click
+    // never reaches document at all, which would pass this vacuously).
     const click = new MouseEvent('click', { bubbles: true, cancelable: true })
     const reached = vi.fn()
     document.addEventListener('click', reached, true)
-    window.dispatchEvent(click)
+    document.body.dispatchEvent(click)
     expect(reached).not.toHaveBeenCalled()
+    expect(click.defaultPrevented).toBe(true)
     document.removeEventListener('click', reached, true)
     canvas.setOn(false)
+  })
+
+  it('wheel pan during a space-drag survives the next pointermove (live-state panning)', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, bubbles: true, cancelable: true }))
+    // A wheel pan lands mid-drag — its delta must not be reverted by the next pointermove.
+    window.dispatchEvent(new WheelEvent('wheel', { deltaX: 5, deltaY: 7, cancelable: true, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
+    // wheel: (-5, -7) + drag: (+30, -20) = (25, -27)
+    expect(bodyTransform()).toBe('translate(25px, -27px) scale(1)')
+    // consume the one-shot squelch this pan-drag armed (a real browser always fires the
+    // click right after pointerup; jsdom doesn't, so it would leak into the next test)
+    const eaten = new MouseEvent('click', { bubbles: true, cancelable: true })
+    window.dispatchEvent(eaten)
+    expect(eaten.defaultPrevented).toBe(true)
+    canvas.setOn(false)
+  })
+
+  it('pointercancel ends the drag WITHOUT arming the squelch — a later click passes through', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, bubbles: true, cancelable: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointercancel', { bubbles: true }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
+    // pointercancel means the browser never fires a click for this gesture — an unrelated
+    // later click must NOT be eaten. Dispatch on body (not window): a window-targeted
+    // event's propagation path is just window, so it would never reach a document-capture
+    // spy and the assertion would be vacuous.
+    const reached = vi.fn()
+    document.addEventListener('click', reached, true)
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(reached).toHaveBeenCalledTimes(1)
+    document.removeEventListener('click', reached, true)
+    // and the drag itself is dead: a stray pointermove after cancel changes nothing
+    const before = bodyTransform()
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 500, clientY: 500, bubbles: true }))
+    expect(bodyTransform()).toBe(before)
+    canvas.setOn(false)
+  })
+
+  it('setOn(false) mid-drag tears the drag down — no transform written onto the restored page', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, bubbles: true, cancelable: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, bubbles: true }))
+    canvas.setOn(false) // exits with the drag still in flight
+    expect(bodyTransform()).toBe('')
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 300, clientY: 300, bubbles: true }))
+    expect(bodyTransform()).toBe('') // the dead drag must not write onto the restored page
+    // and the teardown must not have armed a squelch either (body-dispatched — see the
+    // pointercancel test for why window.dispatchEvent would make this vacuous)
+    const reached = vi.fn()
+    document.addEventListener('click', reached, true)
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(reached).toHaveBeenCalledTimes(1)
+    document.removeEventListener('click', reached, true)
   })
 
   it('listeners are fully gone after setOn(false) — zero idle overhead', () => {

@@ -221,6 +221,10 @@ export class CanvasMode {
 
   private spaceHeld = false
   private didPan = false
+  /** Live drag teardown — set while a space-drag is in flight so removeListeners() can
+   *  kill the transient move/up/cancel pair; otherwise a mid-drag unapply() leaves them
+   *  alive and the next pointermove writes a transform onto the already-restored page. */
+  private dragTeardown: (() => void) | null = null
 
   /** composedPath()[0] over e.target — shadow DOM retargets, same convention as ui/menu. */
   private realTarget(e: Event): EventTarget | null {
@@ -253,6 +257,8 @@ export class CanvasMode {
   }
 
   private onKeyUp = (e: KeyboardEvent): void => {
+    // No isEditable/hostContains guards on purpose: clearing is idempotent, and spaceHeld
+    // can only be true if the matching keydown already passed those guards.
     if (e.code === 'Space') this.spaceHeld = false
   }
 
@@ -262,27 +268,37 @@ export class CanvasMode {
     e.preventDefault()
     e.stopPropagation() // window-capture fires before index.ts's document-capture handlers
     this.didPan = false
-    const startX = e.clientX
-    const startY = e.clientY
-    const start = this.state
+    // Pan incrementally from LIVE state, not a frozen pointerdown snapshot — a wheel
+    // pan/zoom landing mid-drag must survive the next pointermove instead of being
+    // silently reverted to the anchor.
+    let lastX = e.clientX
+    let lastY = e.clientY
     const onMove = (ev: PointerEvent): void => {
       this.didPan = true
-      this.setState(panBy(start, ev.clientX - startX, ev.clientY - startY))
+      this.setState(panBy(this.state, ev.clientX - lastX, ev.clientY - lastY))
+      lastX = ev.clientX
+      lastY = ev.clientY
     }
-    const onUp = (): void => {
+    const finish = (installSquelch: boolean): void => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+      this.dragTeardown = null
       // The click that follows a pan-drag would land as a selection click — squelch
       // exactly one. window-capture beats index.ts's document-capture click handler.
-      if (this.didPan) {
+      // Only pointerup gets one: pointercancel (and forced teardown) means the browser
+      // never fires a click for this gesture, so arming it would eat an unrelated click.
+      if (installSquelch && this.didPan) {
         const squelch = (ce: MouseEvent): void => { ce.stopPropagation(); ce.preventDefault() }
         window.addEventListener('click', squelch, { capture: true, once: true })
       }
     }
+    const onUp = (): void => finish(true)
+    const onCancel = (): void => finish(false)
+    this.dragTeardown = () => finish(false)
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
+    window.addEventListener('pointercancel', onCancel)
   }
 
   private addListeners(): void {
@@ -293,6 +309,7 @@ export class CanvasMode {
   }
 
   private removeListeners(): void {
+    this.dragTeardown?.() // a drag in flight must not outlive canvas mode
     window.removeEventListener('wheel', this.onWheel, true)
     window.removeEventListener('keydown', this.onKeyDown, true)
     window.removeEventListener('keyup', this.onKeyUp, true)
