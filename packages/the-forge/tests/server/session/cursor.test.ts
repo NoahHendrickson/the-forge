@@ -572,8 +572,7 @@ describe('CursorAdapter', () => {
       const onApproval = vi.fn(
         async (_toolName: string, _detail: string) => ({ behavior: 'allow' }) as const,
       )
-      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
-      adapter.onApproval = onApproval
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN, onApproval })
       adapter.onEvent = () => {}
       adapter.start({ cwd: '/abs/project' })
       bootFresh(lastChild())
@@ -595,8 +594,7 @@ describe('CursorAdapter', () => {
     it('execute-kind permission → deny answers the reject_once option', async () => {
       const { spawnFn, lastChild } = makeFakeSpawn()
       const onApproval = vi.fn(async () => ({ behavior: 'deny' }) as const)
-      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
-      adapter.onApproval = onApproval
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN, onApproval })
       adapter.onEvent = () => {}
       adapter.start({ cwd: '/abs/project' })
       bootFresh(lastChild())
@@ -627,8 +625,7 @@ describe('CursorAdapter', () => {
     it('edit-kind permission auto-allows without calling onApproval', async () => {
       const { spawnFn, lastChild } = makeFakeSpawn()
       const onApproval = vi.fn(async () => ({ behavior: 'deny' }) as const)
-      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
-      adapter.onApproval = onApproval
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN, onApproval })
       adapter.onEvent = () => {}
       adapter.start({ cwd: '/abs/project' })
       bootFresh(lastChild())
@@ -659,8 +656,7 @@ describe('CursorAdapter', () => {
     it("the-forge's own MCP tool call auto-allows without calling onApproval", async () => {
       const { spawnFn, lastChild } = makeFakeSpawn()
       const onApproval = vi.fn(async () => ({ behavior: 'deny' }) as const)
-      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
-      adapter.onApproval = onApproval
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN, onApproval })
       adapter.onEvent = () => {}
       adapter.start({ cwd: '/abs/project' })
       bootFresh(lastChild())
@@ -682,8 +678,7 @@ describe('CursorAdapter', () => {
       const onApproval = vi.fn(
         async (_toolName: string, _detail: string) => ({ behavior: 'deny' }) as const,
       )
-      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
-      adapter.onApproval = onApproval
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN, onApproval })
       adapter.onEvent = () => {}
       adapter.start({ cwd: '/abs/project' })
       bootFresh(lastChild())
@@ -723,8 +718,7 @@ describe('CursorAdapter', () => {
       const onApproval = vi.fn(
         async (_toolName: string, _detail: string) => ({ behavior: 'allow' }) as const,
       )
-      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
-      adapter.onApproval = onApproval
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN, onApproval })
       adapter.onEvent = () => {}
       adapter.start({ cwd: '/abs/project' })
       bootFresh(lastChild())
@@ -763,8 +757,7 @@ describe('CursorAdapter', () => {
       // cover both.
       const { spawnFn, lastChild } = makeFakeSpawn()
       const onApproval = vi.fn(async () => ({ behavior: 'deny' }) as const)
-      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
-      adapter.onApproval = onApproval
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN, onApproval })
       adapter.onEvent = () => {}
       adapter.start({ cwd: '/abs/project' })
       bootFresh(lastChild())

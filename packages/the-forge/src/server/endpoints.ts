@@ -407,8 +407,12 @@ export function createForgeMiddleware(
           if (agent !== undefined && !KNOWN_AGENTS.has(agent)) {
             return send(res, 400, { error: 'unknown agent' })
           }
-          // Resolved BEFORE the embedded + watcher short-circuits so both can key off
-          // the effective agent without re-computing it below.
+          // The LADDER's target agent only (keystroke/deeplink augmentation below) — the
+          // embedded rung deliberately does NOT key off this (dual-SoT fix, PR #32 review):
+          // which harness the embedded rung drives is session.manager.harness(), the manager's
+          // own picker-persisted selection. The ladder is unreachable while an embedded
+          // runtime is in play, so this only ever names the external app when there is no
+          // session wired or the consumer opted out (embedded: false).
           const resolvedAgent = agent ?? dispatchConfig.agent
 
           // Embedded short-circuit — BEFORE the watcher check and BEFORE the pending-item
@@ -429,13 +433,17 @@ export function createForgeMiddleware(
           // everything, the loser burns a "No pending design edits" tick. Harmless
           // (pull is idempotent) but token-wasteful; acceptable for the rare dual setup.
           //
-          // Gate is membership in EMBEDDED_HARNESSES (claude-code, cursor — C1), not a bare
-          // claude-code equality check: cursor now takes the embedded rung too, same as
-          // claude-code — deliberate, embedded is the primary path for every harness that has
-          // an adapter (§3.4). codex still skips this rung entirely — no embedded adapter for
-          // it yet (C2) — and falls through to its own dispatch paths (deeplink / tmux).
-          // dispatchConfig.embedded === false is the consumer opt-out (see DispatchConfig).
-          if (session && EMBEDDED_HARNESSES_SET.has(resolvedAgent) && dispatchConfig.embedded !== false) {
+          // Gate is "an embedded runtime exists and isn't opted out" — NOT the agent string
+          // (dual-SoT fix, PR #32 review): WHICH harness the rung drives is the manager's own
+          // picker-persisted selection (session.manager.harness()), the single runtime source
+          // of truth. The plugin `agent` option only seeds defaultHarness (runtime.ts) and
+          // names the ladder's external target — and the ladder is unreachable from here
+          // (every branch below returns, or falls through to the watcher return). A
+          // codex-configured project therefore still gets embedded delivery: its manager
+          // drives claude-code until C2 (the defaultHarness narrowing in runtime.ts).
+          // dispatchConfig.embedded === false stays the consumer opt-out (see DispatchConfig);
+          // with it the ladder targets the plugin-configured agent exactly as before.
+          if (session && dispatchConfig.embedded !== false) {
             const sessionState = session.manager.state()
             if (sessionState === 'ready' || sessionState === 'busy' || sessionState === 'starting') {
               session.manager.notifyDesignEdits()

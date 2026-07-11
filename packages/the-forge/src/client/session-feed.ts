@@ -4,17 +4,9 @@
 import { createButton } from './ui/button'
 import { createSelect } from './ui/select'
 import { basename } from './source'
-import { CHAT_TEXT_MAX, EMBEDDED_HARNESSES, HARNESS_VOCAB, type HarnessId } from '../shared/chat-constants'
+import { CHAT_TEXT_MAX, EMBEDDED_HARNESSES, HARNESS_VOCAB, isHarnessId, type HarnessId } from '../shared/chat-constants'
 import { AGENT_DISPLAY_NAME } from './agent'
 import { type SessionState } from './watch'
-
-/** True for a value that is one of EMBEDDED_HARNESSES — the untyped-JSON guard shared by
- * seedConfigBar (picking the field off a config-changed event) and makeConfigRow (looking up
- * its display name), same "unknown + manual checks at I/O boundaries" posture as the rest of
- * this module's event parsing. */
-function isHarnessId(v: unknown): v is HarnessId {
-  return typeof v === 'string' && (EMBEDDED_HARNESSES as readonly string[]).includes(v)
-}
 
 // Shared untyped-JSON guard for the edit payload carried by tool-started AND (Cursor's
 // late-diff path) tool-finished — the wire outlives any one bundle build, so shape is checked

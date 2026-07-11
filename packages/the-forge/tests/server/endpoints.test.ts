@@ -676,10 +676,10 @@ describe('POST /__the-forge/dispatch', () => {
     })
 
     it('body agent override to cursor now TAKES the embedded rung (Task 4 — cursor is embedded-capable)', async () => {
-      // resolvedAgent (body override wins over config) is what gates the embedded rung —
-      // cursor is in EMBEDDED_HARNESSES (Task 4), so a cursor-targeted Send is delivered to
-      // the embedded session exactly like claude-code, even when the configured default
-      // agent is claude-code. The ladder must NOT run.
+      // The embedded gate keys on the session runtime existing (dual-SoT fix, PR #32 review) —
+      // a body agent override only re-targets the LADDER (its test escape hatch), which is
+      // unreachable while an embedded runtime is in play. Delivered to the embedded session
+      // exactly like claude-code, even when the configured default agent is claude-code.
       queue.add({}, 'pending markdown')
       const calls = { notify: 0 }
       const session = fakeDispatchSession('ready', calls)
@@ -695,8 +695,12 @@ describe('POST /__the-forge/dispatch', () => {
       expect(calls.notify).toBe(1)
     })
 
-    it('agent=codex skips the embedded rung entirely → falls through to ladder', async () => {
-      // codex has no embedded adapter yet (§3.4) — it uses tmux/manual.
+    it('agent=codex config with a live session takes the embedded rung (manager harness is the runtime SoT)', async () => {
+      // PR #32 review (dual-SoT finding): the gate keys on the session runtime existing, not on
+      // the plugin `agent` string — a codex-configured project's manager drives its own selected
+      // harness (defaultHarness narrows codex → claude-code in runtime.ts until C2), so the
+      // embedded rung is still the right delivery. The ladder must NOT run against the plugin
+      // agent when an embedded runtime is in play.
       queue.add({}, 'pending markdown')
       const calls = { notify: 0 }
       const session = fakeDispatchSession('ready', calls)
@@ -708,8 +712,8 @@ describe('POST /__the-forge/dispatch', () => {
       const res = fakeRes()
       await run(mwEmbed, fakeReq('POST', '/__the-forge/dispatch', {}, { host: 'localhost:5173' }), res)
       expect(res.statusCode).toBe(200)
-      expect(JSON.parse(res.body)).toEqual({ rung: 'manual', detail: 'ladder ran for codex' })
-      expect(calls.notify).toBe(0)
+      expect(JSON.parse(res.body)).toEqual({ rung: 'embedded', detail: 'delivered to the embedded session' })
+      expect(calls.notify).toBe(1)
     })
 
     it('embedded: false disables the rung → ladder runs, session never touched', async () => {

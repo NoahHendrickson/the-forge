@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { SessionAdapter, SessionEvent } from './adapter'
-import { type HarnessId, EMBEDDED_HARNESSES, HARNESS_VOCAB } from '../../shared/chat-constants'
+import { type HarnessId, EMBEDDED_HARNESSES, HARNESS_VOCAB, isHarnessId } from '../../shared/chat-constants'
 
 // ---------------------------------------------------------------------------
 // Exported types and constants
@@ -99,10 +99,6 @@ interface SessionSlot {
 interface SessionFile {
   selected?: HarnessId
   sessions: Partial<Record<HarnessId, SessionSlot>>
-}
-
-function isHarnessId(v: unknown): v is HarnessId {
-  return typeof v === 'string' && (EMBEDDED_HARNESSES as readonly string[]).includes(v)
 }
 
 function isSessionSlot(v: unknown): v is SessionSlot {

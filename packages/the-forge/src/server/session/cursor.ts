@@ -53,19 +53,22 @@ function buildEditFromContent(
   return undefined
 }
 
+// Non-edit, non-forge-MCP permission requests are bridged through this hook; runtime.ts's
+// composition root injects the ApprovalRegistry bridge at construction.
+export type CursorApprovalFn = (
+  toolName: string,
+  detail: string,
+) => Promise<{ behavior: 'allow' } | { behavior: 'deny' }>
+
 export class CursorAdapter implements SessionAdapter {
   onEvent: (e: SessionEvent) => void = () => {}
 
-  /** Non-edit, non-forge-MCP permission requests are bridged here; runtime.ts (Task 4) wires
-   * it to the ApprovalRegistry. Unset (default) → auto-deny: fail closed, never hang the child
-   * on a request nobody will answer. */
-  onApproval: (
-    toolName: string,
-    detail: string,
-  ) => Promise<{ behavior: 'allow' } | { behavior: 'deny' }> = async () => ({ behavior: 'deny' })
-
   private readonly spawnFn: SpawnFn
   private readonly mcpBinPath: string
+  // Constructor-injected (PR #32 review: no post-construction bolt-on field outside the
+  // SessionAdapter contract — the factory stays a pure constructor call). Absent → auto-deny:
+  // fail closed, never hang the child on a request nobody will answer.
+  private readonly onApproval: CursorApprovalFn
 
   private child: SpawnedChild | null = null
   // closed: set on stop() — prevents processing late stdout events after stop()
@@ -101,7 +104,10 @@ export class CursorAdapter implements SessionAdapter {
   // prompt response resolves. An empty buffer flushes nothing (a thought-only turn).
   private segmentBuf = ''
 
-  constructor(spawnFn: SpawnFn = defaultSpawnFn, opts?: { effort?: string; mcpBinPath?: string }) {
+  constructor(
+    spawnFn: SpawnFn = defaultSpawnFn,
+    opts?: { effort?: string; mcpBinPath?: string; onApproval?: CursorApprovalFn },
+  ) {
     this.spawnFn = spawnFn
     // Default: dist/mcp.js beside this bundled module (cursor.ts compiles into dist/vite.js and
     // dist/next.js next to dist/mcp.js — same derivation vite.ts/sidecar.ts use). Injectable for
@@ -109,6 +115,7 @@ export class CursorAdapter implements SessionAdapter {
     // call unconditionally, but Cursor has no effort control surface (documented no-op below).
     this.mcpBinPath =
       opts?.mcpBinPath ?? path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp.js')
+    this.onApproval = opts?.onApproval ?? (async () => ({ behavior: 'deny' }))
     void opts?.effort
   }
 

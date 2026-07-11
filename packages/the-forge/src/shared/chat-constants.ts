@@ -13,6 +13,15 @@ export type HarnessId = 'claude-code' | 'cursor'
 
 export const EMBEDDED_HARNESSES = ['claude-code', 'cursor'] as const
 
+// Single canonical harness-id guard, shared client+server — was duplicated byte-identical
+// across manager.ts, session-feed.ts, and watch.ts (PR #32 dedup); runtime.ts's inline
+// includes+cast collapses to a call too. A pure type-guard adds no imports — the no-imports
+// rule (see header) is about module dependencies leaking across the server/browser boundary,
+// not about function exports.
+export function isHarnessId(v: unknown): v is HarnessId {
+  return typeof v === 'string' && (EMBEDDED_HARNESSES as readonly string[]).includes(v)
+}
+
 export interface HarnessVocab {
   efforts: readonly string[] // [] means unsupported → picker hidden (cursor today; a knob-less future harness)
   liveEffort: boolean // true: effort applies to the live session, no respawn

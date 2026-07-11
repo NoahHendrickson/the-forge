@@ -7,7 +7,7 @@ import { SessionManager } from './session/manager'
 import { ApprovalRegistry, type ApprovalFeedItem } from './session/approvals'
 import { ClaudeAdapter } from './session/claude'
 import { CursorAdapter } from './session/cursor'
-import { EMBEDDED_HARNESSES, type HarnessId } from '../shared/chat-constants'
+import { isHarnessId, type HarnessId } from '../shared/chat-constants'
 
 /** Per-connection session handles exposed to the middleware. The fan-out broadcaster
  * (`onApproval`) bridges the registry's single constructor-injected onChange callback
@@ -84,9 +84,7 @@ export function createForgeRuntime(
   // here — a codex-configured project chats via Claude until C2, same posture as the dispatch
   // ladder's embedded-rung gate below.
   const defaultHarness: HarnessId =
-    opts?.defaultAgent !== undefined && (EMBEDDED_HARNESSES as readonly string[]).includes(opts.defaultAgent)
-      ? (opts.defaultAgent as HarnessId)
-      : 'claude-code'
+    opts?.defaultAgent !== undefined && isHarnessId(opts.defaultAgent) ? opts.defaultAgent : 'claude-code'
   const manager = new SessionManager({
     // Keyed off opts.harness (ClaudeAdapter vs CursorAdapter) — every spawn is FOR a specific
     // harness, never ambiguous (see SessionManagerOpts.makeAdapter's own why-comment).
@@ -94,17 +92,19 @@ export function createForgeRuntime(
     // constructor-time spawn flag — see ClaudeAdapter's constructor why-comment (spike:
     // spawn-flag-only, no set_effort control request); CursorAdapter accepts-and-ignores it
     // (no effort control surface — see cursor.ts's own why-comment).
-    makeAdapter: (adapterOpts) => {
-      if (adapterOpts.harness === 'cursor') {
-        const a = new CursorAdapter(undefined, { effort: adapterOpts.effort })
-        // Non-edit ACP permission requests: same registry, same overlay UI, same timeout-to-deny —
-        // the approve MCP tool + --permission-prompt-tool remain Claude-only; edit-kind requests
-        // never reach here (adapter-side auto-allow, the ratified posture).
-        a.onApproval = (toolName, detail) => approvals.request(toolName, detail).promise
-        return a
-      }
-      return new ClaudeAdapter(undefined, adapterOpts)
-    },
+    makeAdapter: (adapterOpts) =>
+      adapterOpts.harness === 'cursor'
+        ? // Non-edit ACP permission requests: same registry, same overlay UI, same
+          // timeout-to-deny — the approve MCP tool + --permission-prompt-tool remain
+          // Claude-only; edit-kind requests never reach here (adapter-side auto-allow, the
+          // ratified posture). The registry bridge is constructor-injected (PR #32 review) so
+          // the factory stays a pure constructor call — this composition root is where both
+          // objects exist (approvals.ts must not import the adapters).
+          new CursorAdapter(undefined, {
+            effort: adapterOpts.effort,
+            onApproval: (toolName, detail) => approvals.request(toolName, detail).promise,
+          })
+        : new ClaudeAdapter(undefined, adapterOpts),
     forgeDir,
     cwd: resolvedRoot,
     defaultHarness,

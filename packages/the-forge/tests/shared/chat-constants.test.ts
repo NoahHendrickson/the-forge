@@ -7,14 +7,34 @@ import {
   type HarnessVocab,
   HARNESS_VOCAB,
   CHAT_TEXT_MAX,
+  isHarnessId,
 } from '../../src/shared/chat-constants'
 
 const SRC_FILE = path.join(__dirname, '../../src/shared/chat-constants.ts')
 
 describe('chat-constants: pure data, zero imports (bundled into both server and browser bundles)', () => {
   it('the source file contains no import statements', () => {
+    // Still holds with the isHarnessId guard exported — the no-imports rule is about module
+    // dependencies leaking across the server/browser boundary, not about function exports.
     const code = fs.readFileSync(SRC_FILE, 'utf8')
     expect(code).not.toMatch(/^\s*import\s/m)
+  })
+})
+
+describe('isHarnessId (the ONE shared runtime guard — manager/session-feed/watch/runtime all use it)', () => {
+  it('accepts every EMBEDDED_HARNESSES member', () => {
+    for (const h of EMBEDDED_HARNESSES) {
+      expect(isHarnessId(h)).toBe(true)
+    }
+  })
+
+  it('rejects non-embedded agents, non-strings, and absent values', () => {
+    expect(isHarnessId('codex')).toBe(false) // known agent, but not embedded (until C2)
+    expect(isHarnessId('')).toBe(false)
+    expect(isHarnessId(42)).toBe(false)
+    expect(isHarnessId(null)).toBe(false)
+    expect(isHarnessId(undefined)).toBe(false)
+    expect(isHarnessId(['claude-code'])).toBe(false)
   })
 })
 

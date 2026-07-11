@@ -1,5 +1,5 @@
 import { AGENT_DISPLAY_NAME, type AgentName } from './agent'
-import { EMBEDDED_HARNESSES, type HarnessId } from '../shared/chat-constants'
+import { isHarnessId, type HarnessId } from '../shared/chat-constants'
 
 /** Watcher lifecycle as reported by GET /__the-forge/status (server/watchers.ts):
  * 'live' — a session is parked on (or freshly cycling) the /wait long-poll;
@@ -48,7 +48,7 @@ export function parseSessionState(raw: unknown): SessionState {
  * value, same tolerance as sessionEnabled's parse. Exported standalone (like its siblings) so
  * tests can exercise the guard directly without a poll cycle. */
 export function parseHarness(raw: unknown): HarnessId | undefined {
-  return typeof raw === 'string' && (EMBEDDED_HARNESSES as readonly string[]).includes(raw) ? (raw as HarnessId) : undefined
+  return isHarnessId(raw) ? raw : undefined
 }
 
 // ---------------------------------------------------------------------------
