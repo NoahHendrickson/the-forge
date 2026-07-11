@@ -70,7 +70,8 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `composer-send.ts` | `ComposerSend` — the send-everything verb: orchestration (drafts-first-when-both) + the chat leg (POSTs `/session/say`), in-flight guard for the chat leg (`draftsInFlight` stays in index.ts, guarding the injected drafts leg) |
 | `source.ts` | parse `data-dc-source` attrs; `TaggedElement` type |
 | `overlay.ts` | shadow-DOM host, hover/selection outlines, the whole CSS design system (string const) |
-| `dock.ts` | panel docked/floating prefs: width clamps, sessionStorage persistence (`STORAGE_KEY 'the-forge:panel'`) |
+| `dock.ts` | panel docked/floating prefs: width clamps, sessionStorage persistence (`STORAGE_KEY 'the-forge:panel'`); `setCanvasActive` suspends the margin push while canvas mode owns the page |
+| `canvas.ts` | `CanvasMode` — Figma-style canvas: full-page artboard via `<body>` transform, pan/zoom (wheel, ctrl-wheel-to-cursor, space-drag, Shift+0/1, 10%–400%), verbatim style save/restore, sessionStorage persistence (`'the-forge:canvas'`); plus the pure zoom/pan/fit math |
 | `inspector.ts` | reads an element's computed-style snapshot for the panel |
 | `panel.ts` | the properties panel orchestrator (Panel class); `feedDivider`/`feedSplit()` are thin pass-throughs to `feed-divider.ts` |
 | `feed-divider.ts` | the panel↔chat drag divider: clamps, dblclick reset, sessionStorage persistence (`FEED_SPLIT_KEY`) |
@@ -155,6 +156,8 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 - An unignored `.the-forge/` full-reloads Tailwind v4 apps on every Send — the queue markdown is made of class names, so Tailwind's scanner tracks `queue.json`. The plugin now writes the `.gitignore` entry and watcher excludes itself; if a consumer still sees reload-on-send, check that the `.gitignore` write didn't fail.
 - The Chrome DevTools Automatic Workspace Folders well-known path (`/.well-known/appspecific/com.chrome.devtools.json`, `DEVTOOLS_JSON_PATH` in `src/server/endpoints.ts`) lives outside the `/__the-forge/` prefix, so it needs its own routing on each framework: Vite's middleware in `createForgeMiddleware` checks for it before the `/__the-forge/` prefix gate; Next has no equivalent middleware hook, so `src/next/index.ts`'s rewrites merge adds a dedicated rewrite rule alongside the `/__the-forge/*` proxy rule, both pointing at the same sidecar.
 - **In-band CLI errors (rate limit, auth) arrive as `result` events with exit code 0** — the CLI exits cleanly and returns the error text in the `result` message body. Read the event text, not the exit code; mapping these to `session-error` instead of `turn-complete {isError:true}` is wrong.
+- Canvas mode owns the wheel while on — inner scrollable divs and document-level sticky/scroll-triggered UI are inert until it's toggled off; the panel still scrolls itself via the `composedPath()` passthrough, which must use `Overlay.containsDeep` (plain `host.contains` never crosses the shadow boundary — un-retargeted `composedPath()[0]` targets defeat it).
+- The overlay host mounts on `document.documentElement`, NOT `document.body` — canvas mode transforms `<body>`, and a transformed ancestor hijacks `position: fixed` for everything inside it. Don't "fix" the mount point back to body.
 - The Changes list lives INSIDE the composer's draft disclosure since 2026-07-09 — `.changes-section` hooks unchanged, just reparented (`index.ts` appends `changeList.root` to `feed.draftSlot` instead of a panel `changesSlot`). The disclosure is a div toggle (`.draft-disclosure.open`), not a `<details>`, and the drafts pill (`.draft-pill`) is its only opener.
 
 ## Cursor Cloud specific instructions
