@@ -676,6 +676,20 @@ button {
 .composer-send:hover { background: var(--control-hover); }
 .composer-send:disabled { opacity: 0.5; cursor: default; }
 .chat-disabled-reason { color: var(--text-faint); font: 400 var(--text-xs) var(--font-ui); padding: 0 2px; }
+` +
+// Canvas-mode chrome (design-canvas-mode spec): the header toggle just tints '.panel-mode'
+// like every other header button; the zoom pill is its own fixed-position affordance,
+// bottom-left (the panel/toggle/status cluster owns bottom-right). Colors/font copied
+// from #toggle/#status rather than invented.
+`.canvas-toggle.on { color: var(--accent); }
+.zoom-pill-wrap { position: fixed; left: 16px; bottom: 16px; z-index: 2147483647; }
+.zoom-pill-wrap[hidden] { display: none; }
+.zoom-pill-wrap .menu-btn { min-width: 52px; padding: 6px 10px; border-radius: 8px; }
+.zoom-pill {
+  background: var(--surface); color: var(--text-primary); border: 1px solid var(--border-strong);
+  font: 500 var(--text-md) var(--font-ui);
+}
+.zoom-pill:hover { background: var(--control-hover); }
 `
 
 export class Overlay {

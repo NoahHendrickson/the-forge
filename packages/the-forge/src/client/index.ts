@@ -4,6 +4,8 @@ import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { Dock } from './dock'
+import { CanvasMode } from './canvas'
+import { createMenuButton, type MenuButton } from './ui/menu'
 import {
   buildChangeRequestWithElements,
   renderMarkdown,
@@ -69,6 +71,11 @@ export class DesignMode {
   private drafts: DraftStore
   private panel: Panel
   private dock: Dock
+  private canvas: CanvasMode
+  /** Bottom-left zoom affordance (mirrors #toggle/#status's bottom-right cluster) — hidden
+   * until canvas mode is actually applied (design mode off ⇒ suspended ⇒ hidden too). */
+  private zoomPillWrap = document.createElement('div')
+  private zoomMenu: MenuButton
   private verifier: Verifier
   private verifierSummary = ''
   private changeList: ChangeList
@@ -162,6 +169,29 @@ export class DesignMode {
         (el) => this.handleBeforeEdit(el)
       )
     this.dock = dock ?? new Dock(overlay.host, this.panel, overlay.status, overlay.toggle)
+    this.canvas = new CanvasMode({
+      dock: this.dock,
+      hostContains: (t) => this.overlay.contains(t),
+      onChange: () => this.syncCanvasUi(),
+    })
+    this.zoomPillWrap.className = 'zoom-pill-wrap'
+    this.zoomPillWrap.hidden = true
+    this.zoomMenu = createMenuButton({
+      label: '100%',
+      opensUp: true,
+      popoverHost: this.zoomPillWrap,
+      items: () => [
+        { value: 'fit', label: 'Zoom to fit' },
+        { value: '0.5', label: '50%', checked: this.canvas.scale() === 0.5, separator: true },
+        { value: '1', label: '100%', checked: this.canvas.scale() === 1 },
+        { value: '2', label: '200%', checked: this.canvas.scale() === 2 },
+      ],
+      onSelect: (v) => (v === 'fit' ? this.canvas.zoomToFit() : this.canvas.setZoomCentered(Number(v))),
+    })
+    this.zoomMenu.button.classList.add('zoom-pill')
+    this.zoomPillWrap.appendChild(this.zoomMenu.button)
+    this.overlay.attachChrome(this.zoomPillWrap)
+    this.panel.canvasButton.addEventListener('click', () => this.canvas.setOn(!this.canvas.isOn()))
     this.verifier = new Verifier(this.session, this.drafts, (summary) => {
       this.verifierSummary = summary
       this.refreshStatus()
@@ -306,6 +336,17 @@ export class DesignMode {
     const count = this.drafts.elementCount()
     const applying = this.session.records().some((r) => r.stage === 'sent' || r.stage === 'applying')
     this.feed.setDraftState({ count, applying })
+  }
+
+  /** CanvasMode's onChange fires on every state change (setOn, resume, suspend, pan/zoom) —
+   * this must stay an IDEMPOTENT full repaint, not an incremental toggle, since a single user
+   * action (e.g. setOn(true)) can fire onChange more than once per call. */
+  private syncCanvasUi(): void {
+    const applied = this.canvas.isApplied()
+    this.zoomPillWrap.hidden = !applied
+    this.zoomMenu.button.textContent = `${Math.round(this.canvas.scale() * 100)}%`
+    this.panel.canvasButton.classList.toggle('on', this.canvas.isOn())
+    this.panel.canvasButton.title = this.canvas.isOn() ? 'Exit canvas mode' : 'Canvas mode'
   }
 
   /** Cancels the pending debounced draft-sync timer (if any) and runs syncDrafts()+persist()
@@ -527,6 +568,7 @@ export class DesignMode {
     this.overlay.setActive(on)
     if (on) {
       this.dock.enter()
+      this.canvas.resume()
       // Tokens (colors, text scale) are memoized module-globally (readTokens) for cheap
       // repeat access during a session — but that means a theme edit made while design
       // mode was INACTIVE (author tweaks CSS, HMR reloads styles) would otherwise be
@@ -564,6 +606,11 @@ export class DesignMode {
       this.pendingRestore = null
       this.drafts.compareAll(false) // previews survive exit — never leave the page stranded on "before"
       this.panel.hide()
+      // Must run BEFORE dock.exit(): suspend() clears the dock's canvasActive flag while the
+      // dock is still active, so the margin-push repaint stays coherent. Clearing it after
+      // exit() would leave the flag stale for the next enter() and silently suspend the
+      // margin push on re-entry.
+      this.canvas.suspend()
       this.dock.exit()
       this.verifier.stop()
       this.watch.stop()

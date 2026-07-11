@@ -2350,6 +2350,46 @@ describe('Dock integration (docked-panel spec)', () => {
   })
 })
 
+describe('Canvas-mode chrome + lifecycle wiring (design-canvas-mode spec Task 7)', () => {
+  // CanvasMode persists on/state to sessionStorage (canvas.ts) — a prior test's setOn(true)
+  // would otherwise leak into the next test's fresh CanvasMode instance via loadCanvasPrefs().
+  beforeEach(() => {
+    sessionStorage.clear()
+    vi.stubGlobal('scrollTo', vi.fn())
+  })
+
+  it('design-mode off suspends canvas (page restored) and design-mode on resumes it', () => {
+    const { mode } = fullSetup()
+    mode.setActive(true)
+    const btn = mode.panelRoot.querySelector('.canvas-toggle') as HTMLButtonElement
+    expect(btn).toBe(mode.panelRoot.querySelector('.panel-mode.canvas-toggle'))
+    btn.click()
+    expect(document.body.style.transform).toContain('scale(1)')
+    expect(btn.classList.contains('on')).toBe(true)
+
+    mode.setActive(false)
+    expect(document.body.style.transform).toBe('')
+
+    mode.setActive(true)
+    expect(document.body.style.transform).toContain('scale(')
+    mode.setActive(false)
+  })
+
+  it('the zoom pill is hidden until canvas mode is applied, then shows the live percentage', () => {
+    const { mode, overlay } = fullSetup()
+    mode.setActive(true)
+    const wrap = overlay.host.shadowRoot!.querySelector('.zoom-pill-wrap') as HTMLElement
+    expect(wrap.hidden).toBe(true)
+    const btn = mode.panelRoot.querySelector('.canvas-toggle') as HTMLButtonElement
+    btn.click()
+    expect(wrap.hidden).toBe(false)
+    const pill = wrap.querySelector('.zoom-pill') as HTMLButtonElement
+    expect(pill.textContent).toBe('100%')
+    mode.setActive(false)
+    expect(wrap.hidden).toBe(true)
+  })
+})
+
 describe('lifecycle persistence', () => {
   beforeEach(() => sessionStorage.clear())
 
