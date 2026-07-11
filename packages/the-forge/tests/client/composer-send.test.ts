@@ -18,11 +18,11 @@ function chipOf(feed: SessionFeed): HTMLElement {
   return feed.root.querySelector('.chat-chip') as HTMLElement
 }
 
-function setup(overrides: Partial<{ sendDraftsLeg: () => Promise<void>; hasDrafts: () => boolean; chatAvailable: () => boolean }> = {}) {
+function setup(overrides: Partial<{ sendDraftsLeg: () => Promise<boolean>; hasDrafts: () => boolean; chatAvailable: () => boolean }> = {}) {
   const feed = new SessionFeed()
   document.body.appendChild(feed.root)
   const postJson = vi.fn<(path: string, body: unknown) => Promise<Response>>()
-  const sendDraftsLeg = overrides.sendDraftsLeg ?? vi.fn(() => Promise.resolve())
+  const sendDraftsLeg = overrides.sendDraftsLeg ?? vi.fn(() => Promise.resolve(true))
   const hasDrafts = overrides.hasDrafts ?? (() => false)
   const chatAvailable = overrides.chatAvailable ?? (() => true)
   const composerSend = new ComposerSend({ feed, postJson, sendDraftsLeg, hasDrafts, chatAvailable })
@@ -58,8 +58,8 @@ describe('ComposerSend#send — orchestration', () => {
   })
 
   it('both drafts and text: awaits sendDraftsLeg before POSTing /session/say (drafts-first ordering)', async () => {
-    let resolveLeg!: () => void
-    const sendDraftsLeg = vi.fn(() => new Promise<void>((resolve) => (resolveLeg = resolve)))
+    let resolveLeg!: (ok: boolean) => void
+    const sendDraftsLeg = vi.fn(() => new Promise<boolean>((resolve) => (resolveLeg = resolve)))
     const { feed, postJson, composerSend } = setup({ sendDraftsLeg, hasDrafts: () => true })
     textareaOf(feed).value = 'also do this'
     postJson.mockResolvedValue(okResponse())
@@ -68,9 +68,27 @@ describe('ComposerSend#send — orchestration', () => {
     await Promise.resolve()
     expect(postJson).not.toHaveBeenCalled() // chat leg must not fire before the drafts leg settles
 
-    resolveLeg()
+    resolveLeg(true)
     for (let i = 0; i < 4; i++) await Promise.resolve()
     expect(postJson).toHaveBeenCalledWith('/__the-forge/session/say', { text: 'also do this', element: undefined })
+  })
+
+  // 2026-07-10 review: a failed /queue POST used to let the chat leg proceed anyway — a
+  // "apply these edits" message reached the agent with nothing queued. The drafts leg now
+  // reports failure (resolves false) and the chat leg is SKIPPED: the typed text stays in the
+  // textarea (nothing is swallowed — the prior pinned concern) and the drafts leg's own
+  // transient error row explains; the user re-sends both with one more ↑.
+  it('a failed drafts leg (resolves false) skips the chat leg and preserves the typed text', async () => {
+    const sendDraftsLeg = vi.fn(() => Promise.resolve(false))
+    const { feed, postJson, composerSend } = setup({ sendDraftsLeg, hasDrafts: () => true })
+    textareaOf(feed).value = 'apply these edits'
+    postJson.mockResolvedValue(okResponse())
+
+    composerSend.send()
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+
+    expect(postJson).not.toHaveBeenCalled()
+    expect(textareaOf(feed).value).toBe('apply these edits')
   })
 
   it('chatAvailable:false skips the chat leg even with non-empty text', async () => {
@@ -84,8 +102,8 @@ describe('ComposerSend#send — orchestration', () => {
   })
 
   it('captures text at call time — a later change to feed state does not affect the pending chat POST', async () => {
-    let resolveLeg!: () => void
-    const sendDraftsLeg = vi.fn(() => new Promise<void>((resolve) => (resolveLeg = resolve)))
+    let resolveLeg!: (ok: boolean) => void
+    const sendDraftsLeg = vi.fn(() => new Promise<boolean>((resolve) => (resolveLeg = resolve)))
     const { feed, postJson, composerSend } = setup({ sendDraftsLeg, hasDrafts: () => true })
     textareaOf(feed).value = 'original message'
     postJson.mockResolvedValue(okResponse())
@@ -93,7 +111,7 @@ describe('ComposerSend#send — orchestration', () => {
     composerSend.send()
     await Promise.resolve()
     textareaOf(feed).value = '' // user clears mid-flight — must not affect what gets said
-    resolveLeg()
+    resolveLeg(true)
     for (let i = 0; i < 4; i++) await Promise.resolve()
 
     expect(postJson).toHaveBeenCalledWith('/__the-forge/session/say', { text: 'original message', element: undefined })
@@ -134,7 +152,7 @@ describe('ComposerSend — chat leg result handling', () => {
     const postJson = vi.fn(() => new Promise<Response>((resolve) => (resolveSay = resolve)))
     const feed = new SessionFeed()
     document.body.appendChild(feed.root)
-    const composerSend = new ComposerSend({ feed, postJson, sendDraftsLeg: () => Promise.resolve(), hasDrafts: () => false, chatAvailable: () => true })
+    const composerSend = new ComposerSend({ feed, postJson, sendDraftsLeg: () => Promise.resolve(true), hasDrafts: () => false, chatAvailable: () => true })
     textareaOf(feed).value = 'original message'
 
     composerSend.send()

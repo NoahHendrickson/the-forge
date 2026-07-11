@@ -885,6 +885,41 @@ describe('composer send-everything verb + watch strip gating (Task 3)', () => {
     expect(textarea.value).toBe('') // the chat leg still ran its own clear-on-success
   })
 
+  // 2026-07-10 review (ordering race): "drafts apply before the chat turn" used to rest on
+  // /dispatch and /session/say racing over the network — if /say won, SessionManager sent the
+  // chat turn first and parked the pull nudge behind it. The drafts leg now resolves only after
+  // /dispatch settles, making the ordering structural: by the time /say leaves the browser, the
+  // embedded rung has already registered the nudge (or auto-started with it), and the server's
+  // nudge-before-FIFO flush does the rest.
+  it('both drafts and text: /session/say fires only AFTER /dispatch settles, not merely after /queue', async () => {
+    let resolveDispatch!: (v: { ok: boolean; json: () => Promise<unknown> }) => void
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return Promise.resolve({ ok: true, json: async () => ({ id: 'q1' }) })
+      if (url === '/__the-forge/dispatch') return new Promise((resolve) => (resolveDispatch = resolve))
+      if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'ready' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'also do this'
+    clickSend(panel.root)
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    let urls = fetchMock.mock.calls.map(([url]) => url)
+    expect(urls).toContain('/__the-forge/queue')
+    expect(urls).toContain('/__the-forge/dispatch')
+    expect(urls).not.toContain('/__the-forge/session/say') // dispatch unsettled — chat must hold
+
+    resolveDispatch({ ok: true, json: async () => ({ rung: 'embedded', detail: '' }) })
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    urls = fetchMock.mock.calls.map(([url]) => url)
+    expect(urls).toContain('/__the-forge/session/say')
+  })
+
   // Review fix 1 (Important): the old button flashed 'Send failed' on a failed /queue POST —
   // with the button retired, the drafts leg must surface its failure through the same
   // transient-error mechanism the chat leg already uses (renderTransientError), or a failed
@@ -926,9 +961,12 @@ describe('composer send-everything verb + watch strip gating (Task 3)', () => {
     expect(errorRow?.textContent).toBe('failed to queue changes — try again')
   })
 
-  // Pinned semantics (review fix 1): the two legs are independent by design — a failed queue
-  // POST must not swallow the typed message; the chat leg still fires, after the queue attempt.
-  it('queue failure with text present: error row renders AND the chat leg still fires, after the queue attempt', async () => {
+  // REVISED pinned semantics (2026-07-10 review, supersedes review fix 1's "the chat leg still
+  // fires"): a failed /queue POST now SKIPS the chat leg — the message often refers to the edits
+  // ("apply these edits"), and sending it with nothing queued misleads the agent. The original
+  // pin's concern (never swallow the typed message) still holds: the text stays in the textarea
+  // untouched and the error row explains, so one more ↑ re-sends both together.
+  it('queue failure with text present: error row renders, the chat leg is SKIPPED, and the text is preserved', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === '/__the-forge/queue') return Promise.reject(new Error('network down'))
       if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
@@ -941,17 +979,15 @@ describe('composer send-everything verb + watch strip gating (Task 3)', () => {
     const btn = document.querySelector('button')! as HTMLElement
     drafts.apply(btn, 'padding-top', '24px')
     const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
-    textarea.value = 'still say this'
+    textarea.value = 'still typed this'
     clickSend(panel.root)
     for (let i = 0; i < 10; i++) await Promise.resolve()
     const errorRow = panel.root.querySelector('.session-error-row')
     expect(errorRow?.textContent).toBe('failed to queue changes — try again')
     const urls = fetchMock.mock.calls.map(([url]) => url)
-    const queueIndex = urls.indexOf('/__the-forge/queue')
-    const sayIndex = urls.indexOf('/__the-forge/session/say')
-    expect(queueIndex).toBeGreaterThanOrEqual(0)
-    expect(sayIndex).toBeGreaterThan(queueIndex) // chat still after the queue attempt — ordering holds even on failure
-    expect(textarea.value).toBe('') // the chat leg itself succeeded, so its clear-on-success ran
+    expect(urls).toContain('/__the-forge/queue')
+    expect(urls).not.toContain('/__the-forge/session/say') // nothing queued — don't mislead the agent
+    expect(textarea.value).toBe('still typed this') // never swallow the typed message
   })
 
   // Review fix 2 (Minor): the chat text is captured ONCE at onSend entry — a user clearing (or
