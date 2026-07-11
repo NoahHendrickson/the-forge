@@ -73,6 +73,27 @@ describe('discoverEndpoint', () => {
     expect(discoverEndpoint(dir)).toEqual({ port: 5001, host: '127.0.0.1', secret: 'sekret' })
   })
 
+  // The plugin only ever records loopback-reachable hosts, so a non-loopback host means the
+  // file wasn't written by our server — a planted endpoint file trying to point the agent's
+  // pull loop (and its auto-applied edits) at a remote server (2026-07-10 security review).
+  it('skips entries whose host is not loopback (planted endpoint file)', () => {
+    writeFixture(`endpoint-${process.pid}.json`, { port: 443, host: 'attacker.example.com', pid: process.pid, secret: 's' })
+    expect(discoverEndpoint(dir)).toBeNull()
+  })
+
+  it('a newer non-loopback entry loses to an older loopback one instead of shadowing it', () => {
+    writeFixture(`endpoint-${process.pid}.json`, { port: 5001, host: '127.0.0.1', pid: process.pid }, 0)
+    writeFixture('endpoint-11111.json', { port: 443, host: 'evil.example.com', pid: process.pid }, 5000)
+    expect(discoverEndpoint(dir)).toEqual({ port: 5001, host: '127.0.0.1' })
+  })
+
+  it('accepts every loopback/wildcard host shape the plugin actually writes', () => {
+    for (const host of [undefined, 'localhost', '127.0.0.1', '::1', '::', '0.0.0.0']) {
+      writeFixture(`endpoint-${process.pid}.json`, { port: 5001, host, pid: process.pid })
+      expect(discoverEndpoint(dir)?.port, `host ${String(host)}`).toBe(5001)
+    }
+  })
+
   it('omits secret when absent from the endpoint file', () => {
     writeFixture(`endpoint-${process.pid}.json`, { port: 5001, host: '127.0.0.1', pid: process.pid })
     const result = discoverEndpoint(dir)

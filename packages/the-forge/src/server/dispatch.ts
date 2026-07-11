@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { SCOPE_GUARDRAIL, NO_PREVIEW_GUARDRAIL } from '../shared/guardrails'
 
 /** 'embedded' and 'watcher' are produced by the /dispatch endpoint's short-circuits (see
  * endpoints.ts + server/watchers.ts), never by the ladder below. 'embedded' means the change
@@ -250,9 +251,13 @@ async function tryAppleScript(
  * untouched — their reminder arrives via the MCP tool result. */
 export function augmentDispatchMarkdown(agent: DispatchOpts['agent'], markdown: string, pendingId: string | null): string {
   if (agent !== 'cursor' || pendingId === null) return markdown
+  // Short id, same as renderItems in mcp/protocol.ts — Queue.mark resolves unique prefixes.
+  // The guardrails ride here because the deeplink is the one rung whose markdown travels with
+  // no instruction wrapper of its own (see the placement map in src/shared/guardrails.ts).
   return (
     markdown +
-    `\n\nWhen done, call the \`mark_applied\` tool from the \`the-forge\` MCP server with ids: ${pendingId} and status "applied" (or "failed" with a one-line note).`
+    `\n\n${SCOPE_GUARDRAIL}\n${NO_PREVIEW_GUARDRAIL}` +
+    `\n\nWhen done, call the \`mark_applied\` tool from the \`the-forge\` MCP server with ids: ${pendingId.slice(0, 8)} and status "applied" (or "failed" with a one-line note).`
   )
 }
 

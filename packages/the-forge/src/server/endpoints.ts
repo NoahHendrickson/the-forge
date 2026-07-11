@@ -603,9 +603,15 @@ export function createForgeMiddleware(
 }
 
 export function writeEndpointFile(dir: string, port: number, host?: string, secret?: string): string {
-  fs.mkdirSync(dir, { recursive: true })
+  // Owner-only (0700 dir / 0600 file): this file carries the auth secret, and edit-tier tools
+  // are auto-approved in the embedded session — any local reader of the secret can drive code
+  // writes into the project via POST /session/say. The explicit chmod matters: writeFileSync's
+  // mode applies only at creation, so overwriting a looser file from a pre-hardening plugin
+  // version (or after pid reuse) would otherwise keep it world-readable.
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const filePath = path.join(dir, `endpoint-${process.pid}.json`)
-  fs.writeFileSync(filePath, JSON.stringify({ port, host, pid: process.pid, secret }))
+  fs.writeFileSync(filePath, JSON.stringify({ port, host, pid: process.pid, secret }), { mode: 0o600 })
+  fs.chmodSync(filePath, 0o600)
   return filePath
 }
 

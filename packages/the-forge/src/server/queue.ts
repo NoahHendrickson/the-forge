@@ -156,7 +156,15 @@ export class Queue {
   mark(ids: string[], status: 'applied' | 'failed', note?: string): QueueItem[] {
     const marked: QueueItem[] = []
     for (const id of ids) {
-      const item = this.items.find((i) => i.id === id)
+      // Agent-facing text renders ids as 8-char prefixes (renderItems in mcp/protocol.ts —
+      // token cost), so accept a unique prefix as well as the full id. An ambiguous prefix
+      // matches nothing rather than guessing — the unresolved item re-queues via the
+      // stale-claim timeout instead of the wrong item going terminal.
+      let item = this.items.find((i) => i.id === id)
+      if (!item && id.length >= 8) {
+        const prefixed = this.items.filter((i) => i.id.startsWith(id))
+        if (prefixed.length === 1) item = prefixed[0]
+      }
       if (!item) continue
       if (item.status === 'applied' || item.status === 'failed') continue // already terminal — do not clobber
       item.status = status
@@ -231,7 +239,10 @@ export class Queue {
   }
 
   private persist(): void {
-    fs.mkdirSync(this.dir, { recursive: true })
+    // Owner-only like writeEndpointFile (src/server/endpoints.ts): queue.json holds
+    // change-request markdown (project source excerpts) and lives beside the secret-bearing
+    // endpoint file. The rename below carries the tmp file's 0600 onto queue.json.
+    fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 })
     const merged = this.mergeWithDisk()
 
     // Apply the shared pruning rule to the merged array (stale disk items must also be pruned) —
@@ -248,7 +259,7 @@ export class Queue {
     // Scoped by pid: two server processes writing concurrently must not share a tmp path, or one
     // process's partial write/rename could race with the other's.
     const tmpFile = `${this.file}.tmp.${process.pid}`
-    fs.writeFileSync(tmpFile, JSON.stringify(finalMerged, null, 2))
+    fs.writeFileSync(tmpFile, JSON.stringify(finalMerged, null, 2), { mode: 0o600 })
     fs.renameSync(tmpFile, this.file)
   }
 }

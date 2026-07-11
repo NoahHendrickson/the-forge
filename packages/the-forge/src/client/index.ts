@@ -7,6 +7,7 @@ import { Dock } from './dock'
 import {
   buildChangeRequestWithElements,
   renderMarkdown,
+  renderStandaloneMarkdown,
   rebuildRequestFromSeed,
   type ChangeRequest,
   type ElementChange,
@@ -240,7 +241,10 @@ export class DesignMode {
       // ticks every ~2s while a request is pending) — persisting on every tick regardless would
       // defeat "storage writes only on state changes" (final-review F4). Only a real stage
       // transition (sent -> applying, applying -> done, etc.) warrants a sessionStorage write.
-      if (this.session.applyStage(e)) this.persist()
+      // Routed through the ChangeList delegate (NOT session.applyStage directly): the delegate
+      // also lifts clear()'s row suppression, so a stage event after a design-mode off/on cycle
+      // resurrects the in-flight rows (regression pinned 2026-07-10).
+      if (this.changeList.applyStage(e)) this.persist()
     })
     overlay.toggle.addEventListener('click', () => this.setActive(!this.active))
     overlay.copyButton.addEventListener('click', () => {
@@ -253,7 +257,10 @@ export class DesignMode {
         this.flashButton(overlay.copyButton, 'No changes', 'Copy for agent')
         return
       }
-      const md = renderMarkdown(request)
+      // Standalone render (guardrails included): the clipboard payload is pasted into an
+      // arbitrary agent with no command text in context — unlike the queue path at
+      // sendDrafts below, which stays lean because its delivery wrapper carries them.
+      const md = renderStandaloneMarkdown(request)
       navigator.clipboard
         .writeText(md)
         .then(() => this.flashButton(overlay.copyButton, 'Copied ✓', 'Copy for agent'))
@@ -363,9 +370,11 @@ export class DesignMode {
   }
 
   /** Registers a freshly-queued send under its server-assigned id — the single path shared by
-   * Send's onSendOk and resend()'s re-queue success handler. */
+   * Send's onSendOk and resend()'s re-queue success handler. Goes through the ChangeList
+   * delegate (NOT session.register directly) so a new send also lifts clear()'s row
+   * suppression after a design-mode off/on cycle (regression pinned 2026-07-10). */
   private registerQueuedSend(id: string, seeds: SentSeed[]): void {
-    this.session.register(id, seeds)
+    this.changeList.addSent(id, seeds)
     this.verifier.start()
     this.persist()
   }
@@ -423,30 +432,35 @@ export class DesignMode {
   /** The drafts leg of the send-everything verb (composer consolidation Task 3) — extracted
    * verbatim from the old standalone 'Send to agent' button's click handler (the button itself
    * is retired: the composer's ↑ is the only send surface now, via ComposerSend#send in
-   * composer-send.ts, which this method is injected into as sendDraftsLeg). Behavior is
-   * unchanged — queue POST -> dispatch POST -> lifecycle row registration — only the
-   * button-flash feedback (flashButton(overlay.sendButton, ...)) is gone, since there is no
-   * button left to flash. Resolves once the /queue leg SETTLES (registered or failed) —
-   * deliberately NOT once /dispatch also settles — so ComposerSend#send can chain the chat leg
-   * immediately after, matching the server's nudge-before-FIFO ordering (edits land in the
-   * queue ahead of the chat turn) without stalling on dispatch's best-effort round trip.
+   * composer-send.ts, which this method is injected into as sendDraftsLeg). Queue POST ->
+   * dispatch POST -> lifecycle row registration; the button-flash feedback is gone, since there
+   * is no button left to flash.
+   *
+   * Resolves TRUE only once /dispatch has also settled (2026-07-10 review) — not at the /queue
+   * 200. This is what makes "drafts apply before the chat turn" structural rather than a
+   * network race: /dispatch's embedded rung registers the pull nudge (or auto-starts the
+   * session with it) before ComposerSend fires /session/say, so the server's nudge-before-FIFO
+   * flush is guaranteed to see the nudge first. Resolves FALSE when the /queue POST failed —
+   * ComposerSend skips the chat leg on false (nothing was queued; the typed text survives in
+   * the textarea). No-op outcomes (no-changes/already-sent/re-entrancy) resolve true: the
+   * gesture degrades to chat-only.
    *
    * This method (and draftsInFlight above) stayed here rather than moving into composer-send.ts
    * whole — see ComposerSendOpts#sendDraftsLeg's doc comment in composer-send.ts for why: it
    * reaches into DraftStore/LifecycleSession/Verifier/ChangeList state and shares its
    * queue/dispatch plumbing with resend(), below. */
-  private sendDrafts(): Promise<void> {
-    if (this.draftsInFlight) return Promise.resolve() // re-entrancy guard: a POST is already in flight
+  private sendDrafts(): Promise<boolean> {
+    if (this.draftsInFlight) return Promise.resolve(true) // re-entrancy guard: a POST is already in flight
     // R2 F-C: prepareSend reads the DraftStore directly (always current), so this flush isn't
     // needed for the request itself — it's needed so persist()/the Changes list are coherent
     // with what's about to be sent, rather than lagging behind by up to 300ms.
     this.flushDraftSync()
     const prepared = this.prepareSend()
-    if (prepared === 'no-changes' || prepared === 'already-sent') return Promise.resolve()
+    if (prepared === 'no-changes' || prepared === 'already-sent') return Promise.resolve(true)
     const { request, pairs } = prepared
     const md = renderMarkdown(request)
     this.draftsInFlight = true
-    return new Promise<void>((resolveQueueLeg) => {
+    return new Promise<boolean>((resolveDraftsLeg) => {
       const onSendFailed = (): void => {
         // The old button flashed 'Send failed' here — with the button retired, the same
         // transient-error row the chat leg already uses is the surviving failure surface
@@ -454,21 +468,22 @@ export class DesignMode {
         // edits were sent.
         this.feed.renderTransientError('failed to queue changes — try again')
         this.draftsInFlight = false
-        resolveQueueLeg()
+        resolveDraftsLeg(false)
       }
-      // Dispatch reaches for the user's already-RUNNING agent session (tmux/AppleScript/Cursor
-      // deeplink) so they never have to type anything but Enter — see server/dispatch.ts. A
-      // dispatch failure (network hiccup, non-200) must NOT undo the send: the request is
-      // already safely queued, so we degrade to the same copy as rung 'manual' (no visible
-      // label anymore, but onSendComplete/the guard release must still happen).
+      // Dispatch reaches for the user's already-RUNNING agent session (embedded rung first,
+      // then tmux/AppleScript/Cursor deeplink) so they never have to type anything but Enter —
+      // see server/dispatch.ts. A dispatch failure (network hiccup, non-200) must NOT undo the
+      // send: the request is already safely queued, so we degrade to the same copy as rung
+      // 'manual' and still resolve true — the chat turn may proceed; a linked watcher or
+      // /forge-design will deliver the edits.
       const onDispatchSettled = (): void => {
         this.draftsInFlight = false
         this.onSendComplete?.()
+        resolveDraftsLeg(true)
       }
       const onSendOk = (id: string): void => {
         const seeds = this.pairsToSeeds(pairs)
         this.registerQueuedSend(id, seeds)
-        resolveQueueLeg() // queue leg settled — dispatch continues below, unawaited
         this.postDispatch(onDispatchSettled)
       }
       this.queueRequest(request, md, onSendOk, onSendFailed)

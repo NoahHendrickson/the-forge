@@ -22,6 +22,16 @@ describe('Queue', () => {
     expect(onDisk[0].id).toBe(item.id)
   })
 
+  // queue.json holds change-request markdown (project source excerpts) and .the-forge/ sits
+  // next to the secret-bearing endpoint file — both stay owner-only (2026-07-10 security review).
+  it('persists queue.json owner-only (0600) in an owner-only dir (0700)', () => {
+    const fresh = path.join(dir, 'nested', '.the-forge')
+    const q = new Queue(fresh)
+    q.add({}, '# md')
+    expect(fs.statSync(path.join(fresh, 'queue.json')).mode & 0o777).toBe(0o600)
+    expect(fs.statSync(fresh).mode & 0o777).toBe(0o700)
+  })
+
   it('pull claims all pending items', () => {
     const q = new Queue(dir)
     const a = q.add({}, 'a')
@@ -40,6 +50,33 @@ describe('Queue', () => {
     expect(marked[0].status).toBe('applied')
     expect(marked[0].note).toBe('done')
     expect(q.mark(['nope'], 'applied')).toEqual([]) // unknown ids ignored
+  })
+
+  // Agent-facing text renders ids as 8-char prefixes (mcp/protocol.ts renderItems — full
+  // UUIDs cost ~15-22 tokens each and appeared 3x per item), so mark() must resolve a
+  // unique prefix back to the full id. Full ids keep working; an ambiguous prefix marks
+  // nothing rather than guessing.
+  it('mark resolves a unique 8-char id prefix', () => {
+    const q = new Queue(dir)
+    const a = q.add({}, 'a')
+    q.pull()
+    const marked = q.mark([a.id.slice(0, 8)], 'applied')
+    expect(marked).toHaveLength(1)
+    expect(q.get(a.id)!.status).toBe('applied')
+  })
+
+  it('mark ignores an ambiguous prefix instead of guessing', () => {
+    const q = new Queue(dir)
+    const a = q.add({}, 'a')
+    const b = q.add({}, 'b')
+    // Force two items onto the same 8-char prefix.
+    ;(q as unknown as { items: Array<{ id: string }> }).items[0].id = 'aaaaaaaa-1111-4111-8111-111111111111'
+    ;(q as unknown as { items: Array<{ id: string }> }).items[1].id = 'aaaaaaaa-2222-4222-8222-222222222222'
+    q.pull()
+    expect(q.mark(['aaaaaaaa'], 'applied')).toEqual([])
+    expect(q.get('aaaaaaaa-1111-4111-8111-111111111111')!.status).toBe('claimed')
+    void a
+    void b
   })
 
   it('does not let a stale mark() clobber an item already in a terminal state (double-claim)', () => {

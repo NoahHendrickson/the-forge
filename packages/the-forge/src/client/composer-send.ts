@@ -19,8 +19,10 @@ export interface ComposerSendOpts {
    * shares its queue/dispatch POST plumbing with resend() — pulling all of that in here would
    * leave ComposerSend re-exposing nearly every DesignMode internal as a constructor option for
    * no real encapsulation win, so the leg stays put and this module only needs to know WHEN it
-   * settles (queued+dispatched, or bailed out early on no-changes/already-sent/failure). */
-  sendDraftsLeg: () => Promise<void>
+   * settles and HOW: resolves true once the request is queued AND /dispatch has settled (or the
+   * leg was a no-op: no-changes/already-sent/re-entrancy), false when the /queue POST failed —
+   * false means the chat leg must not fire (2026-07-10 review; see send()). */
+  sendDraftsLeg: () => Promise<boolean>
   /** this.drafts.elementCount() > 0 at click time — decides send()'s branch (await the drafts
    * leg before the chat leg vs. fire the chat leg immediately), without this module needing its
    * own DraftStore reference. Also preserves a tick-count detail worth calling out: when this is
@@ -43,14 +45,21 @@ export interface ComposerSendOpts {
  * (nudge-before-FIFO), so queuing edits before the chat POST keeps client-observed send order
  * consistent with server-observed apply order.
  *
+ * Ordering is STRUCTURAL, not a race (2026-07-10 review): for a both-legs gesture, send()
+ * awaits the drafts leg through its /dispatch POST — by the time /session/say leaves the
+ * browser, the embedded rung has already registered the pull nudge (or auto-started the session
+ * with it), so the server's nudge-before-FIFO flush is guaranteed to apply the edits before
+ * answering the chat turn. (Previously the leg resolved at the /queue 200 and /dispatch raced
+ * /say over the network; a winning /say made the agent answer the chat before pulling.) The
+ * latency cost is small: with chat available the embedded rung short-circuits /dispatch before
+ * the keystroke ladder, so it settles in one fast round trip.
+ *
  * TWO independent in-flight flags exist across this extraction — draftsInFlight (stays in
  * DesignMode, guarding the injected sendDraftsLeg) and chatInFlight (owned here, guarding
  * sendChat) — and that split is deliberate, NOT a shortcut to be collapsed into one shared phase
- * enum. The two legs deliberately OVERLAP in time: send() awaits only the drafts leg's /queue
- * POST, not its /dispatch POST (fire-and-forget, kicked off and left to settle on its own) — so
- * the chat leg's /session/say POST can already be in flight while the drafts leg's dispatch is
- * still running. A single enum cannot represent "queue done, dispatch still running, chat also
- * running" without inventing states nothing else needs — keep both flags.
+ * enum: the legs can still overlap (a drafts-only send's dispatch can be in flight while a
+ * follow-up chat-only gesture POSTs /say), and a single enum cannot represent that without
+ * inventing states nothing else needs — keep both flags.
  */
 export class ComposerSend {
   private chatInFlight = false
@@ -75,8 +84,17 @@ export class ComposerSend {
     const proceedWithChat = (): void => {
       if (text && chatAvailable) void this.sendChat(text)
     }
-    if (hasDrafts) this.opts.sendDraftsLeg().then(proceedWithChat)
-    else proceedWithChat()
+    // A failed drafts leg (queue POST failed) SKIPS the chat leg: the message often refers to
+    // the edits, and sending it with nothing queued misleads the agent. Nothing is swallowed —
+    // the text stays in the textarea (sendChat never ran, so no clear) and the drafts leg's own
+    // transient error row explains; one more ↑ re-sends both together.
+    if (hasDrafts) {
+      void this.opts.sendDraftsLeg().then((ok) => {
+        if (ok) proceedWithChat()
+      })
+    } else {
+      proceedWithChat()
+    }
   }
 
   /** The chat leg of the send-everything verb — POSTs the given text + the attached chip via

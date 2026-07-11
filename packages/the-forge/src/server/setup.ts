@@ -160,7 +160,9 @@ export function ensureDevtoolsUuid(forgeDir: string): string {
     // no file yet — fall through and mint one
   }
   const uuid = randomUUID()
-  fs.mkdirSync(forgeDir, { recursive: true })
+  // 0700 like every other .the-forge/ creator (endpoints/queue/manager): whichever creator runs
+  // first sets the dir mode, and the dir gates the secret-bearing endpoint file beside this one.
+  fs.mkdirSync(forgeDir, { recursive: true, mode: 0o700 })
   fs.writeFileSync(uuidFile, uuid, { mode: 0o644 })
   return uuid
 }

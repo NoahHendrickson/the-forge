@@ -476,7 +476,13 @@ describe('POST /__the-forge/dispatch', () => {
       expect(res.statusCode).toBe(200)
       expect(receivedOpts.markdown).toContain('# md body')
       expect(receivedOpts.markdown).toContain('mark_applied')
-      expect(receivedOpts.markdown).toContain(added.id)
+      // Short id, same as renderItems in mcp/protocol.ts — Queue.mark resolves unique prefixes.
+      expect(receivedOpts.markdown).toContain(added.id.slice(0, 8))
+      expect(receivedOpts.markdown).not.toContain(added.id)
+      // The deeplink is the one rung whose markdown travels with no instruction wrapper, so
+      // the guardrails ride the augmentation here instead of every queued item.
+      expect(receivedOpts.markdown).toContain('this call site only')
+      expect(receivedOpts.markdown).toContain('Do not run the app')
     })
 
     it('does not append the trailer for claude-code (the MCP tool result carries the reminder there)', async () => {
@@ -994,6 +1000,23 @@ describe('writeEndpointFile', () => {
     expect(files).toHaveLength(1)
     const data = JSON.parse(fs.readFileSync(path.join(dir, files[0]), 'utf8'))
     expect(data.port).toBe(6000)
+  })
+
+  // The endpoint file carries the auth secret, and edit-tier tools are auto-approved in the
+  // embedded session — any local reader of the secret can drive code writes into the project.
+  // Owner-only perms are the local-user gate (2026-07-10 security review, finding 1).
+  it('writes the secret-bearing file owner-only (0600) inside an owner-only dir (0700)', () => {
+    const fresh = path.join(dir, 'nested', '.the-forge')
+    const filePath = writeEndpointFile(fresh, 5199, '127.0.0.1', 'my-secret')
+    expect(fs.statSync(filePath).mode & 0o777).toBe(0o600)
+    expect(fs.statSync(fresh).mode & 0o777).toBe(0o700)
+  })
+
+  it('re-tightens a pre-existing looser endpoint file on overwrite', () => {
+    const filePath = writeEndpointFile(dir, 5199)
+    fs.chmodSync(filePath, 0o644) // e.g. left behind by a pre-hardening plugin version
+    writeEndpointFile(dir, 6000, '127.0.0.1', 's')
+    expect(fs.statSync(filePath).mode & 0o777).toBe(0o600)
   })
 })
 

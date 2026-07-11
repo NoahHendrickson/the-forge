@@ -19,6 +19,21 @@ function isAlive(pid: number): boolean {
   }
 }
 
+/** Hosts our own server can legitimately record: loopback names/addresses and the wildcard
+ * binds baseUrl (src/mcp/url.ts) maps to loopback. Anything else means the endpoint file was
+ * NOT written by our plugin — a planted file could otherwise point the pull loop (whose
+ * change requests the agent auto-applies as edits) at an attacker-controlled server
+ * (2026-07-10 security review, finding 2). The trade-off — a dev server deliberately bound to
+ * a single non-loopback interface loses MCP discovery — is accepted: the bin runs on the same
+ * machine, so loopback is the only transport it ever needs. */
+function isLoopbackHost(host: string | undefined): boolean {
+  if (host === undefined) return true
+  if (host === 'localhost' || host === '::1' || host === '::' || host === '0.0.0.0') return true
+  if (host.startsWith('127.')) return true // 127.0.0.0/8, e.g. 127.0.0.1
+  if (host === '::ffff:127.0.0.1') return true // IPv4-mapped loopback
+  return false
+}
+
 function readEntry(filePath: string): { data: EndpointFileData; mtimeMs: number } | null {
   try {
     const raw = fs.readFileSync(filePath, 'utf8')
@@ -56,6 +71,8 @@ export function discoverEndpoint(dir: string): ForgeEndpoint | null {
     if (!entry) continue
     if (typeof entry.data.pid !== 'number' || !isAlive(entry.data.pid)) continue
     if (typeof entry.data.port !== 'number') continue
+    if (entry.data.host !== undefined && typeof entry.data.host !== 'string') continue
+    if (!isLoopbackHost(entry.data.host)) continue
     if (!best || entry.mtimeMs > best.mtimeMs) best = entry
   }
 

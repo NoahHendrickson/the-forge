@@ -1,10 +1,10 @@
-# The Forge — Handoff (updated 2026-07-04, post-overnight)
+# The Forge — Handoff (updated 2026-07-10)
 
-**Read [/CLAUDE.md](../CLAUDE.md) first** — it owns the what/why, commands, architecture map, MCP contract, hard product constraints, conventions, and gotchas. This file holds process and session state: how work gets executed and reviewed with this user, and what's next.
+**Read [/CLAUDE.md](../CLAUDE.md) first** — it owns the what/why, commands, architecture map, MCP contract, hard product constraints, conventions, and gotchas. This file holds process conventions and a coarse state pointer: how work gets executed and reviewed with this user, and what's next. Fine-grained session state lives in auto-memory (see Working agreements), not here — this file only needs updating at milestone boundaries.
 
-State: **v1 COMPLETE.** M1, M2a, M2b-1, M2b-2, M3, M4, M5 + the panel visual overhaul all merged to `main` and pushed. Gate: `npm test` at root (typecheck + full suite), `./scripts/check-prod-clean.sh` (prod purity + package-size budget). Owner: Noey (product designer; the product's target user).
+State: **v1 + watch mode + Next.js adapter + panel redesign + embedded sessions all COMPLETE and on `main`.** Shipped since the v1 line (M1–M5): watch mode (`/forge-watch` long-poll), the Next 15/16 adapter (both routers, both dev bundlers), the designer panel redesign + layout/fill/stroke/sizing/input-polish milestones, prompt mode → embedded sessions (milestones A+B: the dev server spawns `claude -p` as the dispatch ladder's top rung, with in-overlay approvals and a streamed session feed) → composer consolidation (the chat composer's ↑ is the only send surface; the old "Send to agent" button is retired), and the npm publish: the package was renamed `the-forge` → **`forge-mode`** (npm typosquat block, 2026-07-10) and v0.1.0 is live on npm. Gate: `npm test` at root (typecheck + full suite), `./scripts/check-prod-clean.sh` (prod purity + package-size budget). Owner: Noey (product designer; the product's target user).
 
-The full loop is user-verified live: panel edit → Send → dispatch ladder types `/forge-design` into the running Claude Code session (zero keystrokes) → agent pulls via MCP, applies to source → browser verifies computed styles → Implemented ✓.
+The full loop is user-verified live: panel edit → ↑ in the composer → embedded session (or linked watcher / dispatch ladder) pulls via MCP, applies to source → browser verifies computed styles → Implemented ✓.
 
 ## Process conventions (these built the whole repo — keep them)
 
@@ -24,12 +24,13 @@ Track A (panel visual cleanup), Track B (M2b-2: typography/fill/stroke/color pic
 1. Effects section (box-shadow, blur/backdrop-filter) — biggest remaining Figma-parity gap (spec §6 v2 tier).
 2. Gradients / background-image in Fill; Position section (spec v2, partial).
 3. Quick-apply mode (spec §7, optional, deliberately not primary).
-4. Real Channels adapter — blocked on the Claude Code preview flag; the rung is an inert stub behind `experimentalChannels`. Superseded in practice by watch mode (`/forge-watch` + `wait_for_design_edits` long-poll, 2026-07-04): a linked session already gets zero-keystroke delivery without the preview. Revisit only if Channels ships something the long-poll can't do.
-5. panel.ts Stage-2 split (section modules behind a PanelContext interface) — do BEFORE the next panel-feature milestone; Stage 1 (panel-specs/panel-readers) landed 2026-07-04.
-6. Deferred nits (review-ledger minors): multi-select Compare keyed to first element; `auto`/`normal` displays as 0 in multi fields; `double`/`groove` border styles read as "None"; Cursor deeplink untested against real Cursor (6000-char cap is a chosen constant); tmux rung assumes `pane_current_command` reports `claude`/`codex` (wrapper-launched agents may report `node`); client runs two /status pollers (verifier @2s while sends pending, watch probe @5s while design mode on) — PR #1 review suggested unifying into one StatusPoller; deferred as a behavioral refactor of proven verifier timing, do it when next touching the verifier.
+4. Codex/Cursor embedded-session adapters (milestone C of embedded sessions) — `SessionAdapter` (src/server/session/adapter.ts) is the seam; ClaudeAdapter is the only implementation so far.
+5. Real Channels adapter — blocked on the Claude Code preview flag; the rung is an inert stub behind `experimentalChannels`. Superseded twice over: watch mode (2026-07-04) and now the embedded rung both deliver zero-keystroke sends. Revisit only if Channels ships something these can't do.
+6. ~~panel.ts Stage-2 split~~ — DONE across the panel milestones (panel-token-ui, panel-layout, panel-fillstroke extractions all landed by 2026-07-07).
+7. Deferred nits (review-ledger minors): multi-select Compare keyed to first element; `auto`/`normal` displays as 0 in multi fields; `double`/`groove` border styles read as "None"; Cursor deeplink untested against real Cursor (6000-char cap is a chosen constant); tmux rung assumes `pane_current_command` reports `claude`/`codex` (wrapper-launched agents may report `node`); client runs two /status pollers (verifier @2s while sends pending, watch probe @5s while design mode on) — PR #1 review suggested unifying into one StatusPoller; deferred as a behavioral refactor of proven verifier timing, do it when next touching the verifier.
 
 ## Working agreements with this user
 
 - They're a designer: show, don't tell (screenshots, before/after); ask real design decisions via options, decide the technical ones yourself.
 - Verify claims live before reporting done; report review findings honestly (they respond well to "the review caught X").
-- Update `~/.claude/projects/-Users-noey/memory/the-forge-project.md` (auto-memory) at milestone boundaries.
+- Update auto-memory at milestone boundaries: the index is `~/.claude/projects/-Users-noey-Developer-the-forge/memory/MEMORY.md`, one file per fact beside it.

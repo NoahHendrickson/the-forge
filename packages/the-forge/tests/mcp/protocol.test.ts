@@ -90,11 +90,30 @@ describe('handleMessage', () => {
     expect(result.isError).toBeUndefined()
     expect(result.content).toHaveLength(1)
     const text = result.content[0].text
-    expect(text).toContain('--- request a1 (created 2026-01-01T00:00:00.000Z) ---\n## Change one')
-    expect(text).toContain('--- request b2 (created 2026-01-02T00:00:00.000Z) ---\n## Change two')
+    expect(text).toContain('--- request a1 ---\n## Change one')
+    expect(text).toContain('--- request b2 ---\n## Change two')
     expect(text).toContain('a1')
     expect(text).toContain('b2')
     expect(text.toLowerCase()).toContain('mark_applied')
+    // The created-at timestamp is deliberately NOT rendered — it was an undocumented second
+    // server-data interpolation and pure token cost (2026-07-10 cost review).
+    expect(text).not.toContain('created')
+  })
+
+  it('renders UUID-length ids as 8-char prefixes (Queue.mark accepts unique prefixes)', async () => {
+    const be = backend({
+      pull: async () => [
+        { id: '3f6c2a10-9d2e-4b7f-8a1c-5e0d9b3c7a21', markdown: '## Long-id change', createdAt: '2026-01-01T00:00:00.000Z' },
+      ],
+    })
+    const res = await handleMessage(
+      { jsonrpc: '2.0', id: 31, method: 'tools/call', params: { name: 'pull_design_edits', arguments: {} } },
+      be
+    )
+    const text = (res as { result: { content: Array<{ text: string }> } }).result.content[0].text
+    expect(text).toContain('--- request 3f6c2a10 ---')
+    expect(text).toContain('mark_applied with ids: 3f6c2a10.')
+    expect(text).not.toContain('3f6c2a10-9d2e') // full UUID never reaches the model
   })
 
   it('tools/call pull_design_edits with empty queue says so', async () => {
@@ -131,7 +150,7 @@ describe('handleMessage', () => {
           }),
         })
       )
-      expect(text).toContain('--- request w1 (created 2026-01-03T00:00:00.000Z) ---\n## Watched change')
+      expect(text).toContain('--- request w1 ---\n## Watched change')
       expect(text).toContain('call mark_applied with ids: w1')
       expect(text).toContain('call wait_for_design_edits again immediately to keep watching')
     })
