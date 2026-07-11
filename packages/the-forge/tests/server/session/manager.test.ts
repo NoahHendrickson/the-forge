@@ -16,6 +16,7 @@ import {
   type ElementRef,
 } from '../../../src/server/session/manager'
 import type { SessionAdapter, SessionEvent } from '../../../src/server/session/adapter'
+import type { HarnessId } from '../../../src/shared/chat-constants'
 
 // ---------------------------------------------------------------------------
 // Fake adapter — records calls, exposes emit(e) to simulate adapter events.
@@ -36,6 +37,10 @@ interface FakeAdapter extends SessionAdapter {
   // Recorded from the makeAdapter(opts) factory call that created THIS instance —
   // lets tests assert which --effort value a given spawn was created with.
   effortReceived?: string
+  // Recorded from the makeAdapter(opts) factory call that created THIS instance (Task 2:
+  // harness is now a REQUIRED field on the opts) — lets tests assert which harness a given
+  // spawn was created for.
+  harnessReceived?: HarnessId
   emit(e: SessionEvent): void
 }
 
@@ -95,7 +100,8 @@ function makeHarness(
   const opts: SessionManagerOpts = {
     makeAdapter: (adapterOpts) => {
       const a = makeFakeAdapter()
-      a.effortReceived = adapterOpts?.effort
+      a.effortReceived = adapterOpts.effort
+      a.harnessReceived = adapterOpts.harness
       adapters.push(a)
       return a
     },
@@ -171,10 +177,12 @@ describe('SessionManager', () => {
       // the pull turn was already written at spawn; started must not re-send or flush anything
       expect(adapters[0]!.sendTurnCalls).toHaveLength(1)
       expect(adapters[0]!.sendTurnCalls[0]).toBe(PULL_TURN_TEXT)
-      // session.json written
-      const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as unknown
-      expect(json).toMatchObject({ sessionId: 'sess-1' })
-      expect(typeof (json as Record<string, unknown>).updatedAt).toBe('string')
+      // session.json written to the claude-code slot (Task 2 per-harness shape)
+      const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
+        sessions: Record<string, { sessionId: string; updatedAt: string }>
+      }
+      expect(json.sessions['claude-code']).toMatchObject({ sessionId: 'sess-1' })
+      expect(typeof json.sessions['claude-code']!.updatedAt).toBe('string')
     })
 
     it('session.json updatedAt comes from the injectable clock', () => {
@@ -187,9 +195,9 @@ describe('SessionManager', () => {
       adapters[0]!.emit({ kind: 'started', sessionId: 'sess-1', model: 'claude', mcpLoaded: true })
 
       const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
-        updatedAt: string
+        sessions: Record<string, { updatedAt: string }>
       }
-      expect(json.updatedAt).toMatch(/^1970-01-01T/)
+      expect(json.sessions['claude-code']!.updatedAt).toMatch(/^1970-01-01T/)
     })
 
     it('on turn-complete (no error) → state ready', () => {
@@ -446,7 +454,12 @@ describe('SessionManager', () => {
       expect(adapters).toHaveLength(2)
       expect(adapters[1]!.startCalls[0]!.resumeId).toBeUndefined()
       expect(mgr.state()).toBe<SessionState>('busy')
-      expect(fs.existsSync(path.join(dir, 'session.json'))).toBe(false)
+      // clearSessionSlot is per-slot (Task 2) — the file itself survives (it's rewritten
+      // sans the claude-code slot), only that harness's persisted resume id is gone.
+      const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
+        sessions: Record<string, unknown>
+      }
+      expect(json.sessions['claude-code']).toBeUndefined()
 
       // The parked pull still flushes on the fresh session's started.
       adapters[1]!.emit({ kind: 'started', sessionId: 'fresh-1', model: 'claude', mcpLoaded: true })
@@ -655,9 +668,9 @@ describe('SessionManager', () => {
       // A further stale event from the old adapter must not overwrite the live session id
       adapters[0]!.emit({ kind: 'started', sessionId: 'STALE', model: 'claude', mcpLoaded: true })
       const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
-        sessionId: string
+        sessions: Record<string, { sessionId: string }>
       }
-      expect(json.sessionId).toBe('sess-race-2')
+      expect(json.sessions['claude-code']!.sessionId).toBe('sess-race-2')
     })
   })
 
@@ -1553,6 +1566,251 @@ describe('SessionManager', () => {
 
       expect(adapters[0]!.setModelCalls).toEqual([])
       expect(adapters[0]!.setPermissionModeCalls).toEqual([])
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Task 2 (C1): per-harness vocab, per-harness session.json slots, harness selection
+  // ---------------------------------------------------------------------------
+
+  describe('harness() resolution', () => {
+    it('defaults to claude-code when nothing else is configured', () => {
+      const { opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      expect(mgr.harness()).toBe<HarnessId>('claude-code')
+    })
+
+    it('respects opts.defaultHarness when no selection is persisted', () => {
+      const { opts } = makeHarness(dir, { defaultHarness: 'codex' })
+      const mgr = new SessionManager(opts)
+      expect(mgr.harness()).toBe<HarnessId>('codex')
+    })
+
+    it('respects a persisted session.json selected over defaultHarness', () => {
+      fs.writeFileSync(
+        path.join(dir, 'session.json'),
+        JSON.stringify({ selected: 'codex', sessions: {} }),
+      )
+      const { opts } = makeHarness(dir, { defaultHarness: 'claude-code' })
+      const mgr = new SessionManager(opts)
+      expect(mgr.harness()).toBe<HarnessId>('codex')
+    })
+
+    it('an unknown persisted selected value falls back to defaultHarness, never throws', () => {
+      fs.writeFileSync(
+        path.join(dir, 'session.json'),
+        JSON.stringify({ selected: 'some-future-harness', sessions: {} }),
+      )
+      const { opts } = makeHarness(dir, { defaultHarness: 'codex' })
+      expect(() => new SessionManager(opts)).not.toThrow()
+      const mgr = new SessionManager(opts)
+      expect(mgr.harness()).toBe<HarnessId>('codex')
+    })
+  })
+
+  describe('session.json legacy read-compat', () => {
+    it('a legacy flat {sessionId, updatedAt} file reads as the claude-code slot', () => {
+      fs.writeFileSync(
+        path.join(dir, 'session.json'),
+        JSON.stringify({ sessionId: 'legacy-id', updatedAt: 'x' }),
+      )
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+
+      expect(adapters[0]!.startCalls[0]!.resumeId).toBe('legacy-id')
+      void mgr
+    })
+  })
+
+  describe('per-harness session.json slots', () => {
+    it('started under codex writes the codex slot without touching an existing claude-code slot', () => {
+      // No `selected` key — defaultHarness alone drives this session to codex; a pre-existing
+      // claude-code slot (from an earlier claude-code session) must survive untouched.
+      fs.writeFileSync(
+        path.join(dir, 'session.json'),
+        JSON.stringify({
+          sessions: { 'claude-code': { sessionId: 'claude-existing', updatedAt: 'x' } },
+        }),
+      )
+      const { adapters, opts } = makeHarness(dir, { defaultHarness: 'codex' })
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 'codex-sess-1', model: 'codex', mcpLoaded: true })
+
+      const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
+        sessions: Record<string, { sessionId: string }>
+      }
+      expect(json.sessions['codex']!.sessionId).toBe('codex-sess-1')
+      expect(json.sessions['claude-code']!.sessionId).toBe('claude-existing')
+    })
+
+    it('stale-resume retry clears only the current harness slot, leaving the other harness untouched', () => {
+      fs.writeFileSync(
+        path.join(dir, 'session.json'),
+        JSON.stringify({
+          selected: 'codex',
+          sessions: {
+            codex: { sessionId: 'stale-codex-id', updatedAt: 'x' },
+            'claude-code': { sessionId: 'claude-untouched', updatedAt: 'y' },
+          },
+        }),
+      )
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      expect(adapters[0]!.startCalls[0]!.resumeId).toBe('stale-codex-id')
+      // CLI rejects the resume id in-band, before ever emitting init/started.
+      adapters[0]!.emit({ kind: 'turn-complete', isError: true, errorText: 'not a UUID' })
+
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.startCalls[0]!.resumeId).toBeUndefined()
+
+      const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
+        sessions: Record<string, { sessionId: string } | undefined>
+      }
+      expect(json.sessions['codex']).toBeUndefined()
+      expect(json.sessions['claude-code']!.sessionId).toBe('claude-untouched')
+    })
+  })
+
+  describe('setConfig({harness})', () => {
+    it('busy → {ok:false, reason:"busy"} — a switch must not kill a live turn', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      const events: FeedEvent[] = []
+      mgr.subscribe((e) => events.push(e))
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      expect(mgr.state()).toBe<SessionState>('busy')
+
+      const result = mgr.setConfig({ harness: 'codex' })
+
+      expect(result).toEqual({ ok: false, reason: 'busy' })
+      expect(mgr.harness()).toBe<HarnessId>('claude-code')
+      expect(adapters[0]!.stopCalls).toBe(0)
+      expect(events.some((fe) => fe.event.kind === 'config-changed')).toBe(false)
+    })
+
+    it('while ready: stops the live adapter (state -> idle), persists selected, pushes config-changed {harness}', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+      const events: FeedEvent[] = []
+      mgr.subscribe((e) => events.push(e))
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // -> ready
+
+      const result = mgr.setConfig({ harness: 'codex' })
+
+      expect(result).toEqual({ ok: true })
+      expect(mgr.harness()).toBe<HarnessId>('codex')
+      expect(adapters[0]!.stopCalls).toBe(1)
+      expect(mgr.state()).toBe<SessionState>('idle')
+
+      const row = events.find((fe) => fe.event.kind === 'config-changed')
+      expect(row?.event).toEqual({ kind: 'config-changed', harness: 'codex' })
+
+      const json = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')) as {
+        selected: string
+      }
+      expect(json.selected).toBe('codex')
+    })
+
+    it("after a harness switch, the next say() spawns via makeAdapter with the new harness and that harness's own resumeId", () => {
+      fs.writeFileSync(
+        path.join(dir, 'session.json'),
+        JSON.stringify({
+          selected: 'claude-code',
+          sessions: {
+            codex: { sessionId: 'codex-own-id', updatedAt: 'x' },
+            'claude-code': { sessionId: 'claude-own-id', updatedAt: 'y' },
+          },
+        }),
+      )
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      expect(adapters[0]!.startCalls[0]!.resumeId).toBe('claude-own-id')
+      adapters[0]!.emit({ kind: 'started', sessionId: 'claude-own-id', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // -> ready
+
+      mgr.setConfig({ harness: 'codex' })
+      expect(mgr.state()).toBe<SessionState>('idle')
+
+      mgr.say('go')
+
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.harnessReceived).toBe<HarnessId>('codex')
+      expect(adapters[1]!.startCalls[0]!.resumeId).toBe('codex-own-id')
+      expect(adapters[1]!.sendTurnCalls).toEqual(['go'])
+    })
+
+    it("stop() does not clear the persisted selection — a restart keeps the user's harness", () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
+      mgr.setConfig({ harness: 'codex' })
+
+      mgr.stop()
+
+      const second = makeHarness(dir)
+      const mgr2 = new SessionManager(second.opts)
+      expect(mgr2.harness()).toBe<HarnessId>('codex')
+      void mgr
+    })
+  })
+
+  describe('setConfig({effort}) — capability-aware via HARNESS_VOCAB[harness].liveEffort', () => {
+    it('a liveEffort harness (codex): no stop, allowed while busy, calls adapter.setEffort, respawn still passes effort', () => {
+      const { adapters, opts } = makeHarness(dir, { defaultHarness: 'codex' })
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'codex', mcpLoaded: true })
+      expect(mgr.state()).toBe<SessionState>('busy')
+
+      const result = mgr.setConfig({ effort: 'high' })
+
+      expect(result).toEqual({ ok: true })
+      expect(adapters[0]!.stopCalls).toBe(0) // no stop — safe mid-turn
+      expect(adapters[0]!.setEffortCalls).toEqual(['high'])
+      expect(mgr.state()).toBe<SessionState>('busy') // no respawn, no state change
+
+      // A later respawn (watchdog fire) still threads the chosen effort to makeAdapter.
+      vi.advanceTimersByTime(35)
+      expect(adapters).toHaveLength(2)
+      expect(adapters[1]!.effortReceived).toBe('high')
+      expect(adapters[1]!.harnessReceived).toBe<HarnessId>('codex')
+    })
+
+    it('claude-code (liveEffort: false) keeps the existing stop/reject-while-busy behavior', () => {
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.notifyDesignEdits()
+      adapters[0]!.emit({ kind: 'started', sessionId: 's1', model: 'claude', mcpLoaded: true })
+      expect(mgr.state()).toBe<SessionState>('busy')
+
+      const busyResult = mgr.setConfig({ effort: 'max' })
+      expect(busyResult).toEqual({ ok: false, reason: 'busy' })
+      expect(adapters[0]!.setEffortCalls).toEqual([])
+
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // -> ready
+      const readyResult = mgr.setConfig({ effort: 'max' })
+      expect(readyResult).toEqual({ ok: true })
+      expect(adapters[0]!.stopCalls).toBe(1)
+      expect(mgr.state()).toBe<SessionState>('idle')
+      expect(adapters[0]!.setEffortCalls).toEqual([]) // never called on the non-live path
     })
   })
 })

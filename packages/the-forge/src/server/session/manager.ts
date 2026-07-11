@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { SessionAdapter, SessionEvent } from './adapter'
+import { type HarnessId, EMBEDDED_HARNESSES, HARNESS_VOCAB } from '../../shared/chat-constants'
 
 // ---------------------------------------------------------------------------
 // Exported types and constants
@@ -61,12 +62,17 @@ export interface ElementRef {
 export interface SessionManagerOpts {
   /** Injectable factory — tests pass a fake, production passes (opts) => new
    * ClaudeAdapter(undefined, opts). `opts.effort` threads the spike-confirmed spawn-flag-only
-   * effort level (see ClaudeAdapter's constructor why-comment) into each fresh spawn. */
-  makeAdapter: (opts?: { effort?: string }) => SessionAdapter
+   * effort level (see ClaudeAdapter's constructor why-comment) into each fresh spawn.
+   * `opts.harness` (Task 2, C1) is REQUIRED — every spawn is FOR a specific harness, never
+   * ambiguous; Task 4's factory keys off it to construct a ClaudeAdapter vs a CodexAdapter. */
+  makeAdapter: (opts: { harness: HarnessId; effort?: string }) => SessionAdapter
   /** .the-forge/ dir — session.json home. Created lazily (mkdirSync recursive). */
   forgeDir: string
   /** resolveProjectRoot() — child process cwd. */
   cwd: string
+  /** From the plugin's `agent` option; 'claude-code' when absent. Only takes effect when
+   * session.json has no (valid) persisted `selected` — see harness() below. */
+  defaultHarness?: HarnessId
   /** Injectable clock for deterministic tests; defaults to Date.now. */
   now?: () => number
   /** Watchdog timeout override for tests (real default: WATCHDOG_MS). */
@@ -77,48 +83,113 @@ export interface SessionManagerOpts {
 
 // ---------------------------------------------------------------------------
 // session.json shape
+//
+// { "selected": "codex", "sessions": { "claude-code": {sessionId, updatedAt},
+//   "codex": {sessionId, updatedAt} } } — one slot per embedded harness, so switching
+// harnesses (setConfig({harness})) never clobbers the OTHER harness's resume id. Legacy
+// flat `{sessionId, updatedAt}` files (pre-Task-2) are read as the claude-code slot with no
+// `selected` — one-release read-compat; the first write migrates the file to this shape.
 // ---------------------------------------------------------------------------
 
-interface SessionFile {
+interface SessionSlot {
   sessionId: string
   updatedAt: string
 }
 
-function readSessionFile(forgeDir: string): SessionFile | undefined {
+interface SessionFile {
+  selected?: HarnessId
+  sessions: Partial<Record<HarnessId, SessionSlot>>
+}
+
+function isHarnessId(v: unknown): v is HarnessId {
+  return typeof v === 'string' && (EMBEDDED_HARNESSES as readonly string[]).includes(v)
+}
+
+function isSessionSlot(v: unknown): v is SessionSlot {
+  return typeof v === 'object' && v !== null && typeof (v as Record<string, unknown>).sessionId === 'string'
+}
+
+/** Reads the whole file and normalizes it to the current shape, migrating the legacy flat
+ * form in memory (the on-disk file itself is only rewritten on the next actual write).
+ * Corrupt/missing → fresh `{sessions: {}}`, never throw — unchanged posture from the
+ * pre-Task-2 single-slot reader. */
+function readSessionFile(forgeDir: string): SessionFile {
   try {
     const raw = fs.readFileSync(path.join(forgeDir, 'session.json'), 'utf8')
     const parsed: unknown = JSON.parse(raw)
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      typeof (parsed as Record<string, unknown>).sessionId === 'string'
-    ) {
-      return parsed as SessionFile
+    if (typeof parsed !== 'object' || parsed === null) return { sessions: {} }
+    const obj = parsed as Record<string, unknown>
+
+    // Legacy shape: a bare {sessionId, updatedAt} pair, always the claude-code slot (Task 2
+    // is the first release with more than one embedded harness).
+    if (typeof obj['sessionId'] === 'string') {
+      const updatedAt = typeof obj['updatedAt'] === 'string' ? obj['updatedAt'] : ''
+      return { sessions: { 'claude-code': { sessionId: obj['sessionId'], updatedAt } } }
     }
-    return undefined
+
+    const sessions: Partial<Record<HarnessId, SessionSlot>> = {}
+    const rawSessions = obj['sessions']
+    if (typeof rawSessions === 'object' && rawSessions !== null) {
+      for (const h of EMBEDDED_HARNESSES) {
+        const slot = (rawSessions as Record<string, unknown>)[h]
+        if (isSessionSlot(slot)) sessions[h] = slot
+      }
+    }
+    // Unknown persisted `selected` (a newer build's harness read by an older one) is
+    // dropped here — the caller falls back to opts.defaultHarness, never throws.
+    const selected = isHarnessId(obj['selected']) ? obj['selected'] : undefined
+    return { selected, sessions }
   } catch {
-    // Missing or corrupt → start fresh, never throw.
-    return undefined
+    return { sessions: {} }
   }
 }
 
-function clearSessionFile(forgeDir: string): void {
+function readSlot(forgeDir: string, harness: HarnessId): SessionSlot | undefined {
+  return readSessionFile(forgeDir).sessions[harness]
+}
+
+function readSelectedHarness(forgeDir: string): HarnessId | undefined {
+  return readSessionFile(forgeDir).selected
+}
+
+/** Stale-resume retry needs to drop only the CURRENT harness's slot — the other harness's
+ * resume id (from a session that was never touched this run) must survive untouched. */
+function clearSessionSlot(forgeDir: string, harness: HarnessId): void {
   try {
-    fs.rmSync(path.join(forgeDir, 'session.json'), { force: true })
+    const current = readSessionFile(forgeDir)
+    if (!(harness in current.sessions)) return // nothing to clear
+    delete current.sessions[harness]
+    fs.mkdirSync(forgeDir, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(path.join(forgeDir, 'session.json'), JSON.stringify(current), { encoding: 'utf8', mode: 0o600 })
   } catch {
     // Best-effort — a stale file that survives only re-triggers the fresh-retry path.
   }
 }
 
-function writeSessionFile(forgeDir: string, sessionId: string, updatedAt: string): void {
+function writeSessionSlot(forgeDir: string, harness: HarnessId, sessionId: string, updatedAt: string): void {
   try {
     // forgeDir may not exist yet (mirrors writeEndpointFile in src/server/endpoints.ts,
     // including the owner-only 0700/0600 perms — see the why-comment there).
     fs.mkdirSync(forgeDir, { recursive: true, mode: 0o700 })
-    const data: SessionFile = { sessionId, updatedAt }
-    fs.writeFileSync(path.join(forgeDir, 'session.json'), JSON.stringify(data), { encoding: 'utf8', mode: 0o600 })
+    const current = readSessionFile(forgeDir)
+    current.sessions[harness] = { sessionId, updatedAt }
+    fs.writeFileSync(path.join(forgeDir, 'session.json'), JSON.stringify(current), { encoding: 'utf8', mode: 0o600 })
   } catch {
     // I/O failure is non-fatal — resume just won't work next time.
+  }
+}
+
+/** setConfig({harness}) persists the switch here — a read-modify-write so an in-flight
+ * harness's session slot is never disturbed by a selection change alone. */
+function writeSelectedHarness(forgeDir: string, harness: HarnessId): void {
+  try {
+    fs.mkdirSync(forgeDir, { recursive: true, mode: 0o700 })
+    const current = readSessionFile(forgeDir)
+    current.selected = harness
+    fs.writeFileSync(path.join(forgeDir, 'session.json'), JSON.stringify(current), { encoding: 'utf8', mode: 0o600 })
+  } catch {
+    // I/O failure is non-fatal — the in-memory selection (this._harness) still wins for the
+    // rest of this process; only a restart would silently forget the choice.
   }
 }
 
@@ -132,6 +203,9 @@ export class SessionManager {
   private _clock: () => number
   private _watchdogMs: number
   private _postApprovalWatchdogMs: number
+  // Resolved ONCE at construction (see harness()'s doc comment below) — every _start()/
+  // _respawn() and every session.json slot read/write keys off this, never re-resolved.
+  private _harness: HarnessId
 
   // Count of approvals parked in the overlay. While > 0 the watchdog is fully suspended —
   // a human deciding is not a hung CLI. The ApprovalRegistry's own hold timer guarantees
@@ -199,6 +273,10 @@ export class SessionManager {
     this._clock = opts.now ?? (() => Date.now())
     this._watchdogMs = opts.watchdogMs ?? WATCHDOG_MS
     this._postApprovalWatchdogMs = opts.postApprovalWatchdogMs ?? POST_APPROVAL_WATCHDOG_MS
+    // session.json's persisted `selected` wins over the plugin's `agent` option default —
+    // an unrecognized value (a newer build's harness read by an older one) is already
+    // filtered out by readSessionFile, so this never throws on a future/unknown id.
+    this._harness = readSelectedHarness(opts.forgeDir) ?? opts.defaultHarness ?? 'claude-code'
   }
 
   // ---------------------------------------------------------------------------
@@ -207,6 +285,15 @@ export class SessionManager {
 
   state(): SessionState {
     return this._state
+  }
+
+  /** The embedded harness this session is (or will be, on the next auto-start) driving.
+   * Resolved ONCE at construction — session.json's `selected` if it names a still-known
+   * harness, else opts.defaultHarness, else 'claude-code'. Changed only via
+   * setConfig({harness}), never re-derived from disk afterward (this._harness is the single
+   * source of truth for the rest of this process's lifetime). */
+  harness(): HarnessId {
+    return this._harness
   }
 
   /** Auto-start + deliver: the /dispatch 'embedded' rung.
@@ -298,18 +385,32 @@ export class SessionManager {
   }
 
   /** Applies model/permissionMode via live control-request writes (safe mid-turn — the CLI
-   * acks these regardless of busy state) and effort via a respawn-on-next-turn scheme
-   * (spike, Task 1: no set_effort control request exists — it's spawn-flag-only).
+   * acks these regardless of busy state); effort and harness are capability-aware via
+   * HARNESS_VOCAB (src/shared/chat-constants.ts):
    *
-   * Effort while busy is rejected outright (`{ok:false, reason:'busy'}`, the endpoint's 409)
-   * rather than killing a live turn. Effort while NOT busy does NOT eagerly respawn: the
-   * lazy-boot CLI emits nothing until the first stdin line, so spawning right now would boot
-   * a silently parked child with no turn to send. Instead: stop the live adapter (state ->
-   * idle) if one exists, record the new level in `_spawnEffort`, and let the NEXT say()/
-   * notifyDesignEdits auto-start with `--effort <level>` through the normal send-at-spawn
-   * path — `--resume <id>` (persisted in session.json) keeps the conversation intact. */
-  setConfig(cfg: { model?: string; permissionMode?: string; effort?: string }): SetConfigResult {
-    if (cfg.effort !== undefined && this._state === 'busy') {
+   * - effort on a `liveEffort: false` harness (claude-code): the pre-existing
+   *   respawn-on-next-turn scheme (spike, Task 1: no set_effort control request exists —
+   *   it's spawn-flag-only). Rejected outright while busy (`{ok:false, reason:'busy'}`, the
+   *   endpoint's 409) rather than killing a live turn. While NOT busy this does NOT eagerly
+   *   respawn: the lazy-boot CLI emits nothing until the first stdin line, so spawning right
+   *   now would boot a silently parked child with no turn to send. Instead: stop the live
+   *   adapter (state -> idle) if one exists, record the new level in `_spawnEffort`, and let
+   *   the NEXT say()/notifyDesignEdits auto-start with `--effort <level>` through the normal
+   *   send-at-spawn path — `--resume <id>` (persisted in session.json) keeps the
+   *   conversation intact.
+   * - effort on a `liveEffort: true` harness (Task 4's Codex): a live per-turn param — no
+   *   stop, no busy rejection (safe mid-turn, applies starting the next turn). `_spawnEffort`
+   *   is still recorded (kept in BOTH branches) so a later respawn re-applies it.
+   * - harness: busy is rejected the same way a non-live effort change is (a switch must not
+   *   kill a live turn); otherwise the live adapter is stopped (state -> idle), the new
+   *   harness is recorded and persisted to session.json's `selected`, and the NEXT
+   *   say()/notifyDesignEdits auto-starts THAT harness, resuming from its OWN slot. */
+  setConfig(cfg: { model?: string; permissionMode?: string; effort?: string; harness?: HarnessId }): SetConfigResult {
+    if (cfg.harness !== undefined && this._state === 'busy') {
+      return { ok: false, reason: 'busy' }
+    }
+    const liveEffort = HARNESS_VOCAB[this._harness].liveEffort
+    if (cfg.effort !== undefined && !liveEffort && this._state === 'busy') {
       return { ok: false, reason: 'busy' }
     }
 
@@ -326,11 +427,20 @@ export class SessionManager {
     }
     if (cfg.effort !== undefined) {
       this._spawnEffort = cfg.effort
-      if (this._adapter) {
+      if (liveEffort) {
+        this._adapter?.setEffort(cfg.effort)
+      } else if (this._adapter) {
         this._cancelWatchdog()
         this._discardAdapter()?.stop()
         this._state = 'idle'
       }
+    }
+    if (cfg.harness !== undefined) {
+      this._cancelWatchdog()
+      this._discardAdapter()?.stop()
+      this._state = 'idle'
+      this._harness = cfg.harness
+      writeSelectedHarness(this._opts.forgeDir, cfg.harness)
     }
 
     this._push({ kind: 'config-changed', ...cfg })
@@ -410,10 +520,10 @@ export class SessionManager {
     // leaks a live child whose stray `ended` would discard the new adapter (the same
     // stale-event race _onWatchdogFired defends against).
     this._discardAdapter()?.stop()
-    const resumeId = fresh ? undefined : readSessionFile(this._opts.forgeDir)?.sessionId
+    const resumeId = fresh ? undefined : readSlot(this._opts.forgeDir, this._harness)?.sessionId
     this._lastStartResumeId = resumeId
     this._sawStarted = false
-    const adapter = this._opts.makeAdapter({ effort: this._spawnEffort })
+    const adapter = this._opts.makeAdapter({ harness: this._harness, effort: this._spawnEffort })
     this._adapter = adapter
     adapter.onEvent = (e) => this._onAdapterEvent(e)
     // State before start(): an adapter emitting `started` synchronously inside
@@ -465,7 +575,7 @@ export class SessionManager {
         this._lastSessionId = event.sessionId
         this._sawStarted = true
         this._startFailures = 0
-        writeSessionFile(this._opts.forgeDir, event.sessionId, new Date(this._clock()).toISOString())
+        writeSessionSlot(this._opts.forgeDir, this._harness, event.sessionId, new Date(this._clock()).toISOString())
         // Re-apply the last user-chosen model/permissionMode to every fresh adapter — a
         // respawn (watchdog fire, ended-while-busy, stale-resume retry) otherwise silently
         // reverts to spawn defaults while the UI still shows the old choice (final-review
@@ -497,7 +607,9 @@ export class SessionManager {
             // result/error_during_execution BEFORE any init event — session.json goes stale
             // legitimately (CLI session store pruned, project moved). Clear it and retry
             // fresh ONCE; the retry has no resumeId, so a second failure parks in `failed`.
-            clearSessionFile(this._opts.forgeDir)
+            // Clears only the CURRENT harness's slot — the other harness's resume id (a
+            // session this run never touched) must survive untouched.
+            clearSessionSlot(this._opts.forgeDir, this._harness)
             this._lastSessionId = undefined
             this._push({ kind: 'session-error', text: 'stale session id — starting fresh' })
             // Same nudge-preservation rule as _respawn(): only a resent PULL turn makes a
@@ -616,10 +728,10 @@ export class SessionManager {
    * `_inflightTurn` immediately (lazy-boot CLI — see notifyDesignEdits). Used by both
    * the watchdog and the ended-while-busy path. */
   private _respawn(): void {
-    const resumeId = this._lastSessionId ?? readSessionFile(this._opts.forgeDir)?.sessionId
+    const resumeId = this._lastSessionId ?? readSlot(this._opts.forgeDir, this._harness)?.sessionId
     this._lastStartResumeId = resumeId
     this._sawStarted = false
-    const adapter = this._opts.makeAdapter({ effort: this._spawnEffort })
+    const adapter = this._opts.makeAdapter({ harness: this._harness, effort: this._spawnEffort })
     this._adapter = adapter
     // The parked nudge is cleared ONLY when the turn we're about to re-send is itself the
     // pull turn — a fresh pull already covers everything a nudge would ask for, same as

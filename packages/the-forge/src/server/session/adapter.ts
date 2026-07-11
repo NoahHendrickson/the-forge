@@ -1,5 +1,7 @@
 // Harness-agnostic session contract. Codex/Cursor adapters implement this alongside ClaudeAdapter.
 
+import type { HarnessId } from '../../shared/chat-constants'
+
 export type SessionEvent =
   | { kind: 'started'; sessionId: string; model: string; mcpLoaded: boolean }
   | { kind: 'assistant-text'; text: string }
@@ -14,7 +16,7 @@ export type SessionEvent =
     }
   | { kind: 'tool-finished'; toolId: string }
   | { kind: 'turn-complete'; isError: boolean; errorText?: string; costUsd?: number }
-  | { kind: 'config-changed'; model?: string; permissionMode?: string; effort?: string }
+  | { kind: 'config-changed'; model?: string; permissionMode?: string; effort?: string; harness?: HarnessId }
   | { kind: 'session-error'; text: string } // spawn failure, stderr chatter, unparseable protocol state
   | { kind: 'ended' } // child exited (any reason)
   | { kind: 'activity' } // liveness heartbeat (hook/system chatter) — re-arms the watchdog, never rendered

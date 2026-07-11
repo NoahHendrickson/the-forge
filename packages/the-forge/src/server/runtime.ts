@@ -74,11 +74,13 @@ export function createForgeRuntime(resolvedRoot: string, viteRoot?: string): For
     },
   })
   const manager = new SessionManager({
-    // Production default: ClaudeAdapter. Task 5 (vite.ts / sidecar.ts) wires this in;
-    // this default is what callers get if they don't override the factory. `opts.effort`
-    // (threaded by SessionManager on every spawn) becomes ClaudeAdapter's constructor-time
-    // spawn flag — see ClaudeAdapter's constructor why-comment (spike: spawn-flag-only,
-    // no set_effort control request).
+    // Production default: ClaudeAdapter regardless of opts.harness. Task 4 makes this
+    // factory actually key off opts.harness (ClaudeAdapter vs CodexAdapter); for now (C1
+    // Task 2 — vocab/manager/adapter-type groundwork only) opts.harness is ignored so the
+    // factory keeps compiling against the now-required field. `opts.effort` (threaded by
+    // SessionManager on every spawn) becomes ClaudeAdapter's constructor-time spawn flag —
+    // see ClaudeAdapter's constructor why-comment (spike: spawn-flag-only, no set_effort
+    // control request).
     makeAdapter: (opts) => new ClaudeAdapter(undefined, opts),
     forgeDir,
     cwd: resolvedRoot,
