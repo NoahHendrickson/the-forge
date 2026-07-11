@@ -751,6 +751,48 @@ describe('CursorAdapter', () => {
       expect(answer!.result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
     })
 
+    it('a LOOK-ALIKE server whose name merely starts with "the-forge-" goes to onApproval, not auto-allow', async () => {
+      // PR #32 review: the earlier ^the-forge[:-] anchor would have trusted any third-party
+      // MCP server named e.g. `the-forge-utils` (title "the-forge-utils-do_thing: do_thing").
+      // The anchor is now pinned to the two exact recorded shapes ("the-forge: <tool>" /
+      // "the-forge-<ourtool>: <tool>"), so a look-alike prefix must prompt like any stranger.
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const onApproval = vi.fn(
+        async (_toolName: string, _detail: string) => ({ behavior: 'allow' }) as const,
+      )
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN, onApproval })
+      adapter.onEvent = () => {}
+      adapter.start({ cwd: '/abs/project' })
+      bootFresh(lastChild())
+      const w = captureWrites(lastChild())
+
+      const lookAlike = JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'session/request_permission',
+        params: {
+          sessionId: 's',
+          toolCall: {
+            toolCallId: 't',
+            title: 'the-forge-utils-do_thing: do_thing',
+            kind: 'other',
+            status: 'pending',
+          },
+          options: [
+            { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+            { optionId: 'allow-always', name: 'Allow always', kind: 'allow_always' },
+            { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+          ],
+        },
+      })
+      pushLine(lastChild(), lookAlike)
+      await tick()
+
+      expect(onApproval).toHaveBeenCalledTimes(1)
+      const answer = w.find((m) => m.id === 0 && 'result' in m)
+      expect(answer!.result).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } })
+    })
+
     it('the replay-style the-forge title ("the-forge: pull_design_edits", kind other) also auto-allows', async () => {
       // The fixtures record TWO title spellings for our tools: live
       // "the-forge-pull_design_edits: …" and replay "the-forge: …" — the prefix anchor must

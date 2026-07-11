@@ -530,11 +530,17 @@ export class CursorAdapter implements SessionAdapter {
     // - kind === 'other' (the MCP-tool kind, fixture-pinned) excludes shell commands — an
     //   execute title is attacker-influenceable content (`echo pull_design_edits` would
     //   otherwise auto-allow, a prompt-injection-reachable bypass of this exact gate);
-    // - a ^the-forge[:-] title prefix scopes to OUR server, mirroring EDIT_TIER_ALLOW's
-    //   mcp__the-forge__* trust level. Both recorded fixture titles carry it: live
-    //   "the-forge-pull_design_edits: pull_design_edits" and replay "the-forge: pull_design_edits".
-    // A CLI title-wording change breaks toward SAFE (the tool merely prompts).
-    const isForgeMcpTool = kind === 'other' && /^the-forge[:-]/.test(title)
+    // - the title must match one of the TWO exact recorded shapes, scoping to OUR server and
+    //   mirroring EDIT_TIER_ALLOW's mcp__the-forge__* trust level: live
+    //   "the-forge-<tool>: <tool>" (tool pinned to our four names — a looser ^the-forge[:-]
+    //   prefix would also trust a DIFFERENT server whose name merely starts with `the-forge-`,
+    //   e.g. a project-configured `the-forge-utils` titling "the-forge-utils-do_thing: do_thing")
+    //   and replay "the-forge: <tool>".
+    // A CLI title-wording change (or a new forge tool missing from the alternation) breaks
+    // toward SAFE (the tool merely prompts).
+    const isForgeMcpTool =
+      kind === 'other' &&
+      /^the-forge(?:-(?:pull_design_edits|mark_applied|wait_for_design_edits|approve))?: /.test(title)
 
     let allow: boolean
     if (isEditKind || isForgeMcpTool) {
