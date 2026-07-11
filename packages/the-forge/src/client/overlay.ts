@@ -731,11 +731,18 @@ export class Overlay {
   }
 
   mount(): void {
-    document.body.appendChild(this.host)
+    // On <html>, not <body>: canvas mode applies a transform to <body>, and a transformed
+    // ancestor hijacks position:fixed — every overlay outline/panel is fixed-positioned.
+    // Bonus: app CSS like `body > *` can no longer style the host.
+    document.documentElement.appendChild(this.host)
   }
 
   attachPanel(panelRoot: HTMLElement): void {
     this.host.shadowRoot!.appendChild(panelRoot)
+  }
+
+  attachChrome(el: HTMLElement): void {
+    this.host.shadowRoot!.appendChild(el)
   }
 
   contains(target: EventTarget | null): boolean {
