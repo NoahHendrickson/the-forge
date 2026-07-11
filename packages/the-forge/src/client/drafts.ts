@@ -47,6 +47,16 @@ export class DraftStore {
     return this.drafts.size
   }
 
+  /** Total drafted properties across all elements — the composer pill's "N changes" count.
+   * Same cheap Map-size read as elementCount(); a draft scrubbed back to its exact original
+   * still counts (no-ops are only detectable at send time via computed styles — see
+   * buildChangeRequestWithElements), matching elementCount()'s identical blind spot. */
+  changeCount(): number {
+    let n = 0
+    for (const props of this.drafts.values()) n += props.size
+    return n
+  }
+
   compare(el: TaggedElement, on: boolean): void {
     if (!this.drafts.has(el) || on === this.showingOriginal.has(el)) return
     if (on) this.showingOriginal.add(el)
