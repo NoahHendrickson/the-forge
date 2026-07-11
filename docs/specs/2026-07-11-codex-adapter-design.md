@@ -29,7 +29,7 @@ Cursor verified against cursor.com/docs/cli (parameters, output-format, headless
 - **Approvals:** blocking server→client `session/request_permission` requests carrying the tool call + an options list (allow-once / allow-always / reject-once style). Unanswered requests hang the agent — timeout-to-deny is mandatory. We never answer allow-always.
 - **MCP:** ACP `session/new` takes an `mcpServers` array (spawn-time wiring, no file writes — decision 3); the CLI also honors project `.cursor/mcp.json`.
 - **Auth:** `agent login` (browser OAuth on the Cursor subscription); login-sourced auth is a first-class headless path. We never set `CURSOR_API_KEY` (usage-billed — the forbidden category).
-- **Caveats (spike checkpoints):** no effort knob at all; model selection in ACP mode unverified; `session/load` streams the conversation history back as `session/update` notifications (the adapter must not re-ring replayed history); failures can surface as stderr + non-zero exit rather than in-band events — the **inverse** of the Claude in-band-error gotcha; no usage/cost fields.
+- **Caveats (spike checkpoints):** no effort knob at all; model selection in ACP mode unverified; `session/load` streams the conversation history back as `session/update` notifications (the adapter must not re-ring replayed history); no usage/cost fields. ~~failures surface as stderr + non-zero exit~~ — **spike-corrected 2026-07-11:** in ACP mode failures are in-band JSON-RPC error responses (auth = `-32000`) with EMPTY stderr and the process staying alive; the stderr/exit-code claim was print-mode research that does not apply here.
 
 ### Codex — `codex app-server` (C2, verified and parked)
 
