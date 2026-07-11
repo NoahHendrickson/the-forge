@@ -511,11 +511,19 @@ export class CursorAdapter implements SessionAdapter {
     // with NO permission request — only shell/execute and MCP tool calls prompt. We therefore
     // auto-allow (a) edit-kind requests — defensive; none observed live, but the ratified posture
     // is "edits auto" so a future CLI that DOES prompt for edits must not park the designer — and
-    // (b) the-forge's OWN MCP tools (pull_design_edits / mark_applied), mirroring ClaudeAdapter's
-    // static mcp__the-forge__* allows: without this, every pull turn would park an approval on a
-    // tool WE drive. Everything else (shell/execute, other MCP tools) → this.onApproval.
+    // (b) the-forge's OWN MCP tools, mirroring ClaudeAdapter's static mcp__the-forge__* allows:
+    // without this, every pull turn would park an approval on a tool WE drive. Everything else
+    // (shell/execute, other MCP tools) → this.onApproval.
     const isEditKind = kind === 'edit'
-    const isForgeMcpTool = /pull_design_edits|mark_applied/.test(title)
+    // The forge-MCP arm is anchored to BOTH signals, never a bare substring of the title:
+    // - kind === 'other' (the MCP-tool kind, fixture-pinned) excludes shell commands — an
+    //   execute title is attacker-influenceable content (`echo pull_design_edits` would
+    //   otherwise auto-allow, a prompt-injection-reachable bypass of this exact gate);
+    // - a ^the-forge[:-] title prefix scopes to OUR server, mirroring EDIT_TIER_ALLOW's
+    //   mcp__the-forge__* trust level. Both recorded fixture titles carry it: live
+    //   "the-forge-pull_design_edits: pull_design_edits" and replay "the-forge: pull_design_edits".
+    // A CLI title-wording change breaks toward SAFE (the tool merely prompts).
+    const isForgeMcpTool = kind === 'other' && /^the-forge[:-]/.test(title)
 
     let allow: boolean
     if (isEditKind || isForgeMcpTool) {
