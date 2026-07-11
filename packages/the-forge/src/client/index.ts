@@ -180,8 +180,8 @@ export class DesignMode {
     // NOT modified; feed.draftSlot is just a new parent for the same root element.
     this.feed.draftSlot.appendChild(this.changeList.root)
     this.panel.feedSlot.appendChild(this.feed.root)
-    // Drafts pill state (composer consolidation Task 2): count comes from the DraftStore (the
-    // same elementCount() refreshStatus already reads), applying is true while any lifecycle
+    // Drafts pill state (composer consolidation Task 2): count comes from changeCount(), applying
+    // is true while any lifecycle
     // row is still sent/applying — the same stage predicate ChangeList's own inFlightProps
     // uses to decide which draft rows are already represented by an in-flight row. Pushed from
     // TWO independent triggers below: drafts.onChange (count can change) and session.onChange

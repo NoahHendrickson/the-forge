@@ -259,6 +259,7 @@ export class SessionFeed {
     const draftChevron = document.createElement('span')
     draftChevron.className = 'draft-pill-chevron'
     draftChevron.textContent = '▾'
+    draftChevron.setAttribute('aria-hidden', 'true')
     this.draftPill.append(this.draftPillLabel, draftChevron)
     this.draftPill.addEventListener('click', () => this.setDisclosureOpen(!this.draftDisclosure.classList.contains('open')))
 
