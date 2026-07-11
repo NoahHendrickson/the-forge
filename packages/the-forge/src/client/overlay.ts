@@ -542,6 +542,16 @@ button {
   flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--text-muted);
 }
+` +
+// .change-detail: one line per drafted property (2026-07-11 draft-badge spec — replaces the
+// "+N more"/title collapse on draft rows). flex-basis: 100% wraps each line full-width inside
+// the flex row, same trick .change-note uses; the 22px left pad aligns under .change-el past
+// the chip.
+`
+.change-detail {
+  flex-basis: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-muted); font: 400 var(--text-xs) var(--font-ui); padding: 0 6px 0 22px;
+}
 .change-note { flex-basis: 100%; color: #F87171; font-size: 10.5px; padding: 0 6px 2px 22px; white-space: normal; }
 .change-note-mismatch { color: var(--ripple); }
 .change-actions { display: flex; gap: 4px; flex-basis: 100%; padding: 0 6px 2px 22px; }

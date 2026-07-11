@@ -56,8 +56,8 @@ describe('draft rows', () => {
     expect(rows.length).toBe(1)
     expect(rows[0].querySelector('.chip')!.className).toContain('chip-draft')
     expect(rows[0].querySelector('.change-el')!.textContent).toContain('h1')
-    expect(rows[0].querySelector('.change-summary')!.textContent).toContain('padding-top')
-    expect(rows[0].querySelector('.change-summary')!.textContent).toContain('24px')
+    expect(rows[0].querySelector('.change-detail')!.textContent).toContain('padding-top')
+    expect(rows[0].querySelector('.change-detail')!.textContent).toContain('24px')
   })
 
   it('removes the draft row when the draft is discarded', () => {
@@ -86,22 +86,26 @@ describe('draft rows', () => {
     drafts.apply(el as never, 'margin-top', '8px')
     list.syncDrafts()
     const draftRow = [...list.root.querySelectorAll('.change-row')].find((r) => r.querySelector('.chip-draft'))
-    expect(draftRow?.querySelector('.change-summary')?.textContent).toContain('margin-top')
-    expect(draftRow?.querySelector('.change-summary')?.textContent).not.toContain('padding-top')
+    const details = [...draftRow!.querySelectorAll('.change-detail')].map((l) => l.textContent)
+    expect(details.join()).toContain('margin-top')
+    expect(details.join()).not.toContain('padding-top')
   })
 
-  // R2 minor: draft rows and sent rows each formatted "+N more" independently — extracted to one
-  // shared helper. This proves a multi-prop draft row uses the SAME "+N more" shape as the
-  // multi-change sent row test above ('summarizes multi-change elements with +N more').
-  it('summarizes a multi-prop draft row with +N more, same shape as sent rows', () => {
+  // 2026-07-11 draft-badge spec: draft rows list EVERY drafted property as its own visible
+  // .change-detail line — the pill click was the user's opt-in to detail, so nothing hides
+  // behind "+N more"/title tooltips here. Sent rows keep the compact collapseWithMore shape
+  // (history stays terse) — pinned by 'summarizes multi-change elements with +N more' below.
+  it('lists every drafted property as its own .change-detail line, no title tooltip', () => {
     const drafts = new DraftStore()
     const el = tagged()
     const list = new ChangeList(drafts, new LifecycleSession(), noop)
     drafts.apply(el as never, 'padding-top', '24px')
     drafts.apply(el as never, 'margin-top', '8px')
     list.syncDrafts()
-    const summary = list.root.querySelector('.change-summary')!
-    expect(summary.textContent).toBe('padding-top → 24px +1 more')
+    const lines = [...list.root.querySelectorAll('.change-detail')].map((l) => l.textContent)
+    expect(lines).toEqual(['padding-top → 24px', 'margin-top → 8px'])
+    expect(list.root.querySelector('.change-row [title]')).toBeNull()
+    expect(list.root.querySelector('.change-row .change-summary')).toBeNull()
   })
 })
 

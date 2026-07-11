@@ -19,8 +19,7 @@ function summarizeItem(c: ChangeItem): string {
   return `${c.property}: ${c.beforeCss} → ${c.afterCss}`
 }
 
-/** Shared "+N more" collapse for both sent-row (summarize) and draft-row (renderDraftRow)
- * summaries (R2 minor: this formatting existed twice, independently) — `text` is the visible
+/** Shared "+N more" collapse for sent-row (summarize) summaries — `text` is the visible
  * summary (first entry, +N more if there's more than one), `full` is the newline-joined tooltip
  * shown via the row's title attribute. */
 function collapseWithMore(all: string[]): { text: string; full: string } {
@@ -167,12 +166,19 @@ export class ChangeList {
   private renderDraftRow(el: TaggedElement, props: Array<[string, { original: string; value: string }]>): HTMLElement {
     const row = this.baseRow('draft', el)
     const dcSource = el.dataset?.dcSource ?? null
-    const [elLabel, summary] = this.label(el.tagName.toLowerCase(), dcSource)
-    const all = props.map(([prop, d]) => `${prop} → ${d.value}`)
-    const { text, full } = collapseWithMore(all)
-    summary.textContent = text
-    summary.title = full
-    row.append(elLabel, summary)
+    const [elLabel] = this.label(el.tagName.toLowerCase(), dcSource)
+    row.appendChild(elLabel)
+    // Draft rows list EVERY drafted property (2026-07-11 draft-badge spec) — the disclosure
+    // is already the user's opt-in to detail, so nothing hides behind "+N more"/title here.
+    // The value shown is the inline draft (`prop → value`, no "before"): the DraftStore's
+    // recorded original is the prior INLINE style (usually empty) — the real before/after
+    // pair only exists at send time via computed styles. Sent rows keep collapseWithMore.
+    for (const [prop, d] of props) {
+      const line = document.createElement('div')
+      line.className = 'change-detail'
+      line.textContent = `${prop} → ${d.value}`
+      row.appendChild(line)
+    }
     return row
   }
 
