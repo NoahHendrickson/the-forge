@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { Overlay, CSS, TOKENS } from '../../src/client/overlay'
+import { DUR_FAST_MS } from '../../src/client/motion'
 
 // The overlay's why-comments live as TS comments in the source (kept out of the shipped
 // CSS string for package-budget reasons — see perf(client) shipped-CSS-comments commit),
@@ -284,6 +285,39 @@ describe('Overlay (M2 additions)', () => {
     overlay.mount()
     expect(overlay.host.parentElement).toBe(document.documentElement)
     expect(document.body.contains(overlay.host)).toBe(false)
+  })
+})
+
+describe('Overlay.showSelectOutline tween (motion pass Task 7)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('tween arms only on a visible→visible move, never on first show, and self-disarms', () => {
+    vi.useFakeTimers()
+    const o = new Overlay()
+    const rect = (x: number) => ({ left: x, top: 10, width: 50, height: 20 }) as DOMRect
+    o.showSelectOutline(rect(0), true) // first show: outline was hidden — no tween
+    const outline = o.host.shadowRoot!.querySelector('#select-outline') as HTMLElement
+    expect(outline.classList.contains('tween')).toBe(false)
+    o.showSelectOutline(rect(100), true) // move while visible: tween
+    expect(outline.classList.contains('tween')).toBe(true)
+    vi.advanceTimersByTime(DUR_FAST_MS + 100) // self-disarm
+    expect(outline.classList.contains('tween')).toBe(false)
+    o.showSelectOutline(rect(100), true)
+    expect(outline.classList.contains('tween')).toBe(true)
+    o.showSelectOutline(rect(120)) // reflow-tracking call (default): snaps, kills the tween
+    expect(outline.classList.contains('tween')).toBe(false)
+  })
+
+  it('tween never arms under reduced motion', () => {
+    vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true } as MediaQueryList)
+    const o = new Overlay()
+    const rect = { left: 0, top: 0, width: 10, height: 10 } as DOMRect
+    o.showSelectOutline(rect, true)
+    o.showSelectOutline(rect, true)
+    const outline = o.host.shadowRoot!.querySelector('#select-outline') as HTMLElement
+    expect(outline.classList.contains('tween')).toBe(false)
   })
 })
 

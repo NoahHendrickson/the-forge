@@ -1,6 +1,6 @@
 import { DEFAULT_WIDTH } from './dock'
 import { createButton } from './ui/button'
-import { DUR_FAST_MS, DUR_POP_MS, DUR_PANEL_MS, EASE_SPRING, EASE_OUT } from './motion'
+import { DUR_FAST_MS, DUR_POP_MS, DUR_PANEL_MS, EASE_SPRING, EASE_OUT, prefersReducedMotion } from './motion'
 
 /**
  * The design-token registry — the single canonical source for the overlay's palette,
@@ -101,6 +101,14 @@ button {
   position: fixed; z-index: 2147483646; pointer-events: none;
   border: 2px solid var(--accent); border-radius: 2px;
 }
+` +
+// left/top/width/height on ONE fixed-position element is cheap paint, no layout cascade —
+// safe to tween directly. #select-outline is deliberately NOT .forge-anim: entry is a
+// fade-in via this @starting-style block (separate from Task 2's forge-anim one), exit is
+// an instant [hidden] snap, never a fade-out.
+`#select-outline { transition: opacity 80ms var(--ease-out); }
+#select-outline.tween { transition: left var(--dur-fast) var(--ease-out), top var(--dur-fast) var(--ease-out), width var(--dur-fast) var(--ease-out), height var(--dur-fast) var(--ease-out); }
+@starting-style { #select-outline { opacity: 0; } }
 .select-outline-multi {
   position: fixed; z-index: 2147483646; pointer-events: none;
   border: 2px solid var(--accent); border-radius: 2px;
@@ -811,6 +819,7 @@ export class Overlay {
   /** Pool of ripple-outline divs, reused across showRipples() calls instead of recreated. */
   private ripplePool: HTMLElement[] = []
   private rippleClearTimer: ReturnType<typeof setTimeout> | null = null
+  private outlineTweenTimer: ReturnType<typeof setTimeout> | null = null
 
   /** Pool of select-outline-multi divs (B6), reused across showSelectOutlines() calls. */
   private selectOutlinePool: HTMLElement[] = []
@@ -900,8 +909,26 @@ export class Overlay {
     this.outline.hidden = true
   }
 
-  showSelectOutline(rect: DOMRect): void {
-    this.place(this.selectOutline, rect)
+  /** tween=true animates the outline from its current rect to the new one (Figma-style
+   * selection hop — deliberately ease-out, not spring: a springy rect reads as wobble).
+   * Callers that TRACK an element (remeasure on scroll/resize/edit-reflow) keep the
+   * default snap — the tween is only for the selection CHANGING, and any tracking call
+   * landing mid-tween disarms it (direct manipulation wins). First show from hidden
+   * never tweens (it would fly in from a stale rect); it fades in via @starting-style. */
+  showSelectOutline(rect: DOMRect, tween = false): void {
+    const el = this.selectOutline
+    if (this.outlineTweenTimer) clearTimeout(this.outlineTweenTimer)
+    this.outlineTweenTimer = null
+    if (tween && !el.hidden && !prefersReducedMotion()) {
+      el.classList.add('tween')
+      this.outlineTweenTimer = setTimeout(() => {
+        this.outlineTweenTimer = null
+        el.classList.remove('tween')
+      }, DUR_FAST_MS + 50)
+    } else {
+      el.classList.remove('tween')
+    }
+    this.place(el, rect)
   }
 
   hideSelectOutline(): void {

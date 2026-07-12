@@ -473,6 +473,18 @@ describe('DesignMode multi-select (B6)', () => {
     )
   })
 
+  it('a single→single selection hop tweens the outline; the first selection does not (motion pass Task 7)', () => {
+    const { overlay, mode } = multiSetup()
+    mode.setActive(true)
+    const a = document.getElementById('a')!
+    const b = document.getElementById('b')!
+    const spy = vi.spyOn(overlay, 'showSelectOutline')
+    click(a) // first selection: outline was hidden, no tween
+    expect(spy.mock.calls[0][1]).toBeFalsy()
+    click(b) // single -> single hop: tweens
+    expect(spy.mock.calls[1][1]).toBe(true)
+  })
+
   it('panel.show is called with the full selection array and the first element data in multi-select', () => {
     const { panel, mode } = multiSetup()
     mode.setActive(true)
