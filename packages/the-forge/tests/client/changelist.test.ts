@@ -407,6 +407,27 @@ describe('stage-change motion', () => {
     expect(list.root.querySelector('.stage-flip')).toBeNull()
   })
 
+  // Regression (review round 2): index.ts's resend() reuses the SAME SentSeed object under a
+  // new request id (session.removeSeed(seed) → registerQueuedSend(newId, [seed])). Tracking
+  // last-rendered stages by seed identity would survive that retirement — the resent row's
+  // FIRST render would see the stale 'failed' vs its new 'sent' stage and flip, violating the
+  // "never on first appearance" invariant. SeedRecord identity (fresh per register()) doesn't.
+  it('a resent seed (same object, new id) renders WITHOUT .stage-flip on first appearance', () => {
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
+    const session = (list as unknown as { session: LifecycleSession }).session
+    const s = seed(tagged())
+    list.addSent('q1', [s])
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'failed' })
+    expect(list.root.querySelector('.change-row.stage-flip')).not.toBeNull()
+    // The host's resend-success sequence: retire the seed, re-register the SAME object.
+    session.removeSeed(s)
+    list.addSent('q2', [s])
+    expect(list.root.querySelector('.stage-flip')).toBeNull()
+    // ...and a real stage change on the new registration still flips.
+    list.applyStage({ requestId: 'q2', elIndex: 0, dcSource: null, stage: 'applying' })
+    expect(list.root.querySelector('.change-row.stage-flip')).not.toBeNull()
+  })
+
   it('dismiss collapses the row before removing the seed (timeout path)', () => {
     vi.useFakeTimers()
     const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)

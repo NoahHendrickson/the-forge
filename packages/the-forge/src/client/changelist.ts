@@ -48,13 +48,18 @@ export class ChangeList {
    * rows WITHOUT wiping the session — the verifier keeps polling its entries across a
    * deactivate/reactivate. */
   private suppressSeedRecords = false
-  /** Stage seen at the previous render, keyed by seed identity — render() rebuilds every
+  /** Stage seen at the previous render, keyed by SeedRecord identity — render() rebuilds every
    * row via replaceChildren(), so CSS transitions can never fire across a stage change and
    * a bare entry animation would replay on EVERY re-render (each scrub tick rebuilds the
    * list). .stage-flip therefore lands only on the one render where a row's stage actually
    * differs from what this map last saw — the pop/shake plays once, then the next render
-   * (whatever triggers it) rebuilds the row without the class. */
-  private lastStages = new WeakMap<object, LifecycleStage>()
+   * (whatever triggers it) rebuilds the row without the class. Keyed by the RECORD, not
+   * row.seed: index.ts's resend() reuses the SAME SentSeed object under a new request id
+   * (removeSeed → registerQueuedSend), so a seed-keyed entry would survive retirement and
+   * flip the resent row's FIRST render (stale 'failed' remembered vs fresh 'sent') — records
+   * are minted fresh per register() (lifecycle.ts) and identity-stable across renders, so a
+   * re-registration starts clean by construction, no manual invalidation to forget. */
+  private lastStages = new WeakMap<SeedRecord, LifecycleStage>()
 
   constructor(
     private drafts: DraftStore,
@@ -189,9 +194,9 @@ export class ChangeList {
 
   private renderSeedRecord(row: SeedRecord): HTMLElement {
     const dom = this.baseRow(row.stage, row.seed.el)
-    const prev = this.lastStages.get(row.seed)
+    const prev = this.lastStages.get(row)
     if (prev !== undefined && prev !== row.stage) dom.classList.add('stage-flip')
-    this.lastStages.set(row.seed, row.stage)
+    this.lastStages.set(row, row.stage)
     const source = row.seed.change.source
     const dcSource = source ? `${source.file}:${source.line}:${source.col}` : row.seed.dcSource
     const elLabel = this.elLabel(row.seed.change.tag, dcSource)
