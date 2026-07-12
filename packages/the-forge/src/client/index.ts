@@ -176,6 +176,20 @@ export class DesignMode {
       // would make a wheel over the docked panel pan the artboard instead of scrolling it.
       hostContains: (t) => this.overlay.containsDeep(t),
       onChange: () => this.syncCanvasUi(),
+      // Shift+2 zoom-to-selection: the union box of the multi-select, viewport coords
+      // (getBoundingClientRect is already canvas-transformed — CanvasMode unmaps it).
+      selectionRect: () => {
+        if (this.selection.length === 0) return null
+        let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity
+        for (const el of this.selection) {
+          const r = el.getBoundingClientRect()
+          left = Math.min(left, r.left)
+          top = Math.min(top, r.top)
+          right = Math.max(right, r.right)
+          bottom = Math.max(bottom, r.bottom)
+        }
+        return { left, top, width: right - left, height: bottom - top }
+      },
     })
     this.canvasChrome = buildCanvasChrome(this.canvas, this.panel)
     this.overlay.attach(this.canvasChrome.wrap)

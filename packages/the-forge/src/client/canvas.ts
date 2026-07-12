@@ -26,6 +26,49 @@ export function panBy(state: CanvasState, dx: number, dy: number): CanvasState {
   return { x: state.x + dx, y: state.y + dy, scale: state.scale }
 }
 
+/** px per DOM_DELTA_LINE wheel step — Firefox mouse wheels report ±3 LINES per notch, not
+ *  pixels; without this a Firefox pan crawls at ~3px/notch (30× slower than Chrome). */
+export const WHEEL_LINE_PX = 16
+
+/** Per-event cap on the zoom wheel delta. A discrete mouse notch is deltaY ≈ ±100–120,
+ *  which through exp(−d·0.01) would jump ~2.7–3.3× per notch; capped at 32 a notch steps
+ *  e^0.32 ≈ 1.38× (Figma-like). Trackpad pinch deltas are small (<~30/event) and land
+ *  under the cap, so pinch speed is unchanged. */
+export const ZOOM_WHEEL_CLAMP = 32
+
+/**
+ * Figma's keyboard-zoom ladder — powers of two (… 25% 50% 100% 200% 400%), clamped.
+ * The ±1e-9 epsilon keeps a scale already ON a stop moving to the NEXT one instead of
+ * re-landing on itself through float noise.
+ */
+export function zoomStopAfter(s: number): number {
+  return clampScale(Math.pow(2, Math.floor(Math.log2(s) + 1e-9) + 1))
+}
+
+export function zoomStopBefore(s: number): number {
+  return clampScale(Math.pow(2, Math.ceil(Math.log2(s) - 1e-9) - 1))
+}
+
+/** A rectangle in PAGE coordinates (untransformed body space). */
+export interface PageRect { x: number; y: number; w: number; h: number }
+
+/**
+ * Fit a page-space rect into the viewport area the panel doesn't cover, centered.
+ * Shared by zoom-to-fit (rect = the whole artboard) and Shift+2 zoom-to-selection.
+ */
+export function fitRectState(
+  viewportW: number, viewportH: number, rect: PageRect, panelW: number
+): CanvasState {
+  const availW = Math.max(1, viewportW - panelW - FIT_MARGIN * 2)
+  const availH = Math.max(1, viewportH - FIT_MARGIN * 2)
+  const scale = clampScale(Math.min(availW / Math.max(1, rect.w), availH / Math.max(1, rect.h)))
+  return {
+    x: FIT_MARGIN + Math.max(0, (availW - rect.w * scale) / 2) - rect.x * scale,
+    y: FIT_MARGIN + Math.max(0, (availH - rect.h * scale) / 2) - rect.y * scale,
+    scale,
+  }
+}
+
 /**
  * Fit the whole artboard into the viewport area the panel doesn't cover. MIN_SCALE
  * deliberately wins over "whole page visible" for absurdly tall pages — a sub-10%
@@ -34,14 +77,7 @@ export function panBy(state: CanvasState, dx: number, dy: number): CanvasState {
 export function fitState(
   viewportW: number, viewportH: number, pageW: number, pageH: number, panelW: number
 ): CanvasState {
-  const availW = Math.max(1, viewportW - panelW - FIT_MARGIN * 2)
-  const availH = Math.max(1, viewportH - FIT_MARGIN * 2)
-  const scale = clampScale(Math.min(availW / Math.max(1, pageW), availH / Math.max(1, pageH)))
-  return {
-    x: FIT_MARGIN + Math.max(0, (availW - pageW * scale) / 2),
-    y: FIT_MARGIN + Math.max(0, (availH - pageH * scale) / 2),
-    scale,
-  }
+  return fitRectState(viewportW, viewportH, { x: 0, y: 0, w: pageW, h: pageH }, panelW)
 }
 
 const DEFAULT_STATE: CanvasState = { x: 0, y: 0, scale: 1 }
@@ -86,15 +122,20 @@ export interface CanvasModeOpts {
   dock: { setCanvasActive(on: boolean): void; mode(): 'docked' | 'floating'; width(): number }
   hostContains: (t: EventTarget | null) => boolean
   onChange: () => void
+  /** Current selection's bounding box in VIEWPORT coordinates (already canvas-transformed),
+   *  or null when nothing is selected — Shift+2 zoom-to-selection. */
+  selectionRect?: () => { left: number; top: number; width: number; height: number } | null
 }
 
 interface SavedStyles {
   bodyTransform: string
   bodyTransformOrigin: string
+  bodyWillChange: string
   bodyBoxShadow: string
   bodyBackgroundColor: string
   htmlOverflow: string
   htmlBackgroundColor: string
+  htmlCursor: string
 }
 
 function isEditable(t: EventTarget | null): boolean {
@@ -151,14 +192,36 @@ export class CanvasMode {
     this.persist()
   }
 
+  /** One keyboard/menu zoom step through the powers-of-2 ladder (Figma's +/− behavior). */
+  zoomStep(dir: 1 | -1): void {
+    this.setZoomCentered(dir > 0 ? zoomStopAfter(this.state.scale) : zoomStopBefore(this.state.scale))
+  }
+
+  private panelWidth(): number {
+    return this.opts.dock.mode() === 'docked' ? this.opts.dock.width() : 0
+  }
+
   zoomToFit(): void {
-    const panelW = this.opts.dock.mode() === 'docked' ? this.opts.dock.width() : 0
     this.setState(
       fitState(
         window.innerWidth, window.innerHeight,
-        document.body.scrollWidth, document.body.scrollHeight, panelW
+        document.body.scrollWidth, document.body.scrollHeight, this.panelWidth()
       )
     )
+    this.persist()
+  }
+
+  /** Shift+2 — fit the current selection (Figma parity). No-op without a selection. */
+  zoomToSelection(): void {
+    const r = this.opts.selectionRect?.()
+    if (!r || r.width <= 0 || r.height <= 0) return
+    // selectionRect is viewport-space (post-transform) — map back to page space first.
+    const { x, y, scale } = this.state
+    const page: PageRect = {
+      x: (r.left - x) / scale, y: (r.top - y) / scale,
+      w: r.width / scale, h: r.height / scale,
+    }
+    this.setState(fitRectState(window.innerWidth, window.innerHeight, page, this.panelWidth()))
     this.persist()
   }
 
@@ -169,10 +232,12 @@ export class CanvasMode {
     this.saved = {
       bodyTransform: body.style.transform,
       bodyTransformOrigin: body.style.transformOrigin,
+      bodyWillChange: body.style.willChange,
       bodyBoxShadow: body.style.boxShadow,
       bodyBackgroundColor: body.style.backgroundColor,
       htmlOverflow: html.style.overflow,
       htmlBackgroundColor: html.style.backgroundColor,
+      htmlCursor: html.style.cursor,
     }
     // Read the html background BEFORE painting it gray — if the page's background lives
     // on <html> and body is transparent, the artboard must keep the page's color or the
@@ -189,6 +254,10 @@ export class CanvasMode {
     if (isTransparent(bodyBg)) body.style.backgroundColor = isTransparent(htmlBg) ? '#ffffff' : htmlBg
     body.style.boxShadow = ARTBOARD_SHADOW
     body.style.transformOrigin = '0 0'
+    // Keep the artboard on its own compositor layer for the whole canvas session — pan/zoom
+    // writes transform every tick, and without the hint some engines re-rasterize on the
+    // main thread per frame instead of compositing.
+    body.style.willChange = 'transform'
     this.setState(seed)
     this.addListeners()
     this.opts.dock.setCanvasActive(true)
@@ -204,10 +273,12 @@ export class CanvasMode {
     const body = document.body
     body.style.transform = this.saved.bodyTransform
     body.style.transformOrigin = this.saved.bodyTransformOrigin
+    body.style.willChange = this.saved.bodyWillChange
     body.style.boxShadow = this.saved.bodyBoxShadow
     body.style.backgroundColor = this.saved.bodyBackgroundColor
     html.style.overflow = this.saved.htmlOverflow
     html.style.backgroundColor = this.saved.htmlBackgroundColor
+    html.style.cursor = this.saved.htmlCursor
     this.saved = null
     this.opts.dock.setCanvasActive(false)
     window.scrollTo(sx, sy)
@@ -248,28 +319,78 @@ export class CanvasMode {
     return e.composedPath?.()[0] ?? e.target
   }
 
-  /** Trailing debounce for wheel's persist() — wheel has no gesture-end event (unlike
-   *  pointerup/setZoomCentered/zoomToFit), so a full trackpad pan would otherwise never
-   *  persist until the NEXT discrete action. Idle-zero holds: the timer only exists while
-   *  actively wheeling — armed here, cleared (and flushed) in removeListeners(). */
+  /** Trailing debounce for the continuous gestures' persist() — wheel and Safari pinch have
+   *  no gesture-end event usable as a persist point (unlike pointerup/setZoomCentered/
+   *  zoomToFit), so a full trackpad pan would otherwise never persist until the NEXT
+   *  discrete action. Idle-zero holds: the timer only exists while actively gesturing —
+   *  armed here, cleared (and flushed) in removeListeners(). */
   private wheelPersistTimer: ReturnType<typeof setTimeout> | null = null
 
-  private onWheel = (e: WheelEvent): void => {
-    if (this.opts.hostContains(this.realTarget(e))) return // panel scrolls itself
-    e.preventDefault()
-    if (e.ctrlKey || e.metaKey) {
-      // Pinch arrives as ctrlKey wheel (Chrome/Safari/Firefox). Exponential factor keeps
-      // zoom speed feel constant across devices and directions.
-      const factor = Math.exp(-e.deltaY * 0.01)
-      this.setState(zoomAt(this.state, e.clientX, e.clientY, this.state.scale * factor))
-    } else {
-      this.setState(panBy(this.state, -e.deltaX, -e.deltaY))
-    }
+  private armPersistDebounce(): void {
     if (this.wheelPersistTimer) clearTimeout(this.wheelPersistTimer)
     this.wheelPersistTimer = setTimeout(() => {
       this.wheelPersistTimer = null
       this.persist()
     }, 250)
+  }
+
+  /** Paint only if the gesture actually moved the state — at the zoom clamp every further
+   *  pinch tick resolves to an identical state, and repainting it would burn a transform
+   *  write + a full onChange (chrome sync + outline reflow) per tick for nothing. */
+  private setStateIfChanged(next: CanvasState): void {
+    const s = this.state
+    if (next.x === s.x && next.y === s.y && next.scale === s.scale) return
+    this.setState(next)
+  }
+
+  private onWheel = (e: WheelEvent): void => {
+    if (this.opts.hostContains(this.realTarget(e))) return // panel scrolls itself
+    e.preventDefault()
+    // deltaMode normalization: Firefox mouse wheels report LINES (±3/notch), not pixels.
+    const unit = e.deltaMode === 1 ? WHEEL_LINE_PX : e.deltaMode === 2 ? window.innerHeight : 1
+    if (e.ctrlKey || e.metaKey) {
+      // Pinch arrives as ctrlKey wheel on Chrome/Firefox (Safari uses gesture events, below).
+      // Exponential factor keeps zoom speed feel constant across devices and directions;
+      // the clamp tames discrete mouse notches without touching pinch (see ZOOM_WHEEL_CLAMP).
+      const dy = Math.max(-ZOOM_WHEEL_CLAMP, Math.min(ZOOM_WHEEL_CLAMP, e.deltaY * unit))
+      const factor = Math.exp(-dy * 0.01)
+      this.setStateIfChanged(zoomAt(this.state, e.clientX, e.clientY, this.state.scale * factor))
+    } else {
+      let dx = e.deltaX * unit
+      let dy = e.deltaY * unit
+      // Shift+wheel pans horizontally (Figma standard). Browsers that already remap
+      // shift+wheel report it in deltaX — only swap when the device gave us none.
+      if (e.shiftKey && dx === 0) { dx = dy; dy = 0 }
+      this.setStateIfChanged(panBy(this.state, -dx, -dy))
+    }
+    this.armPersistDebounce()
+  }
+
+  // ── Safari pinch ────────────────────────────────────────────────────────────
+  // Safari does NOT synthesize ctrlKey wheel events for trackpad pinch — it fires
+  // nonstandard gesturestart/gesturechange/gestureend with a cumulative e.scale
+  // relative to gesture start. Without these the browser page-zooms instead.
+  private gestureStartScale = 1
+
+  private onGestureStart = (e: Event): void => {
+    if (this.opts.hostContains(this.realTarget(e))) return
+    e.preventDefault()
+    this.gestureStartScale = this.state.scale
+  }
+
+  private onGestureChange = (e: Event): void => {
+    if (this.opts.hostContains(this.realTarget(e))) return
+    e.preventDefault()
+    const g = e as Event & { scale?: number; clientX?: number; clientY?: number }
+    if (typeof g.scale !== 'number' || !Number.isFinite(g.scale) || g.scale <= 0) return
+    const cx = typeof g.clientX === 'number' ? g.clientX : window.innerWidth / 2
+    const cy = typeof g.clientY === 'number' ? g.clientY : window.innerHeight / 2
+    this.setStateIfChanged(zoomAt(this.state, cx, cy, this.gestureStartScale * g.scale))
+    this.armPersistDebounce()
+  }
+
+  private onGestureEnd = (e: Event): void => {
+    e.preventDefault()
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -278,23 +399,46 @@ export class CanvasMode {
     if (e.code === 'Space') {
       this.spaceHeld = true
       e.preventDefault() // page can't scroll anyway; this stops button re-activation
+      // Hand cursor while space is armed — Figma's pan affordance. Skipped mid-drag so
+      // auto-repeat can't downgrade an active 'grabbing' back to 'grab'.
+      if (!this.dragTeardown) this.setCursor('grab')
       return
     }
     if (e.shiftKey && e.code === 'Digit0') { e.preventDefault(); this.setZoomCentered(1) }
     else if (e.shiftKey && e.code === 'Digit1') { e.preventDefault(); this.zoomToFit() }
+    else if (e.shiftKey && e.code === 'Digit2') { e.preventDefault(); this.zoomToSelection() }
+    // Bare +/− step the zoom ladder (Figma). Modified +/− (Cmd/Ctrl) stays the browser's.
+    else if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (e.code === 'Equal' || e.code === 'NumpadAdd') { e.preventDefault(); this.zoomStep(1) }
+      else if (e.code === 'Minus' || e.code === 'NumpadSubtract') { e.preventDefault(); this.zoomStep(-1) }
+    }
   }
 
   private onKeyUp = (e: KeyboardEvent): void => {
     // No isEditable/hostContains guards on purpose: clearing is idempotent, and spaceHeld
     // can only be true if the matching keydown already passed those guards.
-    if (e.code === 'Space') this.spaceHeld = false
+    if (e.code === 'Space') {
+      this.spaceHeld = false
+      if (!this.dragTeardown) this.setCursor('')
+    }
+  }
+
+  /** Cursor writes go on <html> (the overlay host's parent) so they win over page CSS
+   *  without touching body. Clearing ('') restores the page's own saved inline cursor —
+   *  not a bare wipe — so a page that set one keeps it between gestures. */
+  private setCursor(c: string): void {
+    document.documentElement.style.cursor = c || (this.saved?.htmlCursor ?? '')
   }
 
   private onPointerDown = (e: PointerEvent): void => {
-    if (!this.spaceHeld || e.button !== 0) return
+    // Two pan triggers, both Figma's: space+left-drag, and middle-button drag (no space).
+    // preventDefault on middle also suppresses Chrome's autoscroll widget.
+    const middle = e.button === 1
+    if (!middle && !(this.spaceHeld && e.button === 0)) return
     if (this.opts.hostContains(this.realTarget(e))) return
     e.preventDefault()
     e.stopPropagation() // window-capture fires before index.ts's document-capture handlers
+    this.setCursor('grabbing')
     this.didPan = false
     // Pan incrementally from LIVE state, not a frozen pointerdown snapshot — a wheel
     // pan/zoom landing mid-drag must survive the next pointermove instead of being
@@ -312,6 +456,7 @@ export class CanvasMode {
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onCancel)
       this.dragTeardown = null
+      this.setCursor(this.spaceHeld ? 'grab' : '')
       this.persist() // drag ended — a discrete gesture-end, persist regardless of squelch path
       // The click that follows a pan-drag would land as a selection click — squelch
       // exactly one. window-capture beats index.ts's document-capture click handler.
@@ -322,7 +467,9 @@ export class CanvasMode {
         window.addEventListener('click', squelch, { capture: true, once: true })
       }
     }
-    const onUp = (): void => finish(true)
+    // A middle-button release fires auxclick, not click — index.ts's selection handler
+    // never sees it, so no squelch to arm on that path.
+    const onUp = (): void => finish(!middle)
     const onCancel = (): void => finish(false)
     this.dragTeardown = () => finish(false)
     window.addEventListener('pointermove', onMove)
@@ -335,6 +482,12 @@ export class CanvasMode {
     window.addEventListener('keydown', this.onKeyDown, true)
     window.addEventListener('keyup', this.onKeyUp, true)
     window.addEventListener('pointerdown', this.onPointerDown, true)
+    // Safari-only pinch path — feature-detected so other engines never pay for it.
+    if ('GestureEvent' in window) {
+      window.addEventListener('gesturestart', this.onGestureStart, { capture: true, passive: false })
+      window.addEventListener('gesturechange', this.onGestureChange, { capture: true, passive: false })
+      window.addEventListener('gestureend', this.onGestureEnd, { capture: true, passive: false })
+    }
   }
 
   private removeListeners(): void {
@@ -348,6 +501,10 @@ export class CanvasMode {
     window.removeEventListener('keydown', this.onKeyDown, true)
     window.removeEventListener('keyup', this.onKeyUp, true)
     window.removeEventListener('pointerdown', this.onPointerDown, true)
+    // Unconditional (no feature gate) — removing a never-added listener is a no-op.
+    window.removeEventListener('gesturestart', this.onGestureStart, true)
+    window.removeEventListener('gesturechange', this.onGestureChange, true)
+    window.removeEventListener('gestureend', this.onGestureEnd, true)
     this.spaceHeld = false
   }
 }

@@ -23,12 +23,19 @@ export function buildCanvasChrome(canvas: CanvasMode, panel: Panel): CanvasChrom
     opensUp: true,
     popoverHost: wrap,
     items: () => [
-      { value: 'fit', label: 'Zoom to fit' },
+      { value: 'in', label: 'Zoom in' },
+      { value: 'out', label: 'Zoom out' },
+      { value: 'fit', label: 'Zoom to fit', separator: true },
       { value: '0.5', label: '50%', checked: canvas.scale() === 0.5, separator: true },
       { value: '1', label: '100%', checked: canvas.scale() === 1 },
       { value: '2', label: '200%', checked: canvas.scale() === 2 },
     ],
-    onSelect: (v) => (v === 'fit' ? canvas.zoomToFit() : canvas.setZoomCentered(Number(v))),
+    onSelect: (v) => {
+      if (v === 'in') canvas.zoomStep(1)
+      else if (v === 'out') canvas.zoomStep(-1)
+      else if (v === 'fit') canvas.zoomToFit()
+      else canvas.setZoomCentered(Number(v))
+    },
   })
   menu.button.classList.add('zoom-pill')
   wrap.appendChild(menu.button)
