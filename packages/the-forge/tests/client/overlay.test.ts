@@ -183,6 +183,18 @@ describe('Overlay CSS design tokens (Task 1)', () => {
     }
   })
 
+  it('exposes the motion tokens and keyframes', () => {
+    expect(TOKENS['dur-fast']).toBe('120ms')
+    expect(TOKENS['dur-pop']).toBe('180ms')
+    expect(TOKENS['dur-panel']).toBe('240ms')
+    expect(TOKENS['ease-spring'].startsWith('linear(')).toBe(true)
+    expect(TOKENS['ease-out'].startsWith('cubic-bezier(')).toBe(true)
+    expect(CSS).toContain('@keyframes forge-pop')
+    expect(CSS).toContain('@keyframes forge-rise-in')
+    expect(CSS).toContain('@keyframes forge-shake')
+    expect(CSS).toContain('@media (prefers-reduced-motion: reduce)')
+  })
+
 })
 
 describe('Overlay (M2 additions)', () => {

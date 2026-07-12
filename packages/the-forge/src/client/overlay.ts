@@ -1,5 +1,6 @@
 import { DEFAULT_WIDTH } from './dock'
 import { createButton } from './ui/button'
+import { DUR_FAST_MS, DUR_POP_MS, DUR_PANEL_MS, EASE_SPRING, EASE_OUT } from './motion'
 
 /**
  * The design-token registry — the single canonical source for the overlay's palette,
@@ -32,6 +33,11 @@ export const TOKENS = {
   'text-xs': '10px',
   'text-sm': '11px',
   'text-md': '12px',
+  'dur-fast': `${DUR_FAST_MS}ms`,
+  'dur-pop': `${DUR_POP_MS}ms`,
+  'dur-panel': `${DUR_PANEL_MS}ms`,
+  'ease-spring': EASE_SPRING,
+  'ease-out': EASE_OUT,
 } as const
 
 const tokenBlock = Object.entries(TOKENS)
@@ -50,6 +56,8 @@ const tokenBlock = Object.entries(TOKENS)
 // --ripple: sibling-reflow ripple outline (must stay distinct from selection accent)
 // --font-ui / --font-mono: font-family stacks.
 // --text-xs / --text-sm / --text-md: the 10/11/12px type scale.
+// --dur-fast/--dur-pop/--dur-panel + --ease-spring/--ease-out: the motion system
+//   (motion.ts is the source; see the 2026-07-12 overlay-motion spec).
 // Radius: panel 12px, controls 6px, matrix tile 8px.
 export const CSS = `
 [hidden] { display: none !important; }
@@ -705,6 +713,23 @@ button {
   font: 500 var(--text-md) var(--font-ui);
 }
 .zoom-pill:hover { background: var(--control-hover); }
+` +
+// Motion primitives (2026-07-12 overlay-motion spec). forge-pop/rise-in are from-only —
+// the destination is the element's natural state, so one keyframe serves every use site.
+// The reduced-motion block is a blanket: 1ms (never 0s — transitionend must still fire
+// for JS that waits on it) across every shadow-DOM transition/animation, including the
+// pre-existing ripple fade and chip pulse. Page-context motion (dock margin, canvas
+// transform) is guarded separately via prefersReducedMotion() in motion.ts.
+`@keyframes forge-pop { from { transform: scale(0.8); } }
+@keyframes forge-rise-in { from { opacity: 0; transform: translateY(8px); } }
+@keyframes forge-shake { 25% { transform: translateX(-2px); } 50% { transform: translateX(2px); } 75% { transform: translateX(-1px); } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
 `
 
 export class Overlay {
