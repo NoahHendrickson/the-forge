@@ -52,7 +52,7 @@ export function savePrefs(prefs: PanelPrefs): void {
 }
 
 import type { Panel } from './panel'
-import { DUR_PANEL_MS, EASE_OUT, prefersReducedMotion } from './motion'
+import { armPageTransition } from './motion'
 
 /**
  * Owns the docked-vs-floating layout state of the panel. "Docked" pushes the page
@@ -168,32 +168,14 @@ export class Dock {
 
   /** Animates the NEXT html margin-right write (dock/undock/design-mode-enter — the
    * discrete toggles only; width-drag syncWidth writes stay instant and onResizeStart
-   * force-clears any in-flight arm, so a drag never fights a tween). Page context can't
-   * see the shadow root's --dur/--ease tokens, hence the imported literals. transitionend
-   * BUBBLES — an unrelated page element finishing its own margin-right transition would
-   * otherwise bubble up to html and kill this tween mid-glide, so the handler also checks
-   * e.target is html itself. */
+   * force-clears any in-flight arm, so a drag never fights a tween). The arm/restore/
+   * self-clean dance (incl. the transitionend bubbling guard) lives in motion.ts's
+   * armPageTransition — shared with CanvasMode's zoom tween. */
   private armMarginTransition(): void {
-    if (prefersReducedMotion()) return
     this.marginTransitionCleanup?.()
-    const html = document.documentElement
-    const prev = html.style.transition
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const cleanup = (): void => {
-      html.style.transition = prev
-      html.removeEventListener('transitionend', onEnd)
-      if (timer) clearTimeout(timer)
+    this.marginTransitionCleanup = armPageTransition(document.documentElement, 'margin-right', () => {
       this.marginTransitionCleanup = null
-    }
-    const onEnd = (e: TransitionEvent): void => {
-      if (e.target === html && e.propertyName === 'margin-right') cleanup()
-    }
-    html.style.transition = prev
-      ? `${prev}, margin-right ${DUR_PANEL_MS}ms ${EASE_OUT}`
-      : `margin-right ${DUR_PANEL_MS}ms ${EASE_OUT}`
-    html.addEventListener('transitionend', onEnd)
-    timer = setTimeout(cleanup, DUR_PANEL_MS + 80)
-    this.marginTransitionCleanup = cleanup
+    })
   }
 
   private applyDocked(): void {

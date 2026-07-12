@@ -1,4 +1,4 @@
-import { DUR_PANEL_MS, EASE_OUT, prefersReducedMotion } from './motion'
+import { armPageTransition } from './motion'
 
 export interface CanvasState { x: number; y: number; scale: number }
 export interface CanvasPrefs { on: boolean; state: CanvasState }
@@ -367,33 +367,16 @@ export class CanvasMode {
   /** Arms a transform tween for the NEXT setState write — the discrete zooms only
    * (fit/ladder/percent-menu/Shift+0-1-2). Enter/exit stay seamless by construction (the
    * seed transform matches the live scroll), and wheel/pinch/drag must never be damped:
-   * every continuous path clears this before writing. Page context can't read the shadow
-   * root's tokens — hence imported literals (motion.ts is the shared source). EASE_OUT,
-   * not the spring: an overshooting zoom re-rasterizes the artboard past its target and
-   * reads as focus hunting, not springiness. transitionend BUBBLES — an unrelated page
-   * element finishing its own transform transition would otherwise bubble up to body and
-   * kill this tween mid-glide, so the handler also checks e.target is body itself. */
+   * every continuous path clears this before writing. The arm/restore/self-clean dance
+   * (incl. the transitionend bubbling guard) lives in motion.ts's armPageTransition —
+   * shared with Dock's margin push. EASE_OUT, not the spring: an overshooting zoom
+   * re-rasterizes the artboard past its target and reads as focus hunting. */
   private armZoomTween(): void {
-    if (prefersReducedMotion() || this.saved === null) return
+    if (this.saved === null) return
     this.zoomTweenCleanup?.()
-    const body = document.body
-    const prev = body.style.transition
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const cleanup = (): void => {
-      body.style.transition = prev
-      body.removeEventListener('transitionend', onEnd)
-      if (timer) clearTimeout(timer)
+    this.zoomTweenCleanup = armPageTransition(document.body, 'transform', () => {
       this.zoomTweenCleanup = null
-    }
-    const onEnd = (e: TransitionEvent): void => {
-      if (e.target === body && e.propertyName === 'transform') cleanup()
-    }
-    body.style.transition = prev
-      ? `${prev}, transform ${DUR_PANEL_MS}ms ${EASE_OUT}`
-      : `transform ${DUR_PANEL_MS}ms ${EASE_OUT}`
-    body.addEventListener('transitionend', onEnd)
-    timer = setTimeout(cleanup, DUR_PANEL_MS + 80)
-    this.zoomTweenCleanup = cleanup
+    })
   }
 
   /** Paint only if the gesture actually moved the state — at the zoom clamp every further

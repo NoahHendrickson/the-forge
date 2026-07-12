@@ -42,6 +42,40 @@ export function popOnce(el: HTMLElement, className = 'pop'): void {
   el.classList.add(className)
 }
 
+/** Arms a one-shot page-context transition on `el` for `property`, at the shared
+ * discrete-gesture profile (DUR_PANEL_MS + EASE_OUT): saves the element's prior inline
+ * transition VERBATIM, appends the property tween, and self-cleans on transitionend or a
+ * DUR_PANEL_MS + 80 timeout, whichever first (jsdom never fires transitionend).
+ * transitionend BUBBLES — an unrelated page element finishing its own `property`
+ * transition would otherwise bubble up to `el` and kill the tween mid-glide, so the
+ * handler checks e.target is `el` itself (PR #34 final review). Returns the cleanup so
+ * callers can stash it for direct-manipulation force-clears, or null under reduced
+ * motion. `onSettle` runs exactly once as part of cleanup — callers null their stashed
+ * handle there, keeping the per-tick `?.()` guard the cheap common case. Extracted from
+ * the dock-margin/canvas-zoom twins (PR #34 review — both reviewers). */
+export function armPageTransition(
+  el: HTMLElement, property: string, onSettle: () => void
+): (() => void) | null {
+  if (prefersReducedMotion()) return null
+  const prev = el.style.transition
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const cleanup = (): void => {
+    el.style.transition = prev
+    el.removeEventListener('transitionend', onEnd)
+    if (timer) clearTimeout(timer)
+    onSettle()
+  }
+  const onEnd = (e: TransitionEvent): void => {
+    if (e.target === el && e.propertyName === property) cleanup()
+  }
+  el.style.transition = prev
+    ? `${prev}, ${property} ${DUR_PANEL_MS}ms ${EASE_OUT}`
+    : `${property} ${DUR_PANEL_MS}ms ${EASE_OUT}`
+  el.addEventListener('transitionend', onEnd)
+  timer = setTimeout(cleanup, DUR_PANEL_MS + 80)
+  return cleanup
+}
+
 /** Fade-and-collapse a row, then hand control back (the caller does the actual state
  * mutation — e.g. session.removeSeed — in onDone, which triggers the re-render that
  * discards this element). transitionend AND a timeout race to onDone (jsdom and
