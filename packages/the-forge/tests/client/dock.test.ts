@@ -71,9 +71,16 @@ function dockSetup() {
 afterEach(() => {
   document.body.innerHTML = ''
   document.documentElement.style.marginRight = ''
-  // Task 8: armMarginTransition's real (non-fake) fallback setTimeout can outlive a test
-  // that never calls exit() to trigger its own synchronous cleanup chain — reset here so
-  // a stale value never leaks into the next test's `prev` read.
+  // Flush any in-flight armMarginTransition cleanup deterministically — jsdom never fires
+  // transitionend on its own, and removeDocked()'s arm otherwise leaves a live real timer
+  // + listener dangling past the test (Task 8 review). jsdom has no TransitionEvent
+  // constructor — the Object.assign shape is the idiom; the cleanup handler only reads
+  // e.propertyName.
+  document.documentElement.dispatchEvent(
+    Object.assign(new Event('transitionend'), { propertyName: 'margin-right' })
+  )
+  // Belt-and-braces: reset the style so a stale value can never leak into the next test's
+  // `prev` read even if a future arm shape escapes the flush above.
   document.documentElement.style.transition = ''
 })
 
