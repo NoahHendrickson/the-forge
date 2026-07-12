@@ -6,6 +6,7 @@ import {
   MIN_SCALE, MAX_SCALE, CANVAS_STORAGE_KEY, FIT_MARGIN, WHEEL_LINE_PX, ZOOM_WHEEL_CLAMP,
   CanvasMode, type CanvasModeOpts,
 } from '../../src/client/canvas'
+import { DUR_PANEL_MS } from '../../src/client/motion'
 
 describe('clampScale', () => {
   it('clamps to [MIN_SCALE, MAX_SCALE]', () => {
@@ -595,5 +596,54 @@ describe('CanvasMode Figma-parity pass (2026-07-11 optimization review)', () => 
     } finally {
       delete (window as unknown as { GestureEvent?: unknown }).GestureEvent
     }
+  })
+})
+
+describe('CanvasMode discrete-zoom tween (2026-07-12 motion pass)', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+    document.documentElement.removeAttribute('style')
+    document.body.removeAttribute('style')
+    vi.stubGlobal('scrollTo', vi.fn())
+    Object.defineProperty(window, 'scrollX', { value: 0, configurable: true })
+    Object.defineProperty(window, 'scrollY', { value: 0, configurable: true })
+  })
+
+  it('discrete zooms tween the body transform; continuous gestures never do', () => {
+    vi.useFakeTimers()
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    expect(document.body.style.transition).toBe('') // enter is seamless — no tween
+    canvas.zoomToFit()
+    expect(document.body.style.transition).toContain('transform')
+    vi.advanceTimersByTime(DUR_PANEL_MS + 100)
+    expect(document.body.style.transition).toBe('')
+    canvas.setZoomCentered(2)
+    expect(document.body.style.transition).toContain('transform')
+    // a wheel tick mid-tween must clear it — direct manipulation wins
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: 10, cancelable: true }))
+    expect(document.body.style.transition).toBe('')
+    canvas.setOn(false)
+    vi.useRealTimers()
+  })
+
+  it('unapply never leaves a transition behind', () => {
+    vi.useFakeTimers()
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    canvas.zoomToFit()
+    canvas.setOn(false)
+    expect(document.body.style.transition).toBe('')
+    vi.useRealTimers()
+  })
+
+  it('no zoom tween under reduced motion', () => {
+    const spy = vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true } as MediaQueryList)
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    canvas.zoomToFit()
+    expect(document.body.style.transition).toBe('')
+    canvas.setOn(false)
+    spy.mockRestore()
   })
 })

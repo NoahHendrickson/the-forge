@@ -1,3 +1,5 @@
+import { DUR_PANEL_MS, EASE_OUT, prefersReducedMotion } from './motion'
+
 export interface CanvasState { x: number; y: number; scale: number }
 export interface CanvasPrefs { on: boolean; state: CanvasState }
 
@@ -208,6 +210,7 @@ export class CanvasMode {
   }
 
   setZoomCentered(scale: number): void {
+    this.armZoomTween()
     this.setState(zoomAt(this.state, window.innerWidth / 2, window.innerHeight / 2, scale))
     this.persist()
   }
@@ -222,6 +225,7 @@ export class CanvasMode {
   }
 
   zoomToFit(): void {
+    this.armZoomTween()
     this.setState(
       fitState(
         window.innerWidth, window.innerHeight,
@@ -235,6 +239,7 @@ export class CanvasMode {
   zoomToSelection(): void {
     const r = this.opts.selectionRect?.()
     if (!r || r.width <= 0 || r.height <= 0) return
+    this.armZoomTween()
     // selectionRect is viewport-space (post-transform) — map back to page space first.
     const { x, y, scale } = this.state
     const page: PageRect = {
@@ -354,6 +359,41 @@ export class CanvasMode {
     }, 250)
   }
 
+  /** Undoes an in-flight discrete-zoom tween (restores body's prior inline transition
+   * verbatim). Non-null only while a tween is live — the continuous-gesture paths call it
+   * unconditionally per tick, so the null-check must stay the cheap common case. */
+  private zoomTweenCleanup: (() => void) | null = null
+
+  /** Arms a transform tween for the NEXT setState write — the discrete zooms only
+   * (fit/ladder/percent-menu/Shift+0-1-2). Enter/exit stay seamless by construction (the
+   * seed transform matches the live scroll), and wheel/pinch/drag must never be damped:
+   * every continuous path clears this before writing. Page context can't read the shadow
+   * root's tokens — hence imported literals (motion.ts is the shared source). EASE_OUT,
+   * not the spring: an overshooting zoom re-rasterizes the artboard past its target and
+   * reads as focus hunting, not springiness. */
+  private armZoomTween(): void {
+    if (prefersReducedMotion() || this.saved === null) return
+    this.zoomTweenCleanup?.()
+    const body = document.body
+    const prev = body.style.transition
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const cleanup = (): void => {
+      body.style.transition = prev
+      body.removeEventListener('transitionend', onEnd)
+      if (timer) clearTimeout(timer)
+      this.zoomTweenCleanup = null
+    }
+    const onEnd = (e: TransitionEvent): void => {
+      if (e.propertyName === 'transform') cleanup()
+    }
+    body.style.transition = prev
+      ? `${prev}, transform ${DUR_PANEL_MS}ms ${EASE_OUT}`
+      : `transform ${DUR_PANEL_MS}ms ${EASE_OUT}`
+    body.addEventListener('transitionend', onEnd)
+    timer = setTimeout(cleanup, DUR_PANEL_MS + 80)
+    this.zoomTweenCleanup = cleanup
+  }
+
   /** Paint only if the gesture actually moved the state — at the zoom clamp every further
    *  pinch tick resolves to an identical state, and repainting it would burn a transform
    *  write + a full onChange (chrome sync + outline reflow) per tick for nothing. */
@@ -366,6 +406,7 @@ export class CanvasMode {
   private onWheel = (e: WheelEvent): void => {
     if (this.opts.hostContains(this.realTarget(e))) return // panel scrolls itself
     e.preventDefault()
+    this.zoomTweenCleanup?.() // continuous gesture — direct manipulation must never be damped
     // deltaMode normalization: Firefox mouse wheels report LINES (±3/notch), not pixels.
     const unit = e.deltaMode === 1 ? WHEEL_LINE_PX : e.deltaMode === 2 ? window.innerHeight : 1
     if (e.ctrlKey || e.metaKey) {
@@ -401,6 +442,7 @@ export class CanvasMode {
   private onGestureChange = (e: Event): void => {
     if (this.opts.hostContains(this.realTarget(e))) return
     e.preventDefault()
+    this.zoomTweenCleanup?.() // continuous gesture — direct manipulation must never be damped
     const g = e as Event & { scale?: number; clientX?: number; clientY?: number }
     if (typeof g.scale !== 'number' || !Number.isFinite(g.scale) || g.scale <= 0) return
     const cx = typeof g.clientX === 'number' ? g.clientX : window.innerWidth / 2
@@ -466,6 +508,7 @@ export class CanvasMode {
     let lastX = e.clientX
     let lastY = e.clientY
     const onMove = (ev: PointerEvent): void => {
+      this.zoomTweenCleanup?.() // continuous gesture — direct manipulation must never be damped
       this.didPan = true
       this.setState(panBy(this.state, ev.clientX - lastX, ev.clientY - lastY))
       lastX = ev.clientX
@@ -512,6 +555,8 @@ export class CanvasMode {
 
   private removeListeners(): void {
     this.dragTeardown?.() // a drag in flight must not outlive canvas mode
+    this.zoomTweenCleanup?.() // unapply() calls removeListeners() before restoring saved
+    // styles — the body's transition must be back to its pre-tween value first, no ordering hazard.
     if (this.wheelPersistTimer) {
       clearTimeout(this.wheelPersistTimer)
       this.wheelPersistTimer = null
