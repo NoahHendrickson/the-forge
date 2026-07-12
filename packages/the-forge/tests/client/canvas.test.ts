@@ -646,4 +646,25 @@ describe('CanvasMode discrete-zoom tween (2026-07-12 motion pass)', () => {
     canvas.setOn(false)
     spy.mockRestore()
   })
+
+  // transitionend BUBBLES — a page element finishing its own transform transition must
+  // not be mistaken for the artboard's own zoom tween (final-review Finding 1).
+  it('a bubbled transitionend from a child element does not kill the zoom tween early', () => {
+    vi.useFakeTimers()
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    canvas.zoomToFit()
+    expect(document.body.style.transition).toContain('transform')
+    const child = document.createElement('div')
+    document.body.appendChild(child)
+    child.dispatchEvent(
+      Object.assign(new Event('transitionend', { bubbles: true }), { propertyName: 'transform' })
+    )
+    // still armed — a bubbled event from an unrelated descendant must not cancel the tween
+    expect(document.body.style.transition).toContain('transform')
+    document.body.dispatchEvent(Object.assign(new Event('transitionend'), { propertyName: 'transform' }))
+    expect(document.body.style.transition).toBe('')
+    canvas.setOn(false)
+    vi.useRealTimers()
+  })
 })

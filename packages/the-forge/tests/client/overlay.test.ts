@@ -731,6 +731,14 @@ describe('SessionFeed chat CSS hooks (Task 5)', () => {
     expect(CSS).toContain('.draft-disclosure.open { grid-template-rows: 1fr;')
     expect(CSS).not.toContain('.draft-disclosure { display: none; }')
   })
+
+  // final-review Finding 2: a rendered 0-height grid item (closed disclosure) still earns
+  // .chat-composer's 6px flex gap — margin-bottom cancels it closed, releases it open.
+  it('closed draft disclosure cancels the composer gap; open disclosure releases it', () => {
+    expect(CSS).toContain('.draft-disclosure { display: grid; grid-template-rows: 0fr; visibility: hidden; margin-bottom: -6px;')
+    expect(CSS).toContain('margin-bottom var(--dur-pop) var(--ease-spring)')
+    expect(CSS).toContain('.draft-disclosure.open { grid-template-rows: 1fr; visibility: visible; margin-bottom: 0; }')
+  })
 })
 
 describe('Overlay CSS session rows + approval card entrances (Task 6)', () => {

@@ -706,6 +706,13 @@ button {
 // rides the transition so collapsed ChangeList buttons stay untabbable when closed but render
 // during the collapse/expand — a UX win that keeps the 2px spring overshoot invisible (>100% is
 // layout-safe slack). CSS class names here are test hooks — extend, don't rename.
+// final-review Finding 2: .draft-disclosure is an always-mounted first child of .chat-composer
+// (flex; gap: 6px). The old closed state was display:none (no gap slot); grid-template-rows: 0fr
+// still renders a 0-height flex item, which still earns the parent's 6px gap — a dead 6px band
+// above the chips row whenever the disclosure is closed (almost always). margin-bottom: -6px
+// cancels exactly that gap while closed; .open resets it to 0 so the open disclosure sits flush
+// against the chips row below it. The compensation rides the same spring transition so it never
+// pops discretely against the grid-template-rows glide — keep in sync with .chat-composer's gap.
 `.draft-pill {
   flex: none; display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 8px; border-radius: 6px; background: var(--control); border: none;
@@ -714,9 +721,9 @@ button {
 .draft-pill:hover { background: var(--control-hover); }
 .draft-pill-chevron { transition: transform 120ms ease; }
 .draft-pill.open .draft-pill-chevron { transform: rotate(180deg); }
-.draft-disclosure { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows var(--dur-pop) var(--ease-spring), visibility var(--dur-pop); }
+.draft-disclosure { display: grid; grid-template-rows: 0fr; visibility: hidden; margin-bottom: -6px; transition: grid-template-rows var(--dur-pop) var(--ease-spring), visibility var(--dur-pop), margin-bottom var(--dur-pop) var(--ease-spring); }
 .draft-disclosure > .draft-slot { min-height: 0; overflow: hidden; }
-.draft-disclosure.open { grid-template-rows: 1fr; visibility: visible; }
+.draft-disclosure.open { grid-template-rows: 1fr; visibility: visible; margin-bottom: 0; }
 ` +
 `.chat-input { display: flex; flex-direction: column; gap: 6px; }
 .chat-textarea {
@@ -780,7 +787,7 @@ button {
 // The [hidden] rule carries the exit transition (destination-state timing wins).
 // #status[hidden] is the ID-specificity trap: #status's own `display: flex` (1,0,0)
 // outranks .forge-anim[hidden]'s display:none (0,2,0), so a hidden status strip would
-// stay visible — the (1,0,1) ID-anchored override wins, and stays non-important so the
+// stay visible — the (1,1,0) ID-anchored override wins, and stays non-important so the
 // allow-discrete display transition still holds it visible during the exit fade. Keep
 // in sync if any other ID-selector element ever gets .forge-anim.
 `.forge-anim, .menu-popover {

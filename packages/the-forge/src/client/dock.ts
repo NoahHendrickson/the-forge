@@ -140,6 +140,10 @@ export class Dock {
 
   setCanvasActive(on: boolean): void {
     if (on === this.canvasActive) return
+    // Canvas-driven margin suspension must stay instant (spec §7) — an in-flight
+    // margin-push tween would otherwise still be gliding when syncWidth below writes
+    // the suspended/restored value, producing a visible fight between the two.
+    this.marginTransitionCleanup?.()
     this.canvasActive = on
     if (this.active && this.prefs.mode === 'docked') this.syncWidth()
   }
@@ -165,7 +169,10 @@ export class Dock {
   /** Animates the NEXT html margin-right write (dock/undock/design-mode-enter — the
    * discrete toggles only; width-drag syncWidth writes stay instant and onResizeStart
    * force-clears any in-flight arm, so a drag never fights a tween). Page context can't
-   * see the shadow root's --dur/--ease tokens, hence the imported literals. */
+   * see the shadow root's --dur/--ease tokens, hence the imported literals. transitionend
+   * BUBBLES — an unrelated page element finishing its own margin-right transition would
+   * otherwise bubble up to html and kill this tween mid-glide, so the handler also checks
+   * e.target is html itself. */
   private armMarginTransition(): void {
     if (prefersReducedMotion()) return
     this.marginTransitionCleanup?.()
@@ -179,7 +186,7 @@ export class Dock {
       this.marginTransitionCleanup = null
     }
     const onEnd = (e: TransitionEvent): void => {
-      if (e.propertyName === 'margin-right') cleanup()
+      if (e.target === html && e.propertyName === 'margin-right') cleanup()
     }
     html.style.transition = prev
       ? `${prev}, margin-right ${DUR_PANEL_MS}ms ${EASE_OUT}`

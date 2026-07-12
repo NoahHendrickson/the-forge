@@ -344,4 +344,40 @@ describe('Dock margin-push motion (Task 8)', () => {
     dock.exit()
     spy.mockRestore()
   })
+
+  // transitionend BUBBLES — a page element finishing its own margin-right transition
+  // must not be mistaken for the dock's own (final-review Finding 1).
+  it('a bubbled transitionend from a child element does not kill the margin transition early', () => {
+    vi.useFakeTimers()
+    const { dock } = dockSetup()
+    dock.enter()
+    expect(document.documentElement.style.transition).toContain('margin-right')
+    const child = document.createElement('div')
+    document.body.appendChild(child)
+    child.dispatchEvent(
+      Object.assign(new Event('transitionend', { bubbles: true }), { propertyName: 'margin-right' })
+    )
+    // still armed — a bubbled event from an unrelated descendant must not cancel the tween
+    expect(document.documentElement.style.transition).toContain('margin-right')
+    document.documentElement.dispatchEvent(
+      Object.assign(new Event('transitionend'), { propertyName: 'margin-right' })
+    )
+    expect(document.documentElement.style.transition).toBe('')
+    dock.exit()
+    vi.useRealTimers()
+  })
+})
+
+describe('Dock canvas-toggle margin clear (final-review Finding 3)', () => {
+  it('setCanvasActive clears an in-flight armed margin transition instantly', () => {
+    vi.useFakeTimers()
+    const { dock } = dockSetup()
+    dock.enter()
+    expect(document.documentElement.style.transition).toContain('margin-right')
+    dock.setCanvasActive(true)
+    expect(document.documentElement.style.transition).toBe('')
+    dock.setCanvasActive(false)
+    dock.exit()
+    vi.useRealTimers()
+  })
 })

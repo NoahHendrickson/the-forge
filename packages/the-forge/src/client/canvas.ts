@@ -370,7 +370,9 @@ export class CanvasMode {
    * every continuous path clears this before writing. Page context can't read the shadow
    * root's tokens — hence imported literals (motion.ts is the shared source). EASE_OUT,
    * not the spring: an overshooting zoom re-rasterizes the artboard past its target and
-   * reads as focus hunting, not springiness. */
+   * reads as focus hunting, not springiness. transitionend BUBBLES — an unrelated page
+   * element finishing its own transform transition would otherwise bubble up to body and
+   * kill this tween mid-glide, so the handler also checks e.target is body itself. */
   private armZoomTween(): void {
     if (prefersReducedMotion() || this.saved === null) return
     this.zoomTweenCleanup?.()
@@ -384,7 +386,7 @@ export class CanvasMode {
       this.zoomTweenCleanup = null
     }
     const onEnd = (e: TransitionEvent): void => {
-      if (e.propertyName === 'transform') cleanup()
+      if (e.target === body && e.propertyName === 'transform') cleanup()
     }
     body.style.transition = prev
       ? `${prev}, transform ${DUR_PANEL_MS}ms ${EASE_OUT}`
