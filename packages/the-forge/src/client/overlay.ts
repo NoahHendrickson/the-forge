@@ -128,6 +128,11 @@ button {
   -webkit-font-smoothing: antialiased;
 }
 ` +
+// Entry-only: #panel deliberately NOT .forge-anim — dock↔float toggles must not fade
+// the panel, only a genuine hidden→shown fires @starting-style; panel.hide() stays a snap.
+`#panel { transition: opacity var(--dur-panel) var(--ease-out), transform var(--dur-panel) var(--ease-out); }
+@starting-style { #panel { opacity: 0; transform: translateY(6px); } }
+` +
 // Docked: full-height right sidebar; page content is pushed left by Dock's html
 // margin-right (the VisBug-style mechanism — see dock.ts).
 `#panel.docked {

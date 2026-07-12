@@ -213,6 +213,12 @@ describe('Overlay CSS animations (Task 2)', () => {
   })
 })
 
+describe('Overlay CSS animations (Task 8: panel entrance)', () => {
+  it('panel rises in on show', () => {
+    expect(CSS).toContain('@starting-style { #panel { opacity: 0; transform: translateY(6px); } }')
+  })
+})
+
 describe('Overlay (M2 additions)', () => {
   it('attach mounts an external panel root into the shadow root', () => {
     const overlay = new Overlay()

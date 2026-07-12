@@ -52,6 +52,7 @@ export function savePrefs(prefs: PanelPrefs): void {
 }
 
 import type { Panel } from './panel'
+import { DUR_PANEL_MS, EASE_OUT, prefersReducedMotion } from './motion'
 
 /**
  * Owns the docked-vs-floating layout state of the panel. "Docked" pushes the page
@@ -75,6 +76,10 @@ export class Dock {
    * unchanged. The saved original margin is what gets written back — not '' — so a
    * page's own inline margin survives the whole canvas session. */
   private canvasActive = false
+  /** Undoes an in-flight margin-push transition (restoring any pre-existing inline
+   * transition verbatim — same restore discipline as savedHtmlMarginRight). Set only
+   * between armMarginTransition() and its transitionend/timeout. */
+  private marginTransitionCleanup: (() => void) | null = null
 
   constructor(
     private host: HTMLElement,
@@ -157,7 +162,35 @@ export class Dock {
     }
   }
 
+  /** Animates the NEXT html margin-right write (dock/undock/design-mode-enter — the
+   * discrete toggles only; width-drag syncWidth writes stay instant and onResizeStart
+   * force-clears any in-flight arm, so a drag never fights a tween). Page context can't
+   * see the shadow root's --dur/--ease tokens, hence the imported literals. */
+  private armMarginTransition(): void {
+    if (prefersReducedMotion()) return
+    this.marginTransitionCleanup?.()
+    const html = document.documentElement
+    const prev = html.style.transition
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const cleanup = (): void => {
+      html.style.transition = prev
+      html.removeEventListener('transitionend', onEnd)
+      if (timer) clearTimeout(timer)
+      this.marginTransitionCleanup = null
+    }
+    const onEnd = (e: TransitionEvent): void => {
+      if (e.propertyName === 'margin-right') cleanup()
+    }
+    html.style.transition = prev
+      ? `${prev}, margin-right ${DUR_PANEL_MS}ms ${EASE_OUT}`
+      : `margin-right ${DUR_PANEL_MS}ms ${EASE_OUT}`
+    html.addEventListener('transitionend', onEnd)
+    timer = setTimeout(cleanup, DUR_PANEL_MS + 80)
+    this.marginTransitionCleanup = cleanup
+  }
+
   private applyDocked(): void {
+    this.armMarginTransition()
     this.dockedApplied = true
     this.panel.setDocked(true)
     // Same DOM node moves — ids, listeners, and updateStatus() lookups all survive.
@@ -173,6 +206,7 @@ export class Dock {
 
   private removeDocked(): void {
     if (!this.dockedApplied) return
+    this.armMarginTransition()
     this.dockedApplied = false
     this.panel.setDocked(false)
     this.host.shadowRoot!.appendChild(this.status)
@@ -196,6 +230,7 @@ export class Dock {
 
   private onResizeStart = (e: PointerEvent): void => {
     if (e.button !== 0) return // primary button only — a right-click must not start a drag
+    this.marginTransitionCleanup?.() // a width drag must write margins instantly from its first move
     e.preventDefault()
     const startX = e.clientX
     const startWidth = this.prefs.width
