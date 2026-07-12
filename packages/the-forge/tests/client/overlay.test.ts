@@ -692,3 +692,11 @@ describe('SessionFeed chat CSS hooks (Task 5)', () => {
     expect(CSS).not.toContain('.draft-disclosure { display: none; }')
   })
 })
+
+describe('Overlay CSS session rows + approval card entrances (Task 6)', () => {
+  it('session rows rise in; the approval card gets the springier entrance', () => {
+    expect(CSS).toContain('.session-row { animation: forge-rise-in var(--dur-pop) var(--ease-out);')
+    expect(CSS).toContain('.session-approval') // existing rule intact
+    expect(CSS).toContain('animation: forge-rise-in var(--dur-panel) var(--ease-spring);')
+  })
+})

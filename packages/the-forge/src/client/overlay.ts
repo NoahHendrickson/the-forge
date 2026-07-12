@@ -599,12 +599,14 @@ button {
   padding: 3px 6px; border-radius: 6px; font: 400 var(--text-sm) var(--font-ui);
   color: var(--text-secondary); word-break: break-word;
 }
+.session-row { animation: forge-rise-in var(--dur-pop) var(--ease-out); }
 .session-error-row { color: #F87171; }
 .session-tool-row { color: var(--text-muted); }
 .session-spinner { flex: none; color: var(--accent-soft); font-size: 10px; }
 .session-approval {
   border: 1px solid rgba(255,255,255,0.1); padding: 4px 6px; border-radius: 6px;
 }
+.session-approval:not(.session-approval-resolved) { animation: forge-rise-in var(--dur-panel) var(--ease-spring); }
 .session-approval-resolved { color: var(--text-muted); font-style: italic; border: none; }
 ` +
 // Chat rendering (Task 5) — bubbles, delta streaming, diff disclosures, config rows.
