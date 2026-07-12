@@ -666,7 +666,14 @@ button {
 // 2026-07-11 draft-badge spec: the pill's .open class is mirrored alongside the disclosure's
 // (session-feed.ts's setDisclosureOpen) purely so .draft-pill-chevron has a same-element CSS
 // hook to rotate on — the disclosure itself is a sibling, not an ancestor, of the pill.
-// CSS class names here are test hooks — extend, don't rename.
+// 2026-07-12 motion pass: draft disclosure springs open via grid-template-rows (Task 3) instead
+// of snapping display:none⇄block. The 0fr⇄1fr trick is the only way to transition an auto-height
+// reveal in pure CSS; .draft-slot (the disclosure's single child) requires min-height:0 +
+// overflow:hidden to make the fr interpolation work (grid-template-rows animates auto → 1fr,
+// but only the intrinsic .draft-slot height, not nested .changes-section auto itself). visibility
+// rides the transition so collapsed ChangeList buttons stay untabbable when closed but render
+// during the collapse/expand — a UX win that keeps the 2px spring overshoot invisible (>100% is
+// layout-safe slack). CSS class names here are test hooks — extend, don't rename.
 `.draft-pill {
   flex: none; display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 8px; border-radius: 6px; background: var(--control); border: none;
@@ -675,8 +682,9 @@ button {
 .draft-pill:hover { background: var(--control-hover); }
 .draft-pill-chevron { transition: transform 120ms ease; }
 .draft-pill.open .draft-pill-chevron { transform: rotate(180deg); }
-.draft-disclosure { display: none; }
-.draft-disclosure.open { display: block; }
+.draft-disclosure { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows var(--dur-pop) var(--ease-spring), visibility var(--dur-pop); }
+.draft-disclosure > .draft-slot { min-height: 0; overflow: hidden; }
+.draft-disclosure.open { grid-template-rows: 1fr; visibility: visible; }
 ` +
 `.chat-input { display: flex; flex-direction: column; gap: 6px; }
 .chat-textarea {

@@ -685,4 +685,10 @@ describe('SessionFeed chat CSS hooks (Task 5)', () => {
   it('CSS declares .session-config for the config-changed row', () => {
     expect(CSS).toContain('.session-config')
   })
+
+  it('draft disclosure animates open via grid-template-rows, not display:none', () => {
+    expect(CSS).toContain('.draft-disclosure { display: grid; grid-template-rows: 0fr;')
+    expect(CSS).toContain('.draft-disclosure.open { grid-template-rows: 1fr;')
+    expect(CSS).not.toContain('.draft-disclosure { display: none; }')
+  })
 })
