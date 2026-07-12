@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
-  clampScale, zoomAt, panBy, fitState, loadCanvasPrefs, saveCanvasPrefs,
-  MIN_SCALE, MAX_SCALE, CANVAS_STORAGE_KEY, FIT_MARGIN,
+  clampScale, zoomAt, panBy, fitState, fitRectState, loadCanvasPrefs, saveCanvasPrefs,
+  zoomStopAfter, zoomStopBefore, unionClientRect,
+  MIN_SCALE, MAX_SCALE, CANVAS_STORAGE_KEY, FIT_MARGIN, WHEEL_LINE_PX, ZOOM_WHEEL_CLAMP,
   CanvasMode, type CanvasModeOpts,
 } from '../../src/client/canvas'
 
@@ -51,6 +52,56 @@ describe('fitState', () => {
   })
   it('never returns a scale below MIN_SCALE even for absurdly tall pages', () => {
     expect(fitState(1280, 800, 1280, 100000, 320).scale).toBe(MIN_SCALE)
+  })
+})
+
+describe('fitRectState', () => {
+  it('centers an offset page rect in the available box (zoom-to-selection math)', () => {
+    const rect = { x: 100, y: 100, w: 200, h: 100 }
+    const s = fitRectState(1024, 768, rect, 320)
+    const availW = 1024 - 320 - FIT_MARGIN * 2
+    const availH = 768 - FIT_MARGIN * 2
+    expect(s.scale).toBeCloseTo(Math.min(availW / 200, availH / 100))
+    // the rect's center must project to the available box's center
+    const cx = (rect.x + rect.w / 2) * s.scale + s.x
+    const cy = (rect.y + rect.h / 2) * s.scale + s.y
+    expect(cx).toBeCloseTo(FIT_MARGIN + availW / 2)
+    expect(cy).toBeCloseTo(FIT_MARGIN + availH / 2)
+  })
+  it('fitState is the whole-page special case of fitRectState', () => {
+    expect(fitState(1280, 800, 1280, 4000, 320))
+      .toEqual(fitRectState(1280, 800, { x: 0, y: 0, w: 1280, h: 4000 }, 320))
+  })
+})
+
+describe('unionClientRect', () => {
+  const fake = (left: number, top: number, right: number, bottom: number): Element => {
+    const el = document.createElement('div')
+    el.getBoundingClientRect = () =>
+      ({ left, top, right, bottom, width: right - left, height: bottom - top, x: left, y: top, toJSON: () => '' }) as DOMRect
+    return el
+  }
+  it('returns null for an empty selection', () => {
+    expect(unionClientRect([])).toBeNull()
+  })
+  it('unions multiple client rects into one AABB', () => {
+    expect(unionClientRect([fake(10, 20, 110, 70), fake(50, 5, 90, 200)]))
+      .toEqual({ left: 10, top: 5, width: 100, height: 195 })
+  })
+})
+
+describe('zoom ladder (Figma powers-of-2 stops)', () => {
+  it('steps up and down through powers of two', () => {
+    expect(zoomStopAfter(1)).toBe(2)
+    expect(zoomStopBefore(1)).toBe(0.5)
+    expect(zoomStopAfter(1.5)).toBe(2)
+    expect(zoomStopBefore(1.5)).toBe(1)
+    expect(zoomStopAfter(0.3)).toBe(0.5)
+    expect(zoomStopBefore(0.3)).toBe(0.25)
+  })
+  it('clamps at the scale bounds', () => {
+    expect(zoomStopAfter(MAX_SCALE)).toBe(MAX_SCALE)
+    expect(zoomStopBefore(0.125)).toBe(MIN_SCALE) // 2^-4 = 0.0625 clamps up to 0.1
   })
 })
 
@@ -398,5 +449,151 @@ describe('CanvasMode onChange notifies exactly once per action (2026-07-11 revie
     expect(calls).toBe(3)
     canvas.setOn(false)
     expect(calls).toBe(4)
+  })
+})
+
+describe('CanvasMode Figma-parity pass (2026-07-11 optimization review)', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+    document.documentElement.removeAttribute('style')
+    document.body.removeAttribute('style')
+    vi.stubGlobal('scrollTo', vi.fn())
+    Object.defineProperty(window, 'scrollX', { value: 0, configurable: true })
+    Object.defineProperty(window, 'scrollY', { value: 0, configurable: true })
+  })
+
+  it('normalizes DOM_DELTA_LINE wheel deltas (Firefox mouse wheel) to pixels', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: 3, deltaMode: 1, cancelable: true, bubbles: true }))
+    expect(bodyTransform()).toBe(`translate(0px, ${-3 * WHEEL_LINE_PX}px) scale(1)`)
+    canvas.setOn(false)
+  })
+
+  it('shift+wheel pans horizontally when the device reports only deltaY', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: 40, shiftKey: true, cancelable: true, bubbles: true }))
+    expect(bodyTransform()).toBe('translate(-40px, 0px) scale(1)')
+    // a device that already remaps to deltaX is left alone (no double-swap)
+    window.dispatchEvent(new WheelEvent('wheel', { deltaX: 10, shiftKey: true, cancelable: true, bubbles: true }))
+    expect(bodyTransform()).toBe('translate(-50px, 0px) scale(1)')
+    canvas.setOn(false)
+  })
+
+  it('caps a discrete mouse notch: ctrl+wheel deltaY −1000 zooms exp(clamp·0.01), not exp(10)', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: -1000, ctrlKey: true, clientX: 0, clientY: 0, cancelable: true, bubbles: true }))
+    expect(canvas.scale()).toBeCloseTo(Math.exp(ZOOM_WHEEL_CLAMP * 0.01), 5)
+    canvas.setOn(false)
+  })
+
+  it('at the zoom clamp, further zoom-in wheel ticks fire no onChange (no-op repaints skipped)', () => {
+    let calls = 0
+    const { canvas } = makeCanvas({ onChange: () => { calls++ } })
+    canvas.setOn(true)
+    canvas.setZoomCentered(MAX_SCALE)
+    const before = calls
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, ctrlKey: true, clientX: 0, clientY: 0, cancelable: true, bubbles: true }))
+    expect(calls).toBe(before)
+    expect(canvas.scale()).toBe(MAX_SCALE)
+    canvas.setOn(false)
+  })
+
+  it('bare +/− step the powers-of-2 ladder; Cmd/Ctrl-modified zoom keys stay the browser’s', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Equal', bubbles: true, cancelable: true }))
+    expect(canvas.scale()).toBe(2)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Minus', bubbles: true, cancelable: true }))
+    expect(canvas.scale()).toBe(1)
+    const browserZoom = new KeyboardEvent('keydown', { code: 'Equal', metaKey: true, bubbles: true, cancelable: true })
+    window.dispatchEvent(browserZoom)
+    expect(canvas.scale()).toBe(1)
+    expect(browserZoom.defaultPrevented).toBe(false)
+    canvas.setOn(false)
+  })
+
+  it('Shift+2 fits the selection; no-op when nothing is selected', () => {
+    let rect: { left: number; top: number; width: number; height: number } | null = null
+    const { canvas } = makeCanvas({ selectionRect: () => rect })
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit2', shiftKey: true, bubbles: true }))
+    expect(canvas.scale()).toBe(1) // nothing selected → untouched
+    rect = { left: 100, top: 100, width: 200, height: 100 }
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit2', shiftKey: true, bubbles: true }))
+    // state was identity, so the viewport rect IS the page rect — must match the pure math
+    const expected = fitRectState(
+      window.innerWidth, window.innerHeight, { x: 100, y: 100, w: 200, h: 100 }, 320
+    )
+    expect(canvas.scale()).toBeCloseTo(expected.scale)
+    expect(bodyTransform()).toBe(`translate(${expected.x}px, ${expected.y}px) scale(${expected.scale})`)
+    canvas.setOn(false)
+  })
+
+  it('middle-button drag pans without space and does NOT squelch the next click', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 1, bubbles: true, cancelable: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    expect(bodyTransform()).toBe('translate(30px, -20px) scale(1)')
+    // middle release fires auxclick, not click — an unrelated click must pass through
+    const reached = vi.fn()
+    document.addEventListener('click', reached, true)
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(reached).toHaveBeenCalledTimes(1)
+    document.removeEventListener('click', reached, true)
+    canvas.setOn(false)
+  })
+
+  it('hand cursor: grab on space, grabbing while dragging, page cursor restored after', () => {
+    document.documentElement.style.cursor = 'crosshair' // page's own inline cursor survives
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    expect(document.documentElement.style.cursor).toBe('grab')
+    window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 0, clientY: 0, button: 0, bubbles: true, cancelable: true }))
+    expect(document.documentElement.style.cursor).toBe('grabbing')
+    window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    expect(document.documentElement.style.cursor).toBe('grab') // space still held
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
+    expect(document.documentElement.style.cursor).toBe('crosshair')
+    canvas.setOn(false)
+    expect(document.documentElement.style.cursor).toBe('crosshair')
+    document.documentElement.style.cursor = ''
+    // consume the squelch the drag armed (jsdom never fires the post-pointerup click itself)
+    window.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  })
+
+  it('promotes the artboard to a compositor layer while on (will-change) and restores it', () => {
+    document.body.style.willChange = 'opacity'
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    expect(document.body.style.willChange).toBe('transform')
+    canvas.setOn(false)
+    expect(document.body.style.willChange).toBe('opacity')
+    document.body.style.willChange = ''
+  })
+
+  it('Safari pinch rides gesturestart/gesturechange when GestureEvent exists', () => {
+    ;(window as unknown as { GestureEvent?: unknown }).GestureEvent = function GestureEvent() {}
+    try {
+      const { canvas } = makeCanvas()
+      canvas.setOn(true) // listeners registered with the feature detect satisfied
+      window.dispatchEvent(Object.assign(new Event('gesturestart', { cancelable: true, bubbles: true }), {
+        clientX: 0, clientY: 0, scale: 1,
+      }))
+      const change = Object.assign(new Event('gesturechange', { cancelable: true, bubbles: true }), {
+        clientX: 0, clientY: 0, scale: 2,
+      })
+      window.dispatchEvent(change)
+      expect(change.defaultPrevented).toBe(true)
+      expect(canvas.scale()).toBe(2) // cumulative: gesture-start scale (1) × e.scale (2)
+      canvas.setOn(false)
+    } finally {
+      delete (window as unknown as { GestureEvent?: unknown }).GestureEvent
+    }
   })
 })

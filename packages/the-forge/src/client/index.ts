@@ -4,7 +4,7 @@ import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { Dock } from './dock'
-import { CanvasMode } from './canvas'
+import { CanvasMode, unionClientRect } from './canvas'
 import { buildCanvasChrome, type CanvasChrome } from './canvas-chrome'
 import {
   buildChangeRequestWithElements,
@@ -176,6 +176,9 @@ export class DesignMode {
       // would make a wheel over the docked panel pan the artboard instead of scrolling it.
       hostContains: (t) => this.overlay.containsDeep(t),
       onChange: () => this.syncCanvasUi(),
+      // Shift+2 zoom-to-selection: the union box of the multi-select, viewport coords
+      // (getBoundingClientRect is already canvas-transformed — CanvasMode unmaps it).
+      selectionRect: () => unionClientRect(this.selection),
     })
     this.canvasChrome = buildCanvasChrome(this.canvas, this.panel)
     this.overlay.attach(this.canvasChrome.wrap)
