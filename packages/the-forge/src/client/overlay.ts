@@ -599,15 +599,25 @@ button {
   padding: 3px 6px; border-radius: 6px; font: 400 var(--text-sm) var(--font-ui);
   color: var(--text-secondary); word-break: break-word;
 }
-.session-row { animation: forge-rise-in var(--dur-pop) var(--ease-out); }
 .session-error-row { color: #F87171; }
 .session-tool-row { color: var(--text-muted); }
 .session-spinner { flex: none; color: var(--accent-soft); font-size: 10px; }
 .session-approval {
   border: 1px solid rgba(255,255,255,0.1); padding: 4px 6px; border-radius: 6px;
 }
-.session-approval:not(.session-approval-resolved) { animation: forge-rise-in var(--dur-panel) var(--ease-spring); }
 .session-approval-resolved { color: var(--text-muted); font-style: italic; border: none; }
+` +
+// Chat-entrance motion: content enters as fade+rise, deliberately NOT springy — the research
+// line is "springs for interactive elements, plain rise for content"; the approval card is the
+// exception because it's requesting a decision. Animation-on-insertion means streaming delta
+// mutations on an existing bubble never re-trigger, and a reconnect replay burst animates once
+// in unison — acceptable.
+// The :not(.session-approval-resolved) gate is load-bearing: resolving an approval adds that
+// class to the SAME element (session-feed.ts), and without the :not() the animation-rules
+// change would restart the rise on resolve; with it, the element falls back to the .session-row
+// rule whose animation-name is identical, so nothing restarts.
+`.session-row { animation: forge-rise-in var(--dur-pop) var(--ease-out); }
+.session-approval:not(.session-approval-resolved) { animation: forge-rise-in var(--dur-panel) var(--ease-spring); }
 ` +
 // Chat rendering (Task 5) — bubbles, delta streaming, diff disclosures, config rows.
 // .chat-msg: bubble base (extends .session-row); .chat-user / .chat-assistant: sender variant.
