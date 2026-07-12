@@ -731,6 +731,11 @@ button {
 // Exit: ~100ms plain fade; `display` rides the transition discretely (allow-discrete)
 // so none lands only after the fade. Non-supporting browsers snap (today's behavior).
 // The [hidden] rule carries the exit transition (destination-state timing wins).
+// #status[hidden] is the ID-specificity trap: #status's own `display: flex` (1,0,0)
+// outranks .forge-anim[hidden]'s display:none (0,2,0), so a hidden status strip would
+// stay visible — the (1,0,1) ID-anchored override wins, and stays non-important so the
+// allow-discrete display transition still holds it visible during the exit fade. Keep
+// in sync if any other ID-selector element ever gets .forge-anim.
 `.forge-anim, .menu-popover {
   transition: opacity var(--dur-pop) var(--ease-spring), transform var(--dur-pop) var(--ease-spring), display var(--dur-pop) allow-discrete;
   transform-origin: top center;
@@ -739,6 +744,7 @@ button {
   display: none; opacity: 0; transform: scale(0.98);
   transition: opacity 100ms var(--ease-out), transform 100ms var(--ease-out), display 100ms allow-discrete;
 }
+#status[hidden] { display: none; }
 @starting-style {
   .forge-anim, .menu-popover { opacity: 0; transform: scale(0.96); }
 }

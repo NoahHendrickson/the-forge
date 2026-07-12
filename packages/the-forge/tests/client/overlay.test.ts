@@ -203,6 +203,7 @@ describe('Overlay CSS animations (Task 2)', () => {
     expect(CSS).toContain('.forge-anim[hidden]')
     expect(CSS).toContain('@starting-style')
     expect(CSS).toContain('allow-discrete')
+    expect(CSS).toContain('#status[hidden] { display: none; }')
   })
 
   it('marks #status as forge-anim', () => {
