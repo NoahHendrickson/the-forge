@@ -703,11 +703,16 @@ button {
   flex: none; width: 26px; height: 26px; border-radius: 50%; padding: 0;
   display: flex; align-items: center; justify-content: center;
   background: var(--control); color: var(--text-primary); border: none;
-  font: 500 13px var(--font-ui); transition: transform var(--dur-fast) var(--ease-spring), background 120ms;
+  font: 500 13px var(--font-ui);
 }
 .composer-send:hover { background: var(--control-hover); }
-.composer-send:active { transform: scale(0.92); }
 .composer-send:disabled { opacity: 0.5; cursor: default; }
+` +
+// Press-down + spring return is the highest-touch button's micro-feedback; .pop is popOnce's
+// re-triggerable one-shot for the glyph morph (see session-feed.ts updateSendMorph — fires
+// only on genuine ↑/■ flips, never per keystroke).
+`.composer-send { transition: transform var(--dur-fast) var(--ease-spring), background 120ms; }
+.composer-send:active { transform: scale(0.92); }
 .composer-send.pop { animation: forge-pop var(--dur-fast) var(--ease-spring); }
 .chat-disabled-reason { color: var(--text-faint); font: 400 var(--text-xs) var(--font-ui); padding: 0 2px; }
 ` +

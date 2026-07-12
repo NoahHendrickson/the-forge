@@ -753,7 +753,7 @@ export class SessionFeed {
   // Rendering helpers
   // ---------------------------------------------------------------------------
 
-  setBusyish(on: boolean): void {
+  private setBusyish(on: boolean): void {
     this.busyish = on
     this.updateSendMorph()
   }
