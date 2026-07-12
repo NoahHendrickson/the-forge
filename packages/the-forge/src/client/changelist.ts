@@ -4,6 +4,7 @@ import type { ChangeItem } from './request'
 import type { TaggedElement } from './source'
 import { shortSource } from './source'
 import type { LifecycleSession, SentSeed, SeedRecord } from './lifecycle'
+import { collapseRow } from './motion'
 
 export type { SentSeed } from './lifecycle'
 
@@ -47,6 +48,13 @@ export class ChangeList {
    * rows WITHOUT wiping the session — the verifier keeps polling its entries across a
    * deactivate/reactivate. */
   private suppressSeedRecords = false
+  /** Stage seen at the previous render, keyed by seed identity — render() rebuilds every
+   * row via replaceChildren(), so CSS transitions can never fire across a stage change and
+   * a bare entry animation would replay on EVERY re-render (each scrub tick rebuilds the
+   * list). .stage-flip therefore lands only on the one render where a row's stage actually
+   * differs from what this map last saw — the pop/shake plays once, then the next render
+   * (whatever triggers it) rebuilds the row without the class. */
+  private lastStages = new WeakMap<object, LifecycleStage>()
 
   constructor(
     private drafts: DraftStore,
@@ -181,6 +189,9 @@ export class ChangeList {
 
   private renderSeedRecord(row: SeedRecord): HTMLElement {
     const dom = this.baseRow(row.stage, row.seed.el)
+    const prev = this.lastStages.get(row.seed)
+    if (prev !== undefined && prev !== row.stage) dom.classList.add('stage-flip')
+    this.lastStages.set(row.seed, row.stage)
     const source = row.seed.change.source
     const dcSource = source ? `${source.file}:${source.line}:${source.col}` : row.seed.dcSource
     const elLabel = this.elLabel(row.seed.change.tag, dcSource)
@@ -231,7 +242,13 @@ export class ChangeList {
     dismiss.textContent = 'Dismiss'
     dismiss.addEventListener('click', (e) => {
       e.stopPropagation()
-      this.session.removeSeed(row.seed)
+      // Collapse first, mutate after — the removeSeed() re-render discards this element,
+      // so animating post-removal is impossible. A re-render landing mid-collapse discards
+      // the animating row early; collapseRow's timeout still fires onDone, so the seed is
+      // removed either way (removal is the invariant, the collapse is garnish).
+      const rowEl = (e.currentTarget as HTMLElement).closest('.change-row') as HTMLElement | null
+      if (rowEl) collapseRow(rowEl, () => this.session.removeSeed(row.seed))
+      else this.session.removeSeed(row.seed)
     })
     actions.append(resend, dismiss)
     return actions

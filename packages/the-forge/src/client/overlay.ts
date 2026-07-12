@@ -545,6 +545,13 @@ button {
 .chip-mismatch { color: var(--ripple); background: rgba(226,149,74,0.12); }
 .chip-unverified { color: var(--text-faint); background: rgba(255,255,255,0.08); }
 .chip-failed { color: #F87171; background: rgba(248,113,113,0.12); }
+` +
+// The pop marks arrival at done — a small springy dot scale-in; the shake is the ONE
+// stronger gesture in the system, semantically earned by failure; both keyed to
+// .stage-flip so they play once per real transition, see changelist.ts lastStages.
+`
+.stage-flip .chip-done::before { animation: forge-pop var(--dur-pop) var(--ease-spring); }
+.stage-flip .chip-failed { animation: forge-shake 250ms var(--ease-out); }
 .change-el { flex: none; color: var(--text-primary); }
 .change-summary {
   flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
