@@ -7,6 +7,7 @@ import { CHAT_TEXT_MAX, isHarnessId, type HarnessId } from '../shared/chat-const
 import { AGENT_DISPLAY_NAME } from './agent'
 import { ComposerConfig } from './composer-config'
 import { type SessionState } from './watch'
+import { popOnce } from './motion'
 
 // Shared untyped-JSON guard for the edit payload carried by tool-started AND (Cursor's
 // late-diff path) tool-finished — the wire outlives any one bundle build, so shape is checked
@@ -476,11 +477,15 @@ export class SessionFeed {
 
   /** Recomputes composer-send's morph — ■ (interrupt) while a turn is in flight (busyish) AND
    * the textarea is empty; otherwise ↑ (send). Called on every busyish transition (setBusyish)
-   * and on every textarea keystroke (typing mid-turn flips it back to ↑ immediately). */
+   * and on every textarea keystroke (typing mid-turn flips it back to ↑ immediately).
+   * The glyph pop (popOnce) fires only when the morph actually FLIPS — this method runs per
+   * keystroke, so popping unconditionally would pulse the button while typing. */
   private updateSendMorph(): void {
+    const wasStop = this.sendIsStop
     this.sendIsStop = this.busyish && this.textarea.value.trim() === ''
     this.sendBtn.textContent = this.sendIsStop ? '■' : '↑'
     this.sendBtn.setAttribute('aria-label', this.sendIsStop ? 'Stop' : 'Send')
+    if (wasStop !== this.sendIsStop) popOnce(this.sendBtn)
   }
 
   /** Switches the composer's config pickers to a harness — thin delegate to ComposerConfig
@@ -748,7 +753,7 @@ export class SessionFeed {
   // Rendering helpers
   // ---------------------------------------------------------------------------
 
-  private setBusyish(on: boolean): void {
+  setBusyish(on: boolean): void {
     this.busyish = on
     this.updateSendMorph()
   }

@@ -471,6 +471,24 @@ describe('stream consumption', () => {
     feed.stop()
   })
 
+  it('send↔stop morph pops the glyph exactly on flips, not on every keystroke', () => {
+    const feed = new SessionFeed()
+    document.body.appendChild(feed.root)
+    const btn = feed.root.querySelector('.composer-send') as HTMLElement
+    expect(btn.classList.contains('pop')).toBe(false) // initial render: no flip, no pop
+    feed.setBusyish(true) // ↑ → ■
+    expect(btn.classList.contains('pop')).toBe(true)
+    btn.classList.remove('pop') // simulate the animation having finished
+    const ta = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    ta.value = 'x'
+    ta.dispatchEvent(new Event('input')) // ■ → ↑ (typing mid-turn)
+    expect(btn.classList.contains('pop')).toBe(true)
+    btn.classList.remove('pop')
+    ta.value = 'xy'
+    ta.dispatchEvent(new Event('input')) // still ↑ — no flip, no pop
+    expect(btn.classList.contains('pop')).toBe(false)
+  })
+
   it('malformed JSON lines are ignored without crashing', async () => {
     const lines = [
       'not json at all',

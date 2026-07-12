@@ -703,10 +703,12 @@ button {
   flex: none; width: 26px; height: 26px; border-radius: 50%; padding: 0;
   display: flex; align-items: center; justify-content: center;
   background: var(--control); color: var(--text-primary); border: none;
-  font: 500 13px var(--font-ui);
+  font: 500 13px var(--font-ui); transition: transform var(--dur-fast) var(--ease-spring), background 120ms;
 }
 .composer-send:hover { background: var(--control-hover); }
+.composer-send:active { transform: scale(0.92); }
 .composer-send:disabled { opacity: 0.5; cursor: default; }
+.composer-send.pop { animation: forge-pop var(--dur-fast) var(--ease-spring); }
 .chat-disabled-reason { color: var(--text-faint); font: 400 var(--text-xs) var(--font-ui); padding: 0 2px; }
 ` +
 // Canvas-mode chrome (design-canvas-mode spec): the header toggle just tints '.panel-mode'
