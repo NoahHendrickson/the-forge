@@ -16,7 +16,7 @@ export function buildCanvasChrome(canvas: CanvasMode, panel: Panel): CanvasChrom
   // Bottom-left zoom affordance (mirrors #toggle/#status's bottom-right cluster) — hidden
   // until canvas mode is actually applied (design mode off ⇒ suspended ⇒ hidden too).
   const wrap = document.createElement('div')
-  wrap.className = 'zoom-pill-wrap'
+  wrap.className = 'zoom-pill-wrap forge-anim'
   wrap.hidden = true
   const menu: MenuButton = createMenuButton({
     label: '100%',

@@ -60,7 +60,7 @@ const tokenBlock = Object.entries(TOKENS)
 //   (motion.ts is the source; see the 2026-07-12 overlay-motion spec).
 // Radius: panel 12px, controls 6px, matrix tile 8px.
 export const CSS = `
-[hidden] { display: none !important; }
+[hidden]:not(.forge-anim) { display: none !important; }
 *, *::before, *::after { box-sizing: border-box; }
 :host { all: initial; }
 :host {
@@ -723,7 +723,27 @@ button {
 `@keyframes forge-pop { from { transform: scale(0.8); } }
 @keyframes forge-rise-in { from { opacity: 0; transform: translateY(8px); } }
 @keyframes forge-shake { 25% { transform: translateX(-2px); } 50% { transform: translateX(2px); } 75% { transform: translateX(-1px); } }
-@media (prefers-reduced-motion: reduce) {
+` +
+// Animated show/hide for hidden-toggled popovers/chrome (.forge-anim opt-in — see the
+// [hidden] exemption at the top of this string). Entry: spring scale-in via
+// @starting-style (fires on unhide AND on fresh insertion, which is how .menu-popover —
+// created per open, removed on close — gets entry-only motion without the class).
+// Exit: ~100ms plain fade; `display` rides the transition discretely (allow-discrete)
+// so none lands only after the fade. Non-supporting browsers snap (today's behavior).
+// The [hidden] rule carries the exit transition (destination-state timing wins).
+`.forge-anim, .menu-popover {
+  transition: opacity var(--dur-pop) var(--ease-spring), transform var(--dur-pop) var(--ease-spring), display var(--dur-pop) allow-discrete;
+  transform-origin: top center;
+}
+.forge-anim[hidden] {
+  display: none; opacity: 0; transform: scale(0.98);
+  transition: opacity 100ms var(--ease-out), transform 100ms var(--ease-out), display 100ms allow-discrete;
+}
+@starting-style {
+  .forge-anim, .menu-popover { opacity: 0; transform: scale(0.96); }
+}
+` +
+`@media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     transition-duration: 1ms !important;
     animation-duration: 1ms !important;
@@ -770,6 +790,7 @@ export class Overlay {
     this.outline.id = 'outline'
     this.selectOutline.id = 'select-outline'
     this.status.id = 'status'
+    this.status.classList.add('forge-anim')
     this.sentLabel.id = 'sent'
     this.sentLabel.hidden = true
     this.watchLabel.id = 'watch'

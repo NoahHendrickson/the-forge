@@ -23,11 +23,11 @@ describe('Overlay CSS (Track A visibility correctness)', () => {
     expect(CSS).not.toContain('/*')
   })
 
-  it('declares a shadow-root-wide [hidden] rule as the very first rule, forcing display:none regardless of other selectors', () => {
+  it('declares a shadow-root-wide [hidden]:not(.forge-anim) rule as the very first rule, forcing display:none regardless of other selectors (exempting animated popovers)', () => {
     const trimmed = CSS.trim()
     // Must be the first rule in the stylesheet so nothing declared later can outrank it.
     expect(trimmed.startsWith('[hidden]')).toBe(true)
-    expect(trimmed).toMatch(/^\[hidden\]\s*{\s*display:\s*none\s*!important;?\s*}/)
+    expect(trimmed).toMatch(/^\[hidden\]:not\(\.forge-anim\)\s*{\s*display:\s*none\s*!important;?\s*}/)
   })
 
   it('no longer needs the now-redundant #panel .panel-section[hidden] guard', () => {
@@ -195,6 +195,20 @@ describe('Overlay CSS design tokens (Task 1)', () => {
     expect(CSS).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
+})
+
+describe('Overlay CSS animations (Task 2)', () => {
+  it('exempts .forge-anim from the !important display:none so exits can transition', () => {
+    expect(CSS).toContain('[hidden]:not(.forge-anim) { display: none !important; }')
+    expect(CSS).toContain('.forge-anim[hidden]')
+    expect(CSS).toContain('@starting-style')
+    expect(CSS).toContain('allow-discrete')
+  })
+
+  it('marks #status as forge-anim', () => {
+    const o = new Overlay()
+    expect(o.status.classList.contains('forge-anim')).toBe(true)
+  })
 })
 
 describe('Overlay (M2 additions)', () => {

@@ -38,7 +38,12 @@ describe('TokenPicker', () => {
     expect(picker.root.isConnected).toBe(true)
     expect(panelRoot.contains(picker.root)).toBe(true)
     expect(picker.root.hidden).toBe(true)
-    expect(picker.root.className).toBe('token-popover')
+    expect(picker.root.className).toContain('token-popover')
+  })
+
+  it('root carries forge-anim for animated show/hide', () => {
+    const { picker } = setupPicker()
+    expect(picker.root.classList.contains('forge-anim')).toBe(true)
   })
 
   it('open() shows the popover positioned near the anchor and renders all entries', () => {
