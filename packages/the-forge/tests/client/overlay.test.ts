@@ -726,18 +726,14 @@ describe('SessionFeed chat CSS hooks (Task 5)', () => {
     expect(CSS).toContain('.session-config')
   })
 
-  it('draft disclosure animates open via grid-template-rows, not display:none', () => {
-    expect(CSS).toContain('.draft-disclosure { display: grid; grid-template-rows: 0fr;')
-    expect(CSS).toContain('.draft-disclosure.open { grid-template-rows: 1fr;')
-    expect(CSS).not.toContain('.draft-disclosure { display: none; }')
-  })
-
-  // final-review Finding 2: a rendered 0-height grid item (closed disclosure) still earns
-  // .chat-composer's 6px flex gap — margin-bottom cancels it closed, releases it open.
-  it('closed draft disclosure cancels the composer gap; open disclosure releases it', () => {
-    expect(CSS).toContain('.draft-disclosure { display: grid; grid-template-rows: 0fr; visibility: hidden; margin-bottom: -6px;')
-    expect(CSS).toContain('margin-bottom var(--dur-pop) var(--ease-spring)')
-    expect(CSS).toContain('.draft-disclosure.open { grid-template-rows: 1fr; visibility: visible; margin-bottom: 0; }')
+  // PR #34 review rework: closed = display:none (opts out of .chat-composer's 6px flex gap —
+  // a rendered 0-height item would earn it), animated anyway via @starting-style (0fr entry
+  // frame on the none→grid flip) + display allow-discrete (holds grid through the collapse).
+  it('draft disclosure springs open from display:none via @starting-style + allow-discrete', () => {
+    expect(CSS).toContain('.draft-disclosure { display: none; grid-template-rows: 0fr; transition: grid-template-rows var(--dur-pop) var(--ease-spring), display var(--dur-pop) allow-discrete; }')
+    expect(CSS).toContain('.draft-disclosure.open { display: grid; grid-template-rows: 1fr; }')
+    expect(CSS).toContain('@starting-style { .draft-disclosure.open { grid-template-rows: 0fr; } }')
+    expect(CSS).not.toContain('margin-bottom: -6px')
   })
 })
 

@@ -698,21 +698,19 @@ button {
 // 2026-07-11 draft-badge spec: the pill's .open class is mirrored alongside the disclosure's
 // (session-feed.ts's setDisclosureOpen) purely so .draft-pill-chevron has a same-element CSS
 // hook to rotate on — the disclosure itself is a sibling, not an ancestor, of the pill.
-// 2026-07-12 motion pass: draft disclosure springs open via grid-template-rows (Task 3) instead
-// of snapping display:none⇄block. The 0fr⇄1fr trick is the only way to transition an auto-height
-// reveal in pure CSS; .draft-slot (the disclosure's single child) requires min-height:0 +
-// overflow:hidden to make the fr interpolation work (grid-template-rows animates auto → 1fr,
-// but only the intrinsic .draft-slot height, not nested .changes-section auto itself). visibility
-// rides the transition so collapsed ChangeList buttons stay untabbable when closed but render
-// during the collapse/expand — a UX win that keeps the 2px spring overshoot invisible (>100% is
-// layout-safe slack). CSS class names here are test hooks — extend, don't rename.
-// final-review Finding 2: .draft-disclosure is an always-mounted first child of .chat-composer
-// (flex; gap: 6px). The old closed state was display:none (no gap slot); grid-template-rows: 0fr
-// still renders a 0-height flex item, which still earns the parent's 6px gap — a dead 6px band
-// above the chips row whenever the disclosure is closed (almost always). margin-bottom: -6px
-// cancels exactly that gap while closed; .open resets it to 0 so the open disclosure sits flush
-// against the chips row below it. The compensation rides the same spring transition so it never
-// pops discretely against the grid-template-rows glide — keep in sync with .chat-composer's gap.
+// 2026-07-12 motion pass (Task 3, reworked per PR #34 review): the disclosure springs open via
+// grid-template-rows 0fr⇄1fr — the only pure-CSS way to transition an auto-height reveal;
+// .draft-slot (the single child) needs min-height:0 + overflow:hidden for the fr interpolation
+// to clip. The closed state is display:none, NOT a rendered 0-height item: .chat-composer is
+// flex with gap:6px, and a rendered zero-height first child still earns that gap — a dead 6px
+// band above the chips row. display:none opts out of gap layout entirely (the pre-motion
+// geometry — this replaced a margin-bottom:-6px compensation that had to stay synced to the
+// parent gap); the same @starting-style + `display allow-discrete` mechanics as the .forge-anim
+// popovers make it animatable anyway — @starting-style supplies the 0fr entry frame on the
+// none→grid flip, allow-discrete holds display:grid through the 1fr→0fr collapse on exit.
+// display:none also keeps collapsed ChangeList buttons untabbable for free (the former
+// visibility juggling is gone). Browsers without these features snap open/closed (pre-motion
+// behavior). The ~2% spring overshoot past 1fr is layout-safe slack. Class names are test hooks.
 `.draft-pill {
   flex: none; display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 8px; border-radius: 6px; background: var(--control); border: none;
@@ -721,9 +719,10 @@ button {
 .draft-pill:hover { background: var(--control-hover); }
 .draft-pill-chevron { transition: transform 120ms ease; }
 .draft-pill.open .draft-pill-chevron { transform: rotate(180deg); }
-.draft-disclosure { display: grid; grid-template-rows: 0fr; visibility: hidden; margin-bottom: -6px; transition: grid-template-rows var(--dur-pop) var(--ease-spring), visibility var(--dur-pop), margin-bottom var(--dur-pop) var(--ease-spring); }
+.draft-disclosure { display: none; grid-template-rows: 0fr; transition: grid-template-rows var(--dur-pop) var(--ease-spring), display var(--dur-pop) allow-discrete; }
 .draft-disclosure > .draft-slot { min-height: 0; overflow: hidden; }
-.draft-disclosure.open { grid-template-rows: 1fr; visibility: visible; margin-bottom: 0; }
+.draft-disclosure.open { display: grid; grid-template-rows: 1fr; }
+@starting-style { .draft-disclosure.open { grid-template-rows: 0fr; } }
 ` +
 `.chat-input { display: flex; flex-direction: column; gap: 6px; }
 .chat-textarea {
