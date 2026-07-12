@@ -52,6 +52,26 @@ export function zoomStopBefore(s: number): number {
 /** A rectangle in PAGE coordinates (untransformed body space). */
 export interface PageRect { x: number; y: number; w: number; h: number }
 
+/** A rectangle in VIEWPORT coordinates (post-canvas-transform, getBoundingClientRect space).
+ *  Deliberately a distinct shape from PageRect — the two coordinate spaces must never be
+ *  conflated, and zoomToSelection() owns the only mapping between them. */
+export interface ViewportRect { left: number; top: number; width: number; height: number }
+
+/** Union AABB of the elements' client rects, or null when empty — the selectionRect
+ *  feeder, kept here so index.ts's opt wiring stays a one-liner (2026-07-11 PR review). */
+export function unionClientRect(els: ReadonlyArray<Element>): ViewportRect | null {
+  if (els.length === 0) return null
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity
+  for (const el of els) {
+    const r = el.getBoundingClientRect()
+    left = Math.min(left, r.left)
+    top = Math.min(top, r.top)
+    right = Math.max(right, r.right)
+    bottom = Math.max(bottom, r.bottom)
+  }
+  return { left, top, width: right - left, height: bottom - top }
+}
+
 /**
  * Fit a page-space rect into the viewport area the panel doesn't cover, centered.
  * Shared by zoom-to-fit (rect = the whole artboard) and Shift+2 zoom-to-selection.
@@ -124,7 +144,7 @@ export interface CanvasModeOpts {
   onChange: () => void
   /** Current selection's bounding box in VIEWPORT coordinates (already canvas-transformed),
    *  or null when nothing is selected — Shift+2 zoom-to-selection. */
-  selectionRect?: () => { left: number; top: number; width: number; height: number } | null
+  selectionRect?: () => ViewportRect | null
 }
 
 interface SavedStyles {

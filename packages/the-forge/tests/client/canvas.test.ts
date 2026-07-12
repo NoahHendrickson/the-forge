@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   clampScale, zoomAt, panBy, fitState, fitRectState, loadCanvasPrefs, saveCanvasPrefs,
-  zoomStopAfter, zoomStopBefore,
+  zoomStopAfter, zoomStopBefore, unionClientRect,
   MIN_SCALE, MAX_SCALE, CANVAS_STORAGE_KEY, FIT_MARGIN, WHEEL_LINE_PX, ZOOM_WHEEL_CLAMP,
   CanvasMode, type CanvasModeOpts,
 } from '../../src/client/canvas'
@@ -71,6 +71,22 @@ describe('fitRectState', () => {
   it('fitState is the whole-page special case of fitRectState', () => {
     expect(fitState(1280, 800, 1280, 4000, 320))
       .toEqual(fitRectState(1280, 800, { x: 0, y: 0, w: 1280, h: 4000 }, 320))
+  })
+})
+
+describe('unionClientRect', () => {
+  const fake = (left: number, top: number, right: number, bottom: number): Element => {
+    const el = document.createElement('div')
+    el.getBoundingClientRect = () =>
+      ({ left, top, right, bottom, width: right - left, height: bottom - top, x: left, y: top, toJSON: () => '' }) as DOMRect
+    return el
+  }
+  it('returns null for an empty selection', () => {
+    expect(unionClientRect([])).toBeNull()
+  })
+  it('unions multiple client rects into one AABB', () => {
+    expect(unionClientRect([fake(10, 20, 110, 70), fake(50, 5, 90, 200)]))
+      .toEqual({ left: 10, top: 5, width: 100, height: 195 })
   })
 })
 
