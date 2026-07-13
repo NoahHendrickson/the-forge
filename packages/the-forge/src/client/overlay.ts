@@ -632,16 +632,21 @@ button {
 `.session-row { animation: forge-rise-in var(--dur-pop) var(--ease-out); }
 .session-approval:not(.session-approval-resolved) { animation: forge-rise-in var(--dur-panel) var(--ease-spring); }
 ` +
-// Chat rendering (Task 5) — bubbles, delta streaming, diff disclosures, config rows.
+// Chat rendering (Task 5 + Task 3 restyle) — bubbles, delta streaming, diff disclosures, config rows.
 // .chat-msg: bubble base (extends .session-row); .chat-user / .chat-assistant: sender variant.
-// .chat-streaming: the single in-progress delta bubble. .chat-msg-ref: element chip echo line.
+// Task 3 (2026-07-12): user bubbles full-width with background, assistant plain text no background,
+// streaming caret replaces the dashed border — .chat-streaming::after with a blinking caret.
+// .chat-msg-ref: element chip echo line.
 // .session-diff / .diff-before / .diff-after: collapsed <details> tool-edit disclosure.
 // .session-config: the config-changed summary line.
 // CSS class names here are test hooks — extend, don't rename.
 `.chat-msg { flex-direction: column; align-items: flex-start; gap: 2px; white-space: pre-wrap; }
-.chat-user { background: rgba(255,255,255,0.05); }
-.chat-assistant { background: rgba(255,255,255,0.03); }
-.chat-streaming { border: 1px dashed var(--border-strong); }
+.chat-user { background: var(--control); border-radius: 8px; padding: 8px 10px; }
+.chat-assistant { background: none; padding: 3px 0; }
+.chat-streaming::after {
+  content: '▍'; margin-left: 2px; color: var(--text-faint);
+  animation: forge-blink 1s steps(1, end) infinite;
+}
 .chat-msg-ref { color: var(--text-faint); font: 400 var(--text-xs) var(--font-mono); }
 .session-diff { flex-basis: 100%; margin-top: 2px; font: 400 var(--text-xs) var(--font-mono); }
 .session-diff summary { cursor: pointer; color: var(--text-muted); }
@@ -784,9 +789,11 @@ button {
 // for JS that waits on it) across every shadow-DOM transition/animation, including the
 // pre-existing ripple fade and chip pulse. Page-context motion (dock margin, canvas
 // transform) is guarded separately via prefersReducedMotion() in motion.ts.
+// Streaming caret blink — steps(1, end) = hard on/off, no fade.
 `@keyframes forge-pop { from { transform: scale(0.8); } }
 @keyframes forge-rise-in { from { opacity: 0; transform: translateY(8px); } }
 @keyframes forge-shake { 25% { transform: translateX(-2px); } 50% { transform: translateX(2px); } 75% { transform: translateX(-1px); } }
+@keyframes forge-blink { 50% { opacity: 0; } }
 ` +
 // Animated show/hide for hidden-toggled popovers/chrome (.forge-anim opt-in — see the
 // [hidden] exemption at the top of this string). Entry: spring scale-in via

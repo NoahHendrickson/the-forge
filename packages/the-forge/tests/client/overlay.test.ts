@@ -729,6 +729,16 @@ describe('SessionFeed chat CSS hooks (Task 5)', () => {
     expect(CSS).toContain('.session-config')
   })
 
+  // Chat rendering Task 3 (2026-07-12): full-width user bubbles, plain assistant text, blink caret while streaming
+  it('CSS declares .chat-streaming::after with a blinking caret', () => {
+    expect(CSS).toContain('.chat-streaming::after')
+    expect(CSS).toContain('@keyframes forge-blink')
+  })
+
+  it('CSS declares .chat-assistant with background: none', () => {
+    expect(CSS).toContain('.chat-assistant { background: none;')
+  })
+
   // PR #34 review rework: closed = display:none (opts out of .chat-composer's 6px flex gap —
   // a rendered 0-height item would earn it), animated anyway via @starting-style (0fr entry
   // frame on the none→grid flip) + display allow-discrete (holds grid through the collapse).
