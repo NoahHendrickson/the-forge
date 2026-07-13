@@ -616,7 +616,10 @@ describe('Overlay CSS chat composer / element chip / controls (composer consolid
     expect(CSS).toContain('.chat-composer')
     expect(CSS).toContain('.composer-controls')
     expect(CSS).toContain('.session-model')
-    expect(CSS).toContain('.chat-chip')
+    expect(CSS).toContain('.composer-chip')
+    expect(CSS).toContain('.chat-input:focus-within')
+    expect(CSS).toContain('.chat-input.has-items')
+    expect(CSS).not.toContain('.chat-chip')
     expect(CSS).toContain('.chat-input')
     expect(CSS).toContain('.chat-textarea')
     expect(CSS).toContain('.chat-disabled-reason')
@@ -724,6 +727,16 @@ describe('SessionFeed chat CSS hooks (Task 5)', () => {
 
   it('CSS declares .session-config for the config-changed row', () => {
     expect(CSS).toContain('.session-config')
+  })
+
+  // Chat rendering Task 3 (2026-07-12): full-width user bubbles, plain assistant text, blink caret while streaming
+  it('CSS declares .chat-streaming::after with a blinking caret', () => {
+    expect(CSS).toContain('.chat-streaming::after')
+    expect(CSS).toContain('@keyframes forge-blink')
+  })
+
+  it('CSS declares .chat-assistant with background: none', () => {
+    expect(CSS).toContain('.chat-assistant { background: none;')
   })
 
   // PR #34 review rework: closed = display:none (opts out of .chat-composer's 6px flex gap —

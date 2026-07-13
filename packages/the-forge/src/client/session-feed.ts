@@ -6,6 +6,7 @@ import { basename } from './source'
 import { CHAT_TEXT_MAX, isHarnessId, type HarnessId } from '../shared/chat-constants'
 import { AGENT_DISPLAY_NAME } from './agent'
 import { ComposerConfig } from './composer-config'
+import { FeedAnchor } from './feed-anchor'
 import { type SessionState } from './watch'
 import { popOnce } from './motion'
 
@@ -127,18 +128,20 @@ export class SessionFeed {
   private readonly chatComposer: HTMLElement
   private readonly composerChips: HTMLElement
   private readonly composerControls: HTMLElement
-  // --- drafts pill + disclosure (composer consolidation Task 2): the pill lives in
-  // composerChips alongside the element chip; draftDisclosure is a sibling block, above
-  // composerChips, that the pill's click toggles open/closed via the .open class — a
-  // details-free div toggle (no <details> semantics needed, there's only ever one thing to
-  // show/hide). draftSlot (public) is the content host inside it. ---
+  // --- drafts pill + disclosure (composer consolidation Task 2): draftPill is the single
+  // unified chip — it absorbed the old separate element chip (chat-composer-chip spec) and
+  // renders drafts count, element label, or both. draftDisclosure is a block above .chat-input
+  // that the pill's click toggles open/closed via the .open class — a details-free div toggle
+  // (no <details> semantics needed, there's only ever one thing to show/hide). draftSlot
+  // (public) is the content host inside it. ---
   private readonly draftPill: HTMLButtonElement
   private readonly draftPillLabel: HTMLSpanElement
+  private readonly draftPillEl: HTMLSpanElement
+  private readonly draftChevron: HTMLSpanElement
+  private readonly pillClear: HTMLButtonElement
   private readonly draftDisclosure: HTMLElement
 
-  // --- element chip + input cluster ---
-  private readonly chip: HTMLElement
-  private readonly chipLabel: HTMLElement
+  // --- attached-element state + input cluster ---
   private readonly inputCluster: HTMLElement
   private readonly textarea: HTMLTextAreaElement
   private readonly sendBtn: HTMLButtonElement
@@ -168,6 +171,10 @@ export class SessionFeed {
   private readonly approvalRows = new Map<string, HTMLElement>()
   /** All rows appended to this.list, in insertion order; capped at MAX_ROWS (oldest removed). */
   private readonly rowList: HTMLElement[] = []
+  /** Anchor-at-top owner (feed-anchor.ts, extracted PR #35 review): the tail spacer, the
+   * anchored-row bookkeeping, and the sizing math. addRow inserts rows before its `spacer`;
+   * the mutation sites that must call `anchor.update()` are named in FeedAnchor's docs. */
+  private readonly anchor: FeedAnchor
   /** The single in-progress .chat-streaming bubble, if any — the first seq-0 delta after a
    * non-delta event creates it; subsequent deltas append to it; the next final assistant-text
    * replaces its content and clears this back to null (no duplicate bubble). */
@@ -189,6 +196,9 @@ export class SessionFeed {
    * both edits and chat, so an empty textarea must not block sending when there ARE drafts to
    * send, even though it still blocks when there is truly nothing (no text, no drafts). */
   private draftCount = 0
+  /** Mirrors setDraftState's `applying` — updateChip needs both halves of the drafts signal,
+   * and setDraftState must not be the only place that can recompute the pill text. */
+  private draftApplying = false
   /** Mirrors setAvailability's last `enabled` value — kept alongside draftCount so
    * syncSendEnabled() can compute the send button's disabled state from both independent
    * signals without either setter having to know the other's current value (final-review fix
@@ -210,6 +220,8 @@ export class SessionFeed {
     this.list = document.createElement('div')
     this.list.className = 'session-list'
 
+    this.anchor = new FeedAnchor(this.list)
+
     // Config pickers (harness/model/effort/permission) — owned by ComposerConfig
     // (composer-config.ts, extracted PR #32). It forwards each picker's onChange through the
     // SessionFeed.onConfig arrow below (read lazily, so index.ts reassigning onConfig after
@@ -218,36 +230,42 @@ export class SessionFeed {
     // composer consolidation (Task 1) moved them into the composer's .composer-controls row.
     this.config = new ComposerConfig((cfg) => this.onConfig(cfg))
 
-    // Element chip: Prompt-button / host sets it via setChip(); the × clears it locally
-    // (no host callback — a host's onSend implementation reads it via getChip(), same as the
-    // old floating prompt popup used to read its own anchor).
-    this.chip = document.createElement('div')
-    this.chip.className = 'chat-chip'
-    this.chip.hidden = true
-    this.chipLabel = document.createElement('span')
-    const chipClear = createButton({ label: '×', className: 'chat-chip-clear' })
-    chipClear.type = 'button'
-    chipClear.addEventListener('click', () => this.setChip(null))
-    this.chip.append(this.chipLabel, chipClear)
-
-    // Drafts pill + disclosure (composer consolidation Task 2): the pill is a plain
-    // createButton (CLAUDE.md's ui/ factory rule), hidden until setDraftState says otherwise.
-    // Its click toggles the sibling draftDisclosure's .open class — draftSlot is exposed
-    // publicly so index.ts can append the (unmodified) ChangeList's root into it.
-    // Label + chevron are child spans (2026-07-11 draft-badge spec): setDraftState rewrites
-    // only the label span, and .open is mirrored onto the pill itself so the chevron can
-    // rotate with a same-element CSS hook (the disclosure is a sibling, not a parent).
+    // Unified chip (2026-07-12 chat-composer-chip spec): ONE chip carries both the pending-
+    // drafts state and the attached element — .chat-chip retired, .draft-pill absorbed its
+    // job. The visual chip (.composer-chip) holds TWO sibling buttons, because a button
+    // cannot nest an interactive child: .draft-pill (count label + element label + chevron;
+    // click toggles the sibling draftDisclosure's .open class, drafts permitting) and
+    // .draft-pill-clear (× — detaches the element, the old .chat-chip-clear contract: no
+    // host callback, hosts read the element via getChip()). Both are createButton (CLAUDE.md
+    // ui/ factory rule). All label/visibility rendering flows through updateChip() — the
+    // single owner — so setChip and setDraftState can each fire without knowing the other's
+    // state. .open is mirrored onto the pill itself so the chevron can rotate with a
+    // same-element CSS hook (the disclosure is a sibling, not a parent).
     this.draftPill = createButton({ className: 'draft-pill' })
     this.draftPill.type = 'button'
-    this.draftPill.hidden = true
     this.draftPillLabel = document.createElement('span')
     this.draftPillLabel.className = 'draft-pill-label'
-    const draftChevron = document.createElement('span')
-    draftChevron.className = 'draft-pill-chevron'
-    draftChevron.textContent = '▾'
-    draftChevron.setAttribute('aria-hidden', 'true')
-    this.draftPill.append(this.draftPillLabel, draftChevron)
-    this.draftPill.addEventListener('click', () => this.setDisclosureOpen(!this.draftDisclosure.classList.contains('open')))
+    this.draftPillEl = document.createElement('span')
+    this.draftPillEl.className = 'draft-pill-el'
+    this.draftPillEl.hidden = true
+    this.draftChevron = document.createElement('span')
+    this.draftChevron.className = 'draft-pill-chevron'
+    this.draftChevron.textContent = '▾'
+    this.draftChevron.setAttribute('aria-hidden', 'true')
+    this.draftPill.append(this.draftPillLabel, this.draftPillEl, this.draftChevron)
+    this.draftPill.addEventListener('click', () => {
+      if (this.draftCount > 0 || this.draftApplying) {
+        this.setDisclosureOpen(!this.draftDisclosure.classList.contains('open'))
+      }
+    })
+    this.pillClear = createButton({ label: '×', className: 'draft-pill-clear' })
+    this.pillClear.type = 'button'
+    this.pillClear.setAttribute('aria-label', 'Detach element')
+    this.pillClear.hidden = true
+    this.pillClear.addEventListener('click', () => this.setChip(null))
+    const composerChip = document.createElement('div')
+    composerChip.className = 'composer-chip'
+    composerChip.append(this.draftPill, this.pillClear)
 
     this.draftSlot = document.createElement('div')
     this.draftSlot.className = 'draft-slot'
@@ -255,10 +273,12 @@ export class SessionFeed {
     this.draftDisclosure.className = 'draft-disclosure'
     this.draftDisclosure.append(this.draftSlot)
 
-    // Composer chip row: the element chip plus the drafts pill (Task 2).
+    // Composer chip row — hidden-attr managed by updateChip (the old `.composer-chips:empty`
+    // CSS can't work anymore: the unified chip is always a child, just sometimes blank).
     this.composerChips = document.createElement('div')
     this.composerChips.className = 'composer-chips'
-    this.composerChips.append(this.chip, this.draftPill)
+    this.composerChips.hidden = true
+    this.composerChips.append(composerChip)
 
     // Input cluster: plain createElement for the textarea (no factory exists for it, per
     // CLAUDE.md's ui/ factory rule — that rule covers buttons/selects). Send now lives in
@@ -291,7 +311,7 @@ export class SessionFeed {
     // flip ■ back to ↑ immediately (a mid-turn message queues via the existing FIFO), not just
     // whenever busyish itself next transitions.
     this.textarea.addEventListener('input', () => this.updateSendMorph())
-    this.inputCluster.append(this.disabledReason, this.textarea)
+    this.inputCluster.append(this.composerChips, this.disabledReason, this.textarea)
 
     // Composer send/stop button: morphs between ↑ (send, fires onSend) and ■ (interrupt, fires
     // onInterrupt) — see updateSendMorph()/sendIsStop. Kept on BOTH .composer-send (the new
@@ -319,12 +339,14 @@ export class SessionFeed {
 
     // The single bordered composer card (composer consolidation Task 1) — replaces the retired
     // status row, standalone Stop button, and .session-config-bar. draftDisclosure sits ABOVE
-    // composerChips (Task 2): it hosts the ChangeList, which can grow to its own max-height —
-    // above the chips/input/controls rows is the only position that never pushes the textarea
-    // around when it opens. Task 4 adds the draggable divider above .session-feed.
+    // .chat-input: it hosts the ChangeList, which can grow to its own max-height — above the
+    // input/controls rows is the only position that never pushes the textarea around when it
+    // opens. The chips row now lives inside the input box itself (chat-composer-chip spec,
+    // Task 2), appended to inputCluster above. Task 4 adds the draggable divider above
+    // .session-feed.
     this.chatComposer = document.createElement('div')
     this.chatComposer.className = 'chat-composer'
-    this.chatComposer.append(this.draftDisclosure, this.composerChips, this.inputCluster, this.composerControls)
+    this.chatComposer.append(this.draftDisclosure, this.inputCluster, this.composerControls)
 
     this.root.append(this.list, this.chatComposer)
     this.updateSendMorph()
@@ -338,8 +360,7 @@ export class SessionFeed {
    * clearText(). */
   setChip(el: { source: string; tag: string; label: string } | null): void {
     this.currentChip = el
-    this.chipLabel.textContent = el?.label ?? ''
-    this.chip.hidden = el === null
+    this.updateChip()
   }
 
   /** Focuses the chat textarea — the Prompt button's new job (index.ts) is setChip + focus,
@@ -352,21 +373,47 @@ export class SessionFeed {
    * this from both the drafts store's onChange (count) and the lifecycle session's onChange
    * (applying), so either can independently flip the pill on/off without knowing about the
    * other's derivation. `applying` wins the text over a nonzero count — an in-flight send stays
-   * "applying…" even while further drafts pile up behind it. Hidden only when there is truly
-   * nothing to show, which also force-closes the disclosure — an empty disclosure left open
-   * would show a blank block once the last draft/send resolves. */
+   * "applying…" even while further drafts pile up behind it. Visibility/hidden-state (whole
+   * chip, force-closing the disclosure) is no longer decided here — that's updateChip()'s job,
+   * since the unified chip's visibility also depends on the independent element-chip signal. */
   setDraftState(s: { count: number; applying: boolean }): void {
     this.draftCount = s.count
-    const visible = s.count > 0 || s.applying
-    this.draftPill.hidden = !visible
-    if (!visible) {
-      this.setDisclosureOpen(false)
-    } else {
-      this.draftPillLabel.textContent = s.applying ? 'applying…' : s.count === 1 ? '1 change drafted' : `${s.count} changes drafted`
-    }
+    this.draftApplying = s.applying
+    this.updateChip()
     // Draft count is one of the two independent signals that can license the send button —
     // see syncSendEnabled (final-review fix C1).
     this.syncSendEnabled()
+  }
+
+  /** Single renderer for the unified chip (chat-composer-chip spec) — setChip and
+   * setDraftState both route here so either signal can flip visibility/labels without
+   * knowing the other's derivation. States: drafts only → "N changes" + chevron; element
+   * only → element label + ×; both → "N changes · <label>" + chevron + ×; neither → the
+   * whole .composer-chips row hidden. `applying` wins the drafts text over a nonzero count —
+   * an in-flight send stays "applying…" even while further drafts pile up behind it. The
+   * disclosure force-close ALSO lives here (not on wrapper-hidden): the chip can stay
+   * visible element-only while the drafts disclosure must still close, or an empty
+   * disclosure would show a blank block once the last draft resolves. has-items on
+   * .chat-input is the primed-state CSS hook (accent glow — see overlay.ts). */
+  private updateChip(): void {
+    const draftsVisible = this.draftCount > 0 || this.draftApplying
+    const el = this.currentChip
+    const visible = draftsVisible || el !== null
+    this.composerChips.hidden = !visible
+    this.draftPillLabel.hidden = !draftsVisible
+    this.draftPillLabel.textContent = !draftsVisible
+      ? ''
+      : this.draftApplying
+        ? 'applying…'
+        : this.draftCount === 1
+          ? '1 change'
+          : `${this.draftCount} changes`
+    this.draftPillEl.hidden = el === null
+    this.draftPillEl.textContent = el === null ? '' : draftsVisible ? `· ${el.label}` : el.label
+    this.draftChevron.hidden = !draftsVisible
+    this.pillClear.hidden = el === null
+    if (!draftsVisible) this.setDisclosureOpen(false)
+    this.inputCluster.classList.toggle('has-items', visible)
   }
 
   /** Single owner of the disclosure's open state — mirrored onto the pill so the chevron
@@ -675,7 +722,9 @@ export class SessionFeed {
       case 'user-text': {
         const text = typeof e.text === 'string' ? e.text : ''
         const element = typeof e.element === 'object' && e.element !== null ? (e.element as Record<string, unknown>) : undefined
-        this.addRow(this.makeUserBubble(text, element))
+        const bubble = this.makeUserBubble(text, element)
+        this.addRow(bubble)
+        this.anchor.anchor(bubble)
         break
       }
       case 'assistant-delta': {
@@ -716,6 +765,9 @@ export class SessionFeed {
           const edit = parseEditPayload(e.edit)
           if (edit && !row.querySelector('.session-diff')) {
             row.append(makeDiffDetails(edit))
+            // In-place row growth with no addRow — same spacer invariant as the in-place
+            // finalize branch (PR #35 review: this path was the one still bypassing it).
+            this.anchor.update()
           }
         }
         break
@@ -782,6 +834,11 @@ export class SessionFeed {
       this.streamingBubble.classList.remove('chat-streaming')
       this.streamingBubble = null
       this.streamingText = ''
+      // The bubble can grow in place with no addRow/appendDelta — e.g. a mid-stream
+      // reconnect replays a final assistant-text much longer than the partial streamed
+      // text — so the spacer must be recomputed here or it stays oversized, leaving a
+      // scrollable blank tail.
+      this.anchor.update()
       return
     }
     this.addRow(this.makeAssistantBubble(text))
@@ -800,6 +857,7 @@ export class SessionFeed {
     }
     this.streamingText += text
     this.streamingBubble.textContent = this.streamingText
+    this.anchor.update()
   }
 
   private makeAssistantBubble(text: string): HTMLElement {
@@ -907,7 +965,7 @@ export class SessionFeed {
 
   private addRow(row: HTMLElement): void {
     this.rowList.push(row)
-    this.list.appendChild(row)
+    this.list.insertBefore(row, this.anchor.spacer)
     this.root.hidden = false
     // Cap at MAX_ROWS — drop oldest rows beyond the limit (mirrors the server's ring-buffer cap)
     if (this.rowList.length > MAX_ROWS) {
@@ -919,6 +977,8 @@ export class SessionFeed {
       if (this.streamingBubble && excess.includes(this.streamingBubble)) {
         this.clearStreamingBubble()
       }
+      this.anchor.onEvict(excess)
     }
+    this.anchor.update()
   }
 }

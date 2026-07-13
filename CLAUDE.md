@@ -77,6 +77,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `inspector.ts` | reads an element's computed-style snapshot for the panel |
 | `panel.ts` | the properties panel orchestrator (Panel class); `feedDivider`/`feedSplit()` are thin pass-throughs to `feed-divider.ts` |
 | `feed-divider.ts` | the panel↔chat drag divider: clamps, dblclick reset, sessionStorage persistence (`FEED_SPLIT_KEY`) |
+| `feed-anchor.ts` | `FeedAnchor` — the anchor-at-top invariant: owns `.feed-tail-spacer` (always `.session-list`'s last child, exempt from MAX_ROWS) and the anchored-row sizing math; mutation sites in session-feed.ts call `anchor.update()` (the sites are named in its docs) |
 | `panel-specs.ts` | RowSpec/SectionSpec types, SECTIONS definition, token-scale helpers (`tokenEntriesFor`); also hosts `defeatFillIfGrowing`, the shared app-CSS-fill defeat policy |
 | `panel-readers.ts` | pure computed-style readers/normalizers (`isFlex`, `normalizeJustify`, font helpers) |
 | `panel-token-ui.ts` | PanelTokenUi — the token affordance cluster: shared TokenPicker instance, scale-field open path, pill boundTokens bookkeeping (B5/Compare rules), color-row token button; plus pillLabelFor/colorDisplay helpers |

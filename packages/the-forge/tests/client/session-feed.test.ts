@@ -118,7 +118,7 @@ describe('composer shell', () => {
     const feed = new SessionFeed()
     document.body.appendChild(feed.root)
     const chips = feed.root.querySelector('.composer-chips')
-    expect(chips?.querySelector('.chat-chip')).not.toBeNull()
+    expect(chips?.querySelector('.composer-chip')).not.toBeNull()
   })
 
   it('the three pickers and composer-send live in .composer-controls, and .session-config-bar is gone', () => {
@@ -179,18 +179,149 @@ describe('composer shell', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Drafts pill + disclosure (composer consolidation Task 2) — the pill lives in
-// .composer-chips alongside the element chip; .draft-disclosure is a sibling block, above
-// .composer-chips, hosting draftSlot (where index.ts appends the unmodified ChangeList's root).
+// Unified chip (chat-composer-chip spec): one chip carries drafts count AND the
+// attached element — .chat-chip retired, .draft-pill absorbed its job.
+// ---------------------------------------------------------------------------
+
+describe('unified chip', () => {
+  function parts(feed: SessionFeed) {
+    return {
+      chips: feed.root.querySelector('.composer-chips') as HTMLElement,
+      pill: feed.root.querySelector('.draft-pill') as HTMLButtonElement,
+      label: feed.root.querySelector('.draft-pill-label') as HTMLElement,
+      el: feed.root.querySelector('.draft-pill-el') as HTMLElement,
+      chevron: feed.root.querySelector('.draft-pill-chevron') as HTMLElement,
+      clear: feed.root.querySelector('.draft-pill-clear') as HTMLButtonElement,
+      input: feed.root.querySelector('.chat-input') as HTMLElement,
+    }
+  }
+
+  it('is hidden with no drafts and no element, and .chat-chip is gone', () => {
+    const feed = new SessionFeed()
+    const p = parts(feed)
+    expect(p.chips.hidden).toBe(true)
+    expect(feed.root.querySelector('.chat-chip')).toBeNull()
+    expect(p.input.classList.contains('has-items')).toBe(false)
+  })
+
+  it('drafts only: count label + chevron, no element span, no ×', () => {
+    const feed = new SessionFeed()
+    feed.setDraftState({ count: 3, applying: false })
+    const p = parts(feed)
+    expect(p.chips.hidden).toBe(false)
+    expect(p.label.textContent).toBe('3 changes')
+    expect(p.label.hidden).toBe(false)
+    expect(p.chevron.hidden).toBe(false)
+    expect(p.el.hidden).toBe(true)
+    expect(p.clear.hidden).toBe(true)
+  })
+
+  it('singular count reads "1 change"', () => {
+    const feed = new SessionFeed()
+    feed.setDraftState({ count: 1, applying: false })
+    expect(parts(feed).label.textContent).toBe('1 change')
+  })
+
+  it('applying wins the label over a nonzero count', () => {
+    const feed = new SessionFeed()
+    feed.setDraftState({ count: 2, applying: true })
+    expect(parts(feed).label.textContent).toBe('applying…')
+  })
+
+  it('element only: element label + ×, no count label, no chevron', () => {
+    const feed = new SessionFeed()
+    feed.setChip({ source: 'src/App.tsx:12:3', tag: 'div', label: 'div · App.tsx:12' })
+    const p = parts(feed)
+    expect(p.chips.hidden).toBe(false)
+    expect(p.el.textContent).toBe('div · App.tsx:12')
+    expect(p.el.hidden).toBe(false)
+    expect(p.label.hidden).toBe(true)
+    expect(p.chevron.hidden).toBe(true)
+    expect(p.clear.hidden).toBe(false)
+  })
+
+  it('both: count label plus ·-prefixed element label, chevron and ×', () => {
+    const feed = new SessionFeed()
+    feed.setDraftState({ count: 2, applying: false })
+    feed.setChip({ source: 'src/App.tsx:12:3', tag: 'div', label: 'div · App.tsx:12' })
+    const p = parts(feed)
+    expect(p.label.textContent).toBe('2 changes')
+    expect(p.el.textContent).toBe('· div · App.tsx:12')
+    expect(p.chevron.hidden).toBe(false)
+    expect(p.clear.hidden).toBe(false)
+  })
+
+  it('× detaches the element only — drafts stay', () => {
+    const feed = new SessionFeed()
+    feed.setDraftState({ count: 2, applying: false })
+    feed.setChip({ source: 'x:1:1', tag: 'div', label: 'div' })
+    parts(feed).clear.click()
+    const p = parts(feed)
+    expect(feed.getChip()).toBeNull()
+    expect(p.el.hidden).toBe(true)
+    expect(p.chips.hidden).toBe(false)
+    expect(p.label.textContent).toBe('2 changes')
+  })
+
+  it('pill click toggles the disclosure only when drafts exist', () => {
+    const feed = new SessionFeed()
+    const disclosure = feed.root.querySelector('.draft-disclosure') as HTMLElement
+    feed.setChip({ source: 'x:1:1', tag: 'div', label: 'div' })
+    parts(feed).pill.click()
+    expect(disclosure.classList.contains('open')).toBe(false)
+    feed.setDraftState({ count: 1, applying: false })
+    parts(feed).pill.click()
+    expect(disclosure.classList.contains('open')).toBe(true)
+  })
+
+  it('disclosure force-closes when drafts vanish even with an element attached', () => {
+    const feed = new SessionFeed()
+    feed.setDraftState({ count: 1, applying: false })
+    parts(feed).pill.click()
+    feed.setChip({ source: 'x:1:1', tag: 'div', label: 'div' })
+    feed.setDraftState({ count: 0, applying: false })
+    const disclosure = feed.root.querySelector('.draft-disclosure') as HTMLElement
+    expect(disclosure.classList.contains('open')).toBe(false)
+    expect(parts(feed).chips.hidden).toBe(false) // element keeps the chip visible
+  })
+
+  it('has-items on .chat-input tracks chip visibility', () => {
+    const feed = new SessionFeed()
+    const input = feed.root.querySelector('.chat-input') as HTMLElement
+    feed.setChip({ source: 'x:1:1', tag: 'div', label: 'div' })
+    expect(input.classList.contains('has-items')).toBe(true)
+    feed.setChip(null)
+    expect(input.classList.contains('has-items')).toBe(false)
+    feed.setDraftState({ count: 1, applying: false })
+    expect(input.classList.contains('has-items')).toBe(true)
+    feed.setDraftState({ count: 0, applying: false })
+    expect(input.classList.contains('has-items')).toBe(false)
+  })
+
+  it('the chips row renders inside .chat-input, above the textarea', () => {
+    const feed = new SessionFeed()
+    const input = feed.root.querySelector('.chat-input') as HTMLElement
+    const chips = input.querySelector('.composer-chips')
+    expect(chips).not.toBeNull()
+    const children = Array.from(input.children)
+    expect(children.indexOf(chips as Element)).toBeLessThan(children.indexOf(input.querySelector('.chat-textarea')!))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Drafts pill + disclosure (composer consolidation Task 2, unified chip pass) — the pill is
+// the single chip inside .chat-input's .composer-chips row; .draft-disclosure is a sibling
+// block above the input box inside .chat-composer, hosting draftSlot (where index.ts appends
+// the unmodified ChangeList's root).
 // ---------------------------------------------------------------------------
 
 describe('drafts pill + disclosure', () => {
-  it('the drafts pill lives in .composer-chips alongside the element chip', () => {
+  it('the drafts pill lives in .composer-chips', () => {
     const feed = new SessionFeed()
     document.body.appendChild(feed.root)
     const chips = feed.root.querySelector('.composer-chips') as HTMLElement
     expect(chips.querySelector('.draft-pill')).not.toBeNull()
-    expect(chips.querySelector('.chat-chip')).not.toBeNull()
+    expect(chips.querySelector('.composer-chip')).not.toBeNull()
   })
 
   it('.draft-disclosure is a sibling of .composer-chips inside .chat-composer, not nested in it', () => {
@@ -217,17 +348,18 @@ describe('drafts pill + disclosure', () => {
   it('pill is hidden at zero drafts and not applying', () => {
     const feed = new SessionFeed()
     document.body.appendChild(feed.root)
-    const pill = feed.root.querySelector('.draft-pill') as HTMLElement
-    expect(pill.hidden).toBe(true)
+    const chips = feed.root.querySelector('.composer-chips') as HTMLElement
+    expect(chips.hidden).toBe(true)
   })
 
   it('setDraftState(2, false) unhides the pill with the plural count copy', () => {
     const feed = new SessionFeed()
     document.body.appendChild(feed.root)
     feed.setDraftState({ count: 2, applying: false })
+    const chips = feed.root.querySelector('.composer-chips') as HTMLElement
     const pill = feed.root.querySelector('.draft-pill') as HTMLElement
-    expect(pill.hidden).toBe(false)
-    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('2 changes drafted')
+    expect(chips.hidden).toBe(false)
+    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('2 changes')
   })
 
   it('setDraftState(1, false) uses the singular copy', () => {
@@ -235,15 +367,16 @@ describe('drafts pill + disclosure', () => {
     document.body.appendChild(feed.root)
     feed.setDraftState({ count: 1, applying: false })
     const pill = feed.root.querySelector('.draft-pill') as HTMLElement
-    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('1 change drafted')
+    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('1 change')
   })
 
   it('applying:true shows "applying…" and wins over a nonzero count', () => {
     const feed = new SessionFeed()
     document.body.appendChild(feed.root)
     feed.setDraftState({ count: 3, applying: true })
+    const chips = feed.root.querySelector('.composer-chips') as HTMLElement
     const pill = feed.root.querySelector('.draft-pill') as HTMLElement
-    expect(pill.hidden).toBe(false)
+    expect(chips.hidden).toBe(false)
     expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('applying…')
   })
 
@@ -251,14 +384,16 @@ describe('drafts pill + disclosure', () => {
     const feed = new SessionFeed()
     document.body.appendChild(feed.root)
     feed.setDraftState({ count: 0, applying: true })
+    const chips = feed.root.querySelector('.composer-chips') as HTMLElement
     const pill = feed.root.querySelector('.draft-pill') as HTMLElement
-    expect(pill.hidden).toBe(false)
+    expect(chips.hidden).toBe(false)
     expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('applying…')
   })
 
   it('count===0 && !applying hides the pill and force-closes the disclosure', () => {
     const feed = new SessionFeed()
     document.body.appendChild(feed.root)
+    const chips = feed.root.querySelector('.composer-chips') as HTMLElement
     const pill = feed.root.querySelector('.draft-pill') as HTMLElement
     const disclosure = feed.root.querySelector('.draft-disclosure') as HTMLElement
     feed.setDraftState({ count: 2, applying: false })
@@ -266,7 +401,7 @@ describe('drafts pill + disclosure', () => {
     expect(disclosure.classList.contains('open')).toBe(true)
     expect(pill.classList.contains('open')).toBe(true)
     feed.setDraftState({ count: 0, applying: false })
-    expect(pill.hidden).toBe(true)
+    expect(chips.hidden).toBe(true)
     expect(disclosure.classList.contains('open')).toBe(false)
     expect(pill.classList.contains('open')).toBe(false)
   })
@@ -290,7 +425,7 @@ describe('drafts pill + disclosure', () => {
     feed.setDraftState({ count: 2, applying: false })
     const pill = feed.root.querySelector('.draft-pill') as HTMLElement
     expect(pill.querySelector('.draft-pill-chevron')!.textContent).toBe('▾')
-    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('2 changes drafted')
+    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('2 changes')
   })
 
   it('clicking the pill mirrors .open onto pill and disclosure together', () => {
@@ -1148,7 +1283,7 @@ describe('chat input cluster', () => {
     // Text/chip are no longer cleared by the feed itself — that's the host onSend
     // implementation's job now, via getText()/clearText()/getChip()/setChip(null).
     expect(textarea.value).toBe('  make it bigger  ')
-    expect((feed.root.querySelector('.chat-chip') as HTMLElement).hidden).toBe(false)
+    expect((feed.root.querySelector('.draft-pill-el') as HTMLElement).hidden).toBe(false)
   })
 
   it('textarea has maxLength 4000 (mirrors CHAT_TEXT_MAX server cap)', () => {
@@ -1214,10 +1349,10 @@ describe('chat input cluster', () => {
     const feed = new SessionFeed()
     document.body.appendChild(feed.root)
     feed.setChip({ source: 'src/x.tsx:1:1', tag: 'div', label: 'div · x.tsx:1' })
-    const chip = feed.root.querySelector('.chat-chip') as HTMLElement
+    const chip = feed.root.querySelector('.draft-pill-el') as HTMLElement
     expect(chip.hidden).toBe(false)
     expect(chip.textContent).toContain('div · x.tsx:1')
-    const clearBtn = chip.querySelector('.chat-chip-clear') as HTMLButtonElement
+    const clearBtn = feed.root.querySelector('.draft-pill-clear') as HTMLButtonElement
     expect(clearBtn).not.toBeNull()
     clearBtn.click()
     expect(chip.hidden).toBe(true)
@@ -1228,7 +1363,7 @@ describe('chat input cluster', () => {
     document.body.appendChild(feed.root)
     feed.setChip({ source: 'x:1:1', tag: 'div', label: 'div · x:1' })
     feed.setChip(null)
-    expect((feed.root.querySelector('.chat-chip') as HTMLElement).hidden).toBe(true)
+    expect((feed.root.querySelector('.draft-pill-el') as HTMLElement).hidden).toBe(true)
   })
 
   it('setAvailability disables input with reason and unhides the feed root', () => {
@@ -1700,6 +1835,83 @@ describe('row cap', () => {
     expect(rows[0]?.textContent).toBe('line 6')
     // Last row is the newest
     expect(rows[rows.length - 1]?.textContent).toBe('line 205')
+    feed.stop()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Anchor-at-top (chat-composer-chip spec): the tail spacer makes room so a sent
+// user bubble can scroll to the top of the list while the reply streams below.
+// ---------------------------------------------------------------------------
+
+describe('feed tail spacer + anchor', () => {
+  it('the spacer is the last child of .session-list and rows insert before it', async () => {
+    const feed = new SessionFeed({
+      fetchFn: makeFetchFn([
+        feedLine(1, { kind: 'user-text', text: 'hello' }),
+        feedLine(2, { kind: 'assistant-text', text: 'hi' }),
+      ]),
+    })
+    feed.start()
+    await flush()
+    const list = feed.root.querySelector('.session-list') as HTMLElement
+    expect(list.lastElementChild?.className).toBe('feed-tail-spacer')
+    expect(list.querySelectorAll('.feed-tail-spacer')).toHaveLength(1)
+    expect(list.querySelector('.chat-user')).not.toBeNull()
+    feed.stop()
+  })
+
+  it('a user-text event anchors its bubble to the top of the list', async () => {
+    const scrolls: ScrollIntoViewOptions[] = []
+    ;(HTMLElement.prototype as { scrollIntoView?: (o?: ScrollIntoViewOptions) => void }).scrollIntoView =
+      function (o?: ScrollIntoViewOptions) { scrolls.push(o ?? {}) }
+    try {
+      const feed = new SessionFeed({ fetchFn: makeFetchFn([feedLine(1, { kind: 'user-text', text: 'hello' })]) })
+      feed.start()
+      await flush()
+      expect(scrolls).toEqual([{ block: 'start' }])
+      feed.stop()
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  })
+
+  it('the spacer survives MAX_ROWS eviction and never enters the row cap', async () => {
+    const lines = Array.from({ length: 205 }, (_, i) => feedLine(i + 1, { kind: 'user-text', text: `m${i}` }))
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    feed.start()
+    await flush(500)
+    const list = feed.root.querySelector('.session-list') as HTMLElement
+    expect(list.lastElementChild?.className).toBe('feed-tail-spacer')
+    expect(list.querySelectorAll('.chat-user')).toHaveLength(200)
+    feed.stop()
+  })
+
+  // Regression net for finalizeAssistantText's in-place-replace branch calling
+  // updateTailSpacer before returning (a mid-stream reconnect can replay a final
+  // assistant-text much longer than the partial streamed text, which must not leave the
+  // spacer oversized). jsdom gives every element offsetTop/clientHeight of 0, so the
+  // spacer's height is always recomputed to the same value whether or not the finalize
+  // branch calls updateTailSpacer — this test cannot discriminate that call in jsdom (only
+  // a real-browser check can); it guards that the finalize path runs end to end without
+  // throwing and leaves the spacer intact and last in the list. Stubbing clientHeight to a
+  // nonzero value keeps the assertion meaningful about *what* updateTailSpacer computes,
+  // even though it can't prove *which* call computed it.
+  it('the spacer stays sized and last-child through delta -> final-text finalize', async () => {
+    const feed = new SessionFeed({
+      fetchFn: makeFetchFn([
+        feedLine(1, { kind: 'user-text', text: 'hello' }),
+        feedLine(2, { kind: 'assistant-delta', text: 'partial' }),
+        feedLine(3, { kind: 'assistant-text', text: 'a much longer final reply than the partial stream' }),
+      ]),
+    })
+    const list = feed.root.querySelector('.session-list') as HTMLElement
+    Object.defineProperty(list, 'clientHeight', { value: 500, configurable: true })
+    feed.start()
+    await flush()
+    const spacer = list.querySelector('.feed-tail-spacer') as HTMLElement
+    expect(list.lastElementChild).toBe(spacer)
+    expect(spacer.style.height).toBe('500px')
     feed.stop()
   })
 })

@@ -1407,11 +1407,12 @@ describe('change list wiring', () => {
     const { mode, drafts } = fullSetup()
     mode.setActive(true)
     const btn = document.querySelector('button')! as HTMLElement
+    const chips = mode.panelRoot.querySelector('.composer-chips') as HTMLElement
     const pill = mode.panelRoot.querySelector('.draft-pill') as HTMLElement
-    expect(pill.hidden).toBe(true)
+    expect(chips.hidden).toBe(true)
     drafts.apply(btn, 'padding-top', '24px')
-    expect(pill.hidden).toBe(false)
-    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('1 change drafted')
+    expect(chips.hidden).toBe(false)
+    expect(pill.querySelector('.draft-pill-label')!.textContent).toBe('1 change')
   })
 
   it('seeds sent rows on a successful send and clears them on deactivate', async () => {
@@ -1532,9 +1533,10 @@ describe('chat input cluster wiring (Task 6 — floating prompt popup retired)',
 
     panel.promptButton.click()
 
-    const chip = mode.panelRoot.querySelector('.chat-chip') as HTMLElement
+    const chip = mode.panelRoot.querySelector('.draft-pill-el') as HTMLElement
     expect(chip.hidden).toBe(false)
     // label format `<tag> · <basename>:<line>` — src/Button.tsx:42:8 → button · Button.tsx:42
+    // (element-only state has no `·` prefix beyond the label's own)
     expect(chip.textContent).toContain('button · Button.tsx:42')
     expect(focusSpy).toHaveBeenCalled()
     expect(overlay.host.shadowRoot!.querySelector('.prompt-box')).toBeNull()
@@ -1547,7 +1549,7 @@ describe('chat input cluster wiring (Task 6 — floating prompt popup retired)',
     const focusSpy = vi.spyOn(textarea, 'focus')
     panel.promptButton.click()
     expect(focusSpy).not.toHaveBeenCalled()
-    expect((mode.panelRoot.querySelector('.chat-chip') as HTMLElement).hidden).toBe(true)
+    expect((mode.panelRoot.querySelector('.draft-pill-el') as HTMLElement).hidden).toBe(true)
   })
 
   it('say POSTs /session/say with the secret header and the chipped element, then clears the chip', async () => {
@@ -1578,7 +1580,7 @@ describe('chat input cluster wiring (Task 6 — floating prompt popup retired)',
         text: 'make it pop',
         element: { source: 'src/Button.tsx:42:8', tag: 'button' },
       })
-      expect((mode.panelRoot.querySelector('.chat-chip') as HTMLElement).hidden).toBe(true)
+      expect((mode.panelRoot.querySelector('.draft-pill-el') as HTMLElement).hidden).toBe(true)
     } finally {
       delete (globalThis as { __THE_FORGE__?: unknown }).__THE_FORGE__
     }

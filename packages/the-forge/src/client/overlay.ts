@@ -605,6 +605,9 @@ button {
   border-top: 1px solid var(--separator);
 }
 .session-list { flex: 1 1 auto; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+` +
+// anchor-at-top spacer — see feed-anchor.ts (FeedAnchor)
+`.feed-tail-spacer { flex: none; }
 .session-list::-webkit-scrollbar { width: 8px; }
 .session-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 .session-row {
@@ -632,16 +635,21 @@ button {
 `.session-row { animation: forge-rise-in var(--dur-pop) var(--ease-out); }
 .session-approval:not(.session-approval-resolved) { animation: forge-rise-in var(--dur-panel) var(--ease-spring); }
 ` +
-// Chat rendering (Task 5) — bubbles, delta streaming, diff disclosures, config rows.
+// Chat rendering (Task 5 + Task 3 restyle) — bubbles, delta streaming, diff disclosures, config rows.
 // .chat-msg: bubble base (extends .session-row); .chat-user / .chat-assistant: sender variant.
-// .chat-streaming: the single in-progress delta bubble. .chat-msg-ref: element chip echo line.
+// Task 3 (2026-07-12): user bubbles full-width with background, assistant plain text no background,
+// streaming caret replaces the dashed border — .chat-streaming::after with a blinking caret.
+// .chat-msg-ref: element chip echo line.
 // .session-diff / .diff-before / .diff-after: collapsed <details> tool-edit disclosure.
 // .session-config: the config-changed summary line.
 // CSS class names here are test hooks — extend, don't rename.
 `.chat-msg { flex-direction: column; align-items: flex-start; gap: 2px; white-space: pre-wrap; }
-.chat-user { background: rgba(255,255,255,0.05); }
-.chat-assistant { background: rgba(255,255,255,0.03); }
-.chat-streaming { border: 1px dashed var(--border-strong); }
+.chat-user { background: var(--control); border-radius: 8px; padding: 8px 10px; }
+.chat-assistant { background: none; padding: 3px 0; }
+.chat-streaming::after {
+  content: '▍'; margin-left: 2px; color: var(--text-faint);
+  animation: forge-blink 1s steps(1, end) infinite;
+}
 .chat-msg-ref { color: var(--text-faint); font: 400 var(--text-xs) var(--font-mono); }
 .session-diff { flex-basis: 100%; margin-top: 2px; font: 400 var(--text-xs) var(--font-mono); }
 .session-diff summary { cursor: pointer; color: var(--text-muted); }
@@ -663,36 +671,38 @@ button {
 // row overflows a narrow (320px default) panel and shoves the flex: none composer-send clean
 // off the right edge (real-browser regression; jsdom can't see flex, so no unit test guards it).
 // Clipping (ellipsis/nowrap) keeps a shrunk select legible via its native chevron.
-// .chat-chip: the element attached to the next message.
-// .chat-input: the textarea (+ disabled-reason) — Send moved out into .composer-controls, one
-// row below, alongside the pickers. .chat-disabled-reason: shown when setAvailability(false,
-// reason) disables the input.
+// .chat-chip retired → .composer-chip (unified chip, 2026-07-12 chat-composer-chip spec) — the
+// chip row now sits INSIDE .chat-input, above the textarea, instead of as a sibling row.
+// .chat-input: the bordered input box — chip row + textarea (+ disabled-reason) — Send moved
+// out into .composer-controls, one row below, alongside the pickers. .chat-disabled-reason:
+// shown when setAvailability(false, reason) disables the input.
 // CSS class names here are test hooks — extend, don't rename.
 `.chat-composer {
   display: flex; flex-direction: column; gap: 6px; margin: 8px; padding: 8px;
   border: 1px solid var(--border-panel); border-radius: 10px; background: var(--surface);
 }
 .composer-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.composer-chips:empty { display: none; }
 .composer-controls { display: flex; align-items: center; gap: 6px; }
 .composer-spacer { flex: 1 1 auto; }
 .composer-controls .size-mode { font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-model { max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
-.chat-chip {
-  display: flex; align-items: center; gap: 6px;
-  padding: 4px 8px; border-radius: 6px; background: var(--control);
-  font: 400 var(--text-xs) var(--font-mono); color: var(--text-secondary);
+.composer-chip {
+  display: inline-flex; align-items: center;
+  border-radius: 6px; background: var(--surface);
 }
-.chat-chip-clear {
-  background: none; border: none; color: var(--text-faint); padding: 0 2px;
+.composer-chip .draft-pill { background: none; }
+.composer-chip .draft-pill:hover { background: var(--control-hover); }
+.draft-pill-el { font: 400 var(--text-xs) var(--font-mono); color: var(--text-secondary); }
+.draft-pill-clear {
+  background: none; border: none; color: var(--text-faint); padding: 0 6px 0 2px;
   font: 500 var(--text-sm) var(--font-ui); border-radius: 4px;
 }
-.chat-chip-clear:hover { color: var(--text-primary); background: var(--control-hover); }
+.draft-pill-clear:hover { color: var(--text-primary); }
 ` +
-// Drafts pill + disclosure (composer consolidation Task 2) — .draft-pill sits in
-// .composer-chips alongside .chat-chip; clicking it toggles .draft-disclosure open (a
-// details-free div toggle, not a <details> element — see session-feed.ts). .draft-disclosure
-// itself sits ABOVE .composer-chips in .chat-composer so opening it (it hosts the unmodified
+// Drafts pill + disclosure (composer consolidation Task 2) — .draft-pill is the unified chip,
+// wrapped in .composer-chip inside .composer-chips; clicking it toggles .draft-disclosure open
+// (a details-free div toggle, not a <details> element — see session-feed.ts). .draft-disclosure
+// itself sits ABOVE .chat-input in .chat-composer so opening it (it hosts the unmodified
 // ChangeList, whose own .changes-section rules cap it at max-height 180px) never pushes the
 // textarea/controls rows around — it grows upward into free panel space instead.
 // 2026-07-11 draft-badge spec: the pill's .open class is mirrored alongside the disclosure's
@@ -713,7 +723,7 @@ button {
 // behavior). The ~2% spring overshoot past 1fr is layout-safe slack. Class names are test hooks.
 `.draft-pill {
   flex: none; display: inline-flex; align-items: center; gap: 4px;
-  padding: 4px 8px; border-radius: 6px; background: var(--control); border: none;
+  padding: 4px 8px; border-radius: 6px; border: none;
   font: 500 var(--text-xs) var(--font-ui); color: var(--text-secondary);
 }
 .draft-pill:hover { background: var(--control-hover); }
@@ -724,13 +734,22 @@ button {
 .draft-disclosure.open { display: grid; grid-template-rows: 1fr; }
 @starting-style { .draft-disclosure.open { grid-template-rows: 0fr; } }
 ` +
-`.chat-input { display: flex; flex-direction: column; gap: 6px; }
+// The input box is now the bordered surface — chip row + textarea inside (chat-composer-chip
+// spec, Task 2) — so focus moved from .chat-textarea to the wrapper via :focus-within.
+// .has-items is the primed glow when a chip is showing: the rgba is --accent (#0D99FF) at 15%,
+// same hardcoded-tint idiom as .tp-pill.
+`.chat-input {
+  display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid var(--border-panel); border-radius: 8px; background: var(--control);
+  padding: 6px; transition: border-color 120ms, box-shadow 120ms;
+}
+.chat-input:focus-within { border-color: var(--accent); }
+.chat-input.has-items { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(13,153,255,0.15); }
 .chat-textarea {
   box-sizing: border-box; width: 100%; resize: vertical; min-height: 40px;
-  background: var(--control); color: var(--text-primary); border: 1px solid var(--border-panel);
-  border-radius: 4px; padding: 6px; font: 400 var(--text-sm)/1.4 var(--font-ui); outline: none;
+  background: none; color: var(--text-primary); border: none;
+  padding: 0; font: 400 var(--text-sm)/1.4 var(--font-ui); outline: none;
 }
-.chat-textarea:focus { border-color: var(--accent); }
 .chat-textarea:disabled { opacity: 0.5; }
 ` +
 // SessionFeed mounts inside #panel (panel.feedSlot), but there is no generic `#panel button`
@@ -773,9 +792,11 @@ button {
 // for JS that waits on it) across every shadow-DOM transition/animation, including the
 // pre-existing ripple fade and chip pulse. Page-context motion (dock margin, canvas
 // transform) is guarded separately via prefersReducedMotion() in motion.ts.
+// Streaming caret blink — steps(1, end) = hard on/off, no fade.
 `@keyframes forge-pop { from { transform: scale(0.8); } }
 @keyframes forge-rise-in { from { opacity: 0; transform: translateY(8px); } }
 @keyframes forge-shake { 25% { transform: translateX(-2px); } 50% { transform: translateX(2px); } 75% { transform: translateX(-1px); } }
+@keyframes forge-blink { 50% { opacity: 0; } }
 ` +
 // Animated show/hide for hidden-toggled popovers/chrome (.forge-anim opt-in — see the
 // [hidden] exemption at the top of this string). Entry: spring scale-in via
