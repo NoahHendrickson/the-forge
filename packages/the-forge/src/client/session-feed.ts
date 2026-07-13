@@ -134,11 +134,12 @@ export class SessionFeed {
   // show/hide). draftSlot (public) is the content host inside it. ---
   private readonly draftPill: HTMLButtonElement
   private readonly draftPillLabel: HTMLSpanElement
+  private readonly draftPillEl: HTMLSpanElement
+  private readonly draftChevron: HTMLSpanElement
+  private readonly pillClear: HTMLButtonElement
   private readonly draftDisclosure: HTMLElement
 
   // --- element chip + input cluster ---
-  private readonly chip: HTMLElement
-  private readonly chipLabel: HTMLElement
   private readonly inputCluster: HTMLElement
   private readonly textarea: HTMLTextAreaElement
   private readonly sendBtn: HTMLButtonElement
@@ -189,6 +190,9 @@ export class SessionFeed {
    * both edits and chat, so an empty textarea must not block sending when there ARE drafts to
    * send, even though it still blocks when there is truly nothing (no text, no drafts). */
   private draftCount = 0
+  /** Mirrors setDraftState's `applying` — updateChip needs both halves of the drafts signal,
+   * and setDraftState must not be the only place that can recompute the pill text. */
+  private draftApplying = false
   /** Mirrors setAvailability's last `enabled` value — kept alongside draftCount so
    * syncSendEnabled() can compute the send button's disabled state from both independent
    * signals without either setter having to know the other's current value (final-review fix
@@ -218,36 +222,42 @@ export class SessionFeed {
     // composer consolidation (Task 1) moved them into the composer's .composer-controls row.
     this.config = new ComposerConfig((cfg) => this.onConfig(cfg))
 
-    // Element chip: Prompt-button / host sets it via setChip(); the × clears it locally
-    // (no host callback — a host's onSend implementation reads it via getChip(), same as the
-    // old floating prompt popup used to read its own anchor).
-    this.chip = document.createElement('div')
-    this.chip.className = 'chat-chip'
-    this.chip.hidden = true
-    this.chipLabel = document.createElement('span')
-    const chipClear = createButton({ label: '×', className: 'chat-chip-clear' })
-    chipClear.type = 'button'
-    chipClear.addEventListener('click', () => this.setChip(null))
-    this.chip.append(this.chipLabel, chipClear)
-
-    // Drafts pill + disclosure (composer consolidation Task 2): the pill is a plain
-    // createButton (CLAUDE.md's ui/ factory rule), hidden until setDraftState says otherwise.
-    // Its click toggles the sibling draftDisclosure's .open class — draftSlot is exposed
-    // publicly so index.ts can append the (unmodified) ChangeList's root into it.
-    // Label + chevron are child spans (2026-07-11 draft-badge spec): setDraftState rewrites
-    // only the label span, and .open is mirrored onto the pill itself so the chevron can
-    // rotate with a same-element CSS hook (the disclosure is a sibling, not a parent).
+    // Unified chip (2026-07-12 chat-composer-chip spec): ONE chip carries both the pending-
+    // drafts state and the attached element — .chat-chip retired, .draft-pill absorbed its
+    // job. The visual chip (.composer-chip) holds TWO sibling buttons, because a button
+    // cannot nest an interactive child: .draft-pill (count label + element label + chevron;
+    // click toggles the sibling draftDisclosure's .open class, drafts permitting) and
+    // .draft-pill-clear (× — detaches the element, the old .chat-chip-clear contract: no
+    // host callback, hosts read the element via getChip()). Both are createButton (CLAUDE.md
+    // ui/ factory rule). All label/visibility rendering flows through updateChip() — the
+    // single owner — so setChip and setDraftState can each fire without knowing the other's
+    // state. .open is mirrored onto the pill itself so the chevron can rotate with a
+    // same-element CSS hook (the disclosure is a sibling, not a parent).
     this.draftPill = createButton({ className: 'draft-pill' })
     this.draftPill.type = 'button'
-    this.draftPill.hidden = true
     this.draftPillLabel = document.createElement('span')
     this.draftPillLabel.className = 'draft-pill-label'
-    const draftChevron = document.createElement('span')
-    draftChevron.className = 'draft-pill-chevron'
-    draftChevron.textContent = '▾'
-    draftChevron.setAttribute('aria-hidden', 'true')
-    this.draftPill.append(this.draftPillLabel, draftChevron)
-    this.draftPill.addEventListener('click', () => this.setDisclosureOpen(!this.draftDisclosure.classList.contains('open')))
+    this.draftPillEl = document.createElement('span')
+    this.draftPillEl.className = 'draft-pill-el'
+    this.draftPillEl.hidden = true
+    this.draftChevron = document.createElement('span')
+    this.draftChevron.className = 'draft-pill-chevron'
+    this.draftChevron.textContent = '▾'
+    this.draftChevron.setAttribute('aria-hidden', 'true')
+    this.draftPill.append(this.draftPillLabel, this.draftPillEl, this.draftChevron)
+    this.draftPill.addEventListener('click', () => {
+      if (this.draftCount > 0 || this.draftApplying) {
+        this.setDisclosureOpen(!this.draftDisclosure.classList.contains('open'))
+      }
+    })
+    this.pillClear = createButton({ label: '×', className: 'draft-pill-clear' })
+    this.pillClear.type = 'button'
+    this.pillClear.setAttribute('aria-label', 'Detach element')
+    this.pillClear.hidden = true
+    this.pillClear.addEventListener('click', () => this.setChip(null))
+    const composerChip = document.createElement('div')
+    composerChip.className = 'composer-chip'
+    composerChip.append(this.draftPill, this.pillClear)
 
     this.draftSlot = document.createElement('div')
     this.draftSlot.className = 'draft-slot'
@@ -255,10 +265,12 @@ export class SessionFeed {
     this.draftDisclosure.className = 'draft-disclosure'
     this.draftDisclosure.append(this.draftSlot)
 
-    // Composer chip row: the element chip plus the drafts pill (Task 2).
+    // Composer chip row — hidden-attr managed by updateChip (the old `.composer-chips:empty`
+    // CSS can't work anymore: the unified chip is always a child, just sometimes blank).
     this.composerChips = document.createElement('div')
     this.composerChips.className = 'composer-chips'
-    this.composerChips.append(this.chip, this.draftPill)
+    this.composerChips.hidden = true
+    this.composerChips.append(composerChip)
 
     // Input cluster: plain createElement for the textarea (no factory exists for it, per
     // CLAUDE.md's ui/ factory rule — that rule covers buttons/selects). Send now lives in
@@ -338,8 +350,7 @@ export class SessionFeed {
    * clearText(). */
   setChip(el: { source: string; tag: string; label: string } | null): void {
     this.currentChip = el
-    this.chipLabel.textContent = el?.label ?? ''
-    this.chip.hidden = el === null
+    this.updateChip()
   }
 
   /** Focuses the chat textarea — the Prompt button's new job (index.ts) is setChip + focus,
@@ -352,21 +363,47 @@ export class SessionFeed {
    * this from both the drafts store's onChange (count) and the lifecycle session's onChange
    * (applying), so either can independently flip the pill on/off without knowing about the
    * other's derivation. `applying` wins the text over a nonzero count — an in-flight send stays
-   * "applying…" even while further drafts pile up behind it. Hidden only when there is truly
-   * nothing to show, which also force-closes the disclosure — an empty disclosure left open
-   * would show a blank block once the last draft/send resolves. */
+   * "applying…" even while further drafts pile up behind it. Visibility/hidden-state (whole
+   * chip, force-closing the disclosure) is no longer decided here — that's updateChip()'s job,
+   * since the unified chip's visibility also depends on the independent element-chip signal. */
   setDraftState(s: { count: number; applying: boolean }): void {
     this.draftCount = s.count
-    const visible = s.count > 0 || s.applying
-    this.draftPill.hidden = !visible
-    if (!visible) {
-      this.setDisclosureOpen(false)
-    } else {
-      this.draftPillLabel.textContent = s.applying ? 'applying…' : s.count === 1 ? '1 change drafted' : `${s.count} changes drafted`
-    }
+    this.draftApplying = s.applying
+    this.updateChip()
     // Draft count is one of the two independent signals that can license the send button —
     // see syncSendEnabled (final-review fix C1).
     this.syncSendEnabled()
+  }
+
+  /** Single renderer for the unified chip (chat-composer-chip spec) — setChip and
+   * setDraftState both route here so either signal can flip visibility/labels without
+   * knowing the other's derivation. States: drafts only → "N changes" + chevron; element
+   * only → element label + ×; both → "N changes · <label>" + chevron + ×; neither → the
+   * whole .composer-chips row hidden. `applying` wins the drafts text over a nonzero count —
+   * an in-flight send stays "applying…" even while further drafts pile up behind it. The
+   * disclosure force-close ALSO lives here (not on wrapper-hidden): the chip can stay
+   * visible element-only while the drafts disclosure must still close, or an empty
+   * disclosure would show a blank block once the last draft resolves. has-items on
+   * .chat-input is the primed-state CSS hook (accent glow — see overlay.ts). */
+  private updateChip(): void {
+    const draftsVisible = this.draftCount > 0 || this.draftApplying
+    const el = this.currentChip
+    const visible = draftsVisible || el !== null
+    this.composerChips.hidden = !visible
+    this.draftPillLabel.hidden = !draftsVisible
+    this.draftPillLabel.textContent = !draftsVisible
+      ? ''
+      : this.draftApplying
+        ? 'applying…'
+        : this.draftCount === 1
+          ? '1 change'
+          : `${this.draftCount} changes`
+    this.draftPillEl.hidden = el === null
+    this.draftPillEl.textContent = el === null ? '' : draftsVisible ? `· ${el.label}` : el.label
+    this.draftChevron.hidden = !draftsVisible
+    this.pillClear.hidden = el === null
+    if (!draftsVisible) this.setDisclosureOpen(false)
+    this.inputCluster.classList.toggle('has-items', visible)
   }
 
   /** Single owner of the disclosure's open state — mirrored onto the pill so the chevron

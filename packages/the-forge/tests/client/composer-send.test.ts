@@ -15,7 +15,7 @@ function textareaOf(feed: SessionFeed): HTMLTextAreaElement {
 }
 
 function chipOf(feed: SessionFeed): HTMLElement {
-  return feed.root.querySelector('.chat-chip') as HTMLElement
+  return feed.root.querySelector('.draft-pill-el') as HTMLElement
 }
 
 function setup(overrides: Partial<{ sendDraftsLeg: () => Promise<boolean>; hasDrafts: () => boolean; chatAvailable: () => boolean }> = {}) {
