@@ -62,7 +62,7 @@ export class TokenPicker {
   }
 
   constructor(panelRoot: HTMLElement) {
-    this.root.className = 'token-popover'
+    this.root.className = 'token-popover forge-anim'
     this.root.hidden = true
 
     this.searchInput.type = 'text'

@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { Overlay, CSS, TOKENS } from '../../src/client/overlay'
+import { DUR_FAST_MS } from '../../src/client/motion'
 
 // The overlay's why-comments live as TS comments in the source (kept out of the shipped
 // CSS string for package-budget reasons — see perf(client) shipped-CSS-comments commit),
@@ -23,11 +24,11 @@ describe('Overlay CSS (Track A visibility correctness)', () => {
     expect(CSS).not.toContain('/*')
   })
 
-  it('declares a shadow-root-wide [hidden] rule as the very first rule, forcing display:none regardless of other selectors', () => {
+  it('declares a shadow-root-wide [hidden]:not(.forge-anim) rule as the very first rule, forcing display:none regardless of other selectors (exempting animated popovers)', () => {
     const trimmed = CSS.trim()
     // Must be the first rule in the stylesheet so nothing declared later can outrank it.
     expect(trimmed.startsWith('[hidden]')).toBe(true)
-    expect(trimmed).toMatch(/^\[hidden\]\s*{\s*display:\s*none\s*!important;?\s*}/)
+    expect(trimmed).toMatch(/^\[hidden\]:not\(\.forge-anim\)\s*{\s*display:\s*none\s*!important;?\s*}/)
   })
 
   it('no longer needs the now-redundant #panel .panel-section[hidden] guard', () => {
@@ -183,6 +184,39 @@ describe('Overlay CSS design tokens (Task 1)', () => {
     }
   })
 
+  it('exposes the motion tokens and keyframes', () => {
+    expect(TOKENS['dur-fast']).toBe('120ms')
+    expect(TOKENS['dur-pop']).toBe('180ms')
+    expect(TOKENS['dur-panel']).toBe('240ms')
+    expect(TOKENS['ease-spring'].startsWith('linear(')).toBe(true)
+    expect(TOKENS['ease-out'].startsWith('cubic-bezier(')).toBe(true)
+    expect(CSS).toContain('@keyframes forge-pop')
+    expect(CSS).toContain('@keyframes forge-rise-in')
+    expect(CSS).toContain('@keyframes forge-shake')
+    expect(CSS).toContain('@media (prefers-reduced-motion: reduce)')
+  })
+
+})
+
+describe('Overlay CSS animations (Task 2)', () => {
+  it('exempts .forge-anim from the !important display:none so exits can transition', () => {
+    expect(CSS).toContain('[hidden]:not(.forge-anim) { display: none !important; }')
+    expect(CSS).toContain('.forge-anim[hidden]')
+    expect(CSS).toContain('@starting-style')
+    expect(CSS).toContain('allow-discrete')
+    expect(CSS).toContain('#status[hidden] { display: none; }')
+  })
+
+  it('marks #status as forge-anim', () => {
+    const o = new Overlay()
+    expect(o.status.classList.contains('forge-anim')).toBe(true)
+  })
+})
+
+describe('Overlay CSS animations (Task 8: panel entrance)', () => {
+  it('panel rises in on show', () => {
+    expect(CSS).toContain('@starting-style { #panel { opacity: 0; transform: translateY(6px); } }')
+  })
 })
 
 describe('Overlay (M2 additions)', () => {
@@ -257,6 +291,39 @@ describe('Overlay (M2 additions)', () => {
     overlay.mount()
     expect(overlay.host.parentElement).toBe(document.documentElement)
     expect(document.body.contains(overlay.host)).toBe(false)
+  })
+})
+
+describe('Overlay.showSelectOutline tween (motion pass Task 7)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('tween arms only on a visible→visible move, never on first show, and self-disarms', () => {
+    vi.useFakeTimers()
+    const o = new Overlay()
+    const rect = (x: number) => ({ left: x, top: 10, width: 50, height: 20 }) as DOMRect
+    o.showSelectOutline(rect(0), true) // first show: outline was hidden — no tween
+    const outline = o.host.shadowRoot!.querySelector('#select-outline') as HTMLElement
+    expect(outline.classList.contains('tween')).toBe(false)
+    o.showSelectOutline(rect(100), true) // move while visible: tween
+    expect(outline.classList.contains('tween')).toBe(true)
+    vi.advanceTimersByTime(DUR_FAST_MS + 100) // self-disarm
+    expect(outline.classList.contains('tween')).toBe(false)
+    o.showSelectOutline(rect(100), true)
+    expect(outline.classList.contains('tween')).toBe(true)
+    o.showSelectOutline(rect(120)) // reflow-tracking call (default): snaps, kills the tween
+    expect(outline.classList.contains('tween')).toBe(false)
+  })
+
+  it('tween never arms under reduced motion', () => {
+    vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true } as MediaQueryList)
+    const o = new Overlay()
+    const rect = { left: 0, top: 0, width: 10, height: 10 } as DOMRect
+    o.showSelectOutline(rect, true)
+    o.showSelectOutline(rect, true)
+    const outline = o.host.shadowRoot!.querySelector('#select-outline') as HTMLElement
+    expect(outline.classList.contains('tween')).toBe(false)
   })
 })
 
@@ -657,5 +724,23 @@ describe('SessionFeed chat CSS hooks (Task 5)', () => {
 
   it('CSS declares .session-config for the config-changed row', () => {
     expect(CSS).toContain('.session-config')
+  })
+
+  // PR #34 review rework: closed = display:none (opts out of .chat-composer's 6px flex gap —
+  // a rendered 0-height item would earn it), animated anyway via @starting-style (0fr entry
+  // frame on the none→grid flip) + display allow-discrete (holds grid through the collapse).
+  it('draft disclosure springs open from display:none via @starting-style + allow-discrete', () => {
+    expect(CSS).toContain('.draft-disclosure { display: none; grid-template-rows: 0fr; transition: grid-template-rows var(--dur-pop) var(--ease-spring), display var(--dur-pop) allow-discrete; }')
+    expect(CSS).toContain('.draft-disclosure.open { display: grid; grid-template-rows: 1fr; }')
+    expect(CSS).toContain('@starting-style { .draft-disclosure.open { grid-template-rows: 0fr; } }')
+    expect(CSS).not.toContain('margin-bottom: -6px')
+  })
+})
+
+describe('Overlay CSS session rows + approval card entrances (Task 6)', () => {
+  it('session rows rise in; the approval card gets the springier entrance', () => {
+    expect(CSS).toContain('.session-row { animation: forge-rise-in var(--dur-pop) var(--ease-out);')
+    expect(CSS).toContain('.session-approval') // existing rule intact
+    expect(CSS).toContain('animation: forge-rise-in var(--dur-panel) var(--ease-spring);')
   })
 })

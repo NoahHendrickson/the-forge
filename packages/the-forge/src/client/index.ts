@@ -832,6 +832,10 @@ export class DesignMode {
     // Unlike the old floating prompt popup, the chat chip is deliberately NOT cleared on selection
     // change (task-6 contract: only Send and the chip's own × clear it) — a chip stays
     // attached to whatever element the user chose it for even as they browse other elements.
+    // wasSingle: read BEFORE the assignment — a single→single hop is the one case the
+    // outline tweens (multi-select and first-selection always snap; overlay.ts also
+    // refuses a tween from hidden, so single-after-deselect stays a fade-in).
+    const wasSingle = this.selection.length === 1
     this.selection = next
     this.clearRippleState()
     if (next.length === 0) {
@@ -840,7 +844,7 @@ export class DesignMode {
       this.panel.hide()
     } else if (next.length === 1) {
       this.overlay.hideSelectOutlines()
-      this.overlay.showSelectOutline(next[0].getBoundingClientRect())
+      this.overlay.showSelectOutline(next[0].getBoundingClientRect(), wasSingle)
       this.panel.show(next[0], buildInspectorData(next[0]))
     } else {
       this.overlay.hideSelectOutline()

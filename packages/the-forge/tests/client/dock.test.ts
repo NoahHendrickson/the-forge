@@ -13,6 +13,7 @@ import {
 import { Overlay } from '../../src/client/overlay'
 import { Panel } from '../../src/client/panel'
 import { DraftStore } from '../../src/client/drafts'
+import { DUR_PANEL_MS } from '../../src/client/motion'
 
 beforeEach(() => {
   localStorage.clear()
@@ -70,6 +71,17 @@ function dockSetup() {
 afterEach(() => {
   document.body.innerHTML = ''
   document.documentElement.style.marginRight = ''
+  // Flush any in-flight armMarginTransition cleanup deterministically — jsdom never fires
+  // transitionend on its own, and removeDocked()'s arm otherwise leaves a live real timer
+  // + listener dangling past the test (Task 8 review). jsdom has no TransitionEvent
+  // constructor — the Object.assign shape is the idiom; the cleanup handler only reads
+  // e.propertyName.
+  document.documentElement.dispatchEvent(
+    Object.assign(new Event('transitionend'), { propertyName: 'margin-right' })
+  )
+  // Belt-and-braces: reset the style so a stale value can never leak into the next test's
+  // `prev` read even if a future arm shape escapes the flush above.
+  document.documentElement.style.transition = ''
 })
 
 describe('Dock enter/exit', () => {
@@ -86,6 +98,7 @@ describe('Dock enter/exit', () => {
     expect(panel.root.classList.contains('docked')).toBe(true)
     expect(panel.footer.contains(overlay.status)).toBe(true)
     expect(overlay.toggle.classList.contains('dock-open')).toBe(true)
+    dock.exit() // pairs with enter() so its armMarginTransition cleanup chain runs synchronously
   })
 
   it('exit() restores everything, including a pre-existing inline html margin verbatim', () => {
@@ -281,5 +294,90 @@ describe('Dock canvas mode', () => {
     dock.enter()
     expect(document.documentElement.style.marginRight).toBe(`${dock.width()}px`)
     dock.exit()
+  })
+})
+
+describe('Dock margin-push motion (Task 8)', () => {
+  it('dock/undock animates the html margin push and cleans the transition up', () => {
+    vi.useFakeTimers()
+    const { dock } = dockSetup()
+    dock.enter() // docked mode → applyDocked
+    expect(document.documentElement.style.transition).toContain('margin-right')
+    vi.advanceTimersByTime(DUR_PANEL_MS + 100)
+    expect(document.documentElement.style.transition).toBe('')
+    dock.exit()
+    vi.useRealTimers()
+  })
+
+  it('margin push transition restores a pre-existing inline transition verbatim', () => {
+    vi.useFakeTimers()
+    document.documentElement.style.transition = 'color 1s'
+    const { dock } = dockSetup()
+    dock.enter()
+    vi.advanceTimersByTime(DUR_PANEL_MS + 100)
+    expect(document.documentElement.style.transition).toBe('color 1s')
+    document.documentElement.style.transition = ''
+    dock.exit()
+    vi.useRealTimers()
+  })
+
+  it('width drag kills an in-flight margin transition immediately', () => {
+    vi.useFakeTimers()
+    const { dock, panel } = dockSetup()
+    dock.enter()
+    expect(document.documentElement.style.transition).toContain('margin-right')
+    // jsdom has no PointerEvent constructor — dispatch the way the suite's existing
+    // resize-drag tests already do (MouseEvent with type 'pointerdown' carries button/clientX
+    // fine, since onResizeStart only reads those two fields).
+    panel.resizeHandle.dispatchEvent(new MouseEvent('pointerdown', { button: 0, clientX: 100 }))
+    expect(document.documentElement.style.transition).toBe('')
+    window.dispatchEvent(new MouseEvent('pointerup', {}))
+    dock.exit()
+    vi.useRealTimers()
+  })
+
+  it('no margin transition under reduced motion', () => {
+    const spy = vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true } as MediaQueryList)
+    const { dock } = dockSetup()
+    dock.enter()
+    expect(document.documentElement.style.transition).toBe('')
+    dock.exit()
+    spy.mockRestore()
+  })
+
+  // transitionend BUBBLES — a page element finishing its own margin-right transition
+  // must not be mistaken for the dock's own (final-review Finding 1).
+  it('a bubbled transitionend from a child element does not kill the margin transition early', () => {
+    vi.useFakeTimers()
+    const { dock } = dockSetup()
+    dock.enter()
+    expect(document.documentElement.style.transition).toContain('margin-right')
+    const child = document.createElement('div')
+    document.body.appendChild(child)
+    child.dispatchEvent(
+      Object.assign(new Event('transitionend', { bubbles: true }), { propertyName: 'margin-right' })
+    )
+    // still armed — a bubbled event from an unrelated descendant must not cancel the tween
+    expect(document.documentElement.style.transition).toContain('margin-right')
+    document.documentElement.dispatchEvent(
+      Object.assign(new Event('transitionend'), { propertyName: 'margin-right' })
+    )
+    expect(document.documentElement.style.transition).toBe('')
+    dock.exit()
+    vi.useRealTimers()
+  })
+})
+
+describe('Dock canvas-toggle margin clear (final-review Finding 3)', () => {
+  it('setCanvasActive clears an in-flight armed margin transition instantly', () => {
+    vi.useFakeTimers()
+    const { dock } = dockSetup()
+    dock.enter()
+    expect(document.documentElement.style.transition).toContain('margin-right')
+    dock.setCanvasActive(true)
+    expect(document.documentElement.style.transition).toBe('')
+    dock.setCanvasActive(false)
+    dock.exit()
+    vi.useRealTimers()
   })
 })

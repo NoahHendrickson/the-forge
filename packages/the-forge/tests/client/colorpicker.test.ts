@@ -80,6 +80,11 @@ describe('ColorPicker', () => {
     expect(picker.root.hidden).toBe(true)
   })
 
+  it('root carries forge-anim for animated show/hide', () => {
+    const { picker } = setupPicker()
+    expect(picker.root.classList.contains('forge-anim')).toBe(true)
+  })
+
   it('open() shows the popover and renders the palette from injected tokens', () => {
     const { picker } = setupPicker()
     const anchor = anchorEl()

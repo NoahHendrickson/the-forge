@@ -130,7 +130,7 @@ export class ColorPicker {
     panelRoot: HTMLElement,
     private getTokens: () => Tokens = readTokens
   ) {
-    this.root.className = 'color-popover'
+    this.root.className = 'color-popover forge-anim'
     this.root.hidden = true
 
     this.svArea.className = 'cp-sv'

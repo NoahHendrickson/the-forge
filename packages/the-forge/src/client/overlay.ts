@@ -1,5 +1,6 @@
 import { DEFAULT_WIDTH } from './dock'
 import { createButton } from './ui/button'
+import { DUR_FAST_MS, DUR_POP_MS, DUR_PANEL_MS, EASE_SPRING, EASE_OUT, prefersReducedMotion } from './motion'
 
 /**
  * The design-token registry — the single canonical source for the overlay's palette,
@@ -32,6 +33,11 @@ export const TOKENS = {
   'text-xs': '10px',
   'text-sm': '11px',
   'text-md': '12px',
+  'dur-fast': `${DUR_FAST_MS}ms`,
+  'dur-pop': `${DUR_POP_MS}ms`,
+  'dur-panel': `${DUR_PANEL_MS}ms`,
+  'ease-spring': EASE_SPRING,
+  'ease-out': EASE_OUT,
 } as const
 
 const tokenBlock = Object.entries(TOKENS)
@@ -50,9 +56,11 @@ const tokenBlock = Object.entries(TOKENS)
 // --ripple: sibling-reflow ripple outline (must stay distinct from selection accent)
 // --font-ui / --font-mono: font-family stacks.
 // --text-xs / --text-sm / --text-md: the 10/11/12px type scale.
+// --dur-fast/--dur-pop/--dur-panel + --ease-spring/--ease-out: the motion system
+//   (motion.ts is the source; see the 2026-07-12 overlay-motion spec).
 // Radius: panel 12px, controls 6px, matrix tile 8px.
 export const CSS = `
-[hidden] { display: none !important; }
+[hidden]:not(.forge-anim) { display: none !important; }
 *, *::before, *::after { box-sizing: border-box; }
 :host { all: initial; }
 :host {
@@ -93,6 +101,14 @@ button {
   position: fixed; z-index: 2147483646; pointer-events: none;
   border: 2px solid var(--accent); border-radius: 2px;
 }
+` +
+// left/top/width/height on ONE fixed-position element is cheap paint, no layout cascade —
+// safe to tween directly. #select-outline is deliberately NOT .forge-anim: entry is a
+// fade-in via this @starting-style block (separate from Task 2's forge-anim one), exit is
+// an instant [hidden] snap, never a fade-out.
+`#select-outline { transition: opacity 80ms var(--ease-out); }
+#select-outline.tween { transition: left var(--dur-fast) var(--ease-out), top var(--dur-fast) var(--ease-out), width var(--dur-fast) var(--ease-out), height var(--dur-fast) var(--ease-out); }
+@starting-style { #select-outline { opacity: 0; } }
 .select-outline-multi {
   position: fixed; z-index: 2147483646; pointer-events: none;
   border: 2px solid var(--accent); border-radius: 2px;
@@ -111,6 +127,11 @@ button {
   box-shadow: 0 5px 24px rgba(0,0,0,0.35);
   -webkit-font-smoothing: antialiased;
 }
+` +
+// Entry-only: #panel deliberately NOT .forge-anim — dock↔float toggles must not fade
+// the panel, only a genuine hidden→shown fires @starting-style; panel.hide() stays a snap.
+`#panel { transition: opacity var(--dur-panel) var(--ease-out), transform var(--dur-panel) var(--ease-out); }
+@starting-style { #panel { opacity: 0; transform: translateY(6px); } }
 ` +
 // Docked: full-height right sidebar; page content is pushed left by Dock's html
 // margin-right (the VisBug-style mechanism — see dock.ts).
@@ -537,6 +558,13 @@ button {
 .chip-mismatch { color: var(--ripple); background: rgba(226,149,74,0.12); }
 .chip-unverified { color: var(--text-faint); background: rgba(255,255,255,0.08); }
 .chip-failed { color: #F87171; background: rgba(248,113,113,0.12); }
+` +
+// The pop marks arrival at done — a small springy dot scale-in; the shake is the ONE
+// stronger gesture in the system, semantically earned by failure; both keyed to
+// .stage-flip so they play once per real transition, see changelist.ts lastStages.
+`
+.stage-flip .chip-done::before { animation: forge-pop var(--dur-pop) var(--ease-spring); }
+.stage-flip .chip-failed { animation: forge-shake 250ms var(--ease-out); }
 .change-el { flex: none; color: var(--text-primary); }
 .change-summary {
   flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -591,6 +619,18 @@ button {
   border: 1px solid rgba(255,255,255,0.1); padding: 4px 6px; border-radius: 6px;
 }
 .session-approval-resolved { color: var(--text-muted); font-style: italic; border: none; }
+` +
+// Chat-entrance motion: content enters as fade+rise, deliberately NOT springy — the research
+// line is "springs for interactive elements, plain rise for content"; the approval card is the
+// exception because it's requesting a decision. Animation-on-insertion means streaming delta
+// mutations on an existing bubble never re-trigger, and a reconnect replay burst animates once
+// in unison — acceptable.
+// The :not(.session-approval-resolved) gate is load-bearing: resolving an approval adds that
+// class to the SAME element (session-feed.ts), and without the :not() the animation-rules
+// change would restart the rise on resolve; with it, the element falls back to the .session-row
+// rule whose animation-name is identical, so nothing restarts.
+`.session-row { animation: forge-rise-in var(--dur-pop) var(--ease-out); }
+.session-approval:not(.session-approval-resolved) { animation: forge-rise-in var(--dur-panel) var(--ease-spring); }
 ` +
 // Chat rendering (Task 5) — bubbles, delta streaming, diff disclosures, config rows.
 // .chat-msg: bubble base (extends .session-row); .chat-user / .chat-assistant: sender variant.
@@ -658,7 +698,19 @@ button {
 // 2026-07-11 draft-badge spec: the pill's .open class is mirrored alongside the disclosure's
 // (session-feed.ts's setDisclosureOpen) purely so .draft-pill-chevron has a same-element CSS
 // hook to rotate on — the disclosure itself is a sibling, not an ancestor, of the pill.
-// CSS class names here are test hooks — extend, don't rename.
+// 2026-07-12 motion pass (Task 3, reworked per PR #34 review): the disclosure springs open via
+// grid-template-rows 0fr⇄1fr — the only pure-CSS way to transition an auto-height reveal;
+// .draft-slot (the single child) needs min-height:0 + overflow:hidden for the fr interpolation
+// to clip. The closed state is display:none, NOT a rendered 0-height item: .chat-composer is
+// flex with gap:6px, and a rendered zero-height first child still earns that gap — a dead 6px
+// band above the chips row. display:none opts out of gap layout entirely (the pre-motion
+// geometry — this replaced a margin-bottom:-6px compensation that had to stay synced to the
+// parent gap); the same @starting-style + `display allow-discrete` mechanics as the .forge-anim
+// popovers make it animatable anyway — @starting-style supplies the 0fr entry frame on the
+// none→grid flip, allow-discrete holds display:grid through the 1fr→0fr collapse on exit.
+// display:none also keeps collapsed ChangeList buttons untabbable for free (the former
+// visibility juggling is gone). Browsers without these features snap open/closed (pre-motion
+// behavior). The ~2% spring overshoot past 1fr is layout-safe slack. Class names are test hooks.
 `.draft-pill {
   flex: none; display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 8px; border-radius: 6px; background: var(--control); border: none;
@@ -667,8 +719,10 @@ button {
 .draft-pill:hover { background: var(--control-hover); }
 .draft-pill-chevron { transition: transform 120ms ease; }
 .draft-pill.open .draft-pill-chevron { transform: rotate(180deg); }
-.draft-disclosure { display: none; }
-.draft-disclosure.open { display: block; }
+.draft-disclosure { display: none; grid-template-rows: 0fr; transition: grid-template-rows var(--dur-pop) var(--ease-spring), display var(--dur-pop) allow-discrete; }
+.draft-disclosure > .draft-slot { min-height: 0; overflow: hidden; }
+.draft-disclosure.open { display: grid; grid-template-rows: 1fr; }
+@starting-style { .draft-disclosure.open { grid-template-rows: 0fr; } }
 ` +
 `.chat-input { display: flex; flex-direction: column; gap: 6px; }
 .chat-textarea {
@@ -691,6 +745,13 @@ button {
 }
 .composer-send:hover { background: var(--control-hover); }
 .composer-send:disabled { opacity: 0.5; cursor: default; }
+` +
+// Press-down + spring return is the highest-touch button's micro-feedback; .pop is popOnce's
+// re-triggerable one-shot for the glyph morph (see session-feed.ts updateSendMorph — fires
+// only on genuine ↑/■ flips, never per keystroke).
+`.composer-send { transition: transform var(--dur-fast) var(--ease-spring), background 120ms; }
+.composer-send:active { transform: scale(0.92); }
+.composer-send.pop { animation: forge-pop var(--dur-fast) var(--ease-spring); }
 .chat-disabled-reason { color: var(--text-faint); font: 400 var(--text-xs) var(--font-ui); padding: 0 2px; }
 ` +
 // Canvas-mode chrome (design-canvas-mode spec): the header toggle just tints '.panel-mode'
@@ -705,6 +766,49 @@ button {
   font: 500 var(--text-md) var(--font-ui);
 }
 .zoom-pill:hover { background: var(--control-hover); }
+` +
+// Motion primitives (2026-07-12 overlay-motion spec). forge-pop/rise-in are from-only —
+// the destination is the element's natural state, so one keyframe serves every use site.
+// The reduced-motion block is a blanket: 1ms (never 0s — transitionend must still fire
+// for JS that waits on it) across every shadow-DOM transition/animation, including the
+// pre-existing ripple fade and chip pulse. Page-context motion (dock margin, canvas
+// transform) is guarded separately via prefersReducedMotion() in motion.ts.
+`@keyframes forge-pop { from { transform: scale(0.8); } }
+@keyframes forge-rise-in { from { opacity: 0; transform: translateY(8px); } }
+@keyframes forge-shake { 25% { transform: translateX(-2px); } 50% { transform: translateX(2px); } 75% { transform: translateX(-1px); } }
+` +
+// Animated show/hide for hidden-toggled popovers/chrome (.forge-anim opt-in — see the
+// [hidden] exemption at the top of this string). Entry: spring scale-in via
+// @starting-style (fires on unhide AND on fresh insertion, which is how .menu-popover —
+// created per open, removed on close — gets entry-only motion without the class).
+// Exit: ~100ms plain fade; `display` rides the transition discretely (allow-discrete)
+// so none lands only after the fade. Non-supporting browsers snap (today's behavior).
+// The [hidden] rule carries the exit transition (destination-state timing wins).
+// #status[hidden] is the ID-specificity trap: #status's own `display: flex` (1,0,0)
+// outranks .forge-anim[hidden]'s display:none (0,2,0), so a hidden status strip would
+// stay visible — the (1,1,0) ID-anchored override wins, and stays non-important so the
+// allow-discrete display transition still holds it visible during the exit fade. Keep
+// in sync if any other ID-selector element ever gets .forge-anim.
+`.forge-anim, .menu-popover {
+  transition: opacity var(--dur-pop) var(--ease-spring), transform var(--dur-pop) var(--ease-spring), display var(--dur-pop) allow-discrete;
+  transform-origin: top center;
+}
+.forge-anim[hidden] {
+  display: none; opacity: 0; transform: scale(0.98);
+  transition: opacity 100ms var(--ease-out), transform 100ms var(--ease-out), display 100ms allow-discrete;
+}
+#status[hidden] { display: none; }
+@starting-style {
+  .forge-anim, .menu-popover { opacity: 0; transform: scale(0.96); }
+}
+` +
+`@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
 `
 
 export class Overlay {
@@ -726,6 +830,7 @@ export class Overlay {
   /** Pool of ripple-outline divs, reused across showRipples() calls instead of recreated. */
   private ripplePool: HTMLElement[] = []
   private rippleClearTimer: ReturnType<typeof setTimeout> | null = null
+  private outlineTweenTimer: ReturnType<typeof setTimeout> | null = null
 
   /** Pool of select-outline-multi divs (B6), reused across showSelectOutlines() calls. */
   private selectOutlinePool: HTMLElement[] = []
@@ -745,6 +850,7 @@ export class Overlay {
     this.outline.id = 'outline'
     this.selectOutline.id = 'select-outline'
     this.status.id = 'status'
+    this.status.classList.add('forge-anim')
     this.sentLabel.id = 'sent'
     this.sentLabel.hidden = true
     this.watchLabel.id = 'watch'
@@ -814,8 +920,26 @@ export class Overlay {
     this.outline.hidden = true
   }
 
-  showSelectOutline(rect: DOMRect): void {
-    this.place(this.selectOutline, rect)
+  /** tween=true animates the outline from its current rect to the new one (Figma-style
+   * selection hop — deliberately ease-out, not spring: a springy rect reads as wobble).
+   * Callers that TRACK an element (remeasure on scroll/resize/edit-reflow) keep the
+   * default snap — the tween is only for the selection CHANGING, and any tracking call
+   * landing mid-tween disarms it (direct manipulation wins). First show from hidden
+   * never tweens (it would fly in from a stale rect); it fades in via @starting-style. */
+  showSelectOutline(rect: DOMRect, tween = false): void {
+    const el = this.selectOutline
+    if (this.outlineTweenTimer) clearTimeout(this.outlineTweenTimer)
+    this.outlineTweenTimer = null
+    if (tween && !el.hidden && !prefersReducedMotion()) {
+      el.classList.add('tween')
+      this.outlineTweenTimer = setTimeout(() => {
+        this.outlineTweenTimer = null
+        el.classList.remove('tween')
+      }, DUR_FAST_MS + 50)
+    } else {
+      el.classList.remove('tween')
+    }
+    this.place(el, rect)
   }
 
   hideSelectOutline(): void {

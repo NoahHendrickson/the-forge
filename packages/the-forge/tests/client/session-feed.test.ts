@@ -471,6 +471,29 @@ describe('stream consumption', () => {
     feed.stop()
   })
 
+  it('send↔stop morph pops the glyph exactly on flips, not on every keystroke', async () => {
+    // Only tool-started, no turn-complete → busyish stays true (same idiom as the ■-morph
+    // test above — busy state is driven through the real stream consumer, not a test hook).
+    const lines = [feedLine(1, { kind: 'tool-started', toolId: 't1', name: 'Write', detail: 'x.ts' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    const btn = feed.root.querySelector('.composer-send') as HTMLElement
+    expect(btn.classList.contains('pop')).toBe(false) // initial render: no flip, no pop
+    feed.start()
+    await flush() // busyish flips true → ↑ → ■
+    expect(btn.classList.contains('pop')).toBe(true)
+    btn.classList.remove('pop') // simulate the animation having finished
+    const ta = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    ta.value = 'x'
+    ta.dispatchEvent(new Event('input')) // ■ → ↑ (typing mid-turn)
+    expect(btn.classList.contains('pop')).toBe(true)
+    btn.classList.remove('pop')
+    ta.value = 'xy'
+    ta.dispatchEvent(new Event('input')) // still ↑ — no flip, no pop
+    expect(btn.classList.contains('pop')).toBe(false)
+    feed.stop()
+  })
+
   it('malformed JSON lines are ignored without crashing', async () => {
     const lines = [
       'not json at all',

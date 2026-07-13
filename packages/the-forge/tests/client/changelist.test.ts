@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { ChangeList, type SentSeed } from '../../src/client/changelist'
 import { LifecycleSession } from '../../src/client/lifecycle'
 import { DraftStore } from '../../src/client/drafts'
@@ -35,6 +35,8 @@ const noop = { onHover: vi.fn(), onSelect: vi.fn(), onResend: vi.fn() }
 beforeEach(() => {
   document.body.innerHTML = ''
 })
+
+afterEach(() => vi.restoreAllMocks())
 
 describe('empty state', () => {
   it('is hidden with no rows', () => {
@@ -219,6 +221,10 @@ describe('interactions', () => {
   })
 
   it('Dismiss removes a failed row', () => {
+    // Dismiss now collapses the row before removeSeed() (stage-change motion pass) — stub
+    // reduced motion so this behavioral check stays synchronous; the collapse mechanics
+    // themselves (timeout path + reduced-motion path) are covered by 'stage-change motion' below.
+    vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true } as MediaQueryList)
     const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
     list.addSent('q1', [seed(tagged())])
     list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'failed', note: 'nope' })
@@ -384,5 +390,67 @@ describe('interactions', () => {
     expect((list.root.querySelector('.changes-clear') as HTMLElement).hidden).toBe(true)
     list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'done' })
     expect((list.root.querySelector('.changes-clear') as HTMLElement).hidden).toBe(false)
+  })
+})
+
+describe('stage-change motion', () => {
+  it('marks a row .stage-flip only on a real stage change, not on unrelated re-renders', () => {
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
+    // register a seed → first render: no .stage-flip (arrival isn't a change)
+    list.addSent('q1', [seed(tagged())])
+    expect(list.root.querySelector('.stage-flip')).toBeNull()
+    // sent → done: THIS render carries .stage-flip on that row
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'done' })
+    expect(list.root.querySelector('.change-row.stage-flip')).not.toBeNull()
+    // an unrelated re-render (a draft sync) must NOT replay the flip
+    list.syncDrafts()
+    expect(list.root.querySelector('.stage-flip')).toBeNull()
+  })
+
+  // Regression (review round 2): index.ts's resend() reuses the SAME SentSeed object under a
+  // new request id (session.removeSeed(seed) → registerQueuedSend(newId, [seed])). Tracking
+  // last-rendered stages by seed identity would survive that retirement — the resent row's
+  // FIRST render would see the stale 'failed' vs its new 'sent' stage and flip, violating the
+  // "never on first appearance" invariant. SeedRecord identity (fresh per register()) doesn't.
+  it('a resent seed (same object, new id) renders WITHOUT .stage-flip on first appearance', () => {
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
+    const session = (list as unknown as { session: LifecycleSession }).session
+    const s = seed(tagged())
+    list.addSent('q1', [s])
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'failed' })
+    expect(list.root.querySelector('.change-row.stage-flip')).not.toBeNull()
+    // The host's resend-success sequence: retire the seed, re-register the SAME object.
+    session.removeSeed(s)
+    list.addSent('q2', [s])
+    expect(list.root.querySelector('.stage-flip')).toBeNull()
+    // ...and a real stage change on the new registration still flips.
+    list.applyStage({ requestId: 'q2', elIndex: 0, dcSource: null, stage: 'applying' })
+    expect(list.root.querySelector('.change-row.stage-flip')).not.toBeNull()
+  })
+
+  it('dismiss collapses the row before removing the seed (timeout path)', () => {
+    vi.useFakeTimers()
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
+    const session = (list as unknown as { session: LifecycleSession }).session
+    list.addSent('q1', [seed(tagged())])
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'failed' })
+    const dismiss = list.root.querySelector('.change-dismiss') as HTMLElement
+    dismiss.click()
+    // removal is deferred behind the collapse — seed still present immediately
+    expect(session.records().length).toBe(1)
+    vi.advanceTimersByTime(300)
+    expect(session.records().length).toBe(0)
+    vi.useRealTimers()
+  })
+
+  it('dismiss removes immediately under reduced motion', () => {
+    vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true } as MediaQueryList)
+    const list = new ChangeList(new DraftStore(), new LifecycleSession(), noop)
+    const session = (list as unknown as { session: LifecycleSession }).session
+    list.addSent('q1', [seed(tagged())])
+    list.applyStage({ requestId: 'q1', elIndex: 0, dcSource: null, stage: 'failed' })
+    const dismiss = list.root.querySelector('.change-dismiss') as HTMLElement
+    dismiss.click()
+    expect(session.records().length).toBe(0)
   })
 })
