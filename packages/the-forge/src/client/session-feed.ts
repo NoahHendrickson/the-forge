@@ -140,7 +140,7 @@ export class SessionFeed {
   private readonly pillClear: HTMLButtonElement
   private readonly draftDisclosure: HTMLElement
 
-  // --- element chip + input cluster ---
+  // --- attached-element state + input cluster ---
   private readonly inputCluster: HTMLElement
   private readonly textarea: HTMLTextAreaElement
   private readonly sendBtn: HTMLButtonElement
@@ -835,6 +835,11 @@ export class SessionFeed {
       this.streamingBubble.classList.remove('chat-streaming')
       this.streamingBubble = null
       this.streamingText = ''
+      // The bubble can grow in place with no addRow/appendDelta — e.g. a mid-stream
+      // reconnect replays a final assistant-text much longer than the partial streamed
+      // text — so the spacer must be recomputed here or it stays oversized, leaving a
+      // scrollable blank tail.
+      this.updateTailSpacer()
       return
     }
     this.addRow(this.makeAssistantBubble(text))

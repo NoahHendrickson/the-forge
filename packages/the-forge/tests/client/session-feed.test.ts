@@ -309,13 +309,14 @@ describe('unified chip', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Drafts pill + disclosure (composer consolidation Task 2) — the pill lives in
-// .composer-chips alongside the element chip; .draft-disclosure is a sibling block, above
-// .composer-chips, hosting draftSlot (where index.ts appends the unmodified ChangeList's root).
+// Drafts pill + disclosure (composer consolidation Task 2, unified chip pass) — the pill is
+// the single chip inside .chat-input's .composer-chips row; .draft-disclosure is a sibling
+// block above the input box inside .chat-composer, hosting draftSlot (where index.ts appends
+// the unmodified ChangeList's root).
 // ---------------------------------------------------------------------------
 
 describe('drafts pill + disclosure', () => {
-  it('the drafts pill lives in .composer-chips alongside the element chip', () => {
+  it('the drafts pill lives in .composer-chips', () => {
     const feed = new SessionFeed()
     document.body.appendChild(feed.root)
     const chips = feed.root.querySelector('.composer-chips') as HTMLElement
@@ -1883,6 +1884,34 @@ describe('feed tail spacer + anchor', () => {
     const list = feed.root.querySelector('.session-list') as HTMLElement
     expect(list.lastElementChild?.className).toBe('feed-tail-spacer')
     expect(list.querySelectorAll('.chat-user')).toHaveLength(200)
+    feed.stop()
+  })
+
+  // Regression net for finalizeAssistantText's in-place-replace branch calling
+  // updateTailSpacer before returning (a mid-stream reconnect can replay a final
+  // assistant-text much longer than the partial streamed text, which must not leave the
+  // spacer oversized). jsdom gives every element offsetTop/clientHeight of 0, so the
+  // spacer's height is always recomputed to the same value whether or not the finalize
+  // branch calls updateTailSpacer — this test cannot discriminate that call in jsdom (only
+  // a real-browser check can); it guards that the finalize path runs end to end without
+  // throwing and leaves the spacer intact and last in the list. Stubbing clientHeight to a
+  // nonzero value keeps the assertion meaningful about *what* updateTailSpacer computes,
+  // even though it can't prove *which* call computed it.
+  it('the spacer stays sized and last-child through delta -> final-text finalize', async () => {
+    const feed = new SessionFeed({
+      fetchFn: makeFetchFn([
+        feedLine(1, { kind: 'user-text', text: 'hello' }),
+        feedLine(2, { kind: 'assistant-delta', text: 'partial' }),
+        feedLine(3, { kind: 'assistant-text', text: 'a much longer final reply than the partial stream' }),
+      ]),
+    })
+    const list = feed.root.querySelector('.session-list') as HTMLElement
+    Object.defineProperty(list, 'clientHeight', { value: 500, configurable: true })
+    feed.start()
+    await flush()
+    const spacer = list.querySelector('.feed-tail-spacer') as HTMLElement
+    expect(list.lastElementChild).toBe(spacer)
+    expect(spacer.style.height).toBe('500px')
     feed.stop()
   })
 })
