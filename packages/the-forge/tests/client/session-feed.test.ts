@@ -297,6 +297,15 @@ describe('unified chip', () => {
     feed.setDraftState({ count: 0, applying: false })
     expect(input.classList.contains('has-items')).toBe(false)
   })
+
+  it('the chips row renders inside .chat-input, above the textarea', () => {
+    const feed = new SessionFeed()
+    const input = feed.root.querySelector('.chat-input') as HTMLElement
+    const chips = input.querySelector('.composer-chips')
+    expect(chips).not.toBeNull()
+    const children = Array.from(input.children)
+    expect(children.indexOf(chips as Element)).toBeLessThan(children.indexOf(input.querySelector('.chat-textarea')!))
+  })
 })
 
 // ---------------------------------------------------------------------------

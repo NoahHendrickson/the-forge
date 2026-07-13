@@ -127,11 +127,12 @@ export class SessionFeed {
   private readonly chatComposer: HTMLElement
   private readonly composerChips: HTMLElement
   private readonly composerControls: HTMLElement
-  // --- drafts pill + disclosure (composer consolidation Task 2): the pill lives in
-  // composerChips alongside the element chip; draftDisclosure is a sibling block, above
-  // composerChips, that the pill's click toggles open/closed via the .open class — a
-  // details-free div toggle (no <details> semantics needed, there's only ever one thing to
-  // show/hide). draftSlot (public) is the content host inside it. ---
+  // --- drafts pill + disclosure (composer consolidation Task 2): draftPill is the single
+  // unified chip — it absorbed the old separate element chip (chat-composer-chip spec) and
+  // renders drafts count, element label, or both. draftDisclosure is a block above .chat-input
+  // that the pill's click toggles open/closed via the .open class — a details-free div toggle
+  // (no <details> semantics needed, there's only ever one thing to show/hide). draftSlot
+  // (public) is the content host inside it. ---
   private readonly draftPill: HTMLButtonElement
   private readonly draftPillLabel: HTMLSpanElement
   private readonly draftPillEl: HTMLSpanElement
@@ -303,7 +304,7 @@ export class SessionFeed {
     // flip ■ back to ↑ immediately (a mid-turn message queues via the existing FIFO), not just
     // whenever busyish itself next transitions.
     this.textarea.addEventListener('input', () => this.updateSendMorph())
-    this.inputCluster.append(this.disabledReason, this.textarea)
+    this.inputCluster.append(this.composerChips, this.disabledReason, this.textarea)
 
     // Composer send/stop button: morphs between ↑ (send, fires onSend) and ■ (interrupt, fires
     // onInterrupt) — see updateSendMorph()/sendIsStop. Kept on BOTH .composer-send (the new
@@ -331,12 +332,14 @@ export class SessionFeed {
 
     // The single bordered composer card (composer consolidation Task 1) — replaces the retired
     // status row, standalone Stop button, and .session-config-bar. draftDisclosure sits ABOVE
-    // composerChips (Task 2): it hosts the ChangeList, which can grow to its own max-height —
-    // above the chips/input/controls rows is the only position that never pushes the textarea
-    // around when it opens. Task 4 adds the draggable divider above .session-feed.
+    // .chat-input: it hosts the ChangeList, which can grow to its own max-height — above the
+    // input/controls rows is the only position that never pushes the textarea around when it
+    // opens. The chips row now lives inside the input box itself (chat-composer-chip spec,
+    // Task 2), appended to inputCluster above. Task 4 adds the draggable divider above
+    // .session-feed.
     this.chatComposer = document.createElement('div')
     this.chatComposer.className = 'chat-composer'
-    this.chatComposer.append(this.draftDisclosure, this.composerChips, this.inputCluster, this.composerControls)
+    this.chatComposer.append(this.draftDisclosure, this.inputCluster, this.composerControls)
 
     this.root.append(this.list, this.chatComposer)
     this.updateSendMorph()
