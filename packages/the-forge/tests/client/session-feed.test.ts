@@ -1837,3 +1837,52 @@ describe('row cap', () => {
     feed.stop()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Anchor-at-top (chat-composer-chip spec): the tail spacer makes room so a sent
+// user bubble can scroll to the top of the list while the reply streams below.
+// ---------------------------------------------------------------------------
+
+describe('feed tail spacer + anchor', () => {
+  it('the spacer is the last child of .session-list and rows insert before it', async () => {
+    const feed = new SessionFeed({
+      fetchFn: makeFetchFn([
+        feedLine(1, { kind: 'user-text', text: 'hello' }),
+        feedLine(2, { kind: 'assistant-text', text: 'hi' }),
+      ]),
+    })
+    feed.start()
+    await flush()
+    const list = feed.root.querySelector('.session-list') as HTMLElement
+    expect(list.lastElementChild?.className).toBe('feed-tail-spacer')
+    expect(list.querySelectorAll('.feed-tail-spacer')).toHaveLength(1)
+    expect(list.querySelector('.chat-user')).not.toBeNull()
+    feed.stop()
+  })
+
+  it('a user-text event anchors its bubble to the top of the list', async () => {
+    const scrolls: ScrollIntoViewOptions[] = []
+    ;(HTMLElement.prototype as { scrollIntoView?: (o?: ScrollIntoViewOptions) => void }).scrollIntoView =
+      function (o?: ScrollIntoViewOptions) { scrolls.push(o ?? {}) }
+    try {
+      const feed = new SessionFeed({ fetchFn: makeFetchFn([feedLine(1, { kind: 'user-text', text: 'hello' })]) })
+      feed.start()
+      await flush()
+      expect(scrolls).toEqual([{ block: 'start' }])
+      feed.stop()
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  })
+
+  it('the spacer survives MAX_ROWS eviction and never enters the row cap', async () => {
+    const lines = Array.from({ length: 205 }, (_, i) => feedLine(i + 1, { kind: 'user-text', text: `m${i}` }))
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    feed.start()
+    await flush(500)
+    const list = feed.root.querySelector('.session-list') as HTMLElement
+    expect(list.lastElementChild?.className).toBe('feed-tail-spacer')
+    expect(list.querySelectorAll('.chat-user')).toHaveLength(200)
+    feed.stop()
+  })
+})

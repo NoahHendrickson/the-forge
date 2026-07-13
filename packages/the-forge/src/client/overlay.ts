@@ -605,6 +605,9 @@ button {
   border-top: 1px solid var(--separator);
 }
 .session-list { flex: 1 1 auto; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+` +
+// anchor-at-top spacer — see session-feed.ts anchorToTop
+`.feed-tail-spacer { flex: none; }
 .session-list::-webkit-scrollbar { width: 8px; }
 .session-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 .session-row {

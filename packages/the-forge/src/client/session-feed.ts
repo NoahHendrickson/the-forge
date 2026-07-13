@@ -170,6 +170,13 @@ export class SessionFeed {
   private readonly approvalRows = new Map<string, HTMLElement>()
   /** All rows appended to this.list, in insertion order; capped at MAX_ROWS (oldest removed). */
   private readonly rowList: HTMLElement[] = []
+  /** Non-row last child of .session-list — sized on send so the just-sent user bubble can
+   * scroll to the TOP of the list viewport while the reply streams in below (claude.ai
+   * anchoring). Never enters rowList/MAX_ROWS; addRow inserts BEFORE it. */
+  private readonly tailSpacer: HTMLElement
+  /** The user bubble currently anchored at the viewport top, if any — updateTailSpacer
+   * shrinks the spacer as content accumulates below it; nulled when eviction removes it. */
+  private anchorRow: HTMLElement | null = null
   /** The single in-progress .chat-streaming bubble, if any — the first seq-0 delta after a
    * non-delta event creates it; subsequent deltas append to it; the next final assistant-text
    * replaces its content and clears this back to null (no duplicate bubble). */
@@ -214,6 +221,10 @@ export class SessionFeed {
 
     this.list = document.createElement('div')
     this.list.className = 'session-list'
+
+    this.tailSpacer = document.createElement('div')
+    this.tailSpacer.className = 'feed-tail-spacer'
+    this.list.append(this.tailSpacer)
 
     // Config pickers (harness/model/effort/permission) — owned by ComposerConfig
     // (composer-config.ts, extracted PR #32). It forwards each picker's onChange through the
@@ -715,7 +726,9 @@ export class SessionFeed {
       case 'user-text': {
         const text = typeof e.text === 'string' ? e.text : ''
         const element = typeof e.element === 'object' && e.element !== null ? (e.element as Record<string, unknown>) : undefined
-        this.addRow(this.makeUserBubble(text, element))
+        const bubble = this.makeUserBubble(text, element)
+        this.addRow(bubble)
+        this.anchorToTop(bubble)
         break
       }
       case 'assistant-delta': {
@@ -840,6 +853,7 @@ export class SessionFeed {
     }
     this.streamingText += text
     this.streamingBubble.textContent = this.streamingText
+    this.updateTailSpacer()
   }
 
   private makeAssistantBubble(text: string): HTMLElement {
@@ -947,7 +961,7 @@ export class SessionFeed {
 
   private addRow(row: HTMLElement): void {
     this.rowList.push(row)
-    this.list.appendChild(row)
+    this.list.insertBefore(row, this.tailSpacer)
     this.root.hidden = false
     // Cap at MAX_ROWS — drop oldest rows beyond the limit (mirrors the server's ring-buffer cap)
     if (this.rowList.length > MAX_ROWS) {
@@ -959,6 +973,30 @@ export class SessionFeed {
       if (this.streamingBubble && excess.includes(this.streamingBubble)) {
         this.clearStreamingBubble()
       }
+      // Same staleness hazard for the anchor bubble — a detached anchor would freeze the
+      // spacer at its last size forever.
+      if (this.anchorRow && excess.includes(this.anchorRow)) this.anchorRow = null
     }
+    this.updateTailSpacer()
+  }
+
+  /** Sizes the spacer so `row` CAN reach the viewport top, then anchors it there — without
+   * the spacer, scrollIntoView on a short feed is a no-op (nothing below to scroll into the
+   * gap) and the streaming reply would render out of view under a bottom-pinned bubble.
+   * scrollIntoView is optional-chained: jsdom doesn't implement it (layout-free), and the
+   * anchor is purely a visual nicety there. */
+  private anchorToTop(row: HTMLElement): void {
+    this.anchorRow = row
+    this.tailSpacer.style.height = `${Math.max(0, this.list.clientHeight - row.offsetHeight)}px`
+    row.scrollIntoView?.({ block: 'start' })
+  }
+
+  /** Shrinks the spacer as real content accumulates below the anchor — it only ever holds
+   * the space the streaming reply hasn't filled yet, so the feed never scrolls into stale
+   * blank tail. All-zero in jsdom (no layout), harmlessly setting height 0. */
+  private updateTailSpacer(): void {
+    if (this.anchorRow === null || !this.anchorRow.isConnected) return
+    const contentBelow = this.tailSpacer.offsetTop - this.anchorRow.offsetTop
+    this.tailSpacer.style.height = `${Math.max(0, this.list.clientHeight - contentBelow)}px`
   }
 }
