@@ -1011,5 +1011,27 @@ describe('CursorAdapter', () => {
       // late sendTurn was dropped.
       expect(w.length).toBe(before)
     })
+
+    it('a write racing child death does not crash on a stdin EPIPE', () => {
+      // Mirrors claude.test.ts: the child can exit WITHOUT stop() ever being called, leaving
+      // this.child set and this.closed false, so a later write (interrupt here — sendTurn
+      // would queue pre-boot) still lands on a stdin whose other end is already gone. The OS
+      // then reports that asynchronously as an 'error' event (EPIPE / ERR_STREAM_DESTROYED) —
+      // unhandled, that's an uncaught exception in the host Vite/Next dev-server process.
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/abs/project' })
+      bootFresh(lastChild())
+
+      lastChild().simulateExit(0)
+      expect(() => adapter.interrupt()).not.toThrow()
+
+      // Simulate the OS-level EPIPE landing after the write above.
+      expect(() => lastChild().stdin.emit('error', new Error('EPIPE'))).not.toThrow()
+
+      // The session still lands in its normal ended state.
+      expect(events.filter((e) => e.kind === 'ended')).toHaveLength(1)
+    })
   })
 })

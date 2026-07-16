@@ -126,6 +126,15 @@ export class CursorAdapter implements SessionAdapter {
     const child = this.spawnFn('cursor-agent', [...CURSOR_ARGS], { cwd: opts.cwd })
     this.child = child
 
+    // A write racing the child's death (write()/writeNotification() land after the process is
+    // already gone, but before exit's 'ended' fires and closes us out) reports EPIPE/
+    // ERR_STREAM_DESTROYED asynchronously as an 'error' event on stdin itself — unhandled,
+    // Node treats that as an uncaught exception in the host Vite/Next dev-server process. The
+    // child's death already surfaces through the exit/'error' handlers below; this listener
+    // adds nothing but swallowing that crash. No backpressure/drain handling — turn payloads
+    // are small (YAGNI). Mirrors ClaudeAdapter's identical guard.
+    child.stdin.on('error', () => {})
+
     let lineBuf = ''
     child.stdout.on('data', (chunk: Buffer | string) => {
       if (this.closed) return

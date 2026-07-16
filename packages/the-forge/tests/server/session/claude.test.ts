@@ -818,5 +818,28 @@ describe('ClaudeAdapter', () => {
       const sessionEvents = events.filter((e) => e.kind === 'started')
       expect(sessionEvents).toHaveLength(0)
     })
+
+    it('a write racing child death does not crash on a stdin EPIPE', () => {
+      // The child can exit WITHOUT stop() ever being called (killed out from under us) —
+      // this.child stays set and this.closed stays false, so a subsequent write (sendTurn,
+      // interrupt, setModel, …) still lands on a stdin whose other end is already gone. The
+      // OS then reports that asynchronously as an 'error' event (EPIPE / ERR_STREAM_DESTROYED)
+      // on the stdin stream itself — with no listener attached, Node treats an unhandled
+      // 'error' event as an uncaught exception in the host Vite/Next dev-server process.
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new ClaudeAdapter(spawnFn)
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/p' })
+
+      lastChild().simulateExit(0)
+      expect(() => adapter.sendTurn('too late')).not.toThrow()
+
+      // Simulate the OS-level EPIPE landing after the write above.
+      expect(() => lastChild().stdin.emit('error', new Error('EPIPE'))).not.toThrow()
+
+      // The session still lands in its normal ended state — the stdin error adds nothing
+      // beyond the exit path that already fired.
+      expect(events.filter((e) => e.kind === 'ended')).toHaveLength(1)
+    })
   })
 })
