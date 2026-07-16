@@ -99,7 +99,10 @@ function isValidSentChange(v: unknown): v is SentChange {
 function isValidElementChange(v: unknown): v is ElementChange {
   if (!isRecord(v)) return false
   if (typeof v.tag !== 'string' || typeof v.selector !== 'string') return false
-  if (!isRecord(v.source) || typeof v.source.file !== 'string') return false
+  // source is SourceLocation | null (request.ts) — an untagged element (no data-dc-source)
+  // persists source: null, and renderMarkdown already handles that case by falling back to
+  // selector/text. Rejecting null here used to silently drop the whole sent entry.
+  if (v.source !== null && (!isRecord(v.source) || typeof v.source.file !== 'string')) return false
   if (!Array.isArray(v.changes)) return false
   return true
 }
