@@ -186,9 +186,25 @@ export class CursorAdapter implements SessionAdapter {
 
   interrupt(): void {
     // session/cancel is a NOTIFICATION (no id); the in-flight session/prompt then resolves with
-    // stopReason:'cancelled' (spike, Scenario 7). No-op before session-ready — there is no
-    // sessionId to cancel yet, and no turn can be in flight.
-    if (!this.child || this.closed || !this.sessionId) return
+    // stopReason:'cancelled' (spike, Scenario 7).
+    if (!this.child || this.closed) return
+    if (!this.sessionId) {
+      // Pre-ready: there is no sessionId to target session/cancel at, but a turn CAN be
+      // in flight here — the manager's send-at-spawn pattern calls sendTurn() immediately
+      // after start(), before session/new|load has resolved, and sendTurn() parks that text
+      // in turnQueue rather than dropping it. Stop pressed during the ~1.5-2s boot window
+      // used to no-op entirely, so the queued turn silently flushed and ran once
+      // session-ready arrived. Drop it here, and if one was actually queued, synthesize the
+      // same completion signal a genuine session/cancel produces (mirrors the 'cancelled'
+      // stopReason mapping in onPromptResponse) so the manager's busy state resolves back to
+      // ready instead of hanging on a turn that will never be sent. No queued turn → truly
+      // nothing to cancel, stay a real no-op.
+      if (this.turnQueue.length > 0) {
+        this.turnQueue = []
+        this.onEvent({ kind: 'turn-complete', isError: false })
+      }
+      return
+    }
     this.writeNotification('session/cancel', { sessionId: this.sessionId })
   }
 

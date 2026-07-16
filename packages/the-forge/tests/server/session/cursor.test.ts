@@ -904,15 +904,49 @@ describe('CursorAdapter', () => {
       expect('id' in cancel!).toBe(false) // a notification, no id
     })
 
-    it('is a no-op before session-ready', () => {
+    // Was pinned as an unconditional "no-op before session-ready" — that framing went stale
+    // once interrupt() gained the turnQueue-clearing branch below (Task 7): with NO turn
+    // queued there is truly nothing to cancel or complete, so this still writes no
+    // session/cancel AND emits no synthetic turn-complete. The queued-turn case (the actual
+    // bug: send-at-spawn parks a turn that ran anyway) is covered separately below.
+    it('writes no session/cancel and emits no event before session-ready when no turn is queued', () => {
       const { spawnFn, lastChild } = makeFakeSpawn()
       const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
-      adapter.onEvent = () => {}
+      const events = collectEvents(adapter)
       adapter.start({ cwd: '/abs/project' })
       const w = captureWrites(lastChild())
 
       adapter.interrupt()
       expect(w.filter((m) => m.method === 'session/cancel')).toHaveLength(0)
+      expect(events.filter((e) => e.kind !== 'activity')).toHaveLength(0)
+    })
+
+    // The actual bug (Task 7): the manager's send-at-spawn pattern writes the pull/chat turn
+    // via sendTurn() immediately after start(), before session/new has resolved — sendTurn
+    // parks it in turnQueue rather than dropping it. Stop pressed during that ~1.5-2s boot
+    // window used to no-op entirely (no sessionId yet to target session/cancel at), so the
+    // queued turn flushed and ran anyway once session-ready arrived. interrupt() must instead
+    // clear turnQueue AND synthesize the same turn-complete{isError:false} a genuine
+    // session/cancel produces (mirrors the 'cancelled' stopReason mapping above) so the
+    // manager's busy state resolves back to ready instead of hanging on a turn that will
+    // never actually be sent.
+    it('interrupt() before session-ready clears a queued turn and completes it instead of letting it flush', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/abs/project' })
+      const w = captureWrites(lastChild())
+
+      // send-at-spawn: the manager writes the turn before init/session-new ever resolve.
+      adapter.sendTurn('go')
+      adapter.interrupt()
+      const rendered = events.filter((e) => e.kind !== 'activity')
+      expect(rendered).toEqual([{ kind: 'turn-complete', isError: false }])
+
+      // Now let session-ready actually arrive — the cleared queue must not flush.
+      bootFresh(lastChild())
+      expect(w.filter((m) => m.method === 'session/prompt')).toHaveLength(0)
+      expect(events.some((e) => e.kind === 'started')).toBe(true)
     })
   })
 
