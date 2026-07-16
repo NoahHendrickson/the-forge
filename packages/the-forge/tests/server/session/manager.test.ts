@@ -722,6 +722,43 @@ describe('SessionManager', () => {
       expect(adapters).toHaveLength(2)
     })
 
+    it('an adapter event after allow does not collapse the post-approval leash (approve→kill→re-approve loop)', () => {
+      const { adapters, opts } = makeHarness(dir, { postApprovalWatchdogMs: 100 })
+      const mgr = new SessionManager(opts)
+      toBusy(adapters, mgr)
+
+      mgr.onApprovalPending()
+      mgr.onApprovalResolved(true)
+      // A stray event (hook/system chatter) while the approved tool is still silently
+      // running its own re-arm in _onAdapterEvent's busy branch must use the LEASH, not
+      // collapse back to the normal 30ms watchdog.
+      adapters[0]!.emit({ kind: 'activity' })
+
+      vi.advanceTimersByTime(60) // past the normal 30ms watchdog — leash must still hold
+      expect(adapters).toHaveLength(1)
+
+      vi.advanceTimersByTime(50) // past the 100ms leash — genuine stall, recover
+      expect(adapters).toHaveLength(2)
+    })
+
+    it('turn-complete clears the leash — the next turn gets the normal watchdog again', () => {
+      const { adapters, opts } = makeHarness(dir, { postApprovalWatchdogMs: 100 })
+      const mgr = new SessionManager(opts)
+      toBusy(adapters, mgr)
+
+      mgr.onApprovalPending()
+      mgr.onApprovalResolved(true)
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false })
+      expect(mgr.state()).toBe<SessionState>('ready')
+
+      // Next turn — must use the DEFAULT watchdog, not a leftover leash from the last turn.
+      mgr.notifyDesignEdits()
+      expect(mgr.state()).toBe<SessionState>('busy')
+
+      vi.advanceTimersByTime(40) // past the normal 30ms watchdog
+      expect(adapters).toHaveLength(2)
+    })
+
     it('deny re-arms the normal watchdog', () => {
       const { adapters, opts } = makeHarness(dir, { postApprovalWatchdogMs: 100 })
       const mgr = new SessionManager(opts)

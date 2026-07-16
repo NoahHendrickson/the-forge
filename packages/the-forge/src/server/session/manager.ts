@@ -264,6 +264,18 @@ export class SessionManager {
   // Watchdog timer handle (armed only while busy).
   private _watchdog: ReturnType<typeof setTimeout> | null = null
 
+  // The leash duration owed to the NEXT watchdog arm, or null for the normal `_watchdogMs`.
+  // Set by onApprovalResolved(true) to `_postApprovalWatchdogMs` so a stray adapter event
+  // (hook chatter, another tool's `tool-started`) arriving while the approved tool is still
+  // silently running doesn't collapse the 10-minute leash back to the normal 120s in
+  // _onAdapterEvent's busy re-arm — that collapse was the exact approve→kill→re-approve
+  // loop POST_APPROVAL_WATCHDOG_MS's own why-comment exists to prevent. Cleared on
+  // turn-complete and on the next turn's own _sendTurnText — deliberately NOT on
+  // tool-finished: with parallel tools, another approved tool may still be running, so
+  // clearing there would re-expose the same collapse. Worst case a hung post-approval
+  // session takes 10 min to reap instead of 2 — the constant's own stated trade.
+  private _leashMs: number | null = null
+
   constructor(opts: SessionManagerOpts) {
     this._opts = opts
     this._clock = opts.now ?? (() => Date.now())
@@ -469,7 +481,8 @@ export class SessionManager {
   onApprovalResolved(allow: boolean): void {
     this._pendingApprovals = Math.max(0, this._pendingApprovals - 1)
     if (this._pendingApprovals === 0 && this._state === 'busy') {
-      this._armWatchdog(allow ? this._postApprovalWatchdogMs : this._watchdogMs)
+      this._leashMs = allow ? this._postApprovalWatchdogMs : null
+      this._armWatchdog(this._leashMs ?? this._watchdogMs)
     }
   }
 
@@ -547,14 +560,19 @@ export class SessionManager {
     this._adapter?.sendTurn(text)
     this._inflightTurn = text
     this._state = 'busy'
+    // A new turn starts on the normal leash — any post-approval leash owed to the turn
+    // that just ended must not carry forward onto this one (see `_leashMs`'s why-comment).
+    this._leashMs = null
     this._armWatchdog()
   }
 
   private _onAdapterEvent(event: SessionEvent): void {
     // Re-arm the watchdog on any event while busy — prevents spurious expiry
-    // when the session is actively producing output.
+    // when the session is actively producing output. Uses the post-approval leash
+    // (`_leashMs`) when one is owed, so a stray event doesn't collapse it back to the
+    // normal watchdog — see `_leashMs`'s why-comment.
     if (this._state === 'busy') {
-      this._armWatchdog()
+      this._armWatchdog(this._leashMs ?? this._watchdogMs)
     }
 
     if (event.kind === 'activity') {
@@ -608,6 +626,11 @@ export class SessionManager {
 
       case 'turn-complete':
         this._cancelWatchdog()
+        // The leash (if any) belonged to the turn that just ended — a completed turn's
+        // approved tool is done, so the next turn must start on the normal watchdog, not
+        // inherit a stale leash (see `_leashMs`'s why-comment). Any recovery `_sendTurnText`
+        // taken below clears it again too, but that's a harmless no-op here.
+        this._leashMs = null
         if (event.isError) {
           if (!this._sawStarted && this._lastStartResumeId !== undefined) {
             // Stale resume id (observed live, CLI 2.1.201): `--resume <unknown-id>` emits
