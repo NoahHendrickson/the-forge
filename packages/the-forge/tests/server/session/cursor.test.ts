@@ -1015,6 +1015,50 @@ describe('CursorAdapter', () => {
       // And the cancelled turn text never reached the wire on this child.
       expect(w.filter((m) => m.method === 'session/prompt')).toHaveLength(0)
     })
+
+    // The cancel-then-new-turn race (final-review finding): the synthetic turn-complete's
+    // `ready` transition makes the MANAGER itself flush a parked nudge/chat turn into the
+    // post-cancel window (manager.ts turn-complete arm) — a fresh sendTurn() can arrive
+    // pre-ready with NO user Stop against it. That new turn must get NORMAL boot-failure
+    // semantics: if the still-running boot then fails stale, the adapter must emit the
+    // stale-retry key turn-complete{isError:true} (manager clears the slot, respawns, resends
+    // `_inflightTurn` — which IS the new turn), NOT the post-cancel session-error suppression,
+    // or a turn the user never cancelled would silently lose its auto-resend. So sendTurn's
+    // pre-ready queue branch re-arms bootCancelled = false.
+    it('a fresh pre-ready turn after a cancel re-arms stale-retry — stale failure emits turn-complete{isError:true} again', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/abs/project', resumeId: '00000000-0000-0000-0000-000000000000' })
+      const w = captureWrites(lastChild())
+
+      adapter.sendTurn('cancelled-turn')
+      adapter.interrupt()
+      // The manager's ready-transition flush sends the parked turn — still pre-ready.
+      adapter.sendTurn('parked-turn')
+      events.length = 0
+
+      pushLine(lastChild(), INIT_RESPONSE)
+      const staleWithMatchingId = JSON.stringify({
+        ...(JSON.parse(LOAD_STALE_ERROR) as Record<string, unknown>),
+        id: 2,
+      })
+      pushLine(lastChild(), staleWithMatchingId)
+
+      const rendered = events.filter((e) => e.kind !== 'activity')
+      // The stale-retry key is back: the manager's retry branch resends _inflightTurn, which
+      // is now 'parked-turn' — exactly the right recovery for a turn nobody cancelled.
+      expect(rendered).toHaveLength(1)
+      const ev = rendered[0]!
+      expect(ev.kind).toBe('turn-complete')
+      if (ev.kind === 'turn-complete') {
+        expect(ev.isError).toBe(true)
+        expect(typeof ev.errorText).toBe('string')
+      }
+      // The CANCELLED text still never reaches the wire (its queue slot was cleared at
+      // interrupt time; the boot failure means nothing flushes on this child at all).
+      expect(w.filter((m) => m.method === 'session/prompt')).toHaveLength(0)
+    })
   })
 
   describe('config no-ops', () => {

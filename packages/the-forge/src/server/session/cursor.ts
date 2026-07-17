@@ -101,8 +101,12 @@ export class CursorAdapter implements SessionAdapter {
   // instead — the manager's pre-started session-error path lands `failed` (no resend), and
   // the next say()/Send auto-starts fresh from there (no wedge, no 120s watchdog wait). A
   // boot that SUCCEEDS after the cancel is unaffected: started fires normally and the queue
-  // is already empty. Never reset — each adapter instance boots exactly once, so failBoot
-  // only ever runs for the one boot this flag describes.
+  // is already empty. RESET by sendTurn's pre-ready queue branch (final-review fix): the
+  // synthetic turn-complete's `ready` transition lets the MANAGER itself flush a parked
+  // nudge/chat turn into the post-cancel window — a fresh pre-ready turn nobody cancelled.
+  // That turn must get NORMAL boot-failure semantics: with it queued, `_inflightTurn` IS the
+  // new turn, so the stale-retry resend is exactly right; leaving the flag set would
+  // suppress the failure to session-error and silently strip that turn's auto-resend.
   private bootCancelled = false
 
   // Replay suppression: true only between writing session/load and its response resolving.
@@ -192,6 +196,9 @@ export class CursorAdapter implements SessionAdapter {
     if (!this.child || this.closed) return
     if (!this.sessionReady) {
       this.turnQueue.push(text)
+      // A fresh pre-ready turn re-arms normal boot-failure semantics: an earlier cancel's
+      // suppression must not outlive the turn it protected — see bootCancelled's comment.
+      this.bootCancelled = false
       return
     }
     this.writePrompt(text)
