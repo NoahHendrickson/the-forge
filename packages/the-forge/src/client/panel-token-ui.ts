@@ -128,14 +128,15 @@ export class PanelTokenUi {
     const key = spec.props.join(',')
     const bound = this.bound.get(key)
     if (!bound || comparing) return
-    // `value` is `readValue`'s fromPx result — already rounded for display (panel-patterns
-    // doc). `bound.px` is the token entry's exact px (fractional on non-integer scales, e.g.
-    // a 3.75px spacing base's p-3.5 = 13.125px). Comparing them for exact equality compared
-    // a rounded number against an unrounded one, so the pill self-deleted one refresh after
-    // binding on any such theme. Compare in the rounded domain instead: survive when the
-    // bound px rounds to (or within a hair of) the displayed value; a genuine ≥0.5px user
-    // divergence still unbinds.
-    if (!mixed && value !== null && Math.abs(bound.px - value) < 0.5) field.bindToken(bound.label)
+    // `value` is `readValue`'s fromPx result — already rounded for display via Math.round
+    // (panel-patterns doc: displayed values are rounded). `bound.px` is the token entry's
+    // exact px (fractional on non-integer scales, e.g. a 3.75px spacing base's p-3.5 =
+    // 13.125px). Comparing them raw compared a rounded number against an unrounded one, so
+    // the pill self-deleted one refresh after binding on any such theme. Compare in the
+    // rounded domain instead: the pill survives iff the displayed value IS the bound px
+    // under fromPx's own rounding (round-equality, half-up — a bound 13.5px displaying 14
+    // keeps its pill); anything else is a genuine user edit and unbinds.
+    if (!mixed && value !== null && Math.round(bound.px) === value) field.bindToken(bound.label)
     else this.bound.delete(key)
   }
 }

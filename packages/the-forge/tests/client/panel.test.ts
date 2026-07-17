@@ -2305,7 +2305,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     expect(input.value).toBe('20')
   })
 
-  it('a bound pill survives refresh() on a fractional-px spacing theme (rounded-domain compare)', () => {
+  it('a bound pill survives refresh() on a fractional-px spacing theme (round-equality compare)', () => {
     // Task 12: --spacing 3.75px makes p-3.5 = 13.125px — the displayed value rounds to 13
     // (panel-patterns doc), but the bound token's exact px stays 13.125. rebind() must not
     // treat that rounding gap as user divergence.
@@ -2327,7 +2327,7 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     expect(field.classList.contains('nf-pill')).toBe(true)
   })
 
-  it('a bound pill on a fractional-px theme still unbinds on genuine divergence (>=0.5px)', () => {
+  it('a bound pill on a fractional-px theme still unbinds when the value is not the rounding of the bound px', () => {
     const { el, panel, drafts } = setupTailwind()
     document.documentElement.style.setProperty('--spacing', '3.75px')
     resetTokensCache()
@@ -2339,13 +2339,35 @@ describe('Panel + TokenPicker (`=` token picker, B5)', () => {
     ;(row as HTMLElement).click()
     expect(input.value).toBe('px-3.5')
 
-    // 15px is 1.875px off the bound 13.125px — a genuine user edit, not rounding noise.
+    // Math.round(13.125) = 13 !== 15 — a genuine user edit, not rounding noise.
     drafts.apply(el, 'padding-left', '15px')
     drafts.apply(el, 'padding-right', '15px')
     panel.refresh()
 
     expect(field.classList.contains('nf-pill')).toBe(false)
     expect(input.value).toBe('15')
+  })
+
+  it('boundary: an exact .5-fraction bound px (13.5, displayed 14) keeps its pill through refresh()', () => {
+    // --spacing 9px makes p-1.5 = 13.5px — fromPx displays Math.round(13.5) = 14 (half-up).
+    // Round-equality must keep the pill; the earlier epsilon form (|bound.px - value| < 0.5)
+    // failed exactly here because |13.5 - 14| === 0.5.
+    const { el, panel, drafts } = setupTailwind()
+    document.documentElement.style.setProperty('--spacing', '9px')
+    resetTokensCache()
+    const field = pxField(panel, P.PX)
+    const input = field.querySelector('input') as HTMLInputElement
+    pressEquals(input)
+    const picker = pickerOf(panel)
+    const row = [...picker.root.querySelectorAll('.tp-row')].find((r) => r.textContent?.includes('13.5px'))!
+    ;(row as HTMLElement).click()
+
+    expect(drafts.current(el, 'padding-left')).toBe('13.5px')
+    expect(input.value).toBe('px-1.5')
+
+    panel.refresh()
+    expect(input.value).toBe('px-1.5')
+    expect(field.classList.contains('nf-pill')).toBe(true)
   })
 
   it('a bound pill on a sizeMode (W/H) field is dropped once the field switches to auto (Hug) display', () => {
