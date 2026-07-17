@@ -778,6 +778,28 @@ describe('approvals', () => {
     await flush()
     feed.stop()
   })
+
+  it('a pending approval evicted past MAX_ROWS re-renders fresh when the server re-emits it', async () => {
+    // The server re-emits every still-pending approval on each reconnect (no seq to filter
+    // it). If MAX_ROWS eviction removes the approval's row from the DOM but leaves its
+    // approvalRows map entry behind, renderApproval's dup guard sees the (now detached, but
+    // still tracked) row and no-ops the re-emit — the approval becomes permanently
+    // undecidable. Push the approval row itself past the cap, then replay the same id.
+    const lines = [JSON.stringify({ type: 'approval', id: 'evictme', toolName: 'BashTool', detail: 'ls' })]
+    for (let i = 1; i <= 200; i++) {
+      lines.push(feedLine(i, { kind: 'user-text', text: `filler ${i}` }))
+    }
+    lines.push(JSON.stringify({ type: 'approval', id: 'evictme', toolName: 'BashTool', detail: 'ls' }))
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush(300)
+    const rows = feed.root.querySelectorAll('.session-approval')
+    expect(rows.length).toBe(1)
+    expect(rows[0].querySelector('.session-approval-allow')).not.toBeNull()
+    expect(rows[0].querySelector('.session-approval-deny')).not.toBeNull()
+    feed.stop()
+  })
 })
 
 // ---------------------------------------------------------------------------

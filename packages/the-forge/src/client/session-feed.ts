@@ -977,6 +977,18 @@ export class SessionFeed {
       if (this.streamingBubble && excess.includes(this.streamingBubble)) {
         this.clearStreamingBubble()
       }
+      // Evicted rows must release their toolRows/approvalRows entries too — otherwise a
+      // still-pending approval re-emitted by the server on reconnect finds its (now
+      // detached, but still tracked) id in approvalRows and renderApproval's dup guard
+      // no-ops the re-emit, making the approval permanently undecidable; toolRows would
+      // just grow unboundedly with entries pointing at nodes no longer in the DOM.
+      const excessSet = new Set(excess)
+      for (const [id, row] of this.toolRows) {
+        if (excessSet.has(row)) this.toolRows.delete(id)
+      }
+      for (const [id, row] of this.approvalRows) {
+        if (excessSet.has(row)) this.approvalRows.delete(id)
+      }
       this.anchor.onEvict(excess)
     }
     this.anchor.update()
