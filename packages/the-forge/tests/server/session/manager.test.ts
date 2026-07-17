@@ -536,6 +536,26 @@ describe('SessionManager', () => {
       expect(mgr.state()).toBe<SessionState>('idle')
       expect(adapters).toHaveLength(1)
     })
+
+    it('ended after a pre-ready cancel does not resurrect the cancelled turn', () => {
+      // Cursor's pre-ready interrupt() synthesizes turn-complete{isError:false} WITHOUT the
+      // child ever emitting `started` — a state that pre-dated nothing: ready + !sawStarted,
+      // with _inflightTurn still holding the cancelled text. If the child then dies in the
+      // boot window (bare exit → `ended`, no session-error), the pre-init-crash branch must
+      // NOT respawn: _respawn() re-sends _inflightTurn — the exact turn the user cancelled.
+      const { adapters, opts } = makeHarness(dir)
+      const mgr = new SessionManager(opts)
+
+      mgr.say('run the tests') // idle → auto-start + send-at-spawn
+      expect(mgr.state()).toBe<SessionState>('busy')
+      adapters[0]!.emit({ kind: 'turn-complete', isError: false }) // pre-ready cancel, no `started`
+      expect(mgr.state()).toBe<SessionState>('ready')
+
+      adapters[0]!.emit({ kind: 'ended' }) // child dies in the boot window
+
+      expect(mgr.state()).toBe<SessionState>('idle') // clean exit — next Send auto-starts fresh
+      expect(adapters).toHaveLength(1) // no respawn, no resend of the cancelled turn
+    })
   })
 
   describe('watchdog', () => {
@@ -756,6 +776,26 @@ describe('SessionManager', () => {
       expect(mgr.state()).toBe<SessionState>('busy')
 
       vi.advanceTimersByTime(40) // past the normal 30ms watchdog
+      expect(adapters).toHaveLength(2)
+    })
+
+    it('a deny resolving after an earlier allow keeps the owed leash (parallel tools)', () => {
+      // Same invariant as `_leashMs`'s why-comment: tool A was ALLOWED and its silent
+      // build is still running when tool B's prompt is denied — the deny must not
+      // collapse A's owed leash back to the normal watchdog (approve→kill→re-approve).
+      const { adapters, opts } = makeHarness(dir, { postApprovalWatchdogMs: 100 })
+      const mgr = new SessionManager(opts)
+      toBusy(adapters, mgr)
+
+      mgr.onApprovalPending()
+      mgr.onApprovalResolved(true) // tool A allowed — leash owed
+      mgr.onApprovalPending()
+      mgr.onApprovalResolved(false) // tool B denied while A still runs
+
+      vi.advanceTimersByTime(60) // past the normal 30ms watchdog — A's leash must hold
+      expect(adapters).toHaveLength(1)
+
+      vi.advanceTimersByTime(50) // past the 100ms leash — genuine stall, recover
       expect(adapters).toHaveLength(2)
     })
 

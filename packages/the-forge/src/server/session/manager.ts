@@ -477,11 +477,16 @@ export class SessionManager {
 
   /** The parked approval resolved. Once none remain, re-arm: an ALLOWED tool gets the
    * long post-approval leash (builds/tests emit nothing until tool_result); a denied
-   * one resumes the normal leash — the turn continues without a long-running tool. */
+   * one re-arms with whatever the turn already earned — the normal watchdog, or an
+   * earlier allow's still-owed leash. */
   onApprovalResolved(allow: boolean): void {
     this._pendingApprovals = Math.max(0, this._pendingApprovals - 1)
     if (this._pendingApprovals === 0 && this._state === 'busy') {
-      this._leashMs = allow ? this._postApprovalWatchdogMs : null
+      // An allow OWES the long leash. A deny must not collapse a leash an earlier allow
+      // already earned — with parallel tools, that approved tool may still be silently
+      // running (the same invariant that keeps `_leashMs` uncleared on tool-finished).
+      // Deny with nothing owed leaves _leashMs null → normal watchdog.
+      if (allow) this._leashMs = this._postApprovalWatchdogMs
       this._armWatchdog(this._leashMs ?? this._watchdogMs)
     }
   }
@@ -691,6 +696,16 @@ export class SessionManager {
         if (this._state === 'failed') {
           // session-error already drove us to failed; ended is just the adapter
           // signalling the process is gone — don't overwrite the failed state.
+        } else if (!this._sawStarted && this._state === 'ready') {
+          // Pre-ready cancel aftermath: Cursor's pre-ready interrupt() synthesizes
+          // turn-complete{isError:false} without the child ever emitting `started`,
+          // leaving ready + !sawStarted — and `_inflightTurn` still names the turn the
+          // user just CANCELLED. If the child now dies in the boot window (bare exit,
+          // no session-error), this is not a pre-init crash owing a resend: taking the
+          // branch below would _respawn() → _sendTurnText(_inflightTurn) and resurrect
+          // the cancelled turn. No turn is owed at `ready` — clean exit → idle, the
+          // next Send auto-starts fresh.
+          this._state = 'idle'
         } else if (!this._sawStarted) {
           // Died before ever emitting started — a pre-init crash. Bounded: a child that
           // keeps dying pre-init (broken install, corrupted state) must not respawn forever.
