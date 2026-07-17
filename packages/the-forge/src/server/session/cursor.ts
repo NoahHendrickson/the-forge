@@ -1,8 +1,7 @@
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { SessionAdapter, SessionEvent } from './adapter'
-import { type SpawnFn, type SpawnedChild, truncateEditSide } from './claude'
+import { type SessionAdapter, type SessionEvent, type SpawnFn, type SpawnedChild, truncateEditSide } from './adapter'
 
 // cursor-agent speaks ACP (Agent Client Protocol): JSON-RPC 2.0, newline-delimited, over
 // stdio. `acp` is the only arg — everything else (model, permission mode) is negotiated

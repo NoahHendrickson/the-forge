@@ -1,20 +1,6 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import type { SessionAdapter, SessionEvent } from './adapter'
-
-export interface SpawnedChild {
-  // stdin carries its own 'error' listener (distinct from the child-level 'error' below): a
-  // write racing the child's death reports EPIPE/ERR_STREAM_DESTROYED asynchronously as an
-  // 'error' event on THIS stream, not on the child. Both adapters attach a listener at spawn
-  // time — see the why-comment at each call site.
-  stdin: { write(s: string): void; end(): void; on(ev: 'error', fn: (err: unknown) => void): void }
-  stdout: NodeJS.ReadableStream
-  stderr: NodeJS.ReadableStream
-  kill(signal?: string): void
-  on(ev: 'exit' | 'error', fn: (...a: unknown[]) => void): void
-}
-
-export type SpawnFn = (cmd: string, args: string[], opts: { cwd: string }) => SpawnedChild
+import { type SessionAdapter, type SessionEvent, type SpawnFn, type SpawnedChild, truncateEditSide } from './adapter'
 
 // The ratified "edits auto, Bash prompts" posture: static allow rules short-circuit the
 // permission-prompt-tool; everything else (Bash, etc.) reaches mcp__the-forge__approve.
@@ -61,19 +47,6 @@ export const CLAUDE_ARGS: string[] = [
   '--allowedTools',
   EDIT_TIER_ALLOW.join(','),
 ]
-
-// Edit/MultiEdit/Write tool_use payloads can carry arbitrarily large before/after strings
-// (a full file rewrite via Write, e.g.) — cap each side so a single tool call can't blow up
-// the ring buffer or the wire payload to the browser. Truncation is a display concern only;
-// the CLI still has the real file on disk regardless of what the panel shows.
-export const EDIT_PAYLOAD_CAP = 1_500
-
-// Exported so CursorAdapter (and any future harness adapter) reuses the ONE truncation
-// policy instead of copying it — the cap is a shared wire/ring-buffer budget, not a
-// Claude-specific detail.
-export function truncateEditSide(s: string): string {
-  return s.length > EDIT_PAYLOAD_CAP ? s.slice(0, EDIT_PAYLOAD_CAP) + '…' : s
-}
 
 // Edit/MultiEdit → {file, before: old_string, after: new_string}; Write → {file, before: '',
 // after: content}. Absent/malformed `input` fields (a future CLI version renaming a field, a
