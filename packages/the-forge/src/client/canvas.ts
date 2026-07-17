@@ -516,7 +516,14 @@ export class CanvasMode {
     // silently reverted to the anchor.
     let lastX = e.clientX
     let lastY = e.clientY
+    // The drag belongs to ONE pointer. On pen/touch-equipped hardware a second pointer's
+    // stream interleaves with the drag's — a hovering pen reports buttons===0 on its own
+    // moves, which would trip the self-heal below and silently end a live mouse drag (and
+    // before the self-heal existed, its moves caused pan jitter instead). Filter every
+    // drag listener to the pointer that started the gesture.
+    const dragPointerId = e.pointerId
     const onMove = (ev: PointerEvent): void => {
+      if (ev.pointerId !== dragPointerId) return
       // Self-heal a lost pointerup/pointercancel: an app-switch mid-drag can deliver the
       // button release to a DIFFERENT window, so this gesture never sees pointerup at all —
       // the next pointermove we DO get still reports the live button state, and buttons===0
@@ -541,6 +548,11 @@ export class CanvasMode {
       // Only pointerup gets one: pointercancel (and forced teardown) means the browser
       // never fires a click for this gesture, so arming it would eat an unrelated click.
       if (installSquelch && this.didPan) {
+        // A prior pan's squelch that never consumed (the browser dropped that gesture's
+        // click) must not accumulate as an orphan only removeListeners' TRACKED reference
+        // can't reach — disarm it before arming the replacement, so at most one live
+        // squelch ever exists.
+        if (this.clickSquelch) window.removeEventListener('click', this.clickSquelch, true)
         const squelch = (ce: MouseEvent): void => {
           ce.stopPropagation()
           ce.preventDefault()
@@ -552,8 +564,14 @@ export class CanvasMode {
     }
     // A middle-button release fires auxclick, not click — index.ts's selection handler
     // never sees it, so no squelch to arm on that path.
-    const onUp = (): void => finish(!middle)
-    const onCancel = (): void => finish(false)
+    const onUp = (ev: PointerEvent): void => {
+      if (ev.pointerId !== dragPointerId) return
+      finish(!middle)
+    }
+    const onCancel = (ev: PointerEvent): void => {
+      if (ev.pointerId !== dragPointerId) return
+      finish(false)
+    }
     this.dragTeardown = () => finish(false)
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)

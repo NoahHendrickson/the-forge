@@ -491,6 +491,60 @@ describe('CanvasMode gesture edge cases (Task 10: blur, lost pointerup, orphaned
     expect(reached).toHaveBeenCalledTimes(1)
     document.removeEventListener('click', reached, true)
   })
+
+  // jsdom MouseEvents carry no pointerId (undefined); a real second pointer always has a
+  // distinct one — stamp it on explicitly to simulate multi-pointer hardware.
+  function withPointerId(e: MouseEvent, pointerId: number): MouseEvent {
+    Object.defineProperty(e, 'pointerId', { value: pointerId })
+    return e
+  }
+
+  it("a second pointer's events mid-drag are ignored — pen hover (buttons=0) must not self-heal-end a mouse drag", () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    window.dispatchEvent(withPointerId(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, buttons: 1, bubbles: true, cancelable: true }), 1))
+    window.dispatchEvent(withPointerId(new MouseEvent('pointermove', { clientX: 130, clientY: 80, buttons: 1, bubbles: true }), 1))
+    expect(bodyTransform()).toBe('translate(30px, -20px) scale(1)')
+    // A pen hovering into range mid mouse-drag: its OWN pointer stream reports buttons=0.
+    // Filtered by pointerId, it must neither jitter the pan nor trip the lost-pointerup
+    // self-heal (which reads buttons off whatever move it sees).
+    window.dispatchEvent(withPointerId(new MouseEvent('pointermove', { clientX: 500, clientY: 500, buttons: 0, bubbles: true }), 7))
+    // A foreign pointerup must not end the drag either.
+    window.dispatchEvent(withPointerId(new MouseEvent('pointerup', { bubbles: true }), 7))
+    // The mouse drag is still alive and still pans from its own last position.
+    window.dispatchEvent(withPointerId(new MouseEvent('pointermove', { clientX: 140, clientY: 80, buttons: 1, bubbles: true }), 1))
+    expect(bodyTransform()).toBe('translate(40px, -20px) scale(1)')
+    window.dispatchEvent(withPointerId(new MouseEvent('pointerup', { bubbles: true }), 1))
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
+    // consume the squelch the real pointerup armed (jsdom fires no click on its own)
+    const eaten = new MouseEvent('click', { bubbles: true, cancelable: true })
+    window.dispatchEvent(eaten)
+    expect(eaten.defaultPrevented).toBe(true)
+    canvas.setOn(false)
+  })
+
+  it('back-to-back pans leave at most ONE live squelch — setOn(false) fully disarms (no orphan eats a later click)', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    // Two full pan gestures with NO click between them (the browser dropped the first
+    // gesture's click): the first pan's un-consumed once:true squelch used to be orphaned
+    // when the second pan overwrote this.clickSquelch — removeListeners() could then only
+    // disarm the newest one.
+    for (const x of [130, 160]) {
+      window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, buttons: 1, bubbles: true, cancelable: true }))
+      window.dispatchEvent(new MouseEvent('pointermove', { clientX: x, clientY: 80, buttons: 1, bubbles: true }))
+      window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    }
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
+    canvas.setOn(false)
+    const reached = vi.fn()
+    document.addEventListener('click', reached, true)
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(reached).toHaveBeenCalledTimes(1)
+    document.removeEventListener('click', reached, true)
+  })
 })
 
 describe('CanvasMode gesture-end persistence (2026-07-11 review: split paint from persist)', () => {

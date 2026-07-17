@@ -310,6 +310,13 @@ export class NumberField {
     })
 
     this.labelEl.addEventListener('mousedown', (e) => {
+      if (this.pillBound) {
+        // Same gate as ArrowUp/Down above, for the other numeric surface: bindToken()
+        // deliberately leaves lastValid untouched, so a scrub would commit
+        // scrubStartValue(=stale lastValid)+delta — numeric garbage that silently
+        // unbinds the pill on the next refresh. Detach first to scrub.
+        return
+      }
       e.preventDefault()
       this.opts.onScrubStart?.()
       this.scrubbing = true
