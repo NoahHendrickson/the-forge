@@ -522,6 +522,22 @@ describe('Overlay.showRipples (M2b Task 4)', () => {
     expect(ripples(overlay).every((r) => r.hidden)).toBe(true)
   })
 
+  it('showRipples cancels a stale fade-hide timer from a prior clear (Task 10) — a re-show must survive the old fade window', () => {
+    const overlay = new Overlay()
+    overlay.mount()
+    overlay.showRipples([new DOMRect(0, 0, 10, 10)])
+    const [el] = ripples(overlay)
+    overlay.setActive(false) // clearRipples(): opacity -> 0, hide scheduled after RIPPLE_FADE_MS (300ms)
+    // A fresh edit re-shows the ripple before that stale fade-hide timer has fired.
+    overlay.showRipples([new DOMRect(0, 0, 10, 10)])
+    expect(el.style.opacity).toBe('1')
+    expect(el.hidden).toBe(false)
+    // Advance past the ORIGINAL fade window — the stale timer must have been cancelled,
+    // or it fires now and wrongly hides a ripple that was just freshly re-shown.
+    vi.advanceTimersByTime(300)
+    expect(el.hidden).toBe(false)
+  })
+
   it('ripple outlines are pointer-events:none and positioned from the rect', () => {
     const overlay = new Overlay()
     overlay.mount()

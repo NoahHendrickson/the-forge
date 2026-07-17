@@ -339,6 +339,13 @@ export class CanvasMode {
    *  alive and the next pointermove writes a transform onto the already-restored page. */
   private dragTeardown: (() => void) | null = null
 
+  /** The armed once:true click squelch (below), so removeListeners() can remove it directly —
+   *  without a reference, a gesture that ends without a following click (design mode toggled
+   *  off before the browser's click fires, or the user never clicks again) leaves this window
+   *  listener alive indefinitely and it eats one unrelated page click whenever it does land,
+   *  even after design mode is off (a zero-idle-overhead violation). */
+  private clickSquelch: ((e: MouseEvent) => void) | null = null
+
   /** composedPath()[0] over e.target — shadow DOM retargets, same convention as ui/menu. */
   private realTarget(e: Event): EventTarget | null {
     return e.composedPath?.()[0] ?? e.target
@@ -463,11 +470,23 @@ export class CanvasMode {
 
   private onKeyUp = (e: KeyboardEvent): void => {
     // No isEditable/hostContains guards on purpose: clearing is idempotent, and spaceHeld
-    // can only be true if the matching keydown already passed those guards.
+    // can only be true if the matching keydown already passed those guards. NOTE: keyup is
+    // NOT guaranteed to arrive — Cmd+Tab (or any focus-stealing app switch) while Space is
+    // held swallows the keyup entirely, so this alone is not sufficient; onBlur (below) is
+    // the backstop for that case.
     if (e.code === 'Space') {
       this.spaceHeld = false
       if (!this.dragTeardown) this.setCursor('')
     }
+  }
+
+  /** Backstop for the keyup that never arrives: losing window focus (Cmd+Tab, alt-tab,
+   *  clicking another app) mid Space-hold means the OS delivers the keyup to whatever
+   *  window now has focus, not this page — spaceHeld would otherwise stick forever and
+   *  the next pointerdown in this window would wrongly start a pan. */
+  private onBlur = (): void => {
+    this.spaceHeld = false
+    if (!this.dragTeardown) this.setCursor('')
   }
 
   /** Cursor writes go on <html> (the overlay host's parent) so they win over page CSS
@@ -493,6 +512,12 @@ export class CanvasMode {
     let lastX = e.clientX
     let lastY = e.clientY
     const onMove = (ev: PointerEvent): void => {
+      // Self-heal a lost pointerup/pointercancel: an app-switch mid-drag can deliver the
+      // button release to a DIFFERENT window, so this gesture never sees pointerup at all —
+      // the next pointermove we DO get still reports the live button state, and buttons===0
+      // means nothing is held anymore. Treat that as the missed gesture-end. No squelch: the
+      // browser never fires a click for a gesture whose pointerup it never delivered either.
+      if (ev.buttons === 0) { finish(false); return }
       this.zoomTweenCleanup?.() // continuous gesture — direct manipulation must never be damped
       this.didPan = true
       this.setState(panBy(this.state, ev.clientX - lastX, ev.clientY - lastY))
@@ -511,7 +536,12 @@ export class CanvasMode {
       // Only pointerup gets one: pointercancel (and forced teardown) means the browser
       // never fires a click for this gesture, so arming it would eat an unrelated click.
       if (installSquelch && this.didPan) {
-        const squelch = (ce: MouseEvent): void => { ce.stopPropagation(); ce.preventDefault() }
+        const squelch = (ce: MouseEvent): void => {
+          ce.stopPropagation()
+          ce.preventDefault()
+          this.clickSquelch = null // consumed — the once:true listener already removed itself
+        }
+        this.clickSquelch = squelch
         window.addEventListener('click', squelch, { capture: true, once: true })
       }
     }
@@ -529,6 +559,7 @@ export class CanvasMode {
     window.addEventListener('wheel', this.onWheel, { capture: true, passive: false })
     window.addEventListener('keydown', this.onKeyDown, true)
     window.addEventListener('keyup', this.onKeyUp, true)
+    window.addEventListener('blur', this.onBlur)
     window.addEventListener('pointerdown', this.onPointerDown, true)
     // Safari-only pinch path — feature-detected so other engines never pay for it.
     if ('GestureEvent' in window) {
@@ -550,11 +581,18 @@ export class CanvasMode {
     window.removeEventListener('wheel', this.onWheel, true)
     window.removeEventListener('keydown', this.onKeyDown, true)
     window.removeEventListener('keyup', this.onKeyUp, true)
+    window.removeEventListener('blur', this.onBlur)
     window.removeEventListener('pointerdown', this.onPointerDown, true)
     // Unconditional (no feature gate) — removing a never-added listener is a no-op.
     window.removeEventListener('gesturestart', this.onGestureStart, true)
     window.removeEventListener('gesturechange', this.onGestureChange, true)
     window.removeEventListener('gestureend', this.onGestureEnd, true)
+    // An armed once:true click squelch that never fired (design mode toggled off before the
+    // browser's click landed) must not outlive the gesture — see clickSquelch's doc comment.
+    if (this.clickSquelch) {
+      window.removeEventListener('click', this.clickSquelch, true)
+      this.clickSquelch = null
+    }
     this.spaceHeld = false
   }
 }
