@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import http from 'node:http'
+import { AddressInfo } from 'node:net'
 import { EventEmitter } from 'node:events'
 import { Queue } from '../../src/server/queue'
 import { WatcherHub } from '../../src/server/watchers'
@@ -60,10 +62,15 @@ function fakeRes() {
     // handler never attempted to respond twice for one request.
     headersSent: false,
     endCallCount: 0,
-    // The /wait handler registers a 'close' listener (long-poll cleanup); other handlers
-    // never call res.on. Stored so tests can simulate the client vanishing mid-hold.
+    // The /wait handler registers a 'close' listener (long-poll cleanup) and readBody's
+    // oversized guard registers a one-shot 'finish' listener (task 15b — destroy after the
+    // response is written). Stored so tests can simulate the client vanishing mid-hold and so
+    // end() can fire 'finish' the way real http.ServerResponse does.
     listeners: {} as Record<string, () => void>,
     on(event: string, cb: () => void) {
+      this.listeners[event] = cb
+    },
+    once(event: string, cb: () => void) {
       this.listeners[event] = cb
     },
     emitClose() {
@@ -84,6 +91,10 @@ function fakeRes() {
       this.endCallCount++
       this.body = s ?? ''
       this.done?.()
+      // Real ServerResponse emits 'finish' once the body is flushed — fire it AFTER body is
+      // set so the oversized guard's req.destroy() observes the response already written,
+      // proving the [send-400, destroy] ordering (task 15b).
+      this.listeners['finish']?.()
     },
     done: undefined as (() => void) | undefined,
   }
@@ -348,8 +359,19 @@ describe('forge middleware', () => {
     })
   })
 
-  it('400s oversize bodies without double-settling, and destroys the request socket (task 15b) so the client cannot keep streaming into discarded handlers', async () => {
+  it('400s oversize bodies without double-settling, and destroys the request socket ONLY AFTER the 400 is written (task 15b) — the client gets the error before the stream is cut', async () => {
+    // Ordering is the whole point: an oversized upload must receive the 400 body, THEN have its
+    // socket torn down. Record both events in one array — destroy fires from the response's
+    // 'finish' listener (via fakeRes.end above), so [send-400, destroy] proves the fix and would
+    // catch a regression back to destroy-first (which RSTs the connection before the client
+    // reads the error — see the real-http.Server test below for the ECONNRESET consequence).
+    const order: string[] = []
     const res = fakeRes()
+    const realEnd = res.end.bind(res)
+    res.end = ((s?: string) => {
+      order.push('send-400')
+      return realEnd(s)
+    }) as typeof res.end
     const req = new EventEmitter() as unknown as EventEmitter & {
       method: string
       url: string
@@ -362,6 +384,7 @@ describe('forge middleware', () => {
     req.headers = { host: 'localhost:5173' }
     req.destroyed = false
     req.destroy = () => {
+      order.push('destroy')
       req.destroyed = true
     }
     process.nextTick(() => {
@@ -371,6 +394,56 @@ describe('forge middleware', () => {
     await run(mw, req, res)
     expect(res.statusCode).toBe(400)
     expect(req.destroyed).toBe(true)
+    expect(order).toEqual(['send-400', 'destroy'])
+  })
+
+  it('delivers the 400 status + JSON body to a real oversized client, THEN closes the socket (task 15b, real http.Server)', async () => {
+    // The fake-res test above proves the [send-400, destroy] call ordering; this one proves the
+    // consequence a fake can't: against a genuine http.Server + genuine socket, an oversized
+    // client actually RECEIVES the 400 error body (not ECONNRESET) before the connection ends.
+    const server = http.createServer((req, res) => {
+      mw(req, res, () => {
+        res.statusCode = 404
+        res.end()
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+    try {
+      const result = await new Promise<{ status?: number; body: string; err?: string }>((resolve) => {
+        let settled = false
+        const finish = (r: { status?: number; body: string; err?: string }) => {
+          if (settled) return
+          settled = true
+          resolve(r)
+        }
+        const creq = http.request(
+          {
+            host: '127.0.0.1',
+            port,
+            method: 'POST',
+            path: '/__the-forge/queue',
+            headers: { host: 'localhost:5173', 'content-type': 'application/json' },
+          },
+          (cres) => {
+            let body = ''
+            cres.on('data', (c) => (body += c))
+            cres.on('end', () => finish({ status: cres.statusCode, body }))
+            cres.on('close', () => finish({ status: cres.statusCode, body }))
+          }
+        )
+        // The write-side may RST once the server destroys — that's expected; only surface it as
+        // an error if the response never arrived at all.
+        creq.on('error', (e) => finish({ body: '', err: (e as Error).message }))
+        creq.write(Buffer.alloc(1024 * 1024 + 1))
+        creq.end()
+      })
+      expect(result.err).toBeUndefined()
+      expect(result.status).toBe(400)
+      expect(JSON.parse(result.body)).toEqual({ error: 'body too large' })
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
   })
 
   describe('shared secret', () => {

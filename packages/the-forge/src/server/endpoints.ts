@@ -44,7 +44,7 @@ const CHAT_TAG_RE = /^[a-z][a-z0-9-]*$/
 const CONFIG_MODEL_MAX = 100
 const EMBEDDED_HARNESSES_SET = new Set<string>(EMBEDDED_HARNESSES)
 
-function readBody(req: IncomingMessage): Promise<unknown> {
+function readBody(req: IncomingMessage, res: ServerResponse): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
@@ -56,13 +56,18 @@ function readBody(req: IncomingMessage): Promise<unknown> {
       if (size > MAX_BODY) {
         settled = true
         reject(new Error('body too large'))
-        // Destroy the request socket so a hostile/broken client can't keep streaming
-        // megabytes into now-discarded 'data' handlers (settled just short-circuits them,
-        // it doesn't stop the bytes arriving). Deferred one microtask so it runs after the
-        // rejection's .catch handler (every call site's `send(res, 400, ...)`) has already
-        // written the response — destroying first risks tearing down the shared
-        // request/response socket before the error body reaches the client.
-        queueMicrotask(() => req.destroy())
+        // Stop a hostile/broken client from streaming megabytes into now-discarded 'data'
+        // handlers (`settled` just short-circuits them, it doesn't stop the bytes arriving) —
+        // but deliver the 400 FIRST. The rejection above flows through readBody(req,res)'s
+        // consumer as `.catch(e => send(res, 400, ...))`, which is two microtask hops away;
+        // destroying the socket synchronously (or even one queueMicrotask hop later) races
+        // ahead of that send and RSTs the connection, so against a real http.Server the client
+        // gets ECONNRESET and never sees the error JSON. Hooking the response's own 'finish'
+        // event — which fires only once send()'s res.end() has flushed the 400 to the OS —
+        // guarantees the [send-400, destroy] ordering: the client receives the error body, THEN
+        // the socket is torn down so no further upload is read. res.once (not on) so a normal
+        // later response on a reused socket can't re-trigger the destroy.
+        res.once('finish', () => req.destroy())
       } else {
         chunks.push(c)
       }
@@ -294,11 +299,11 @@ export function createForgeMiddleware(
     //
     // Threat model scope: this guards against a browser-borne cross-origin attacker. It does
     // NOT defend against another local user on a shared/multi-user machine — the endpoint file
-    // is written 0700 dir / 0600 file (writeEndpointFile below) and the queue directory it
-    // manages is written 0600 (Queue.persist), which keeps other local accounts out under a
-    // normal single-user Unix permission model, but that's OS-level file-permission hardening,
-    // not something this HTTP layer enforces or can vouch for (a root/admin account, a
-    // misconfigured umask, or a non-Unix filesystem ACL model all sit outside its reach).
+    // is written 0700 dir / 0600 file (writeEndpointFile below) and the queue it manages is
+    // likewise written 0700 dir / 0600 file (Queue.persist), which keeps other local accounts
+    // out under a normal single-user Unix permission model, but that's OS-level file-permission
+    // hardening, not something this HTTP layer enforces or can vouch for (a root/admin account,
+    // a misconfigured umask, or a non-Unix filesystem ACL model all sit outside its reach).
     // Local-multi-user hardening beyond those file modes is out of scope for this single-user
     // dev tool.
     if (secret && req.method === 'POST' && MUTATING_PATHS.has(pathname)) {
@@ -376,7 +381,7 @@ export function createForgeMiddleware(
 
     if (pathname === '/__the-forge/queue') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           const { request, markdown } = body as { request?: unknown; markdown?: string }
           if (typeof markdown !== 'string') return send(res, 400, { error: 'markdown required' })
@@ -407,7 +412,7 @@ export function createForgeMiddleware(
 
     if (pathname === '/__the-forge/mark') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           const { ids, status, note } = body as { ids?: string[]; status?: string; note?: string }
           if (!Array.isArray(ids) || (status !== 'applied' && status !== 'failed')) {
@@ -445,7 +450,7 @@ export function createForgeMiddleware(
 
     if (pathname === '/__the-forge/dispatch') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           // Body overrides are a test/escape-hatch surface only: the overlay client always
           // POSTs {} (see postDispatch in client/index.ts), so in production `agent` comes
@@ -563,7 +568,7 @@ export function createForgeMiddleware(
       // an absent session must be indistinguishable to callers (same 404 body either way).
       if (dispatchConfig.embedded === false) return send(res, 404, { error: 'embedded session unavailable' })
       if (!session) return send(res, 404, { error: 'embedded session unavailable' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           const { text, element } = (body ?? {}) as { text?: unknown; element?: unknown }
           // Validation order (brief, binding): text first — an invalid element must never
@@ -604,7 +609,7 @@ export function createForgeMiddleware(
       // when the consumer has disabled the embedded rung entirely.
       if (dispatchConfig.embedded === false) return send(res, 404, { error: 'embedded session unavailable' })
       if (!session) return send(res, 404, { error: 'embedded session unavailable' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           const { model, permissionMode, effort, harness } = (body ?? {}) as {
             model?: unknown
@@ -666,7 +671,7 @@ export function createForgeMiddleware(
     if (pathname === '/__the-forge/approval') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
       if (!session) return send(res, 404, { error: 'embedded session unavailable' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           const { toolName, detail } = (body ?? {}) as { toolName?: unknown; detail?: unknown }
           const tn = typeof toolName === 'string' ? toolName : ''
@@ -685,7 +690,7 @@ export function createForgeMiddleware(
     if (pathname === '/__the-forge/approval/decide') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
       if (!session) return send(res, 404, { error: 'embedded session unavailable' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           const { id, allow } = (body ?? {}) as { id?: unknown; allow?: unknown }
           if (typeof id !== 'string' || typeof allow !== 'boolean') {
