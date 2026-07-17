@@ -6,9 +6,19 @@ export interface Theme {
 
 const RADIUS_NAMES = ['xs', 'sm', 'md', 'lg', 'xl', '2xl', '3xl', '4xl']
 
-function toPx(value: string, rootFontPx: number): number {
-  const n = Number.parseFloat(value)
-  return value.trim().endsWith('rem') ? n * rootFontPx : n
+// Unit whitelist: px, rem, and bare numbers (treated as px, matching CSS's unitless-zero
+// convention loosely). Anything else (em, %, ch, vw, ...) fails safe by returning null rather
+// than silently misreading it as px — `--spacing: 0.25em` used to read as 0.25px and poison
+// the derived spacing base. Every call site must treat null as "skip this token/scale", not
+// coerce it to 0 or NaN.
+export function toPx(value: string, rootFontPx: number): number | null {
+  const v = value.trim()
+  const n = Number.parseFloat(v)
+  if (Number.isNaN(n)) return null
+  if (/^-?[\d.]+px$/.test(v)) return n
+  if (/^-?[\d.]+rem$/.test(v)) return n * rootFontPx
+  if (/^-?[\d.]+$/.test(v)) return n
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -102,7 +112,9 @@ export function readTokens(doc: Document = document): Tokens {
         if (!raw) continue
         if (!/^-?[\d.]+(px|rem)$/.test(raw)) continue
         const px = toPx(raw, rootFontPx)
-        if (Number.isNaN(px)) continue
+        // the regex above already restricts raw to px|rem, so toPx never returns null here —
+        // guarded anyway since ScaleToken.px is a non-nullable number.
+        if (px === null) continue
         textByName.set(name, { name, px })
       }
     }
@@ -147,6 +159,32 @@ const NAMED_COLORS: Record<string, [number, number, number]> = {
 
 function clamp255(n: number): number {
   return Math.min(255, Math.max(0, Math.round(n)))
+}
+
+// Alpha is a [0, 1] fraction by definition — an out-of-range parse (`rgba(0,0,0,5)`,
+// a stray negative) must not leak past this into contrastRatio/compositing math downstream.
+function clamp01(n: number): number {
+  return Math.min(1, Math.max(0, n))
+}
+
+// Standard CSS Color 4 hsl->rgb (the classic 1976-ish algorithm, not the newer HSL primitive
+// used internally by some browsers) — deg-only hue (bare number or `<n>deg`); grad/rad/turn
+// hue units are YAGNI here since no Tailwind v4 theme authors hue that way.
+function hslToRgb(Hdeg: number, S: number, L: number): [number, number, number] {
+  const h = ((Hdeg % 360) + 360) % 360
+  const c = (1 - Math.abs(2 * L - 1)) * S
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+  const m = L - c / 2
+  let r1: number
+  let g1: number
+  let b1: number
+  if (h < 60) [r1, g1, b1] = [c, x, 0]
+  else if (h < 120) [r1, g1, b1] = [x, c, 0]
+  else if (h < 180) [r1, g1, b1] = [0, c, x]
+  else if (h < 240) [r1, g1, b1] = [0, x, c]
+  else if (h < 300) [r1, g1, b1] = [x, 0, c]
+  else [r1, g1, b1] = [c, 0, x]
+  return [clamp255((r1 + m) * 255), clamp255((g1 + m) * 255), clamp255((b1 + m) * 255)]
 }
 
 /** Shared rgb(+alpha) -> hex formatter — clamps/rounds each channel, zero-pads to 2 digits,
@@ -236,7 +274,28 @@ export function parseColor(css: string): RGBA | null {
     const alphaRaw = alphaPart !== undefined ? alphaPart.trim() : parts[3]
     if (alphaRaw !== undefined) a = parsePercentOrNumber(alphaRaw, 1)
     if ([r, g, b, a].some((n) => Number.isNaN(n))) return null
-    return { r: clamp255(r), g: clamp255(g), b: clamp255(b), a }
+    return { r: clamp255(r), g: clamp255(g), b: clamp255(b), a: clamp01(a) }
+  }
+
+  // hsl()/hsla(): modern space-separated (`hsl(220 90% 56%)`, optional `/ A` alpha) and
+  // legacy comma syntax (`hsl(220, 90%, 56%)`, `hsla(220, 90%, 56%, 0.5)`) — same body-parsing
+  // shape as the rgb() branch above. Hue is deg-only (bare number or `<n>deg`, see hslToRgb).
+  const hslMatch = /^hsla?\(([^)]+)\)$/i.exec(s)
+  if (hslMatch) {
+    const body = hslMatch[1]
+    const [channelsPart, alphaPart] = body.split('/')
+    const parts = channelsPart.trim().split(/[\s,]+/).filter(Boolean)
+    if (parts.length < 3) return null
+    const H = Number.parseFloat(parts[0])
+    const S = parsePercentOrNumber(parts[1], 1)
+    const L = parsePercentOrNumber(parts[2], 1)
+    if ([H, S, L].some((n) => Number.isNaN(n))) return null
+    let a = 1
+    const alphaRaw = alphaPart !== undefined ? alphaPart.trim() : parts[3]
+    if (alphaRaw !== undefined) a = parsePercentOrNumber(alphaRaw, 1)
+    if (Number.isNaN(a)) return null
+    const [r, g, b] = hslToRgb(H, S, L)
+    return { r, g, b, a: clamp01(a) }
   }
 
   // oklch(): L C H or L C H / A ; L may be % or 0-1 number
@@ -254,7 +313,9 @@ export function parseColor(css: string): RGBA | null {
     const alphaRaw = alphaPart !== undefined ? alphaPart.trim() : undefined
     if (alphaRaw !== undefined) a = parsePercentOrNumber(alphaRaw, 1)
     const [r, g, b] = oklchToRgb(L, C, H)
-    return { r, g, b, a }
+    // same out-of-range hazard as the rgba() branch above (part c) — clamp for consistency,
+    // even though oklch() alpha overflow wasn't in the brief's test vectors.
+    return { r, g, b, a: clamp01(a) }
   }
 
   return null
@@ -308,11 +369,20 @@ export function readTheme(root: Element = document.documentElement): Theme {
   const cs = getComputedStyle(root)
   const rootFontPx = Number.parseFloat(cs.fontSize) || 16
   const spacing = cs.getPropertyValue('--spacing').trim()
+  // toPx returning null here (e.g. `--spacing: 0.25em`) flows straight into spacingBasePx,
+  // which is already typed `number | null` — every suggestUtility spacing/color/font-size
+  // branch below gates on `theme.spacingBasePx === null` and bails out rather than deriving
+  // garbage utilities from a mis-parsed base. This is the fail-safe call site.
   const spacingBasePx = spacing ? toPx(spacing, rootFontPx) : null
   const radiusScale: Record<string, number> = {}
   for (const name of RADIUS_NAMES) {
     const v = cs.getPropertyValue(`--radius-${name}`).trim()
-    if (v) radiusScale[name] = toPx(v, rootFontPx)
+    if (!v) continue
+    const px = toPx(v, rootFontPx)
+    // an unrecognized unit skips this radius name entirely rather than storing a bad value —
+    // suggestUtility's RADIUS_PROPS lookup just won't find an exact match for it and falls
+    // back to an arbitrary-value utility, never throws.
+    if (px !== null) radiusScale[name] = px
   }
   return { rootFontPx, spacingBasePx, radiusScale }
 }

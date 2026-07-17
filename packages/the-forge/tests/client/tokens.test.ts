@@ -10,6 +10,7 @@ import {
   nearestColorToken,
   contrastRatio,
   rgbToHex,
+  toPx,
   type Theme,
   type Tokens,
   type ColorToken,
@@ -36,6 +37,42 @@ describe('readTheme', () => {
 
   it('returns spacingBasePx null when --spacing is absent (non-Tailwind project)', () => {
     expect(readTheme(document.documentElement).spacingBasePx).toBeNull()
+  })
+
+  it('fails safe (null, no throw) when --spacing uses a non-whitelisted unit like em', () => {
+    const root = document.documentElement
+    root.style.setProperty('--spacing', '0.25em')
+    expect(() => readTheme(root)).not.toThrow()
+    const theme = readTheme(root)
+    expect(theme.spacingBasePx).toBeNull()
+    // downstream: a null spacing base must make suggestUtility skip the spacing scale
+    // rather than deriving garbage utilities from a mis-parsed base.
+    expect(suggestUtility('padding-top', '24px', theme)).toBeNull()
+  })
+
+  it('skips a radius token whose unit is unrecognized rather than storing a bad px value', () => {
+    const root = document.documentElement
+    root.style.setProperty('--radius-lg', '0.5em')
+    root.style.setProperty('--radius-sm', '4px')
+    const theme = readTheme(root)
+    expect(theme.radiusScale.lg).toBeUndefined()
+    expect(theme.radiusScale.sm).toBe(4)
+  })
+})
+
+describe('toPx', () => {
+  it('whitelists px, rem, and bare numbers (treated as px)', () => {
+    expect(toPx('4px', 16)).toBe(4)
+    expect(toPx('0.25rem', 16)).toBe(4)
+    expect(toPx('4', 16)).toBe(4)
+    expect(toPx('0', 16)).toBe(0)
+  })
+
+  it('fails safe (null) for any other unit instead of misreading it as px', () => {
+    expect(toPx('0.25em', 16)).toBeNull()
+    expect(toPx('50%', 16)).toBeNull()
+    expect(toPx('1ch', 16)).toBeNull()
+    expect(toPx('1vw', 16)).toBeNull()
   })
 })
 
@@ -414,6 +451,29 @@ describe('parseColor', () => {
     expect(parseColor('rgb(255, 0, 0)')).toEqual({ r: 255, g: 0, b: 0, a: 1 })
     expect(parseColor('rgba(255, 0, 0, 0.5)')).toEqual({ r: 255, g: 0, b: 0, a: 0.5 })
     expect(parseColor('rgb(255 0 0 / 0.5)')).toEqual({ r: 255, g: 0, b: 0, a: 0.5 })
+  })
+
+  it('clamps out-of-range rgba() alpha to [0, 1]', () => {
+    expect(parseColor('rgba(0, 0, 0, 5)')).toEqual({ r: 0, g: 0, b: 0, a: 1 })
+    expect(parseColor('rgba(0, 0, 0, -3)')).toEqual({ r: 0, g: 0, b: 0, a: 0 })
+  })
+
+  it('parses hsl()/hsla(), modern space-separated and legacy comma syntax, deg-only hue', () => {
+    // hsl(220 90% 56%): H=220 S=0.90 L=0.56
+    //   C = (1 - |2L-1|) * S = (1 - 0.12) * 0.90 = 0.792
+    //   X = C * (1 - |((H/60) mod 2) - 1|) = 0.792 * (1 - |1.6667 - 1|) = 0.792 * 0.3333 = 0.264
+    //   m = L - C/2 = 0.56 - 0.396 = 0.164
+    //   H in [180,240) -> (R',G',B') = (0, X, C)
+    //   R = (0 + 0.164) * 255 = 41.82 -> 42
+    //   G = (0.264 + 0.164) * 255 = 109.14 -> 109
+    //   B = (0.792 + 0.164) * 255 = 243.78 -> 244
+    expect(parseColor('hsl(220 90% 56%)')).toEqual({ r: 42, g: 109, b: 244, a: 1 })
+    expect(parseColor('hsl(220, 90%, 56%)')).toEqual({ r: 42, g: 109, b: 244, a: 1 })
+    expect(parseColor('hsla(220, 90%, 56%, 0.5)')).toEqual({ r: 42, g: 109, b: 244, a: 0.5 })
+    expect(parseColor('hsl(220 90% 56% / 0.5)')).toEqual({ r: 42, g: 109, b: 244, a: 0.5 })
+    // achromatic (S=0) collapses to L regardless of hue
+    expect(parseColor('hsl(0 0% 100%)')).toEqual({ r: 255, g: 255, b: 255, a: 1 })
+    expect(parseColor('hsl(0 0% 0%)')).toEqual({ r: 0, g: 0, b: 0, a: 1 })
   })
 
   it('parses named colors and transparent', () => {
