@@ -74,6 +74,15 @@ describe('toPx', () => {
     expect(toPx('1ch', 16)).toBeNull()
     expect(toPx('1vw', 16)).toBeNull()
   })
+
+  it('rejects malformed numbers (multiple decimal points) instead of parseFloat-truncating them', () => {
+    // Custom properties are not syntax-checked by browsers — a theme typo like
+    // `--spacing: 1.2.3px` must fail to null, not silently truncate to 1.2px (fail-wrong,
+    // the exact hazard the whitelist exists to prevent).
+    expect(toPx('1.2.3px', 16)).toBeNull()
+    expect(toPx('1.2.3rem', 16)).toBeNull()
+    expect(toPx('4.5.6', 16)).toBeNull()
+  })
 })
 
 describe('suggestUtility', () => {
@@ -474,6 +483,16 @@ describe('parseColor', () => {
     // achromatic (S=0) collapses to L regardless of hue
     expect(parseColor('hsl(0 0% 100%)')).toEqual({ r: 255, g: 255, b: 255, a: 1 })
     expect(parseColor('hsl(0 0% 0%)')).toEqual({ r: 0, g: 0, b: 0, a: 1 })
+  })
+
+  it('wraps out-of-range hues into [0, 360) — negative and >360 hues match their canonical twin', () => {
+    // -40deg ≡ 320deg and 400deg ≡ 40deg per CSS Color 4 hue normalization.
+    expect(parseColor('hsl(-40 100% 50%)')).toEqual(parseColor('hsl(320 100% 50%)'))
+    expect(parseColor('hsl(400 100% 50%)')).toEqual(parseColor('hsl(40 100% 50%)'))
+  })
+
+  it('returns null for a non-numeric oklch alpha instead of yielding a NaN alpha', () => {
+    expect(parseColor('oklch(60% 0.1 30 / xyz)')).toBeNull()
   })
 
   it('parses named colors and transparent', () => {

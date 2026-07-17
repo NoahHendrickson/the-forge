@@ -15,9 +15,12 @@ export function toPx(value: string, rootFontPx: number): number | null {
   const v = value.trim()
   const n = Number.parseFloat(v)
   if (Number.isNaN(n)) return null
-  if (/^-?[\d.]+px$/.test(v)) return n
-  if (/^-?[\d.]+rem$/.test(v)) return n * rootFontPx
-  if (/^-?[\d.]+$/.test(v)) return n
+  // Single-decimal-point number grammar, not just a character class: `[\d.]+` would accept
+  // `1.2.3px` and parseFloat would silently truncate it to 1.2px — a theme typo (custom
+  // properties are never syntax-checked by the browser) must fail to null, not fail wrong.
+  if (/^-?\d*\.?\d+px$/.test(v)) return n
+  if (/^-?\d*\.?\d+rem$/.test(v)) return n * rootFontPx
+  if (/^-?\d*\.?\d+$/.test(v)) return n
   return null
 }
 
@@ -312,6 +315,9 @@ export function parseColor(css: string): RGBA | null {
     let a = 1
     const alphaRaw = alphaPart !== undefined ? alphaPart.trim() : undefined
     if (alphaRaw !== undefined) a = parsePercentOrNumber(alphaRaw, 1)
+    // same NaN guard as the rgb()/hsl() branches — clamp01 does not neutralize NaN
+    // (Math.max(0, NaN) is NaN), so a non-numeric alpha must reject the whole parse.
+    if (Number.isNaN(a)) return null
     const [r, g, b] = oklchToRgb(L, C, H)
     // same out-of-range hazard as the rgba() branch above (part c) — clamp for consistency,
     // even though oklch() alpha overflow wasn't in the brief's test vectors.
