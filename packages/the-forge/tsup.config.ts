@@ -4,7 +4,7 @@ import { defineConfig } from 'tsup'
 // bug reports and node-side crashes alike) must keep naming real functions, but shipped
 // bundles have no business carrying source comments and indentation (the why-comments
 // live in src/, which is what people actually read). Sole purpose is the package-size
-// budget in check-prod-clean.sh (280KB as of the embedded-session milestone); flipping to
+// budget in check-prod-clean.sh (320KB as of milestone B, the chat-surface budget raise); flipping to
 // full `minify: true` would save more but costs debuggability — don't, without revisiting
 // that trade-off. Originally client-only; applied to every bundle when the budget hit
 // ~249.25/250KB (PR #22) — the node bundles alone were carrying ~21KB of whitespace.

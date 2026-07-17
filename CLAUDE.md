@@ -71,7 +71,8 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 | `composer-send.ts` | `ComposerSend` — the send-everything verb: orchestration (drafts-first-when-both) + the chat leg (POSTs `/session/say`), in-flight guard for the chat leg (`draftsInFlight` stays in index.ts, guarding the injected drafts leg) |
 | `source.ts` | parse `data-dc-source` attrs; `TaggedElement` type |
 | `overlay.ts` | shadow-DOM host, hover/selection outlines, the whole CSS design system (string const) |
-| `dock.ts` | panel docked/floating prefs: width clamps, sessionStorage persistence (`STORAGE_KEY 'the-forge:panel'`); `setCanvasActive` suspends the margin push while canvas mode owns the page |
+| `motion.ts` | the motion-token single source: durations + easing curves that overlay.ts's TOKENS map serializes into CSS custom properties, plus `armPageTransition`/`popOnce`/`collapseRow` for page-context tweens (dock margin push, canvas zoom) — extracted in the 2026-07-12 overlay-motion pass so a JS timeout and its CSS transition can never drift apart |
+| `dock.ts` | panel docked/floating prefs: width clamps, localStorage persistence (`STORAGE_KEY 'the-forge:panel'`); `setCanvasActive` suspends the margin push while canvas mode owns the page |
 | `canvas.ts` | `CanvasMode` — Figma-style canvas: full-page artboard via `<body>` transform, pan/zoom (wheel with deltaMode normalization, ctrl-wheel-to-cursor with per-notch clamp, Safari gesture-event pinch, space-drag + middle-drag with grab cursors, Shift+0/1/2, +/− powers-of-2 ladder, 10%–400%), verbatim style save/restore, sessionStorage persistence (`'the-forge:canvas'`); plus the pure zoom/pan/fit math |
 | `canvas-chrome.ts` | `buildCanvasChrome` — the zoom-pill DOM assembly + menu (extracted out of index.ts, 2026-07-11 review); presentation only, CanvasMode itself stays headless with zero ui/ imports |
 | `inspector.ts` | reads an element's computed-style snapshot for the panel |

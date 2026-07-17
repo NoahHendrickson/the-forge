@@ -9,7 +9,7 @@ The full loop is user-verified live: panel edit → ↑ in the composer → embe
 ## Process conventions (these built the whole repo — keep them)
 
 1. Brainstorm/design decisions with the user → write a dated plan in `docs/plans/` (contract + test-sketch style, complete interface signatures) → commit the plan to main → feature branch per milestone.
-2. Execute with `superpowers:subagent-driven-development`: fresh implementer subagent per task (cheap model for transcription, mid-tier for integration), task-scoped review gate after each (spec compliance + quality, diff-file handoff), fix → re-review loops, ledger at `.superpowers/sdd/progress.md` (gitignored).
+2. Execute with `superpowers:subagent-driven-development`: fresh implementer subagent per task (cheap model for transcription, mid-tier for integration), task-scoped review gate after each (spec compliance + quality, diff-file handoff), fix → re-review loops, ledger at `.superpowers/sdd/progress.md` (untracked, not gitignored — no rule in the tracked repo covers it, so don't `git add` it by accident).
 3. Final whole-branch review on the most capable model with the accumulated-minors list; ONE fix subagent for all findings; re-review the wave (long implementer paths — 100+ tool uses — have produced collateral twice; always scrutinize those).
 4. **Controller runs a real-browser E2E before every merge** (Playwright MCP; kill stale dev servers first). Live runs have caught bugs the unit suite missed (IPv6 bind, endpoint clobber, verifier self-confirmation, collapsed-prop commit no-op, Hug→px).
 5. Merge decision belongs to the user (present options), then merge --no-ff to main, re-verify, push.
@@ -17,14 +17,14 @@ The full loop is user-verified live: panel edit → ↑ in the composer → embe
 
 ## Completed 2026-07-04 (overnight run) — do NOT re-execute
 
-Track A (panel visual cleanup), Track B (M2b-2: typography/fill/stroke/color picker/token pills/multi-select), and Track C (M5: dispatch ladder + queue hardening) all shipped through the full gauntlet. Per-milestone plans live in docs/plans/; the SDD ledger (.superpowers/sdd/progress.md, gitignored) holds the review forensics. Post-ship fixes from first real use: `/design` → `/forge-design` (collided with the Figma plugin's command), and ALL plugin-written artifacts (.mcp.json, command file, .the-forge runtime dir) now install at `resolveProjectRoot()` — the git root — never Vite's root. Any NEW on-disk artifact must do the same.
+Track A (panel visual cleanup), Track B (M2b-2: typography/fill/stroke/color picker/token pills/multi-select), and Track C (M5: dispatch ladder + queue hardening) all shipped through the full gauntlet. Per-milestone plans live in docs/plans/; the SDD ledger (.superpowers/sdd/progress.md, untracked — not gitignored) holds the review forensics. Post-ship fixes from first real use: `/design` → `/forge-design` (collided with the Figma plugin's command), and ALL plugin-written artifacts (.mcp.json, command file, .the-forge runtime dir) now install at `resolveProjectRoot()` — the git root — never Vite's root. Any NEW on-disk artifact must do the same.
 
 ## Open backlog (rough value order)
 
 1. Effects section (box-shadow, blur/backdrop-filter) — biggest remaining Figma-parity gap (spec §6 v2 tier).
 2. Gradients / background-image in Fill; Position section (spec v2, partial).
 3. Quick-apply mode (spec §7, optional, deliberately not primary).
-4. Codex/Cursor embedded-session adapters (milestone C of embedded sessions) — `SessionAdapter` (src/server/session/adapter.ts) is the seam; ClaudeAdapter is the only implementation so far.
+4. Codex embedded-session adapter (milestone C2 of embedded sessions) — `SessionAdapter` (src/server/session/adapter.ts) is the seam; `ClaudeAdapter` and `CursorAdapter` (merged 2026-07-11, PR #32) are both implemented, Codex remains outstanding.
 5. Real Channels adapter — blocked on the Claude Code preview flag; the rung is an inert stub behind `experimentalChannels`. Superseded twice over: watch mode (2026-07-04) and now the embedded rung both deliver zero-keystroke sends. Revisit only if Channels ships something these can't do.
 6. ~~panel.ts Stage-2 split~~ — DONE across the panel milestones (panel-token-ui, panel-layout, panel-fillstroke extractions all landed by 2026-07-07).
 7. Deferred nits (review-ledger minors): multi-select Compare keyed to first element; `auto`/`normal` displays as 0 in multi fields; `double`/`groove` border styles read as "None"; Cursor deeplink untested against real Cursor (6000-char cap is a chosen constant); tmux rung assumes `pane_current_command` reports `claude`/`codex` (wrapper-launched agents may report `node`); client runs two /status pollers (verifier @2s while sends pending, watch probe @5s while design mode on) — PR #1 review suggested unifying into one StatusPoller; deferred as a behavioral refactor of proven verifier timing, do it when next touching the verifier.
