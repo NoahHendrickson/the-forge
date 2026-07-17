@@ -96,6 +96,15 @@ export class DesignMode {
    * to allow: the chat leg's /session/say POST can already be in flight while this leg's
    * /dispatch POST is still settling. */
   private draftsInFlight = false
+  /** The in-flight sendDrafts() promise itself (Task 9 review fix) — set alongside
+   * draftsInFlight and cleared alongside it. A re-entrant sendDrafts() call (second ↑ before the
+   * first gesture's /queue+/dispatch round trip settles) now returns THIS promise instead of a
+   * fresh Promise.resolve(true): the old immediate-resolve let a second gesture's chat leg
+   * (composer-send.ts's proceedWithChat) race ahead of the first gesture's own /dispatch —
+   * defeating the structural drafts-before-chat ordering above — and, worse, let the second
+   * gesture's chat go out even when the first gesture's /queue POST was ABOUT TO fail. Returning
+   * the same promise means every re-entrant caller resolves to the real outcome together. */
+  private draftsPromise: Promise<boolean> | null = null
   /** Watcher-state poller — runs ONLY while design mode is on (started/stopped in
    * setActive), so watch mode adds zero idle overhead to the page. Session-state
    * transitions also fire refreshStatus so the embedded-session indicator stays current. The
@@ -477,15 +486,20 @@ export class DesignMode {
    * session with it) before ComposerSend fires /session/say, so the server's nudge-before-FIFO
    * flush is guaranteed to see the nudge first. Resolves FALSE when the /queue POST failed —
    * ComposerSend skips the chat leg on false (nothing was queued; the typed text survives in
-   * the textarea). No-op outcomes (no-changes/already-sent/re-entrancy) resolve true: the
-   * gesture degrades to chat-only.
+   * the textarea). No-op outcomes (no-changes/already-sent) resolve true: the gesture degrades
+   * to chat-only. A re-entrant call (Task 9) is NOT an always-true no-op — it returns the
+   * in-flight leg's own promise and shares its outcome, so it can resolve false too (the
+   * in-flight /queue POST failing suppresses the second gesture's chat leg as well).
    *
    * This method (and draftsInFlight above) stayed here rather than moving into composer-send.ts
    * whole — see ComposerSendOpts#sendDraftsLeg's doc comment in composer-send.ts for why: it
    * reaches into DraftStore/LifecycleSession/Verifier/ChangeList state and shares its
    * queue/dispatch plumbing with resend(), below. */
   private sendDrafts(): Promise<boolean> {
-    if (this.draftsInFlight) return Promise.resolve(true) // re-entrancy guard: a POST is already in flight
+    // Re-entrancy guard: a POST is already in flight. Return THAT gesture's own promise (Task 9)
+    // rather than a fresh Promise.resolve(true) — see draftsPromise's doc comment above for why
+    // an immediate resolve was the bug.
+    if (this.draftsInFlight) return this.draftsPromise!
     // R2 F-C: prepareSend reads the DraftStore directly (always current), so this flush isn't
     // needed for the request itself — it's needed so persist()/the Changes list are coherent
     // with what's about to be sent, rather than lagging behind by up to 300ms.
@@ -495,7 +509,7 @@ export class DesignMode {
     const { request, pairs } = prepared
     const md = renderMarkdown(request)
     this.draftsInFlight = true
-    return new Promise<boolean>((resolveDraftsLeg) => {
+    const legPromise = new Promise<boolean>((resolveDraftsLeg) => {
       const onSendFailed = (): void => {
         // The old button flashed 'Send failed' here — with the button retired, the same
         // transient-error row the chat leg already uses is the surviving failure surface
@@ -503,6 +517,7 @@ export class DesignMode {
         // edits were sent.
         this.feed.renderTransientError('failed to queue changes — try again')
         this.draftsInFlight = false
+        this.draftsPromise = null
         resolveDraftsLeg(false)
       }
       // Dispatch reaches for the user's already-RUNNING agent session (embedded rung first,
@@ -513,6 +528,7 @@ export class DesignMode {
       // /forge-design will deliver the edits.
       const onDispatchSettled = (): void => {
         this.draftsInFlight = false
+        this.draftsPromise = null
         this.onSendComplete?.()
         resolveDraftsLeg(true)
       }
@@ -523,6 +539,8 @@ export class DesignMode {
       }
       this.queueRequest(request, md, onSendOk, onSendFailed)
     })
+    this.draftsPromise = legPromise
+    return legPromise
   }
 
   /** Re-queues one failed element-change as a fresh request. Safe and unfiltered by design:

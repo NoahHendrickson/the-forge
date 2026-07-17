@@ -851,6 +851,12 @@ export class Overlay {
   /** Pool of ripple-outline divs, reused across showRipples() calls instead of recreated. */
   private ripplePool: HTMLElement[] = []
   private rippleClearTimer: ReturnType<typeof setTimeout> | null = null
+  /** The inner fade-then-hide timer clearRipples() arms (opacity->0 now, hidden RIPPLE_FADE_MS
+   *  later). Tracked so a re-show can cancel it — otherwise a showRipples() that lands mid-fade
+   *  (e.g. right after setActive(false) started one) restores the divs to visible, but the
+   *  STALE timer from the earlier clear still fires later and wrongly hides the freshly
+   *  re-shown ripples out from under it. */
+  private rippleFadeTimer: ReturnType<typeof setTimeout> | null = null
   private outlineTweenTimer: ReturnType<typeof setTimeout> | null = null
 
   /** Pool of select-outline-multi divs (B6), reused across showSelectOutlines() calls. */
@@ -1016,6 +1022,12 @@ export class Overlay {
       }
     })
     if (this.rippleClearTimer) clearTimeout(this.rippleClearTimer)
+    // A re-show must cancel a stale in-flight fade from an earlier clearRipples() call, or
+    // that timer still fires later and hides the ripples this call just made visible again.
+    if (this.rippleFadeTimer) {
+      clearTimeout(this.rippleFadeTimer)
+      this.rippleFadeTimer = null
+    }
     this.rippleClearTimer = setTimeout(() => {
       this.rippleClearTimer = null
       this.clearRipples()
@@ -1032,8 +1044,10 @@ export class Overlay {
       clearTimeout(this.rippleClearTimer)
       this.rippleClearTimer = null
     }
+    if (this.rippleFadeTimer) clearTimeout(this.rippleFadeTimer) // guard a rapid double-call
     for (const div of this.ripplePool) div.style.opacity = '0'
-    setTimeout(() => {
+    this.rippleFadeTimer = setTimeout(() => {
+      this.rippleFadeTimer = null
       for (const div of this.ripplePool) div.hidden = true
     }, Overlay.RIPPLE_FADE_MS)
   }

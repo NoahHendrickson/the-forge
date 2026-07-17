@@ -300,7 +300,7 @@ describe('CanvasMode interactions', () => {
     // establish the codebase idiom for this — dispatch a MouseEvent with the pointer type
     // string, since addEventListener('pointerdown', ...) matches by type, not constructor.
     window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, bubbles: true, cancelable: true }))
-    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, buttons: 1, bubbles: true }))
     window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
     window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
     expect(bodyTransform()).toBe('translate(30px, -20px) scale(1)')
@@ -325,7 +325,7 @@ describe('CanvasMode interactions', () => {
     window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, bubbles: true, cancelable: true }))
     // A wheel pan lands mid-drag — its delta must not be reverted by the next pointermove.
     window.dispatchEvent(new WheelEvent('wheel', { deltaX: 5, deltaY: 7, cancelable: true, bubbles: true }))
-    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, buttons: 1, bubbles: true }))
     window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
     window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
     // wheel: (-5, -7) + drag: (+30, -20) = (25, -27)
@@ -343,7 +343,7 @@ describe('CanvasMode interactions', () => {
     canvas.setOn(true)
     window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
     window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, bubbles: true, cancelable: true }))
-    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, buttons: 1, bubbles: true }))
     window.dispatchEvent(new MouseEvent('pointercancel', { bubbles: true }))
     window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
     // pointercancel means the browser never fires a click for this gesture — an unrelated
@@ -367,7 +367,7 @@ describe('CanvasMode interactions', () => {
     canvas.setOn(true)
     window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
     window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, bubbles: true, cancelable: true }))
-    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, buttons: 1, bubbles: true }))
     canvas.setOn(false) // exits with the drag still in flight
     expect(bodyTransform()).toBe('')
     window.dispatchEvent(new MouseEvent('pointermove', { clientX: 300, clientY: 300, bubbles: true }))
@@ -389,6 +389,161 @@ describe('CanvasMode interactions', () => {
     window.dispatchEvent(e)
     expect(e.defaultPrevented).toBe(false)
     expect(bodyTransform()).toBe('')
+  })
+})
+
+describe('CanvasMode gesture edge cases (Task 10: blur, lost pointerup, orphaned squelch)', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+    document.documentElement.removeAttribute('style')
+    document.body.removeAttribute('style')
+    vi.stubGlobal('scrollTo', vi.fn())
+    Object.defineProperty(window, 'scrollX', { value: 0, configurable: true })
+    Object.defineProperty(window, 'scrollY', { value: 0, configurable: true })
+  })
+
+  it('window blur clears spaceHeld — Cmd+Tab away swallows the keyup, so a later pointerdown must not start a pan', () => {
+    document.documentElement.style.cursor = 'crosshair'
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    expect(document.documentElement.style.cursor).toBe('grab')
+    window.dispatchEvent(new Event('blur'))
+    expect(document.documentElement.style.cursor).toBe('crosshair') // cursor restored on blur too
+    // the OS never delivers a keyup for a Space held during an app switch — a pointerdown
+    // that follows must not think space is still armed.
+    window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 0, clientY: 0, button: 0, buttons: 1, bubbles: true, cancelable: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 50, clientY: 50, buttons: 1, bubbles: true }))
+    expect(bodyTransform()).toBe('translate(0px, 0px) scale(1)') // no pan happened
+    canvas.setOn(false)
+    document.documentElement.style.cursor = ''
+  })
+
+  it('blur MID-DRAG tears the gesture down — a refocus-click cannot hit the stale onUp and get squelched', () => {
+    document.documentElement.style.cursor = 'crosshair'
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, buttons: 1, bubbles: true, cancelable: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, buttons: 1, bubbles: true })) // didPan = true
+    // Cmd+Tab mid-drag: blur fires; no pointerup/pointercancel ever will, and with the
+    // pointer gone no pointermove either — the buttons===0 self-heal can't trigger.
+    window.dispatchEvent(new Event('blur'))
+    expect(document.documentElement.style.cursor).toBe('crosshair') // drag torn down, cursor restored
+    // The user comes back and clicks something unrelated — its pointerup must NOT hit a
+    // stale onUp closure (which would arm a squelch off the old didPan=true) and its click
+    // must reach the page. Body-dispatched click, same rationale as the pointercancel test.
+    window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    const reached = vi.fn()
+    document.addEventListener('click', reached, true)
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(reached).toHaveBeenCalledTimes(1)
+    document.removeEventListener('click', reached, true)
+    // and the drag really is dead — a stray pointermove writes nothing
+    const before = bodyTransform()
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 500, clientY: 500, buttons: 1, bubbles: true }))
+    expect(bodyTransform()).toBe(before)
+    canvas.setOn(false)
+    document.documentElement.style.cursor = ''
+  })
+
+  it('a pointermove reporting buttons===0 self-heals a lost pointerup (app-switch mid-drag)', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, buttons: 1, bubbles: true, cancelable: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, buttons: 1, bubbles: true }))
+    expect(bodyTransform()).toBe('translate(30px, -20px) scale(1)')
+    // pointerup/pointercancel never arrive (the OS delivered the mouse-up to another
+    // window) — the next pointermove we DO see reports no buttons held; that alone must
+    // end the drag without a further transform write.
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 500, clientY: 500, buttons: 0, bubbles: true }))
+    expect(bodyTransform()).toBe('translate(30px, -20px) scale(1)')
+    expect(document.documentElement.style.cursor).toBe('grab') // space still held -> finish(false) restores 'grab', not ''
+    // and the drag is truly dead: a further pointermove changes nothing
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 999, clientY: 999, buttons: 0, bubbles: true }))
+    expect(bodyTransform()).toBe('translate(30px, -20px) scale(1)')
+    // self-heal via lost pointerup must NOT arm the squelch (no click will ever follow this
+    // gesture) — an unrelated later click must pass through untouched.
+    const reached = vi.fn()
+    document.addEventListener('click', reached, true)
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(reached).toHaveBeenCalledTimes(1)
+    document.removeEventListener('click', reached, true)
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
+    canvas.setOn(false)
+  })
+
+  it('removeListeners() clears an unfired click squelch — it must not outlive the gesture (zero-idle)', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, buttons: 1, bubbles: true, cancelable: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, buttons: 1, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true })) // arms the once:true click squelch (didPan)
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
+    // design mode turns off before the squelched click ever fires — the squelch must not
+    // survive to eat a later, wholly unrelated click after design mode is off.
+    canvas.setOn(false)
+    const reached = vi.fn()
+    document.addEventListener('click', reached, true)
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(reached).toHaveBeenCalledTimes(1)
+    document.removeEventListener('click', reached, true)
+  })
+
+  // jsdom MouseEvents carry no pointerId (undefined); a real second pointer always has a
+  // distinct one — stamp it on explicitly to simulate multi-pointer hardware.
+  function withPointerId(e: MouseEvent, pointerId: number): MouseEvent {
+    Object.defineProperty(e, 'pointerId', { value: pointerId })
+    return e
+  }
+
+  it("a second pointer's events mid-drag are ignored — pen hover (buttons=0) must not self-heal-end a mouse drag", () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    window.dispatchEvent(withPointerId(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, buttons: 1, bubbles: true, cancelable: true }), 1))
+    window.dispatchEvent(withPointerId(new MouseEvent('pointermove', { clientX: 130, clientY: 80, buttons: 1, bubbles: true }), 1))
+    expect(bodyTransform()).toBe('translate(30px, -20px) scale(1)')
+    // A pen hovering into range mid mouse-drag: its OWN pointer stream reports buttons=0.
+    // Filtered by pointerId, it must neither jitter the pan nor trip the lost-pointerup
+    // self-heal (which reads buttons off whatever move it sees).
+    window.dispatchEvent(withPointerId(new MouseEvent('pointermove', { clientX: 500, clientY: 500, buttons: 0, bubbles: true }), 7))
+    // A foreign pointerup must not end the drag either.
+    window.dispatchEvent(withPointerId(new MouseEvent('pointerup', { bubbles: true }), 7))
+    // The mouse drag is still alive and still pans from its own last position.
+    window.dispatchEvent(withPointerId(new MouseEvent('pointermove', { clientX: 140, clientY: 80, buttons: 1, bubbles: true }), 1))
+    expect(bodyTransform()).toBe('translate(40px, -20px) scale(1)')
+    window.dispatchEvent(withPointerId(new MouseEvent('pointerup', { bubbles: true }), 1))
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
+    // consume the squelch the real pointerup armed (jsdom fires no click on its own)
+    const eaten = new MouseEvent('click', { bubbles: true, cancelable: true })
+    window.dispatchEvent(eaten)
+    expect(eaten.defaultPrevented).toBe(true)
+    canvas.setOn(false)
+  })
+
+  it('back-to-back pans leave at most ONE live squelch — setOn(false) fully disarms (no orphan eats a later click)', () => {
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    // Two full pan gestures with NO click between them (the browser dropped the first
+    // gesture's click): the first pan's un-consumed once:true squelch used to be orphaned
+    // when the second pan overwrote this.clickSquelch — removeListeners() could then only
+    // disarm the newest one.
+    for (const x of [130, 160]) {
+      window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, buttons: 1, bubbles: true, cancelable: true }))
+      window.dispatchEvent(new MouseEvent('pointermove', { clientX: x, clientY: 80, buttons: 1, bubbles: true }))
+      window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    }
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', bubbles: true }))
+    canvas.setOn(false)
+    const reached = vi.fn()
+    document.addEventListener('click', reached, true)
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(reached).toHaveBeenCalledTimes(1)
+    document.removeEventListener('click', reached, true)
   })
 })
 
@@ -537,7 +692,7 @@ describe('CanvasMode Figma-parity pass (2026-07-11 optimization review)', () => 
     const { canvas } = makeCanvas()
     canvas.setOn(true)
     window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 1, bubbles: true, cancelable: true }))
-    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, buttons: 4, bubbles: true }))
     window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
     expect(bodyTransform()).toBe('translate(30px, -20px) scale(1)')
     // middle release fires auxclick, not click — an unrelated click must pass through

@@ -60,8 +60,13 @@ export class FeedAnchor {
 
   /** Drops the anchor when MAX_ROWS eviction removed its row — a detached anchor would
    * freeze the spacer at its last size forever (same staleness hazard as the feed's evicted
-   * streaming bubble). */
+   * streaming bubble). Resetting the height itself (not just the bookkeeping) is what
+   * actually prevents that freeze: update() is a no-op once anchorRow is null, so whatever
+   * height the spacer held at eviction time would otherwise persist untouched. */
   onEvict(removed: HTMLElement[]): void {
-    if (this.anchorRow !== null && removed.includes(this.anchorRow)) this.anchorRow = null
+    if (this.anchorRow !== null && removed.includes(this.anchorRow)) {
+      this.anchorRow = null
+      this.spacer.style.height = '0px'
+    }
   }
 }

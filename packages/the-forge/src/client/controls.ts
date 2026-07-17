@@ -288,6 +288,13 @@ export class NumberField {
         return
       }
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+      if (this.pillBound) {
+        // A bound input's value is a token label ('p-4'), not a number — parseFloat on it
+        // is NaN, so the absolute-path fallback below would treat that as base 0 and
+        // commit(0±step): a 1px garbage draft that silently unbinds the pill on refresh.
+        // No preventDefault: the readOnly input keeps native caret/selection behavior.
+        return
+      }
       e.preventDefault()
       const step = (e.shiftKey ? 10 : 1) * (e.key === 'ArrowUp' ? 1 : -1)
       if (this.displayState === 'values' && this.lastValues && this.opts.onValuesInput) {
@@ -303,6 +310,13 @@ export class NumberField {
     })
 
     this.labelEl.addEventListener('mousedown', (e) => {
+      if (this.pillBound) {
+        // Same gate as ArrowUp/Down above, for the other numeric surface: bindToken()
+        // deliberately leaves lastValid untouched, so a scrub would commit
+        // scrubStartValue(=stale lastValid)+delta — numeric garbage that silently
+        // unbinds the pill on the next refresh. Detach first to scrub.
+        return
+      }
       e.preventDefault()
       this.opts.onScrubStart?.()
       this.scrubbing = true

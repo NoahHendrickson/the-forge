@@ -529,6 +529,58 @@ describe('NumberField — `=` key routes to onTokenOpen (pill-gated)', () => {
   })
 })
 
+describe('NumberField — arrow keys are a no-op while pill-bound', () => {
+  it('ArrowUp while pill-bound fires no onInput, leaves the pill label displayed, and stays bound', () => {
+    const { nf, onInput, input } = make()
+    nf.set(10)
+    nf.bindToken('p-4')
+    const ev = new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true })
+    input.dispatchEvent(ev)
+    // parseFloat('p-4') is NaN — without the gate this would fall back to base 0 and
+    // commit(1), drafting 1px garbage and unbinding the pill.
+    expect(onInput).not.toHaveBeenCalled()
+    expect(input.value).toBe('p-4')
+    expect(nf.root.classList.contains('nf-pill')).toBe(true)
+    expect(input.readOnly).toBe(true)
+    expect(ev.defaultPrevented).toBe(false) // readOnly input keeps native caret behavior
+  })
+
+  it('ArrowDown while pill-bound is likewise a no-op', () => {
+    const { nf, onInput, input } = make()
+    nf.set(10)
+    nf.bindToken('p-4')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true, cancelable: true }))
+    expect(onInput).not.toHaveBeenCalled()
+    expect(input.value).toBe('p-4')
+    expect(nf.root.classList.contains('nf-pill')).toBe(true)
+  })
+
+  it('unbound field still steps by 1 (regression guard for the new gate)', () => {
+    const { onInput, input } = make()
+    input.value = '5'
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
+    expect(onInput).toHaveBeenLastCalledWith(6)
+  })
+})
+
+describe('NumberField — label scrub is a no-op while pill-bound', () => {
+  it('label drag while pill-bound fires no onInput and stays bound', () => {
+    // Same defect class as the arrow-key gate above, via the other numeric-input surface:
+    // bindToken() deliberately leaves lastValid untouched, so an un-gated scrub commits
+    // scrubStartValue(=stale lastValid)+delta — drafting numbers and silently unbinding
+    // the pill on the next refresh.
+    const { nf, onInput, input, label } = make()
+    nf.set(10)
+    nf.bindToken('p-4')
+    label.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 130 }))
+    window.dispatchEvent(new MouseEvent('mouseup', {}))
+    expect(onInput).not.toHaveBeenCalled()
+    expect(input.value).toBe('p-4')
+    expect(nf.root.classList.contains('nf-pill')).toBe(true)
+  })
+})
+
 describe('NumberField — onTokenOpen (`{ }` hover icon button)', () => {
   it('no onTokenOpen → no .token-btn rendered', () => {
     const { nf } = make()
