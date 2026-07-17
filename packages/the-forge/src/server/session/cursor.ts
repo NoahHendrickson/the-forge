@@ -92,6 +92,19 @@ export class CursorAdapter implements SessionAdapter {
   // FIFO of turns pushed before sessionReady; flushed in order once the session resolves.
   private turnQueue: string[] = []
 
+  // Set when interrupt() cancels a queued turn BEFORE session-ready (the boot round trip is
+  // still in flight and keeps running). Guards failBoot's stale-resume branch: that branch's
+  // turn-complete{isError:true} is the manager's stale-retry key — with no state guard on the
+  // manager's side (`!_sawStarted && _lastStartResumeId !== undefined`), a post-cancel stale
+  // failure would clear the slot, respawn, and RESEND `_inflightTurn`: the exact turn the
+  // user just cancelled, resurrected. Post-cancel, that failure surfaces as session-error
+  // instead — the manager's pre-started session-error path lands `failed` (no resend), and
+  // the next say()/Send auto-starts fresh from there (no wedge, no 120s watchdog wait). A
+  // boot that SUCCEEDS after the cancel is unaffected: started fires normally and the queue
+  // is already empty. Never reset — each adapter instance boots exactly once, so failBoot
+  // only ever runs for the one boot this flag describes.
+  private bootCancelled = false
+
   // Replay suppression: true only between writing session/load and its response resolving.
   // session/load REPLAYS the whole prior transcript as session/update notifications (spike,
   // Scenario 8); while this is set they must NOT be ringed as new activity — resume must not
@@ -201,6 +214,9 @@ export class CursorAdapter implements SessionAdapter {
       // nothing to cancel, stay a real no-op.
       if (this.turnQueue.length > 0) {
         this.turnQueue = []
+        // The boot round trip is still running — flag it so a LATE boot failure can't
+        // re-complete (or worse, resurrect) the turn we just cancelled. See bootCancelled.
+        this.bootCancelled = true
         this.onEvent({ kind: 'turn-complete', isError: false })
       }
       return
@@ -352,7 +368,12 @@ export class CursorAdapter implements SessionAdapter {
     // A stale/expired resume id fails session/load with -32602 (spike, Scenario 8). Surface it as
     // turn-complete{isError:true} BEFORE any `started` — the manager's stale-resume retry branch
     // keys on EXACTLY this shape (clears the slot, retries fresh once).
-    if (step === 'session' && this.resumeId) {
+    // UNLESS the boot was cancelled: the retry branch resends `_inflightTurn` — the turn the
+    // user cancelled — so post-cancel this must fall through to the session-error path below
+    // (manager pre-started → `failed`; the next Send auto-starts fresh, and if the slot's id
+    // really is stale THAT boot fails un-cancelled and the normal retry machinery clears the
+    // slot while resending the NEW turn). See bootCancelled's field comment.
+    if (step === 'session' && this.resumeId && !this.bootCancelled) {
       this.onEvent({ kind: 'turn-complete', isError: true, errorText: message })
       return
     }

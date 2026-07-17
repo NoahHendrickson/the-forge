@@ -948,6 +948,73 @@ describe('CursorAdapter', () => {
       expect(w.filter((m) => m.method === 'session/prompt')).toHaveLength(0)
       expect(events.some((e) => e.kind === 'started')).toBe(true)
     })
+
+    // Goal-state (3) of the pre-ready cancel contract: the cancel only kills the QUEUED turn,
+    // never the session itself — when the still-running boot later succeeds, the session must
+    // be fully usable and a NEW turn must go out normally.
+    it('session-ready after a pre-ready cancel leaves the session usable — a new turn sends normally', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      adapter.onEvent = () => {}
+      adapter.start({ cwd: '/abs/project' })
+      const w = captureWrites(lastChild())
+
+      adapter.sendTurn('go')
+      adapter.interrupt()
+      bootFresh(lastChild())
+      expect(w.filter((m) => m.method === 'session/prompt')).toHaveLength(0)
+
+      adapter.sendTurn('next')
+      const prompts = w.filter((m) => m.method === 'session/prompt')
+      expect(prompts).toHaveLength(1)
+      const content = (prompts[0]!.params as Record<string, unknown>).prompt as Array<
+        Record<string, unknown>
+      >
+      expect(content[0]!.text).toBe('next')
+    })
+
+    // The stale-resume resurrection hole (Task 7 review): interrupt() pre-ready clears the
+    // queue and synthesizes turn-complete{isError:false}, but the in-flight session/load
+    // round trip keeps running. If that boot then fails with the stale-resume error, failBoot
+    // would emit a SECOND turn-complete{isError:true} for the same boot — and the manager's
+    // stale-retry branch (no state guard: `!_sawStarted && _lastStartResumeId !== undefined`)
+    // would clear the slot, respawn, and RESEND `_inflightTurn`: the exact turn the user just
+    // cancelled. Post-cancel the stale failure must instead surface as session-error — the
+    // manager's pre-started session-error path lands `failed` (no resend), and the next
+    // say()/Send auto-starts fresh from there, so there's no wedge either.
+    it('stale-resume boot failure AFTER a pre-ready cancel → session-error, never a second turn-complete (no resurrection)', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/abs/project', resumeId: '00000000-0000-0000-0000-000000000000' })
+      const w = captureWrites(lastChild())
+
+      adapter.sendTurn('go')
+      adapter.interrupt()
+      // The cancel itself synthesizes exactly one clean completion.
+      expect(events.filter((e) => e.kind !== 'activity')).toEqual([
+        { kind: 'turn-complete', isError: false },
+      ])
+      events.length = 0
+
+      // The boot keeps running and fails stale (same fixture as the un-cancelled stale test,
+      // id rewritten to match our session/load request id 2).
+      pushLine(lastChild(), INIT_RESPONSE)
+      const staleWithMatchingId = JSON.stringify({
+        ...(JSON.parse(LOAD_STALE_ERROR) as Record<string, unknown>),
+        id: 2,
+      })
+      pushLine(lastChild(), staleWithMatchingId)
+
+      const rendered = events.filter((e) => e.kind !== 'activity')
+      // NO turn-complete of any kind — an isError:true here is the manager's stale-retry key
+      // and would resend the cancelled turn; an isError:false would double-complete.
+      expect(rendered.some((e) => e.kind === 'turn-complete')).toBe(false)
+      expect(rendered).toHaveLength(1)
+      expect(rendered[0]!.kind).toBe('session-error')
+      // And the cancelled turn text never reached the wire on this child.
+      expect(w.filter((m) => m.method === 'session/prompt')).toHaveLength(0)
+    })
   })
 
   describe('config no-ops', () => {
