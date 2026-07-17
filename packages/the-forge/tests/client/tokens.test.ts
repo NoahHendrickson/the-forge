@@ -10,6 +10,7 @@ import {
   nearestColorToken,
   contrastRatio,
   rgbToHex,
+  toPx,
   type Theme,
   type Tokens,
   type ColorToken,
@@ -36,6 +37,51 @@ describe('readTheme', () => {
 
   it('returns spacingBasePx null when --spacing is absent (non-Tailwind project)', () => {
     expect(readTheme(document.documentElement).spacingBasePx).toBeNull()
+  })
+
+  it('fails safe (null, no throw) when --spacing uses a non-whitelisted unit like em', () => {
+    const root = document.documentElement
+    root.style.setProperty('--spacing', '0.25em')
+    expect(() => readTheme(root)).not.toThrow()
+    const theme = readTheme(root)
+    expect(theme.spacingBasePx).toBeNull()
+    // downstream: a null spacing base must make suggestUtility skip the spacing scale
+    // rather than deriving garbage utilities from a mis-parsed base.
+    expect(suggestUtility('padding-top', '24px', theme)).toBeNull()
+  })
+
+  it('skips a radius token whose unit is unrecognized rather than storing a bad px value', () => {
+    const root = document.documentElement
+    root.style.setProperty('--radius-lg', '0.5em')
+    root.style.setProperty('--radius-sm', '4px')
+    const theme = readTheme(root)
+    expect(theme.radiusScale.lg).toBeUndefined()
+    expect(theme.radiusScale.sm).toBe(4)
+  })
+})
+
+describe('toPx', () => {
+  it('whitelists px, rem, and bare numbers (treated as px)', () => {
+    expect(toPx('4px', 16)).toBe(4)
+    expect(toPx('0.25rem', 16)).toBe(4)
+    expect(toPx('4', 16)).toBe(4)
+    expect(toPx('0', 16)).toBe(0)
+  })
+
+  it('fails safe (null) for any other unit instead of misreading it as px', () => {
+    expect(toPx('0.25em', 16)).toBeNull()
+    expect(toPx('50%', 16)).toBeNull()
+    expect(toPx('1ch', 16)).toBeNull()
+    expect(toPx('1vw', 16)).toBeNull()
+  })
+
+  it('rejects malformed numbers (multiple decimal points) instead of parseFloat-truncating them', () => {
+    // Custom properties are not syntax-checked by browsers — a theme typo like
+    // `--spacing: 1.2.3px` must fail to null, not silently truncate to 1.2px (fail-wrong,
+    // the exact hazard the whitelist exists to prevent).
+    expect(toPx('1.2.3px', 16)).toBeNull()
+    expect(toPx('1.2.3rem', 16)).toBeNull()
+    expect(toPx('4.5.6', 16)).toBeNull()
   })
 })
 
@@ -416,6 +462,66 @@ describe('parseColor', () => {
     expect(parseColor('rgb(255 0 0 / 0.5)')).toEqual({ r: 255, g: 0, b: 0, a: 0.5 })
   })
 
+  it('clamps out-of-range rgba() alpha to [0, 1]', () => {
+    expect(parseColor('rgba(0, 0, 0, 5)')).toEqual({ r: 0, g: 0, b: 0, a: 1 })
+    expect(parseColor('rgba(0, 0, 0, -3)')).toEqual({ r: 0, g: 0, b: 0, a: 0 })
+  })
+
+  it('parses hsl()/hsla(), modern space-separated and legacy comma syntax, deg-only hue', () => {
+    // hsl(220 90% 56%): H=220 S=0.90 L=0.56
+    //   C = (1 - |2L-1|) * S = (1 - 0.12) * 0.90 = 0.792
+    //   X = C * (1 - |((H/60) mod 2) - 1|) = 0.792 * (1 - |1.6667 - 1|) = 0.792 * 0.3333 = 0.264
+    //   m = L - C/2 = 0.56 - 0.396 = 0.164
+    //   H in [180,240) -> (R',G',B') = (0, X, C)
+    //   R = (0 + 0.164) * 255 = 41.82 -> 42
+    //   G = (0.264 + 0.164) * 255 = 109.14 -> 109
+    //   B = (0.792 + 0.164) * 255 = 243.78 -> 244
+    expect(parseColor('hsl(220 90% 56%)')).toEqual({ r: 42, g: 109, b: 244, a: 1 })
+    expect(parseColor('hsl(220, 90%, 56%)')).toEqual({ r: 42, g: 109, b: 244, a: 1 })
+    expect(parseColor('hsla(220, 90%, 56%, 0.5)')).toEqual({ r: 42, g: 109, b: 244, a: 0.5 })
+    expect(parseColor('hsl(220 90% 56% / 0.5)')).toEqual({ r: 42, g: 109, b: 244, a: 0.5 })
+    // achromatic (S=0) collapses to L regardless of hue
+    expect(parseColor('hsl(0 0% 100%)')).toEqual({ r: 255, g: 255, b: 255, a: 1 })
+    expect(parseColor('hsl(0 0% 0%)')).toEqual({ r: 0, g: 0, b: 0, a: 1 })
+  })
+
+  it('rejects unitless saturation/lightness (documented unsupported) instead of misreading 90 as the fraction 90', () => {
+    // CSS Color 4 permits `hsl(220 90 56)` (unitless S/L ≡ percentages), but our parser would
+    // read 90 as the raw fraction 90 (i.e. 9000%) — fail-wrong. Until a real theme authors
+    // hsl this way we require the `%` and fail safe to null instead.
+    expect(parseColor('hsl(220 90 56)')).toBeNull()
+    expect(parseColor('hsl(220, 90, 56)')).toBeNull()
+    // the percent form is unaffected
+    expect(parseColor('hsl(220 90% 56%)')).toEqual({ r: 42, g: 109, b: 244, a: 1 })
+  })
+
+  it('accepts the <n>deg hue form identically to the bare number', () => {
+    // Pinned explicitly: this used to work only because parseFloat happens to stop at the
+    // suffix — the same accident that made turn/grad/rad fail WRONG (below). Any tightening
+    // of the hue grammar must keep deg working.
+    expect(parseColor('hsl(220deg 90% 56%)')).toEqual({ r: 42, g: 109, b: 244, a: 1 })
+    expect(parseColor('hsl(-40deg 100% 50%)')).toEqual(parseColor('hsl(320 100% 50%)'))
+  })
+
+  it('rejects grad/rad/turn hue units (documented unsupported) — must fail to null, not fail wrong', () => {
+    // Same fail-safe principle as unitless S/L above: hsl(0.5turn …) is true cyan, but
+    // parseFloat silently reads 0.5 (≈0deg, red) — a wrong color in change requests is
+    // worse than no token match.
+    expect(parseColor('hsl(0.5turn 100% 50%)')).toBeNull()
+    expect(parseColor('hsl(200grad 90% 56%)')).toBeNull()
+    expect(parseColor('hsl(3.14rad 90% 56%)')).toBeNull()
+  })
+
+  it('wraps out-of-range hues into [0, 360) — negative and >360 hues match their canonical twin', () => {
+    // -40deg ≡ 320deg and 400deg ≡ 40deg per CSS Color 4 hue normalization.
+    expect(parseColor('hsl(-40 100% 50%)')).toEqual(parseColor('hsl(320 100% 50%)'))
+    expect(parseColor('hsl(400 100% 50%)')).toEqual(parseColor('hsl(40 100% 50%)'))
+  })
+
+  it('returns null for a non-numeric oklch alpha instead of yielding a NaN alpha', () => {
+    expect(parseColor('oklch(60% 0.1 30 / xyz)')).toBeNull()
+  })
+
   it('parses named colors and transparent', () => {
     expect(parseColor('red')).toEqual({ r: 255, g: 0, b: 0, a: 1 })
     expect(parseColor('white')).toEqual({ r: 255, g: 255, b: 255, a: 1 })
@@ -598,5 +704,26 @@ describe('suggestUtility — color support', () => {
       utility: 'bg-[rgba(251,44,54,0.5)]',
       tokenExact: false,
     })
+  })
+
+  it('an hsl-authored theme token matches end-to-end (the headline hsl fix, integration)', () => {
+    // Pre-fix, an hsl token value was silently dropped by every parseColor consumer — this
+    // pins the recovery where a regression would actually surface: the ±1-per-channel exact
+    // match in suggestColorUtility meeting hsl→rgb rounding, and nearestColorToken. Token
+    // hsl(220 90% 56%) ≡ rgb(42, 109, 244) (derivation in the parseColor suite above).
+    const hslTokens: Tokens = {
+      colors: [{ name: 'brand', value: 'hsl(220 90% 56%)' }],
+      textScale: [],
+    }
+    expect(suggestUtility('background-color', 'rgb(42, 109, 244)', TW, hslTokens)).toEqual({
+      utility: 'bg-brand',
+      tokenExact: true,
+    })
+    // one channel off by 1 still lands inside the exact-match tolerance
+    expect(suggestUtility('color', 'rgb(43, 109, 244)', TW, hslTokens)).toEqual({
+      utility: 'text-brand',
+      tokenExact: true,
+    })
+    expect(nearestColorToken({ r: 50, g: 115, b: 235, a: 1 }, hslTokens.colors)?.token.name).toBe('brand')
   })
 })

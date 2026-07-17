@@ -166,6 +166,73 @@ describe('PanelTokenUi', () => {
     expect((field.root.querySelector('input') as HTMLInputElement).readOnly).toBe(false)
   })
 
+  it('Task 12: rebind uses round-equality on a fractional-px theme (Math.round(bound.px) === value)', () => {
+    // --spacing 3.75px makes step '3.5' == 13.125px. readValue's fromPx rounds the CSS back
+    // to 13 for display (panel-patterns doc) — the bound entry's exact px stays 13.125. That
+    // rounding gap must not read as user divergence.
+    teardownSpacingTheme()
+    document.documentElement.style.setProperty('--spacing', '3.75px')
+    resetTokensCache()
+    const el = makeEl()
+    const ui = makeUi(el)
+    const field = new NumberField({ label: 'PX', min: 0, onInput: () => {} })
+    openAndPick(ui, field, (px) => field.set(px), '3.5')
+
+    field.set(13) // simulate refresh(): the rounded display value
+    expect((field.root.querySelector('input') as HTMLInputElement).readOnly).toBe(false)
+    ui.rebind(PX_SPEC, field, 13, false, false)
+    const input = field.root.querySelector('input') as HTMLInputElement
+    expect(input.readOnly).toBe(true)
+    expect(input.value).toBe('px-3.5')
+  })
+
+  it('Task 12 boundary: an exact .5-fraction bound px (13.5, displayed 14) keeps its pill', () => {
+    // --spacing 9px makes step '1.5' == 13.5px — the exact-half case. fromPx displays it as
+    // Math.round(13.5) = 14 (half-up); round-equality must keep the pill. (The earlier
+    // epsilon form |bound.px - value| < 0.5 failed exactly here: |13.5 - 14| === 0.5.)
+    teardownSpacingTheme()
+    document.documentElement.style.setProperty('--spacing', '9px')
+    resetTokensCache()
+    const el = makeEl()
+    const ui = makeUi(el)
+    const field = new NumberField({ label: 'PX', min: 0, onInput: () => {} })
+    openAndPick(ui, field, (px) => field.set(px), '1.5')
+
+    field.set(14) // simulate refresh(): Math.round(13.5) = 14
+    ui.rebind(PX_SPEC, field, 14, false, false)
+    const input = field.root.querySelector('input') as HTMLInputElement
+    expect(input.readOnly).toBe(true)
+    expect(input.value).toBe('px-1.5')
+  })
+
+  it('Task 12: rebind still drops a value that is not the rounding of the bound px', () => {
+    teardownSpacingTheme()
+    document.documentElement.style.setProperty('--spacing', '3.75px')
+    resetTokensCache()
+    const el = makeEl()
+    const ui = makeUi(el)
+    const field = new NumberField({ label: 'PX', min: 0, onInput: () => {} })
+    openAndPick(ui, field, (px) => field.set(px), '3.5')
+
+    field.set(14) // Math.round(13.125) = 13 !== 14 -> a real user edit, not rounding noise
+    ui.rebind(PX_SPEC, field, 14, false, false)
+    expect((field.root.querySelector('input') as HTMLInputElement).readOnly).toBe(false)
+  })
+
+  it('Task 12 boundary: 13 for a bound 13.5px unbinds — half-up rounds 13.5 to 14, not 13', () => {
+    teardownSpacingTheme()
+    document.documentElement.style.setProperty('--spacing', '9px')
+    resetTokensCache()
+    const el = makeEl()
+    const ui = makeUi(el)
+    const field = new NumberField({ label: 'PX', min: 0, onInput: () => {} })
+    openAndPick(ui, field, (px) => field.set(px), '1.5')
+
+    field.set(13) // Math.round(13.5) = 14 !== 13 -> divergence, must unbind
+    ui.rebind(PX_SPEC, field, 13, false, false)
+    expect((field.root.querySelector('input') as HTMLInputElement).readOnly).toBe(false)
+  })
+
   it('rebind with comparing: true neither binds nor drops — a later non-comparing rebind still binds', () => {
     const el = makeEl()
     const ui = makeUi(el)
