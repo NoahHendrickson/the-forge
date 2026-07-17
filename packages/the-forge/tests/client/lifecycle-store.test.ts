@@ -245,6 +245,34 @@ describe('loadLifecycle — per-item boundary validation', () => {
     expect(loaded!.sent).toHaveLength(0)
   })
 
+  it('keeps a sent element for an untagged element (source: null, dcSource: null)', () => {
+    // Elements with no data-dc-source tag persist ElementChange.source as null (request.ts's
+    // ElementChange.source is SourceLocation | null, and renderMarkdown already handles the null
+    // case by falling back to selector/text) — the restore validator must accept that shape
+    // rather than silently dropping the whole entry.
+    const untagged = {
+      ...validSentElement(),
+      dcSource: null,
+      change: { ...validSentElement().change, source: null },
+    }
+    sessionStorage.setItem(
+      LIFECYCLE_KEY,
+      JSON.stringify({
+        v: 1,
+        designModeOn: true,
+        selection: [],
+        drafts: [],
+        sent: [{ id: 'q1', elements: [untagged] }],
+      })
+    )
+    const loaded = loadLifecycle()
+    expect(loaded).not.toBeNull()
+    expect(loaded!.sent).toHaveLength(1)
+    expect(loaded!.sent[0].elements).toHaveLength(1)
+    expect(loaded!.sent[0].elements[0].dcSource).toBeNull()
+    expect(loaded!.sent[0].elements[0].change.source).toBeNull()
+  })
+
   it('drops retired prompt-send elements (pre-consolidation persisted state) without touching the rest', () => {
     // kind:'prompt' sends died with the composer consolidation — a persisted element carrying
     // `prompt` must be dropped at the load boundary (not restored as a blank no-op row), while

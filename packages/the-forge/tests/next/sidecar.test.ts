@@ -214,6 +214,32 @@ describe('ensureSidecar', () => {
     expect(after).toHaveLength(0)
   })
 
+  describe('agent forwarding to setupProjectConfig', () => {
+    // Bug (full-project review): sidecar.ts called setupProjectConfig without opts.agent, so it
+    // always fell back to the function's own 'claude-code' default — withForge(cfg, { agent:
+    // 'cursor' }) silently never wrote .cursor/mcp.json. vite.ts:91 passes agent correctly;
+    // sidecar.ts must mirror that.
+    it('agent: "cursor" writes .cursor/mcp.json with a the-forge server entry', async () => {
+      const { ensureSidecar } = await importSidecar()
+      const handle = await ensureSidecar(baseOpts({ agent: 'cursor' }))
+      closers.push(() => handle.close())
+
+      const cursorMcpFile = path.join(root, '.cursor', 'mcp.json')
+      expect(fs.existsSync(cursorMcpFile)).toBe(true)
+      const config = JSON.parse(fs.readFileSync(cursorMcpFile, 'utf8'))
+      expect(config.mcpServers['the-forge']).toBeDefined()
+    })
+
+    it('the default agent (claude-code) does NOT write .cursor/mcp.json', async () => {
+      const { ensureSidecar } = await importSidecar()
+      const handle = await ensureSidecar(baseOpts())
+      closers.push(() => handle.close())
+
+      const cursorMcpFile = path.join(root, '.cursor', 'mcp.json')
+      expect(fs.existsSync(cursorMcpFile)).toBe(false)
+    })
+  })
+
   describe('missing-ForgeDesignMode hint', () => {
     it('warns once when client.js is never fetched within the hint delay', async () => {
       const { ensureSidecar } = await importSidecar()

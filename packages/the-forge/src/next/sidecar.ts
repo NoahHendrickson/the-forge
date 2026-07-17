@@ -112,7 +112,7 @@ async function createSidecar(opts: SidecarOpts): Promise<SidecarHandle> {
   writeEndpointFile(forgeDir, port, listenHost, secret)
 
   const dir = path.dirname(fileURLToPath(import.meta.url))
-  setupProjectConfig(opts.root, path.join(dir, 'mcp.js'), opts.root)
+  setupProjectConfig(opts.root, path.join(dir, 'mcp.js'), opts.root, opts.agent)
 
   const onExit = () => {
     removeEndpointFile(forgeDir)

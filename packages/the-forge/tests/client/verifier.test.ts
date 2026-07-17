@@ -171,6 +171,46 @@ describe('verifyEntry', () => {
     expect(result.missing).toBe(0)
   })
 
+  it('neutralizes draft longhands, not just the collapsed change property name, before measuring', () => {
+    // request.ts's COLLAPSE folds padding-top/padding-bottom into padding-block for the
+    // change-request markdown, but the DraftStore's inline styles are still the longhands —
+    // draftProps carries those real keys. Pre-fix, the neutralize loop only stripped
+    // `changes[].property` ('padding-block'), which removeProperty() can't map back to the
+    // longhand inline styles the panel actually set, so the draft's own inline padding-top
+    // would still be there at measurement time.
+    document.body.innerHTML = `<div data-dc-source="src/a.tsx:1:1" id="tlh"></div>`
+    const d = document.getElementById('tlh')! as HTMLElement
+    d.style.setProperty('padding-top', '8px')
+    d.style.setProperty('padding-bottom', '8px')
+
+    let capturedDuringMeasure: string | null = null
+    const realGetComputedStyle = window.getComputedStyle.bind(window)
+    const spy = vi.spyOn(window, 'getComputedStyle').mockImplementation((elt: Element, pseudo?: string | null) => {
+      if (elt === d && capturedDuringMeasure === null) {
+        capturedDuringMeasure = d.style.getPropertyValue('padding-top')
+      }
+      return realGetComputedStyle(elt, pseudo ?? undefined)
+    })
+
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [
+        {
+          el: d,
+          dcSource: 'src/a.tsx:1:1',
+          draftProps: ['padding-top', 'padding-bottom'],
+          changes: [{ property: 'padding-block', afterCss: '8px' }],
+        },
+      ],
+    }
+    verifyEntry(entry, document)
+    spy.mockRestore()
+
+    expect(capturedDuringMeasure).toBe('') // stripped during measurement
+    expect(d.style.getPropertyValue('padding-top')).toBe('8px') // restored after
+    expect(d.style.getPropertyValue('padding-bottom')).toBe('8px')
+  })
+
   it('counts as missing when neither the live ref nor a dc-source match is found', () => {
     const d = el()
     d.dataset.dcSource = 'src/App.tsx:9:9'

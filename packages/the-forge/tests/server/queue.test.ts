@@ -251,6 +251,52 @@ describe('Queue', () => {
       expect(found.status).toBe('applied')
       expect(found.note).toBe('b-was-here')
     })
+
+    // Regression: a stale in-memory `pending` copy must not overwrite another dev server's
+    // `applied`/`failed` state on disk — that would re-deliver an already-applied edit.
+    it('disk applied outranks an in-memory pending copy — does not resurrect an already-applied item', () => {
+      const a = new Queue(dir)
+      const itemX = a.add({}, 'x')
+
+      const b = new Queue(dir) // loads state now: itemX pending, known to both instances
+
+      a.pull()
+      a.mark([itemX.id], 'applied', 'a-applied-it')
+
+      // b's in-memory copy still says pending; add() forces b to persist its (stale) view
+      b.add({}, 'trigger-b-persist')
+
+      const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'queue.json'), 'utf8'))
+      const foundOnDisk = onDisk.find((i: { id: string }) => i.id === itemX.id)
+      expect(foundOnDisk.status).toBe('applied')
+
+      // the disk copy must also be adopted into b's own in-memory items, not just the
+      // persisted output, so a later persist by b can't re-resurrect it again
+      expect(b.get(itemX.id)!.status).toBe('applied')
+
+      // a subsequent pull() on either instance must not return the already-applied item
+      expect(a.pull()).toEqual([])
+      expect(b.pull().map((i) => i.id)).not.toContain(itemX.id)
+    })
+
+    // The stale-PULL sibling of the test above: here the stale instance's first contact
+    // after the other server's mark() is the pull() itself. Its pre-merge claim flips the
+    // stale pending copy to claimed, but the persist inside pull() adopts the disk's
+    // `applied` over it — the RETURNED array must reflect that merged truth too, or the
+    // endpoint delivers the already-applied item's markdown to the agent once more.
+    it('a stale pull() does not deliver an item the disk merge just revealed as applied', () => {
+      const a = new Queue(dir)
+      const itemX = a.add({}, 'x')
+
+      const b = new Queue(dir) // loads state now: itemX pending, known to both instances
+
+      a.pull()
+      a.mark([itemX.id], 'applied', 'a-applied-it')
+
+      const delivered = b.pull()
+      expect(delivered.map((i) => i.id)).not.toContain(itemX.id)
+      expect(b.get(itemX.id)!.status).toBe('applied')
+    })
   })
 
   describe('pruning basis (finishedAt)', () => {

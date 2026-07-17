@@ -70,12 +70,24 @@ function verifyElements(entry: SentEntry, doc: Document = document): ElementVeri
     // there, reporting "implemented" even if the underlying code never adopted the
     // value. Stash and strip each sent property (plus transition, to avoid measuring
     // mid-transition values), measure, then restore in a finally.
+    //
+    // Strip the UNION of el.changes[].property and el.draftProps, not just el.changes:
+    // `changes` carries request.ts's COLLAPSE names (padding-block, border-radius, …) used
+    // for the change-request markdown, but the DraftStore's actual inline styles are the
+    // longhands the panel edits (padding-top/padding-bottom, …) — draftProps is exactly
+    // those real keys (see SentEntry.elements[].draftProps docs in lifecycle.ts).
+    // removeProperty('padding-block') does not strip an inline padding-top, so a DOM node
+    // that survived HMR with its draft still inline would be measured against the client's
+    // OWN draft value — a false "done", followed by commit() visibly snapping the page back.
+    // draftProps exists for exactly this divergence and commit() already uses it (see
+    // handleApplied below); this neutralize loop was the one place that got missed.
     const inlineTransition = target.style.getPropertyValue('transition')
     target.style.setProperty('transition', 'none')
     const stashed = new Map<string, string>()
-    for (const change of el.changes) {
-      stashed.set(change.property, target.style.getPropertyValue(change.property))
-      target.style.removeProperty(change.property)
+    const toStrip = new Set<string>([...el.changes.map((c) => c.property), ...el.draftProps])
+    for (const prop of toStrip) {
+      stashed.set(prop, target.style.getPropertyValue(prop))
+      target.style.removeProperty(prop)
     }
 
     const mismatched: ElementVerification['mismatched'] = []

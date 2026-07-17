@@ -22,6 +22,16 @@ export interface QueueItem {
   finishedAt?: string
 }
 
+/** Lifecycle ordering used by mergeWithDisk to decide, per id, which of the in-memory vs.
+ * on-disk copy is "further along" and should win. applied/failed rank equal — both are
+ * terminal, and which one occurred is not something a later stage can second-guess. */
+const STATUS_RANK: Record<QueueItem['status'], number> = {
+  pending: 0,
+  claimed: 1,
+  applied: 2,
+  failed: 2,
+}
+
 /** The timestamp a terminal item's age is measured from: when it actually finished (finishedAt),
  * falling back to createdAt for legacy items marked before finishedAt existed. */
 function finishedBasis(item: QueueItem): number {
@@ -138,7 +148,11 @@ export class Queue {
       item.claimedAt = stamp
     }
     if (claimable.length > 0) this.persist()
-    return claimable
+    // The persist above runs mergeWithDisk, which can adopt another server's terminal copy
+    // OVER an item claimed two lines up (Object.assign onto the same object this array
+    // holds). Deliver only what survived the merge still claimed — returning the pre-merge
+    // array would hand the agent an item the disk already knows is applied/failed.
+    return claimable.filter((i) => i.status === 'claimed')
   }
 
   /**
@@ -204,9 +218,11 @@ export class Queue {
   /**
    * Merges externally-sourced items (e.g. a legacy queue.json from a since-relocated queue
    * directory — see the forge-dir-root migration) into this instance and persists the result.
-   * Dedupes by id using the same rule as mergeWithDisk: items already known to this instance
-   * (in-memory) always win over an incoming item with the same id, since they reflect this
-   * instance's more current view. Items with unknown ids are appended as-is.
+   * Items with unknown ids are appended as-is; items with ids already known to this instance
+   * keep the in-memory copy untouched — the incoming side is a one-shot legacy import, not a
+   * live peer, so it can never be fresher than this instance's current state (unlike
+   * mergeWithDisk's two-live-servers case, there's no scenario where the incoming copy has
+   * progressed further along the lifecycle than what's already here).
    */
   mergeItems(items: QueueItem[]): void {
     const knownIds = new Set(this.items.map((i) => i.id))
@@ -226,14 +242,32 @@ export class Queue {
   }
 
   /** Re-reads the on-disk file and merges in any items this instance doesn't know about (i.e.
-   * added/persisted by another concurrently-running server on the same queue dir). In-memory
-   * items always win for ids this instance does know, since they reflect this instance's more
-   * recent view (e.g. a just-applied mark()). This turns persist() from a last-writer-wins full
-   * overwrite into an additive merge, so two dev servers sharing a queue dir don't clobber each
-   * other's items. */
+   * added/persisted by another concurrently-running server on the same queue dir), turning
+   * persist() from a last-writer-wins full overwrite into an additive merge so two dev servers
+   * sharing a queue dir don't clobber each other's items.
+   *
+   * For ids known to BOTH sides, "in-memory always reflects the more recent view" is only true
+   * in the direction memory usually moves — forward. It's false in the terminal direction: if
+   * another server pulled and mark()ed an item applied/failed after this instance last loaded
+   * it, this instance's in-memory copy is a STALE pending/claimed snapshot, not a fresher one.
+   * Blindly keeping in-memory would re-persist that stale status and resurrect an
+   * already-applied item back to pending, re-delivering it to be applied a second time. So ids
+   * known to both sides are resolved by lifecycle stage (STATUS_RANK): whichever copy is
+   * further along wins; equal rank keeps the in-memory copy (it may carry a fresher note, e.g.
+   * a just-run mark()). When disk wins, the disk copy is also adopted into this.items — not
+   * just the merged return value — so the next persist can't re-resurrect it again. */
   private mergeWithDisk(): QueueItem[] {
     const onDisk = this.readDiskItems()
+    const onDiskById = new Map(onDisk.map((i) => [i.id, i]))
     const knownIds = new Set(this.items.map((i) => i.id))
+
+    for (const item of this.items) {
+      const diskCopy = onDiskById.get(item.id)
+      if (diskCopy && STATUS_RANK[diskCopy.status] > STATUS_RANK[item.status]) {
+        Object.assign(item, diskCopy)
+      }
+    }
+
     const unknownFromDisk = onDisk.filter((i) => !knownIds.has(i.id))
     return [...this.items, ...unknownFromDisk]
   }
