@@ -94,15 +94,23 @@ function send(res: ServerResponse, status: number, data: unknown): void {
   // already on the wire would throw ERR_HTTP_HEADERS_SENT — the /queue handler's isolated
   // notify() catch below is the primary defense against a post-200 throw reaching here, this
   // is the backstop for any other path that might one day call send() twice for one request.
-  if (res.headersSent) return
+  // Warn rather than swallow silently: the test fake THROWS on a double end(), so a future
+  // double-respond bug is loud in tests — runtime must not be quieter than the suite.
+  if (res.headersSent) {
+    console.warn('[the-forge] send() after headers already sent — dropped (double-respond backstop)')
+    return
+  }
   res.statusCode = status
   res.setHeader('Content-Type', 'application/json')
   res.end(JSON.stringify(data))
 }
 
-/** Constant-time secret compare (task 15a). A duplicated X-Forge-Secret header arrives from
- * Node as a string[] rather than a string — reject that (and any other non-string) shape
- * outright before ever touching timingSafeEqual, which throws on non-Buffer input. Length
+/** Constant-time secret compare (task 15a). Node HTTP/1.x never arrays a duplicated
+ * X-Forge-Secret — repeats arrive joined as one "a, b" string (only set-cookie arrays),
+ * which simply fails the byte compare below. The typeof guard is defense against the
+ * declared header TYPE (string | string[]) and any non-Node fronting layer that does
+ * array it — reject every non-string shape outright before ever touching
+ * timingSafeEqual, which throws on non-Buffer input. Length
  * mismatches are also rejected up front: timingSafeEqual requires equal-length buffers, and
  * comparing lengths first is safe (it leaks only the secret's length, not its content) while
  * avoiding a thrown RangeError. Only the actual byte comparison — the operation whose timing

@@ -480,7 +480,23 @@ describe('forge middleware', () => {
       expect(res.statusCode).toBe(200)
     })
 
-    it('403s POST /queue with a duplicated X-Forge-Secret header (task 15a — Node delivers repeated headers as an array)', async () => {
+    it('403s POST /queue with a duplicated X-Forge-Secret header (Node joins repeats into one comma-separated string)', async () => {
+      // The realistic wire shape: Node HTTP/1.x arrays only set-cookie — a repeated
+      // X-Forge-Secret arrives as the single string "SECRET, SECRET", which must fail the
+      // byte compare. This is the honest behavioral pin for duplicate rejection.
+      const res = fakeRes()
+      await run(
+        secured,
+        fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { host: 'localhost:5173', 'x-forge-secret': `${SECRET}, ${SECRET}` }),
+        res
+      )
+      expect(res.statusCode).toBe(403)
+    })
+
+    it('403s POST /queue with an array-shaped secret header (type-shape defense — a non-Node fronting layer could array it)', async () => {
+      // NOT a shape Node itself produces for this header (see the test above) — this pins
+      // secretMatches' typeof guard, which exists because the TS header type is
+      // string | string[] and timingSafeEqual throws on non-Buffer input.
       const res = fakeRes()
       await run(
         secured,
@@ -488,6 +504,25 @@ describe('forge middleware', () => {
         res
       )
       expect(res.statusCode).toBe(403)
+    })
+
+    it('a send() attempt after headers are already sent is dropped WITH a console.warn (the 15c backstop is not silent)', async () => {
+      // The test fake throws on a double end() but production would swallow it silently —
+      // a future double-respond bug must be loud at runtime too, matching the /queue
+      // notify-isolation warn.
+      const res = fakeRes()
+      res.headersSent = true // headers already on the wire — the handler's send() must hit the guard
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        // Not run(): with the write swallowed, end() never fires and run()'s promise
+        // never settles — invoke the middleware directly and let the sync handler finish.
+        secured(fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }) as never, res as never, () => {})
+        await new Promise((r) => setTimeout(r, 10))
+        expect(res.endCallCount).toBe(0) // guard swallowed the write…
+        expect(warn).toHaveBeenCalledTimes(1) // …but said so
+      } finally {
+        warn.mockRestore()
+      }
     })
 
     it('403s POST /pull and POST /mark missing the header', async () => {
@@ -1453,7 +1488,7 @@ describe('session endpoints (Task 4)', () => {
       expect(res.statusCode).toBe(403)
     })
 
-    it('GET /session/events 403s with a duplicated secret header (task 15a, this call site too)', async () => {
+    it('GET /session/events 403s with an array-shaped secret header (type-shape defense, this call site too)', async () => {
       const res = fakeRes()
       await run(
         mwSecured,
