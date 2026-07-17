@@ -1,14 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { PassThrough } from 'node:stream'
+import { ClaudeAdapter, CLAUDE_ARGS, EDIT_TIER_ALLOW } from '../../../src/server/session/claude'
 import {
-  ClaudeAdapter,
-  CLAUDE_ARGS,
-  EDIT_TIER_ALLOW,
+  type SessionEvent,
   EDIT_PAYLOAD_CAP,
   type SpawnFn,
   type SpawnedChild,
-} from '../../../src/server/session/claude'
-import type { SessionEvent } from '../../../src/server/session/adapter'
+} from '../../../src/server/session/adapter'
 import {
   INIT_NO_MCP,
   INIT_WITH_MCP,

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { SCOPE_GUARDRAIL, NO_PREVIEW_GUARDRAIL } from '../shared/guardrails'
+import type { AgentId } from '../shared/chat-constants'
 
 /** 'embedded' and 'watcher' are produced by the /dispatch endpoint's short-circuits (see
  * endpoints.ts + server/watchers.ts), never by the ladder below. 'embedded' means the change
@@ -17,7 +18,9 @@ export interface DispatchResult {
 }
 
 export interface DispatchOpts {
-  agent: 'claude-code' | 'cursor' | 'codex'
+  // Aliases shared/chat-constants.ts's AgentId (type-only import) so the union spelling can't
+  // drift from src/client/agent.ts's AgentName across the client/server bundle boundary.
+  agent: AgentId
   channelsFlag: boolean
   markdown: string
   /** Injectable for tests — never read process.platform directly inside adapters. Defaults to

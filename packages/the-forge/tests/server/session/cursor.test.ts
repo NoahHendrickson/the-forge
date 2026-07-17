@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { PassThrough } from 'node:stream'
 import { CursorAdapter, CURSOR_ARGS } from '../../../src/server/session/cursor'
-import { EDIT_PAYLOAD_CAP, type SpawnFn, type SpawnedChild } from '../../../src/server/session/claude'
-import type { SessionEvent } from '../../../src/server/session/adapter'
+import {
+  type SessionEvent,
+  EDIT_PAYLOAD_CAP,
+  type SpawnFn,
+  type SpawnedChild,
+} from '../../../src/server/session/adapter'
 import {
   INIT_RESPONSE,
   SESSION_NEW_RESPONSE,
