@@ -1120,6 +1120,36 @@ describe('delta streaming', () => {
     expect(feed.root.textContent).toContain('FINAL ANSWER')
     feed.stop()
   })
+
+  it('an evicted tool row releases its toolRows entry — a late tool-finished cannot reach the detached node', async () => {
+    // Symmetric with the approval-eviction cleanup: without the map release, the toolRows
+    // entry survives eviction pointing at a detached row, and a late tool-finished would
+    // still find and mutate it (flip the spinner to ✓) — proof the map leaked. A manually
+    // controlled stream lets us capture the spinner element BEFORE the fillers evict it.
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const body = new ReadableStream<Uint8Array>({ start(c) { controller = c } })
+    const fetchFn: typeof fetch = (() =>
+      Promise.resolve(new Response(body, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } }))) as typeof fetch
+    const feed = new SessionFeed({ fetchFn })
+    document.body.appendChild(feed.root)
+    feed.start()
+    controller.enqueue(encoder.encode(feedLine(1, { kind: 'tool-started', toolId: 't-evict', name: 'Bash', detail: 'ls' }) + '\n'))
+    await flush()
+    const spinner = feed.root.querySelector('.session-spinner') as HTMLElement
+    expect(spinner).not.toBeNull()
+    expect(spinner.textContent).not.toBe('✓')
+    // Push the tool row past the MAX_ROWS(200) cap, then deliver its (late) tool-finished
+    for (let i = 2; i <= 201; i++) {
+      controller.enqueue(encoder.encode(feedLine(i, { kind: 'user-text', text: `filler ${i}` }) + '\n'))
+    }
+    controller.enqueue(encoder.encode(feedLine(300, { kind: 'tool-finished', toolId: 't-evict' }) + '\n'))
+    controller.close()
+    await flush(400)
+    expect(spinner.isConnected).toBe(false) // the row really was evicted
+    // The map entry must be gone with it — the late tool-finished found nothing to flip
+    expect(spinner.textContent).not.toBe('✓')
+    feed.stop()
+  })
 })
 
 describe('diff disclosure', () => {

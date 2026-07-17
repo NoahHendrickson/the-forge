@@ -107,10 +107,11 @@ describe('FeedAnchor', () => {
     list.insertBefore(row, anchor.spacer)
     anchor.anchor(row)
     anchor.spacer.style.height = '0px' // simulate a fully-drained spacer
-    // If update() recomputed instead of early-outing, this stub would push it back up —
-    // proving the early-out actually short-circuits before the measurement read.
+    // Stub offsets so an UN-guarded recompute would land on a distinguishable NONZERO
+    // height: contentBelow = 0 - 0 = 0 → Math.max(0, 500 - 0) = '500px'. Only the
+    // early-out keeps it at '0px' — delete the guard and this assertion fails.
     stub(anchor.spacer, 'offsetTop', 0)
-    stub(row, 'offsetTop', -1000)
+    stub(row, 'offsetTop', 0)
     anchor.update()
     expect(anchor.spacer.style.height).toBe('0px')
   })
