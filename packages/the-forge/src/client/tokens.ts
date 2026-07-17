@@ -115,8 +115,10 @@ export function readTokens(doc: Document = document): Tokens {
         if (!raw) continue
         if (!/^-?[\d.]+(px|rem)$/.test(raw)) continue
         const px = toPx(raw, rootFontPx)
-        // the regex above already restricts raw to px|rem, so toPx never returns null here —
-        // guarded anyway since ScaleToken.px is a non-nullable number.
+        // LOAD-BEARING guard, not belt-and-braces: the pre-filter regex above uses the loose
+        // `[\d.]+` character class, so a malformed value like `1.2.3px` slips past it — toPx's
+        // stricter single-decimal-point grammar is what actually rejects it (to null). Do not
+        // "simplify" this guard away; ScaleToken.px is a non-nullable number.
         if (px === null) continue
         textByName.set(name, { name, px })
       }
@@ -283,12 +285,16 @@ export function parseColor(css: string): RGBA | null {
   // hsl()/hsla(): modern space-separated (`hsl(220 90% 56%)`, optional `/ A` alpha) and
   // legacy comma syntax (`hsl(220, 90%, 56%)`, `hsla(220, 90%, 56%, 0.5)`) — same body-parsing
   // shape as the rgb() branch above. Hue is deg-only (bare number or `<n>deg`, see hslToRgb).
+  // S/L must carry the `%`: CSS Color 4 also permits unitless S/L (`hsl(220 90 56)` ≡ percents),
+  // but parsePercentOrNumber would read a bare 90 as the raw fraction 90 (9000%) — fail-wrong.
+  // Unitless S/L is YAGNI (same rationale as grad/rad/turn hues); we fail safe to null instead.
   const hslMatch = /^hsla?\(([^)]+)\)$/i.exec(s)
   if (hslMatch) {
     const body = hslMatch[1]
     const [channelsPart, alphaPart] = body.split('/')
     const parts = channelsPart.trim().split(/[\s,]+/).filter(Boolean)
     if (parts.length < 3) return null
+    if (!parts[1].trim().endsWith('%') || !parts[2].trim().endsWith('%')) return null
     const H = Number.parseFloat(parts[0])
     const S = parsePercentOrNumber(parts[1], 1)
     const L = parsePercentOrNumber(parts[2], 1)

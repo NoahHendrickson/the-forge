@@ -485,6 +485,16 @@ describe('parseColor', () => {
     expect(parseColor('hsl(0 0% 0%)')).toEqual({ r: 0, g: 0, b: 0, a: 1 })
   })
 
+  it('rejects unitless saturation/lightness (documented unsupported) instead of misreading 90 as the fraction 90', () => {
+    // CSS Color 4 permits `hsl(220 90 56)` (unitless S/L ≡ percentages), but our parser would
+    // read 90 as the raw fraction 90 (i.e. 9000%) — fail-wrong. Until a real theme authors
+    // hsl this way we require the `%` and fail safe to null instead.
+    expect(parseColor('hsl(220 90 56)')).toBeNull()
+    expect(parseColor('hsl(220, 90, 56)')).toBeNull()
+    // the percent form is unaffected
+    expect(parseColor('hsl(220 90% 56%)')).toEqual({ r: 42, g: 109, b: 244, a: 1 })
+  })
+
   it('wraps out-of-range hues into [0, 360) — negative and >360 hues match their canonical twin', () => {
     // -40deg ≡ 320deg and 400deg ≡ 40deg per CSS Color 4 hue normalization.
     expect(parseColor('hsl(-40 100% 50%)')).toEqual(parseColor('hsl(320 100% 50%)'))
