@@ -495,6 +495,23 @@ describe('parseColor', () => {
     expect(parseColor('hsl(220 90% 56%)')).toEqual({ r: 42, g: 109, b: 244, a: 1 })
   })
 
+  it('accepts the <n>deg hue form identically to the bare number', () => {
+    // Pinned explicitly: this used to work only because parseFloat happens to stop at the
+    // suffix — the same accident that made turn/grad/rad fail WRONG (below). Any tightening
+    // of the hue grammar must keep deg working.
+    expect(parseColor('hsl(220deg 90% 56%)')).toEqual({ r: 42, g: 109, b: 244, a: 1 })
+    expect(parseColor('hsl(-40deg 100% 50%)')).toEqual(parseColor('hsl(320 100% 50%)'))
+  })
+
+  it('rejects grad/rad/turn hue units (documented unsupported) — must fail to null, not fail wrong', () => {
+    // Same fail-safe principle as unitless S/L above: hsl(0.5turn …) is true cyan, but
+    // parseFloat silently reads 0.5 (≈0deg, red) — a wrong color in change requests is
+    // worse than no token match.
+    expect(parseColor('hsl(0.5turn 100% 50%)')).toBeNull()
+    expect(parseColor('hsl(200grad 90% 56%)')).toBeNull()
+    expect(parseColor('hsl(3.14rad 90% 56%)')).toBeNull()
+  })
+
   it('wraps out-of-range hues into [0, 360) — negative and >360 hues match their canonical twin', () => {
     // -40deg ≡ 320deg and 400deg ≡ 40deg per CSS Color 4 hue normalization.
     expect(parseColor('hsl(-40 100% 50%)')).toEqual(parseColor('hsl(320 100% 50%)'))
@@ -687,5 +704,26 @@ describe('suggestUtility — color support', () => {
       utility: 'bg-[rgba(251,44,54,0.5)]',
       tokenExact: false,
     })
+  })
+
+  it('an hsl-authored theme token matches end-to-end (the headline hsl fix, integration)', () => {
+    // Pre-fix, an hsl token value was silently dropped by every parseColor consumer — this
+    // pins the recovery where a regression would actually surface: the ±1-per-channel exact
+    // match in suggestColorUtility meeting hsl→rgb rounding, and nearestColorToken. Token
+    // hsl(220 90% 56%) ≡ rgb(42, 109, 244) (derivation in the parseColor suite above).
+    const hslTokens: Tokens = {
+      colors: [{ name: 'brand', value: 'hsl(220 90% 56%)' }],
+      textScale: [],
+    }
+    expect(suggestUtility('background-color', 'rgb(42, 109, 244)', TW, hslTokens)).toEqual({
+      utility: 'bg-brand',
+      tokenExact: true,
+    })
+    // one channel off by 1 still lands inside the exact-match tolerance
+    expect(suggestUtility('color', 'rgb(43, 109, 244)', TW, hslTokens)).toEqual({
+      utility: 'text-brand',
+      tokenExact: true,
+    })
+    expect(nearestColorToken({ r: 50, g: 115, b: 235, a: 1 }, hslTokens.colors)?.token.name).toBe('brand')
   })
 })

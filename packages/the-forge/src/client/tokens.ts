@@ -295,7 +295,12 @@ export function parseColor(css: string): RGBA | null {
     const parts = channelsPart.trim().split(/[\s,]+/).filter(Boolean)
     if (parts.length < 3) return null
     if (!parts[1].trim().endsWith('%') || !parts[2].trim().endsWith('%')) return null
-    const H = Number.parseFloat(parts[0])
+    // Hue grammar: bare number or `<n>deg` ONLY. parseFloat alone would silently stop at
+    // any unit suffix, reading hsl(0.5turn …) (true cyan) as 0.5deg (red) — grad/rad/turn
+    // must fail to null, not fail wrong (same principle as the unitless-S/L guard above).
+    const hueMatch = /^([+-]?(?:\d+\.?\d*|\.\d+))(?:deg)?$/i.exec(parts[0])
+    if (!hueMatch) return null
+    const H = Number.parseFloat(hueMatch[1])
     const S = parsePercentOrNumber(parts[1], 1)
     const L = parsePercentOrNumber(parts[2], 1)
     if ([H, S, L].some((n) => Number.isNaN(n))) return null
