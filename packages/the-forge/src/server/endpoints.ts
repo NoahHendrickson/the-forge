@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Queue } from './queue'
 import { dispatch as realDispatch, augmentDispatchMarkdown, type DispatchOpts, type DispatchResult } from './dispatch'
@@ -43,7 +44,7 @@ const CHAT_TAG_RE = /^[a-z][a-z0-9-]*$/
 const CONFIG_MODEL_MAX = 100
 const EMBEDDED_HARNESSES_SET = new Set<string>(EMBEDDED_HARNESSES)
 
-function readBody(req: IncomingMessage): Promise<unknown> {
+function readBody(req: IncomingMessage, res: ServerResponse): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
@@ -55,6 +56,18 @@ function readBody(req: IncomingMessage): Promise<unknown> {
       if (size > MAX_BODY) {
         settled = true
         reject(new Error('body too large'))
+        // Stop a hostile/broken client from streaming megabytes into now-discarded 'data'
+        // handlers (`settled` just short-circuits them, it doesn't stop the bytes arriving) —
+        // but deliver the 400 FIRST. The rejection above flows through readBody(req,res)'s
+        // consumer as `.catch(e => send(res, 400, ...))`, which is two microtask hops away;
+        // destroying the socket synchronously (or even one queueMicrotask hop later) races
+        // ahead of that send and RSTs the connection, so against a real http.Server the client
+        // gets ECONNRESET and never sees the error JSON. Hooking the response's own 'finish'
+        // event — which fires only once send()'s res.end() has flushed the 400 to the OS —
+        // guarantees the [send-400, destroy] ordering: the client receives the error body, THEN
+        // the socket is torn down so no further upload is read. res.once (not on) so a normal
+        // later response on a reused socket can't re-trigger the destroy.
+        res.once('finish', () => req.destroy())
       } else {
         chunks.push(c)
       }
@@ -77,9 +90,37 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 function send(res: ServerResponse, status: number, data: unknown): void {
+  // Idempotency guard (belt-and-braces, task 15c): a second send() attempt after headers are
+  // already on the wire would throw ERR_HTTP_HEADERS_SENT — the /queue handler's isolated
+  // notify() catch below is the primary defense against a post-200 throw reaching here, this
+  // is the backstop for any other path that might one day call send() twice for one request.
+  // Warn rather than swallow silently: the test fake THROWS on a double end(), so a future
+  // double-respond bug is loud in tests — runtime must not be quieter than the suite.
+  if (res.headersSent) {
+    console.warn('[the-forge] send() after headers already sent — dropped (double-respond backstop)')
+    return
+  }
   res.statusCode = status
   res.setHeader('Content-Type', 'application/json')
   res.end(JSON.stringify(data))
+}
+
+/** Constant-time secret compare (task 15a). Node HTTP/1.x never arrays a duplicated
+ * X-Forge-Secret — repeats arrive joined as one "a, b" string (only set-cookie arrays),
+ * which simply fails the byte compare below. The typeof guard is defense against the
+ * declared header TYPE (string | string[]) and any non-Node fronting layer that does
+ * array it — reject every non-string shape outright before ever touching
+ * timingSafeEqual, which throws on non-Buffer input. Length
+ * mismatches are also rejected up front: timingSafeEqual requires equal-length buffers, and
+ * comparing lengths first is safe (it leaks only the secret's length, not its content) while
+ * avoiding a thrown RangeError. Only the actual byte comparison — the operation whose timing
+ * could otherwise leak how many leading bytes matched — runs at constant time. */
+function secretMatches(provided: unknown, secret: string): boolean {
+  if (typeof provided !== 'string') return false
+  const providedBuf = Buffer.from(provided, 'utf8')
+  const secretBuf = Buffer.from(secret, 'utf8')
+  if (providedBuf.length !== secretBuf.length) return false
+  return crypto.timingSafeEqual(providedBuf, secretBuf)
 }
 
 /** Extracts the hostname from a Host header value, stripping any port and IPv6 brackets. */
@@ -140,9 +181,16 @@ function rejectDisallowedHost(
 }
 
 // Mutating endpoints that require the shared secret when one is configured. GET /status is
-// deliberately excluded: it's read-only and only exposes ids/statuses, which are non-sensitive.
+// deliberately excluded: it's read-only and was scoped to expose only ids/statuses. In
+// practice its response also includes each item's agent-authored `note` field (see the
+// /status handler below) — free text the applying agent writes on mark_applied/mark_failed,
+// e.g. "needs confirmation: <why>". That's a known asymmetry with the ids/statuses-only
+// framing, accepted rather than gated behind the secret: `note` never carries anything more
+// sensitive than the change-request markdown already visible in the queue file itself, and
+// gating it would mean the watch poller (an unauthenticated GET) can no longer show it either.
 // GET /session/events is also excluded here (it's not a POST) but is secret-gated explicitly
-// in its own handler — see why-comment there.
+// in its own handler — see why-comment there; unlike /status, /session/events carries file
+// paths and command text, which is why it gets the stricter treatment.
 const MUTATING_PATHS = new Set([
   '/__the-forge/queue',
   '/__the-forge/pull',
@@ -258,14 +306,17 @@ export function createForgeMiddleware(
     // was actually configured (older/degraded setups without one keep working unauthenticated).
     //
     // Threat model scope: this guards against a browser-borne cross-origin attacker. It does
-    // NOT defend against another local user on a shared/multi-user machine — this endpoint file
-    // (and the queue dir it manages) is written with mode 644, readable by any local account, so
-    // a co-resident local user can already read the secret and the queue contents directly from
-    // disk. Local-multi-user hardening (e.g. tighter file perms, per-user dirs) is out of scope
-    // for this single-user dev tool.
+    // NOT defend against another local user on a shared/multi-user machine — the endpoint file
+    // is written 0700 dir / 0600 file (writeEndpointFile below) and the queue it manages is
+    // likewise written 0700 dir / 0600 file (Queue.persist), which keeps other local accounts
+    // out under a normal single-user Unix permission model, but that's OS-level file-permission
+    // hardening, not something this HTTP layer enforces or can vouch for (a root/admin account,
+    // a misconfigured umask, or a non-Unix filesystem ACL model all sit outside its reach).
+    // Local-multi-user hardening beyond those file modes is out of scope for this single-user
+    // dev tool.
     if (secret && req.method === 'POST' && MUTATING_PATHS.has(pathname)) {
       const provided = req.headers['x-forge-secret']
-      if (provided !== secret) {
+      if (!secretMatches(provided, secret)) {
         return send(res, 403, { error: 'missing or invalid X-Forge-Secret' })
       }
     }
@@ -294,7 +345,7 @@ export function createForgeMiddleware(
     if (req.method === 'GET' && pathname === '/__the-forge/session/events') {
       if (secret) {
         const provided = req.headers['x-forge-secret']
-        if (provided !== secret) {
+        if (!secretMatches(provided, secret)) {
           return send(res, 403, { error: 'missing or invalid X-Forge-Secret' })
         }
       }
@@ -338,14 +389,24 @@ export function createForgeMiddleware(
 
     if (pathname === '/__the-forge/queue') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           const { request, markdown } = body as { request?: unknown; markdown?: string }
           if (typeof markdown !== 'string') return send(res, 400, { error: 'markdown required' })
           const item = queue.add(request ?? null, markdown)
           send(res, 200, { id: item.id })
           // After the 200 — delivery to a parked watcher must never delay or fail the Send.
-          watcherHub.notify()
+          // Isolated in its own try/catch (task 15c): notify() runs after the response is
+          // already sent, so a throw here has no send() call left to propagate to — left
+          // unguarded, it would escape this .then() as a rejected promise with no attached
+          // .catch, i.e. an unhandled rejection, which crashes the dev server process on
+          // Node >=15 (unhandled rejections no longer just warn). Logging keeps the failure
+          // visible without resurrecting that crash risk.
+          try {
+            watcherHub.notify()
+          } catch (e) {
+            console.warn('[the-forge] watcherHub.notify() threw after /queue responded:', e)
+          }
         })
         .catch((e: Error) => send(res, 400, { error: e.message }))
       return
@@ -359,7 +420,7 @@ export function createForgeMiddleware(
 
     if (pathname === '/__the-forge/mark') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           const { ids, status, note } = body as { ids?: string[]; status?: string; note?: string }
           if (!Array.isArray(ids) || (status !== 'applied' && status !== 'failed')) {
@@ -397,7 +458,7 @@ export function createForgeMiddleware(
 
     if (pathname === '/__the-forge/dispatch') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           // Body overrides are a test/escape-hatch surface only: the overlay client always
           // POSTs {} (see postDispatch in client/index.ts), so in production `agent` comes
@@ -515,7 +576,7 @@ export function createForgeMiddleware(
       // an absent session must be indistinguishable to callers (same 404 body either way).
       if (dispatchConfig.embedded === false) return send(res, 404, { error: 'embedded session unavailable' })
       if (!session) return send(res, 404, { error: 'embedded session unavailable' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           const { text, element } = (body ?? {}) as { text?: unknown; element?: unknown }
           // Validation order (brief, binding): text first — an invalid element must never
@@ -556,7 +617,7 @@ export function createForgeMiddleware(
       // when the consumer has disabled the embedded rung entirely.
       if (dispatchConfig.embedded === false) return send(res, 404, { error: 'embedded session unavailable' })
       if (!session) return send(res, 404, { error: 'embedded session unavailable' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           const { model, permissionMode, effort, harness } = (body ?? {}) as {
             model?: unknown
@@ -618,7 +679,7 @@ export function createForgeMiddleware(
     if (pathname === '/__the-forge/approval') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
       if (!session) return send(res, 404, { error: 'embedded session unavailable' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           const { toolName, detail } = (body ?? {}) as { toolName?: unknown; detail?: unknown }
           const tn = typeof toolName === 'string' ? toolName : ''
@@ -637,7 +698,7 @@ export function createForgeMiddleware(
     if (pathname === '/__the-forge/approval/decide') {
       if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
       if (!session) return send(res, 404, { error: 'embedded session unavailable' })
-      readBody(req)
+      readBody(req, res)
         .then((body) => {
           const { id, allow } = (body ?? {}) as { id?: unknown; allow?: unknown }
           if (typeof id !== 'string' || typeof allow !== 'boolean') {

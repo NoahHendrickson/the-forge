@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import http from 'node:http'
+import { AddressInfo } from 'node:net'
 import { EventEmitter } from 'node:events'
 import { Queue } from '../../src/server/queue'
 import { WatcherHub } from '../../src/server/watchers'
@@ -26,11 +28,23 @@ const { createForgeMiddleware, writeEndpointFile, removeEndpointFile, DEVTOOLS_J
   '../../src/server/endpoints'
 )
 
-function fakeReq(method: string, url: string, body?: unknown, headers: Record<string, string> = {}) {
-  const req = new EventEmitter() as EventEmitter & { method: string; url: string; headers: Record<string, string> }
+function fakeReq(method: string, url: string, body?: unknown, headers: Record<string, string | string[]> = {}) {
+  const req = new EventEmitter() as EventEmitter & {
+    method: string
+    url: string
+    headers: Record<string, string | string[]>
+    destroyed: boolean
+    destroy(): void
+  }
   req.method = method
   req.url = url
   req.headers = headers
+  req.destroyed = false
+  // Real IncomingMessage#destroy — readBody's too-large trip calls this (task 15b); other
+  // paths never call it, so this is a harmless no-op there.
+  req.destroy = () => {
+    req.destroyed = true
+  }
   process.nextTick(() => {
     if (body !== undefined) req.emit('data', Buffer.from(JSON.stringify(body)))
     req.emit('end')
@@ -43,10 +57,20 @@ function fakeRes() {
     statusCode: 0,
     body: '',
     headers: {} as Record<string, string>,
-    // The /wait handler registers a 'close' listener (long-poll cleanup); other handlers
-    // never call res.on. Stored so tests can simulate the client vanishing mid-hold.
+    // Mirrors real http.ServerResponse#headersSent — flips true on the first end() call.
+    // send()'s idempotency guard (task 15c) reads this; endCallCount lets tests assert a
+    // handler never attempted to respond twice for one request.
+    headersSent: false,
+    endCallCount: 0,
+    // The /wait handler registers a 'close' listener (long-poll cleanup) and readBody's
+    // oversized guard registers a one-shot 'finish' listener (task 15b — destroy after the
+    // response is written). Stored so tests can simulate the client vanishing mid-hold and so
+    // end() can fire 'finish' the way real http.ServerResponse does.
     listeners: {} as Record<string, () => void>,
     on(event: string, cb: () => void) {
+      this.listeners[event] = cb
+    },
+    once(event: string, cb: () => void) {
       this.listeners[event] = cb
     },
     emitClose() {
@@ -56,8 +80,21 @@ function fakeRes() {
       this.headers[k] = v
     },
     end(s?: string) {
+      // Real Node throws ERR_HTTP_HEADERS_SENT on a second end() — reproduced here so a
+      // handler that (pre-fix) attempts to respond twice for one request surfaces as a loud
+      // failure (an uncaught throw / unhandled rejection) instead of silently overwriting the
+      // first response, same as the task 15c regression this suite guards against.
+      if (this.headersSent) {
+        throw new Error('ERR_HTTP_HEADERS_SENT: Cannot send headers after they are sent to the client (fake res)')
+      }
+      this.headersSent = true
+      this.endCallCount++
       this.body = s ?? ''
       this.done?.()
+      // Real ServerResponse emits 'finish' once the body is flushed — fire it AFTER body is
+      // set so the oversized guard's req.destroy() observes the response already written,
+      // proving the [send-400, destroy] ordering (task 15b).
+      this.listeners['finish']?.()
     },
     done: undefined as (() => void) | undefined,
   }
@@ -88,6 +125,28 @@ describe('forge middleware', () => {
     expect(res.statusCode).toBe(200)
     const { id } = JSON.parse(res.body)
     expect(queue.get(id)!.markdown).toBe('# md')
+  })
+
+  it('isolates a watcherHub.notify() throw after the /queue 200 — the response stays the already-sent 200, no unhandled rejection, no second send attempted (task 15c)', async () => {
+    const hub = new WatcherHub({ claim: () => queue.pull() })
+    vi.spyOn(hub, 'notify').mockImplementation(() => {
+      throw new Error('notify boom')
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mwWatch = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, hub)
+    const res = fakeRes()
+    await run(mwWatch, fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { host: 'localhost:5173' }), res)
+    // If notify()'s throw escaped to the outer .catch, it would attempt a second send(res, 400,
+    // ...) — fakeRes.end() throws on that second call (mirrors real ERR_HTTP_HEADERS_SENT), so
+    // reaching this assertion at all already proves no unhandled rejection occurred; the status
+    // check below proves the ORIGINAL 200 was never clobbered.
+    expect(res.statusCode).toBe(200)
+    expect(res.endCallCount).toBe(1)
+    const { id } = JSON.parse(res.body)
+    expect(queue.get(id)!.markdown).toBe('x')
+    expect(hub.notify).toHaveBeenCalledTimes(1)
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    warnSpy.mockRestore()
   })
 
   it('pull claims and returns pending items via POST', async () => {
@@ -300,18 +359,91 @@ describe('forge middleware', () => {
     })
   })
 
-  it('400s oversize bodies without double-settling', async () => {
+  it('400s oversize bodies without double-settling, and destroys the request socket ONLY AFTER the 400 is written (task 15b) — the client gets the error before the stream is cut', async () => {
+    // Ordering is the whole point: an oversized upload must receive the 400 body, THEN have its
+    // socket torn down. Record both events in one array — destroy fires from the response's
+    // 'finish' listener (via fakeRes.end above), so [send-400, destroy] proves the fix and would
+    // catch a regression back to destroy-first (which RSTs the connection before the client
+    // reads the error — see the real-http.Server test below for the ECONNRESET consequence).
+    const order: string[] = []
     const res = fakeRes()
-    const req = new EventEmitter() as never
-    ;(req as { method: string }).method = 'POST'
-    ;(req as { url: string }).url = '/__the-forge/queue'
-    ;(req as { headers: object }).headers = { host: 'localhost:5173' }
+    const realEnd = res.end.bind(res)
+    res.end = ((s?: string) => {
+      order.push('send-400')
+      return realEnd(s)
+    }) as typeof res.end
+    const req = new EventEmitter() as unknown as EventEmitter & {
+      method: string
+      url: string
+      headers: Record<string, string>
+      destroyed: boolean
+      destroy(): void
+    }
+    req.method = 'POST'
+    req.url = '/__the-forge/queue'
+    req.headers = { host: 'localhost:5173' }
+    req.destroyed = false
+    req.destroy = () => {
+      order.push('destroy')
+      req.destroyed = true
+    }
     process.nextTick(() => {
-      ;(req as EventEmitter).emit('data', Buffer.alloc(1024 * 1024 + 1))
-      ;(req as EventEmitter).emit('end')
+      req.emit('data', Buffer.alloc(1024 * 1024 + 1))
+      req.emit('end')
     })
     await run(mw, req, res)
     expect(res.statusCode).toBe(400)
+    expect(req.destroyed).toBe(true)
+    expect(order).toEqual(['send-400', 'destroy'])
+  })
+
+  it('delivers the 400 status + JSON body to a real oversized client, THEN closes the socket (task 15b, real http.Server)', async () => {
+    // The fake-res test above proves the [send-400, destroy] call ordering; this one proves the
+    // consequence a fake can't: against a genuine http.Server + genuine socket, an oversized
+    // client actually RECEIVES the 400 error body (not ECONNRESET) before the connection ends.
+    const server = http.createServer((req, res) => {
+      mw(req, res, () => {
+        res.statusCode = 404
+        res.end()
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+    try {
+      const result = await new Promise<{ status?: number; body: string; err?: string }>((resolve) => {
+        let settled = false
+        const finish = (r: { status?: number; body: string; err?: string }) => {
+          if (settled) return
+          settled = true
+          resolve(r)
+        }
+        const creq = http.request(
+          {
+            host: '127.0.0.1',
+            port,
+            method: 'POST',
+            path: '/__the-forge/queue',
+            headers: { host: 'localhost:5173', 'content-type': 'application/json' },
+          },
+          (cres) => {
+            let body = ''
+            cres.on('data', (c) => (body += c))
+            cres.on('end', () => finish({ status: cres.statusCode, body }))
+            cres.on('close', () => finish({ status: cres.statusCode, body }))
+          }
+        )
+        // The write-side may RST once the server destroys — that's expected; only surface it as
+        // an error if the response never arrived at all.
+        creq.on('error', (e) => finish({ body: '', err: (e as Error).message }))
+        creq.write(Buffer.alloc(1024 * 1024 + 1))
+        creq.end()
+      })
+      expect(result.err).toBeUndefined()
+      expect(result.status).toBe(400)
+      expect(JSON.parse(result.body)).toEqual({ error: 'body too large' })
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
   })
 
   describe('shared secret', () => {
@@ -346,6 +478,51 @@ describe('forge middleware', () => {
         res
       )
       expect(res.statusCode).toBe(200)
+    })
+
+    it('403s POST /queue with a duplicated X-Forge-Secret header (Node joins repeats into one comma-separated string)', async () => {
+      // The realistic wire shape: Node HTTP/1.x arrays only set-cookie — a repeated
+      // X-Forge-Secret arrives as the single string "SECRET, SECRET", which must fail the
+      // byte compare. This is the honest behavioral pin for duplicate rejection.
+      const res = fakeRes()
+      await run(
+        secured,
+        fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { host: 'localhost:5173', 'x-forge-secret': `${SECRET}, ${SECRET}` }),
+        res
+      )
+      expect(res.statusCode).toBe(403)
+    })
+
+    it('403s POST /queue with an array-shaped secret header (type-shape defense — a non-Node fronting layer could array it)', async () => {
+      // NOT a shape Node itself produces for this header (see the test above) — this pins
+      // secretMatches' typeof guard, which exists because the TS header type is
+      // string | string[] and timingSafeEqual throws on non-Buffer input.
+      const res = fakeRes()
+      await run(
+        secured,
+        fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { host: 'localhost:5173', 'x-forge-secret': [SECRET, SECRET] }),
+        res
+      )
+      expect(res.statusCode).toBe(403)
+    })
+
+    it('a send() attempt after headers are already sent is dropped WITH a console.warn (the 15c backstop is not silent)', async () => {
+      // The test fake throws on a double end() but production would swallow it silently —
+      // a future double-respond bug must be loud at runtime too, matching the /queue
+      // notify-isolation warn.
+      const res = fakeRes()
+      res.headersSent = true // headers already on the wire — the handler's send() must hit the guard
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        // Not run(): with the write swallowed, end() never fires and run()'s promise
+        // never settles — invoke the middleware directly and let the sync handler finish.
+        secured(fakeReq('GET', '/__the-forge/status', undefined, { host: 'localhost:5173' }) as never, res as never, () => {})
+        await new Promise((r) => setTimeout(r, 10))
+        expect(res.endCallCount).toBe(0) // guard swallowed the write…
+        expect(warn).toHaveBeenCalledTimes(1) // …but said so
+      } finally {
+        warn.mockRestore()
+      }
     })
 
     it('403s POST /pull and POST /mark missing the header', async () => {
@@ -1308,6 +1485,16 @@ describe('session endpoints (Task 4)', () => {
     it('GET /session/events 403s with a wrong secret', async () => {
       const res = fakeRes()
       await run(mwSecured, fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173', 'x-forge-secret': 'wrong' }), res)
+      expect(res.statusCode).toBe(403)
+    })
+
+    it('GET /session/events 403s with an array-shaped secret header (type-shape defense, this call site too)', async () => {
+      const res = fakeRes()
+      await run(
+        mwSecured,
+        fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173', 'x-forge-secret': [SECRET, SECRET] }),
+        res
+      )
       expect(res.statusCode).toBe(403)
     })
 

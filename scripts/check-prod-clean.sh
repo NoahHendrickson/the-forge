@@ -41,7 +41,10 @@ echo "PASS: Next.js production build is clean"
 # of it. Still a regression tripwire, not a target.
 MAX_UNPACKED_KB=320
 PACK_JSON=$(npm pack --dry-run --json -w forge-mode 2>/dev/null)
-UNPACKED_KB=$(printf '%s' "$PACK_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(Math.ceil(j[0].unpackedSize/1024))})')
+# String(...) around the number: Node's console colorizes bare numbers under FORCE_COLOR
+# (Claude Code background shells set FORCE_COLOR=3), which would wrap the digits in ANSI
+# escapes and trip the ^[0-9]+$ guard below into a false FAIL. Strings are never colorized.
+UNPACKED_KB=$(printf '%s' "$PACK_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(String(Math.ceil(j[0].unpackedSize/1024)))})')
 # Guard against a silent PASS: [ -gt ] on an empty/non-numeric value errors to stderr but
 # evaluates false, which would fall through to the PASS lines — the one failure mode this
 # gate exists to prevent. (Unreachable today only because node throws first under pipefail.)
@@ -54,6 +57,29 @@ if [ "$UNPACKED_KB" -gt "$MAX_UNPACKED_KB" ]; then
   exit 1
 fi
 echo "PASS: package size ${UNPACKED_KB}KB (budget ${MAX_UNPACKED_KB}KB)"
+
+# Client-bundle budget gate: dist/client.js is the browser overlay bundle served at
+# GET /__the-forge/client.js — the 250KB figure is cited throughout docs/CLAUDE.md as a
+# real budget, but until now nothing enforced it. wc -c is portable macOS/Linux (unlike
+# `stat`, whose flags differ between the two). String(...) here for the same reason as the
+# package-size gate above: bare console.log numbers get ANSI-wrapped under FORCE_COLOR.
+CLIENT_BUDGET_KB=250
+CLIENT_JS_PATH=packages/the-forge/dist/client.js
+if [ ! -f "$CLIENT_JS_PATH" ]; then
+  echo "FAIL: ${CLIENT_JS_PATH} does not exist" >&2
+  exit 1
+fi
+CLIENT_BYTES=$(wc -c < "$CLIENT_JS_PATH" | tr -d ' ')
+CLIENT_KB=$(node -e "console.log(String(Math.ceil(${CLIENT_BYTES}/1024)))")
+if ! [[ "$CLIENT_KB" =~ ^[0-9]+$ ]]; then
+  echo "FAIL: could not determine client bundle size (got '${CLIENT_KB}')" >&2
+  exit 1
+fi
+if [ "$CLIENT_KB" -gt "$CLIENT_BUDGET_KB" ]; then
+  echo "FAIL: dist/client.js is ${CLIENT_KB}KB — exceeds the ${CLIENT_BUDGET_KB}KB budget" >&2
+  exit 1
+fi
+echo "PASS: client bundle size ${CLIENT_KB}KB (budget ${CLIENT_BUDGET_KB}KB)"
 
 # Tarball-content gate: the published package must be dist/ plus the handful of files npm
 # auto-includes (package.json always; README.md/LICENSE once they exist at the package

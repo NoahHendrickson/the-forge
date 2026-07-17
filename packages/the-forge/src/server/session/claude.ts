@@ -21,9 +21,16 @@ export const EDIT_TIER_ALLOW: string[] = [
   'Edit',
   'Write',
   'MultiEdit',
-  // NotebookEdit is the same tier as Edit/Write (a project-scoped file edit). TodoWrite is
-  // the CLI's own scratchpad, used habitually in headless turns — prompting a designer with
-  // Allow/Deny for it would be pure noise (and each prompt parks up to 110s in the overlay).
+  // NotebookEdit is the same tier as Edit/Write. TODO(scoping, surfaced for Noah in the PR
+  // body): these bare rule names are PATH-UNSCOPED — Claude Code's allow rules only support
+  // path scoping via a glob suffix (e.g. 'Edit(src/**)'), which none of these use, so this
+  // list auto-approves an edit/write ANYWHERE the CLI process can reach, not just inside the
+  // project the design-mode session was started against — including files outside the repo
+  // entirely, e.g. ~/.claude/settings.json. That's the ratified "edits auto, Bash prompts"
+  // posture as actually implemented today, not a project-scoped guarantee; narrowing these to
+  // project-relative globs is an open decision, not yet made. TodoWrite is the CLI's own
+  // scratchpad, used habitually in headless turns — prompting a designer with Allow/Deny for
+  // it would be pure noise (and each prompt parks up to 110s in the overlay).
   'NotebookEdit',
   'TodoWrite',
   'mcp__the-forge__pull_design_edits',
