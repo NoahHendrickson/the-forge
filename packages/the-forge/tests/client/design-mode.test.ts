@@ -933,6 +933,87 @@ describe('composer send-everything verb + watch strip gating (Task 3)', () => {
     expect(urls).toContain('/__the-forge/session/say')
   })
 
+  // Task 9 (review finding): a second ↑ fired while the first gesture's drafts leg is still
+  // in flight used to resolve immediately (the re-entrancy guard returned Promise.resolve(true)
+  // synchronously), so the second gesture's chat leg raced /say ahead of the first gesture's own
+  // /dispatch — defeating the structural drafts-before-chat ordering the test above pins. The fix
+  // makes the re-entrancy guard return the SAME in-flight promise, so a second gesture's chat leg
+  // waits for the real queue+dispatch outcome exactly like the first gesture's does.
+  it('a second ↑ before /queue resolves: /session/say still fires only after /dispatch settles (Task 9)', async () => {
+    let resolveQueue!: (v: { ok: boolean; json: () => Promise<{ id: string }> }) => void
+    let resolveDispatch!: (v: { ok: boolean; json: () => Promise<unknown> }) => void
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return new Promise((resolve) => (resolveQueue = resolve))
+      if (url === '/__the-forge/dispatch') return new Promise((resolve) => (resolveDispatch = resolve))
+      if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'first gesture text'
+    clickSend(panel.root) // gesture 1 — /queue POST fired, unresolved
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+
+    clickSend(panel.root) // gesture 2 — drafts leg re-entrant, chat leg must NOT race ahead
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+
+    let urls = fetchMock.mock.calls.map(([url]) => url)
+    expect(urls.filter((u) => u === '/__the-forge/queue')).toHaveLength(1) // still exactly one /queue POST
+    expect(urls).not.toContain('/__the-forge/session/say') // neither gesture's chat leg has fired yet
+
+    resolveQueue({ ok: true, json: async () => ({ id: 'q1' }) })
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+    urls = fetchMock.mock.calls.map(([url]) => url)
+    expect(urls).toContain('/__the-forge/dispatch')
+    expect(urls).not.toContain('/__the-forge/session/say') // /dispatch still unsettled — chat must hold
+
+    resolveDispatch({ ok: true, json: async () => ({ rung: 'manual', detail: '' }) })
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+    urls = fetchMock.mock.calls.map(([url]) => url)
+    expect(urls).toContain('/__the-forge/session/say')
+    expect(urls.filter((u) => u === '/__the-forge/session/say')).toHaveLength(1) // chatInFlight collapses the two gestures to one POST
+  })
+
+  // Task 9, Case B: the exact scenario the false-return contract exists to prevent — if the
+  // FIRST gesture's /queue POST fails, a second gesture fired before that failure is known must
+  // not let its chat leg through either (it would reference edits that never queued).
+  it('a second ↑ before the first /queue POST fails: zero /session/say POSTs from either gesture (Task 9)', async () => {
+    let rejectQueue!: (e: Error) => void
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/__the-forge/queue') return new Promise((_resolve, reject) => (rejectQueue = reject))
+      if (url === '/__the-forge/session/say') return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      if (url.startsWith('/__the-forge/session/events')) return new Promise<never>(() => {})
+      return Promise.resolve({ ok: true, json: async () => ({ watcher: 'none', session: 'idle' }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { mode, drafts, panel } = fullSetup()
+    mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    drafts.apply(btn, 'padding-top', '24px')
+    const textarea = panel.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'still typed this'
+    clickSend(panel.root) // gesture 1 — /queue POST fired, unresolved
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+
+    clickSend(panel.root) // gesture 2 — shares the same in-flight drafts promise
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+
+    rejectQueue(new Error('network down'))
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+
+    const urls = fetchMock.mock.calls.map(([url]) => url)
+    expect(urls).not.toContain('/__the-forge/session/say')
+    expect(urls.filter((u) => u === '/__the-forge/queue')).toHaveLength(1)
+    const errorRows = panel.root.querySelectorAll('.session-error-row')
+    expect(errorRows.length).toBe(1) // renders once, not once per gesture
+    expect(textarea.value).toBe('still typed this') // never swallow the typed message
+  })
+
   // Review fix 1 (Important): the old button flashed 'Send failed' on a failed /queue POST —
   // with the button retired, the drafts leg must surface its failure through the same
   // transient-error mechanism the chat leg already uses (renderTransientError), or a failed

@@ -20,8 +20,12 @@ export interface ComposerSendOpts {
    * leave ComposerSend re-exposing nearly every DesignMode internal as a constructor option for
    * no real encapsulation win, so the leg stays put and this module only needs to know WHEN it
    * settles and HOW: resolves true once the request is queued AND /dispatch has settled (or the
-   * leg was a no-op: no-changes/already-sent/re-entrancy), false when the /queue POST failed —
-   * false means the chat leg must not fire (2026-07-10 review; see send()). */
+   * leg was a no-op: no-changes/already-sent), false when the /queue POST failed — false means
+   * the chat leg must not fire (2026-07-10 review; see send()). Re-entrancy (a second ↑ while a
+   * drafts leg is already in flight) returns the in-flight leg's OWN promise (Task 9) rather than
+   * resolving immediately — so a second gesture's chat leg waits for the real queue+dispatch
+   * outcome exactly like the first gesture's does, instead of racing /say ahead of /dispatch (or
+   * firing even when the in-flight /queue POST is about to fail). */
   sendDraftsLeg: () => Promise<boolean>
   /** this.drafts.elementCount() > 0 at click time — decides send()'s branch (await the drafts
    * leg before the chat leg vs. fire the chat leg immediately), without this module needing its
