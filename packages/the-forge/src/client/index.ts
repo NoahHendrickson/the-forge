@@ -486,8 +486,10 @@ export class DesignMode {
    * session with it) before ComposerSend fires /session/say, so the server's nudge-before-FIFO
    * flush is guaranteed to see the nudge first. Resolves FALSE when the /queue POST failed —
    * ComposerSend skips the chat leg on false (nothing was queued; the typed text survives in
-   * the textarea). No-op outcomes (no-changes/already-sent/re-entrancy) resolve true: the
-   * gesture degrades to chat-only.
+   * the textarea). No-op outcomes (no-changes/already-sent) resolve true: the gesture degrades
+   * to chat-only. A re-entrant call (Task 9) is NOT an always-true no-op — it returns the
+   * in-flight leg's own promise and shares its outcome, so it can resolve false too (the
+   * in-flight /queue POST failing suppresses the second gesture's chat leg as well).
    *
    * This method (and draftsInFlight above) stayed here rather than moving into composer-send.ts
    * whole — see ComposerSendOpts#sendDraftsLeg's doc comment in composer-send.ts for why: it
