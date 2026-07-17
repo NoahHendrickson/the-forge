@@ -278,6 +278,25 @@ describe('Queue', () => {
       expect(a.pull()).toEqual([])
       expect(b.pull().map((i) => i.id)).not.toContain(itemX.id)
     })
+
+    // The stale-PULL sibling of the test above: here the stale instance's first contact
+    // after the other server's mark() is the pull() itself. Its pre-merge claim flips the
+    // stale pending copy to claimed, but the persist inside pull() adopts the disk's
+    // `applied` over it — the RETURNED array must reflect that merged truth too, or the
+    // endpoint delivers the already-applied item's markdown to the agent once more.
+    it('a stale pull() does not deliver an item the disk merge just revealed as applied', () => {
+      const a = new Queue(dir)
+      const itemX = a.add({}, 'x')
+
+      const b = new Queue(dir) // loads state now: itemX pending, known to both instances
+
+      a.pull()
+      a.mark([itemX.id], 'applied', 'a-applied-it')
+
+      const delivered = b.pull()
+      expect(delivered.map((i) => i.id)).not.toContain(itemX.id)
+      expect(b.get(itemX.id)!.status).toBe('applied')
+    })
   })
 
   describe('pruning basis (finishedAt)', () => {

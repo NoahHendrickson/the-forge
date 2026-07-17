@@ -148,7 +148,11 @@ export class Queue {
       item.claimedAt = stamp
     }
     if (claimable.length > 0) this.persist()
-    return claimable
+    // The persist above runs mergeWithDisk, which can adopt another server's terminal copy
+    // OVER an item claimed two lines up (Object.assign onto the same object this array
+    // holds). Deliver only what survived the merge still claimed — returning the pre-merge
+    // array would hand the agent an item the disk already knows is applied/failed.
+    return claimable.filter((i) => i.status === 'claimed')
   }
 
   /**
