@@ -483,10 +483,15 @@ export class CanvasMode {
   /** Backstop for the keyup that never arrives: losing window focus (Cmd+Tab, alt-tab,
    *  clicking another app) mid Space-hold means the OS delivers the keyup to whatever
    *  window now has focus, not this page — spaceHeld would otherwise stick forever and
-   *  the next pointerdown in this window would wrongly start a pan. */
+   *  the next pointerdown in this window would wrongly start a pan. Blur must kill BOTH
+   *  the space-hold state AND any in-flight drag: with the pointer gone no pointermove
+   *  arrives either (so onMove's buttons===0 self-heal can't fire), and the stale onUp
+   *  closure would otherwise catch the REFOCUS click's pointerup — finish() doesn't
+   *  inspect the event — and arm a squelch off the old didPan, eating that unrelated click. */
   private onBlur = (): void => {
-    this.spaceHeld = false
-    if (!this.dragTeardown) this.setCursor('')
+    this.spaceHeld = false // before the teardown: finish() restores the cursor from spaceHeld
+    this.dragTeardown?.() // finish(false) — removes the drag listeners, restores the cursor, no squelch
+    this.setCursor('') // no-drag path: drop the 'grab' affordance (teardown already restored otherwise)
   }
 
   /** Cursor writes go on <html> (the overlay host's parent) so they win over page CSS

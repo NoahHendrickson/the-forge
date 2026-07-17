@@ -419,6 +419,34 @@ describe('CanvasMode gesture edge cases (Task 10: blur, lost pointerup, orphaned
     document.documentElement.style.cursor = ''
   })
 
+  it('blur MID-DRAG tears the gesture down — a refocus-click cannot hit the stale onUp and get squelched', () => {
+    document.documentElement.style.cursor = 'crosshair'
+    const { canvas } = makeCanvas()
+    canvas.setOn(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, buttons: 1, bubbles: true, cancelable: true }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 130, clientY: 80, buttons: 1, bubbles: true })) // didPan = true
+    // Cmd+Tab mid-drag: blur fires; no pointerup/pointercancel ever will, and with the
+    // pointer gone no pointermove either — the buttons===0 self-heal can't trigger.
+    window.dispatchEvent(new Event('blur'))
+    expect(document.documentElement.style.cursor).toBe('crosshair') // drag torn down, cursor restored
+    // The user comes back and clicks something unrelated — its pointerup must NOT hit a
+    // stale onUp closure (which would arm a squelch off the old didPan=true) and its click
+    // must reach the page. Body-dispatched click, same rationale as the pointercancel test.
+    window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    const reached = vi.fn()
+    document.addEventListener('click', reached, true)
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(reached).toHaveBeenCalledTimes(1)
+    document.removeEventListener('click', reached, true)
+    // and the drag really is dead — a stray pointermove writes nothing
+    const before = bodyTransform()
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 500, clientY: 500, buttons: 1, bubbles: true }))
+    expect(bodyTransform()).toBe(before)
+    canvas.setOn(false)
+    document.documentElement.style.cursor = ''
+  })
+
   it('a pointermove reporting buttons===0 self-heals a lost pointerup (app-switch mid-drag)', () => {
     const { canvas } = makeCanvas()
     canvas.setOn(true)
