@@ -904,15 +904,160 @@ describe('CursorAdapter', () => {
       expect('id' in cancel!).toBe(false) // a notification, no id
     })
 
-    it('is a no-op before session-ready', () => {
+    // Was pinned as an unconditional "no-op before session-ready" — that framing went stale
+    // once interrupt() gained the turnQueue-clearing branch below (Task 7): with NO turn
+    // queued there is truly nothing to cancel or complete, so this still writes no
+    // session/cancel AND emits no synthetic turn-complete. The queued-turn case (the actual
+    // bug: send-at-spawn parks a turn that ran anyway) is covered separately below.
+    it('writes no session/cancel and emits no event before session-ready when no turn is queued', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/abs/project' })
+      const w = captureWrites(lastChild())
+
+      adapter.interrupt()
+      expect(w.filter((m) => m.method === 'session/cancel')).toHaveLength(0)
+      expect(events.filter((e) => e.kind !== 'activity')).toHaveLength(0)
+    })
+
+    // The actual bug (Task 7): the manager's send-at-spawn pattern writes the pull/chat turn
+    // via sendTurn() immediately after start(), before session/new has resolved — sendTurn
+    // parks it in turnQueue rather than dropping it. Stop pressed during that ~1.5-2s boot
+    // window used to no-op entirely (no sessionId yet to target session/cancel at), so the
+    // queued turn flushed and ran anyway once session-ready arrived. interrupt() must instead
+    // clear turnQueue AND synthesize the same turn-complete{isError:false} a genuine
+    // session/cancel produces (mirrors the 'cancelled' stopReason mapping above) so the
+    // manager's busy state resolves back to ready instead of hanging on a turn that will
+    // never actually be sent.
+    it('interrupt() before session-ready clears a queued turn and completes it instead of letting it flush', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/abs/project' })
+      const w = captureWrites(lastChild())
+
+      // send-at-spawn: the manager writes the turn before init/session-new ever resolve.
+      adapter.sendTurn('go')
+      adapter.interrupt()
+      const rendered = events.filter((e) => e.kind !== 'activity')
+      expect(rendered).toEqual([{ kind: 'turn-complete', isError: false }])
+
+      // Now let session-ready actually arrive — the cleared queue must not flush.
+      bootFresh(lastChild())
+      expect(w.filter((m) => m.method === 'session/prompt')).toHaveLength(0)
+      expect(events.some((e) => e.kind === 'started')).toBe(true)
+    })
+
+    // Goal-state (3) of the pre-ready cancel contract: the cancel only kills the QUEUED turn,
+    // never the session itself — when the still-running boot later succeeds, the session must
+    // be fully usable and a NEW turn must go out normally.
+    it('session-ready after a pre-ready cancel leaves the session usable — a new turn sends normally', () => {
       const { spawnFn, lastChild } = makeFakeSpawn()
       const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
       adapter.onEvent = () => {}
       adapter.start({ cwd: '/abs/project' })
       const w = captureWrites(lastChild())
 
+      adapter.sendTurn('go')
       adapter.interrupt()
-      expect(w.filter((m) => m.method === 'session/cancel')).toHaveLength(0)
+      bootFresh(lastChild())
+      expect(w.filter((m) => m.method === 'session/prompt')).toHaveLength(0)
+
+      adapter.sendTurn('next')
+      const prompts = w.filter((m) => m.method === 'session/prompt')
+      expect(prompts).toHaveLength(1)
+      const content = (prompts[0]!.params as Record<string, unknown>).prompt as Array<
+        Record<string, unknown>
+      >
+      expect(content[0]!.text).toBe('next')
+    })
+
+    // The stale-resume resurrection hole (Task 7 review): interrupt() pre-ready clears the
+    // queue and synthesizes turn-complete{isError:false}, but the in-flight session/load
+    // round trip keeps running. If that boot then fails with the stale-resume error, failBoot
+    // would emit a SECOND turn-complete{isError:true} for the same boot — and the manager's
+    // stale-retry branch (no state guard: `!_sawStarted && _lastStartResumeId !== undefined`)
+    // would clear the slot, respawn, and RESEND `_inflightTurn`: the exact turn the user just
+    // cancelled. Post-cancel the stale failure must instead surface as session-error — the
+    // manager's pre-started session-error path lands `failed` (no resend), and the next
+    // say()/Send auto-starts fresh from there, so there's no wedge either.
+    it('stale-resume boot failure AFTER a pre-ready cancel → session-error, never a second turn-complete (no resurrection)', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/abs/project', resumeId: '00000000-0000-0000-0000-000000000000' })
+      const w = captureWrites(lastChild())
+
+      adapter.sendTurn('go')
+      adapter.interrupt()
+      // The cancel itself synthesizes exactly one clean completion.
+      expect(events.filter((e) => e.kind !== 'activity')).toEqual([
+        { kind: 'turn-complete', isError: false },
+      ])
+      events.length = 0
+
+      // The boot keeps running and fails stale (same fixture as the un-cancelled stale test,
+      // id rewritten to match our session/load request id 2).
+      pushLine(lastChild(), INIT_RESPONSE)
+      const staleWithMatchingId = JSON.stringify({
+        ...(JSON.parse(LOAD_STALE_ERROR) as Record<string, unknown>),
+        id: 2,
+      })
+      pushLine(lastChild(), staleWithMatchingId)
+
+      const rendered = events.filter((e) => e.kind !== 'activity')
+      // NO turn-complete of any kind — an isError:true here is the manager's stale-retry key
+      // and would resend the cancelled turn; an isError:false would double-complete.
+      expect(rendered.some((e) => e.kind === 'turn-complete')).toBe(false)
+      expect(rendered).toHaveLength(1)
+      expect(rendered[0]!.kind).toBe('session-error')
+      // And the cancelled turn text never reached the wire on this child.
+      expect(w.filter((m) => m.method === 'session/prompt')).toHaveLength(0)
+    })
+
+    // The cancel-then-new-turn race (final-review finding): the synthetic turn-complete's
+    // `ready` transition makes the MANAGER itself flush a parked nudge/chat turn into the
+    // post-cancel window (manager.ts turn-complete arm) — a fresh sendTurn() can arrive
+    // pre-ready with NO user Stop against it. That new turn must get NORMAL boot-failure
+    // semantics: if the still-running boot then fails stale, the adapter must emit the
+    // stale-retry key turn-complete{isError:true} (manager clears the slot, respawns, resends
+    // `_inflightTurn` — which IS the new turn), NOT the post-cancel session-error suppression,
+    // or a turn the user never cancelled would silently lose its auto-resend. So sendTurn's
+    // pre-ready queue branch re-arms bootCancelled = false.
+    it('a fresh pre-ready turn after a cancel re-arms stale-retry — stale failure emits turn-complete{isError:true} again', () => {
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/abs/project', resumeId: '00000000-0000-0000-0000-000000000000' })
+      const w = captureWrites(lastChild())
+
+      adapter.sendTurn('cancelled-turn')
+      adapter.interrupt()
+      // The manager's ready-transition flush sends the parked turn — still pre-ready.
+      adapter.sendTurn('parked-turn')
+      events.length = 0
+
+      pushLine(lastChild(), INIT_RESPONSE)
+      const staleWithMatchingId = JSON.stringify({
+        ...(JSON.parse(LOAD_STALE_ERROR) as Record<string, unknown>),
+        id: 2,
+      })
+      pushLine(lastChild(), staleWithMatchingId)
+
+      const rendered = events.filter((e) => e.kind !== 'activity')
+      // The stale-retry key is back: the manager's retry branch resends _inflightTurn, which
+      // is now 'parked-turn' — exactly the right recovery for a turn nobody cancelled.
+      expect(rendered).toHaveLength(1)
+      const ev = rendered[0]!
+      expect(ev.kind).toBe('turn-complete')
+      if (ev.kind === 'turn-complete') {
+        expect(ev.isError).toBe(true)
+        expect(typeof ev.errorText).toBe('string')
+      }
+      // The CANCELLED text still never reaches the wire (its queue slot was cleared at
+      // interrupt time; the boot failure means nothing flushes on this child at all).
+      expect(w.filter((m) => m.method === 'session/prompt')).toHaveLength(0)
     })
   })
 
@@ -1010,6 +1155,28 @@ describe('CursorAdapter', () => {
       // No new writes after stop(): the late INIT_RESPONSE didn't drive a session/new, and the
       // late sendTurn was dropped.
       expect(w.length).toBe(before)
+    })
+
+    it('a write racing child death does not crash on a stdin EPIPE', () => {
+      // Mirrors claude.test.ts: the child can exit WITHOUT stop() ever being called, leaving
+      // this.child set and this.closed false, so a later write (interrupt here — sendTurn
+      // would queue pre-boot) still lands on a stdin whose other end is already gone. The OS
+      // then reports that asynchronously as an 'error' event (EPIPE / ERR_STREAM_DESTROYED) —
+      // unhandled, that's an uncaught exception in the host Vite/Next dev-server process.
+      const { spawnFn, lastChild } = makeFakeSpawn()
+      const adapter = new CursorAdapter(spawnFn, { mcpBinPath: MCP_BIN })
+      const events = collectEvents(adapter)
+      adapter.start({ cwd: '/abs/project' })
+      bootFresh(lastChild())
+
+      lastChild().simulateExit(0)
+      expect(() => adapter.interrupt()).not.toThrow()
+
+      // Simulate the OS-level EPIPE landing after the write above.
+      expect(() => lastChild().stdin.emit('error', new Error('EPIPE'))).not.toThrow()
+
+      // The session still lands in its normal ended state.
+      expect(events.filter((e) => e.kind === 'ended')).toHaveLength(1)
     })
   })
 })

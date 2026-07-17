@@ -3,7 +3,11 @@ import { randomUUID } from 'node:crypto'
 import type { SessionAdapter, SessionEvent } from './adapter'
 
 export interface SpawnedChild {
-  stdin: { write(s: string): void; end(): void }
+  // stdin carries its own 'error' listener (distinct from the child-level 'error' below): a
+  // write racing the child's death reports EPIPE/ERR_STREAM_DESTROYED asynchronously as an
+  // 'error' event on THIS stream, not on the child. Both adapters attach a listener at spawn
+  // time — see the why-comment at each call site.
+  stdin: { write(s: string): void; end(): void; on(ev: 'error', fn: (err: unknown) => void): void }
   stdout: NodeJS.ReadableStream
   stderr: NodeJS.ReadableStream
   kill(signal?: string): void
@@ -145,6 +149,15 @@ export class ClaudeAdapter implements SessionAdapter {
 
     const child = this.spawnFn('claude', args, { cwd: opts.cwd })
     this.child = child
+
+    // A write racing the child's death (sendTurn/interrupt/setModel/setPermissionMode land
+    // after the process is already gone, but before exit's 'ended' fires and closes us out)
+    // reports EPIPE/ERR_STREAM_DESTROYED asynchronously as an 'error' event on stdin itself —
+    // unhandled, Node treats that as an uncaught exception in the host Vite/Next dev-server
+    // process. The child's death already surfaces through the exit/'error' handlers below;
+    // this listener adds nothing but swallowing that crash. No backpressure/drain handling —
+    // turn payloads are small (YAGNI).
+    child.stdin.on('error', () => {})
 
     let lineBuf = ''
     child.stdout.on('data', (chunk: Buffer | string) => {
