@@ -17,7 +17,10 @@ export type HarnessId = 'claude-code' | 'cursor'
 // type-only import so the union can't drift across the client/server bundle boundary. A type
 // export costs zero runtime bytes in either bundle — the no-imports rule (see header) is
 // about THIS file importing from elsewhere, not about what imports FROM here.
-export type AgentId = 'claude-code' | 'cursor' | 'codex'
+// DERIVED from HarnessId (not hand-spelled) so the "embedded harnesses plus codex" relation
+// is structural: a harness added to HarnessId joins this union automatically — hand-spelling
+// it here would recreate, one level up, the exact drift this type exists to eliminate.
+export type AgentId = HarnessId | 'codex'
 
 export const EMBEDDED_HARNESSES = ['claude-code', 'cursor'] as const
 

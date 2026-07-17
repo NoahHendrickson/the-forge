@@ -13,6 +13,26 @@ import {
 const SRC_FILE = path.join(__dirname, '../../src/shared/chat-constants.ts')
 const GUARDRAILS_FILE = path.join(__dirname, '../../src/shared/guardrails.ts')
 
+// The detector the file scan below runs. Three alternatives: plain imports, single-line
+// re-exports, and the `} from '...'` continuation line Prettier leaves when it wraps a long
+// re-export list — without that third arm, `export {\n  X,\n} from './y'` slips through
+// (neither of its lines starts with `export … from`). Multi-line IMPORTS need no extra arm:
+// their first line already matches `import\s`.
+const IMPORT_OR_REEXPORT_RE = /^\s*(import\s|export\s.*\sfrom\s|\}\s*from\s)/m
+
+describe('the import/re-export detector itself', () => {
+  it('catches multi-line re-exports (Prettier wraps `} from` onto its own line)', () => {
+    expect("export {\n  Thing,\n} from './other'").toMatch(IMPORT_OR_REEXPORT_RE)
+    expect("export { A } from './b'").toMatch(IMPORT_OR_REEXPORT_RE)
+    expect("import fs from 'node:fs'").toMatch(IMPORT_OR_REEXPORT_RE)
+  })
+
+  it('does not false-positive on prose or object literals mentioning "from"', () => {
+    expect("const hint = 'choose from the list'").not.toMatch(IMPORT_OR_REEXPORT_RE)
+    expect('const o = {\n  a: 1,\n}\n').not.toMatch(IMPORT_OR_REEXPORT_RE)
+  })
+})
+
 // Both files declare the identical "bundled into BOTH server and browser — NO imports, ever"
 // invariant in their own header comments (see each file). A single guard loops over both so
 // the rule can't silently apply to only one of them again.
@@ -25,9 +45,10 @@ describe.each([
     // dependencies leaking across the server/browser boundary, not about function exports.
     // `export ... from '...'` re-exports create the exact same dependency edge as a plain
     // `import` (the module still gets pulled into whichever bundle re-exports it), so the
-    // regex must catch both forms, not just `import`.
+    // regex must catch both forms — including Prettier-wrapped multi-line ones — not just
+    // `import` (see IMPORT_OR_REEXPORT_RE's own suite above).
     const code = fs.readFileSync(file, 'utf8')
-    expect(code).not.toMatch(/^\s*(import\s|export\s.*\sfrom\s)/m)
+    expect(code).not.toMatch(IMPORT_OR_REEXPORT_RE)
   })
 })
 

@@ -47,7 +47,7 @@ The build produces bundles in `packages/the-forge/dist/`: `index.js` (root stub 
 
 | Module | Responsibility |
 | --- | --- |
-| `adapter.ts` | `SessionAdapter` interface + `SessionEvent` union — harness-agnostic; `ClaudeAdapter` and `CursorAdapter` implement it, Codex later (C2) |
+| `adapter.ts` | `SessionAdapter` interface + `SessionEvent` union — harness-agnostic; also the shared spawn seam (`SpawnedChild`/`SpawnFn`) and the cross-adapter edit-payload truncation policy (`truncateEditSide`/`EDIT_PAYLOAD_CAP`), so no adapter depends on another; `ClaudeAdapter` and `CursorAdapter` implement it, Codex later (C2) |
 | `claude.ts` | `ClaudeAdapter` — stream-json spawn contract, NDJSON parse, `SessionEvent` mapping; `CLAUDE_ARGS` + `EDIT_TIER_ALLOW` constants |
 | `cursor.ts` | `CursorAdapter` — ACP JSON-RPC spawn contract, kind-split native approvals, replay-safe resume |
 | `manager.ts` | `SessionManager` — process lifecycle (spawn, interrupt, resume) across harnesses; owns harness selection (`harness()`/`setConfig({harness})`) and per-harness `session.json` slots; notifies `ForgeRuntime` on state transitions |
