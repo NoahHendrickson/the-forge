@@ -11,13 +11,23 @@ import {
 } from '../../src/shared/chat-constants'
 
 const SRC_FILE = path.join(__dirname, '../../src/shared/chat-constants.ts')
+const GUARDRAILS_FILE = path.join(__dirname, '../../src/shared/guardrails.ts')
 
-describe('chat-constants: pure data, zero imports (bundled into both server and browser bundles)', () => {
-  it('the source file contains no import statements', () => {
+// Both files declare the identical "bundled into BOTH server and browser — NO imports, ever"
+// invariant in their own header comments (see each file). A single guard loops over both so
+// the rule can't silently apply to only one of them again.
+describe.each([
+  ['chat-constants.ts', SRC_FILE],
+  ['guardrails.ts', GUARDRAILS_FILE],
+])('%s: pure data, zero imports (bundled into both server and browser bundles)', (_label, file) => {
+  it('the source file contains no import statements or re-export-from statements', () => {
     // Still holds with the isHarnessId guard exported — the no-imports rule is about module
     // dependencies leaking across the server/browser boundary, not about function exports.
-    const code = fs.readFileSync(SRC_FILE, 'utf8')
-    expect(code).not.toMatch(/^\s*import\s/m)
+    // `export ... from '...'` re-exports create the exact same dependency edge as a plain
+    // `import` (the module still gets pulled into whichever bundle re-exports it), so the
+    // regex must catch both forms, not just `import`.
+    const code = fs.readFileSync(file, 'utf8')
+    expect(code).not.toMatch(/^\s*(import\s|export\s.*\sfrom\s)/m)
   })
 })
 
