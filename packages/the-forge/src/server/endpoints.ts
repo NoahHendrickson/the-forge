@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Queue } from './queue'
 import { dispatch as realDispatch, augmentDispatchMarkdown, type DispatchOpts, type DispatchResult } from './dispatch'
@@ -55,6 +56,13 @@ function readBody(req: IncomingMessage): Promise<unknown> {
       if (size > MAX_BODY) {
         settled = true
         reject(new Error('body too large'))
+        // Destroy the request socket so a hostile/broken client can't keep streaming
+        // megabytes into now-discarded 'data' handlers (settled just short-circuits them,
+        // it doesn't stop the bytes arriving). Deferred one microtask so it runs after the
+        // rejection's .catch handler (every call site's `send(res, 400, ...)`) has already
+        // written the response — destroying first risks tearing down the shared
+        // request/response socket before the error body reaches the client.
+        queueMicrotask(() => req.destroy())
       } else {
         chunks.push(c)
       }
@@ -77,9 +85,29 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 function send(res: ServerResponse, status: number, data: unknown): void {
+  // Idempotency guard (belt-and-braces, task 15c): a second send() attempt after headers are
+  // already on the wire would throw ERR_HTTP_HEADERS_SENT — the /queue handler's isolated
+  // notify() catch below is the primary defense against a post-200 throw reaching here, this
+  // is the backstop for any other path that might one day call send() twice for one request.
+  if (res.headersSent) return
   res.statusCode = status
   res.setHeader('Content-Type', 'application/json')
   res.end(JSON.stringify(data))
+}
+
+/** Constant-time secret compare (task 15a). A duplicated X-Forge-Secret header arrives from
+ * Node as a string[] rather than a string — reject that (and any other non-string) shape
+ * outright before ever touching timingSafeEqual, which throws on non-Buffer input. Length
+ * mismatches are also rejected up front: timingSafeEqual requires equal-length buffers, and
+ * comparing lengths first is safe (it leaks only the secret's length, not its content) while
+ * avoiding a thrown RangeError. Only the actual byte comparison — the operation whose timing
+ * could otherwise leak how many leading bytes matched — runs at constant time. */
+function secretMatches(provided: unknown, secret: string): boolean {
+  if (typeof provided !== 'string') return false
+  const providedBuf = Buffer.from(provided, 'utf8')
+  const secretBuf = Buffer.from(secret, 'utf8')
+  if (providedBuf.length !== secretBuf.length) return false
+  return crypto.timingSafeEqual(providedBuf, secretBuf)
 }
 
 /** Extracts the hostname from a Host header value, stripping any port and IPv6 brackets. */
@@ -140,9 +168,16 @@ function rejectDisallowedHost(
 }
 
 // Mutating endpoints that require the shared secret when one is configured. GET /status is
-// deliberately excluded: it's read-only and only exposes ids/statuses, which are non-sensitive.
+// deliberately excluded: it's read-only and was scoped to expose only ids/statuses. In
+// practice its response also includes each item's agent-authored `note` field (see the
+// /status handler below) — free text the applying agent writes on mark_applied/mark_failed,
+// e.g. "needs confirmation: <why>". That's a known asymmetry with the ids/statuses-only
+// framing, accepted rather than gated behind the secret: `note` never carries anything more
+// sensitive than the change-request markdown already visible in the queue file itself, and
+// gating it would mean the watch poller (an unauthenticated GET) can no longer show it either.
 // GET /session/events is also excluded here (it's not a POST) but is secret-gated explicitly
-// in its own handler — see why-comment there.
+// in its own handler — see why-comment there; unlike /status, /session/events carries file
+// paths and command text, which is why it gets the stricter treatment.
 const MUTATING_PATHS = new Set([
   '/__the-forge/queue',
   '/__the-forge/pull',
@@ -258,14 +293,17 @@ export function createForgeMiddleware(
     // was actually configured (older/degraded setups without one keep working unauthenticated).
     //
     // Threat model scope: this guards against a browser-borne cross-origin attacker. It does
-    // NOT defend against another local user on a shared/multi-user machine — this endpoint file
-    // (and the queue dir it manages) is written with mode 644, readable by any local account, so
-    // a co-resident local user can already read the secret and the queue contents directly from
-    // disk. Local-multi-user hardening (e.g. tighter file perms, per-user dirs) is out of scope
-    // for this single-user dev tool.
+    // NOT defend against another local user on a shared/multi-user machine — the endpoint file
+    // is written 0700 dir / 0600 file (writeEndpointFile below) and the queue directory it
+    // manages is written 0600 (Queue.persist), which keeps other local accounts out under a
+    // normal single-user Unix permission model, but that's OS-level file-permission hardening,
+    // not something this HTTP layer enforces or can vouch for (a root/admin account, a
+    // misconfigured umask, or a non-Unix filesystem ACL model all sit outside its reach).
+    // Local-multi-user hardening beyond those file modes is out of scope for this single-user
+    // dev tool.
     if (secret && req.method === 'POST' && MUTATING_PATHS.has(pathname)) {
       const provided = req.headers['x-forge-secret']
-      if (provided !== secret) {
+      if (!secretMatches(provided, secret)) {
         return send(res, 403, { error: 'missing or invalid X-Forge-Secret' })
       }
     }
@@ -294,7 +332,7 @@ export function createForgeMiddleware(
     if (req.method === 'GET' && pathname === '/__the-forge/session/events') {
       if (secret) {
         const provided = req.headers['x-forge-secret']
-        if (provided !== secret) {
+        if (!secretMatches(provided, secret)) {
           return send(res, 403, { error: 'missing or invalid X-Forge-Secret' })
         }
       }
@@ -345,7 +383,17 @@ export function createForgeMiddleware(
           const item = queue.add(request ?? null, markdown)
           send(res, 200, { id: item.id })
           // After the 200 — delivery to a parked watcher must never delay or fail the Send.
-          watcherHub.notify()
+          // Isolated in its own try/catch (task 15c): notify() runs after the response is
+          // already sent, so a throw here has no send() call left to propagate to — left
+          // unguarded, it would escape this .then() as a rejected promise with no attached
+          // .catch, i.e. an unhandled rejection, which crashes the dev server process on
+          // Node >=15 (unhandled rejections no longer just warn). Logging keeps the failure
+          // visible without resurrecting that crash risk.
+          try {
+            watcherHub.notify()
+          } catch (e) {
+            console.warn('[the-forge] watcherHub.notify() threw after /queue responded:', e)
+          }
         })
         .catch((e: Error) => send(res, 400, { error: e.message }))
       return

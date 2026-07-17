@@ -26,11 +26,23 @@ const { createForgeMiddleware, writeEndpointFile, removeEndpointFile, DEVTOOLS_J
   '../../src/server/endpoints'
 )
 
-function fakeReq(method: string, url: string, body?: unknown, headers: Record<string, string> = {}) {
-  const req = new EventEmitter() as EventEmitter & { method: string; url: string; headers: Record<string, string> }
+function fakeReq(method: string, url: string, body?: unknown, headers: Record<string, string | string[]> = {}) {
+  const req = new EventEmitter() as EventEmitter & {
+    method: string
+    url: string
+    headers: Record<string, string | string[]>
+    destroyed: boolean
+    destroy(): void
+  }
   req.method = method
   req.url = url
   req.headers = headers
+  req.destroyed = false
+  // Real IncomingMessage#destroy — readBody's too-large trip calls this (task 15b); other
+  // paths never call it, so this is a harmless no-op there.
+  req.destroy = () => {
+    req.destroyed = true
+  }
   process.nextTick(() => {
     if (body !== undefined) req.emit('data', Buffer.from(JSON.stringify(body)))
     req.emit('end')
@@ -43,6 +55,11 @@ function fakeRes() {
     statusCode: 0,
     body: '',
     headers: {} as Record<string, string>,
+    // Mirrors real http.ServerResponse#headersSent — flips true on the first end() call.
+    // send()'s idempotency guard (task 15c) reads this; endCallCount lets tests assert a
+    // handler never attempted to respond twice for one request.
+    headersSent: false,
+    endCallCount: 0,
     // The /wait handler registers a 'close' listener (long-poll cleanup); other handlers
     // never call res.on. Stored so tests can simulate the client vanishing mid-hold.
     listeners: {} as Record<string, () => void>,
@@ -56,6 +73,15 @@ function fakeRes() {
       this.headers[k] = v
     },
     end(s?: string) {
+      // Real Node throws ERR_HTTP_HEADERS_SENT on a second end() — reproduced here so a
+      // handler that (pre-fix) attempts to respond twice for one request surfaces as a loud
+      // failure (an uncaught throw / unhandled rejection) instead of silently overwriting the
+      // first response, same as the task 15c regression this suite guards against.
+      if (this.headersSent) {
+        throw new Error('ERR_HTTP_HEADERS_SENT: Cannot send headers after they are sent to the client (fake res)')
+      }
+      this.headersSent = true
+      this.endCallCount++
       this.body = s ?? ''
       this.done?.()
     },
@@ -88,6 +114,28 @@ describe('forge middleware', () => {
     expect(res.statusCode).toBe(200)
     const { id } = JSON.parse(res.body)
     expect(queue.get(id)!.markdown).toBe('# md')
+  })
+
+  it('isolates a watcherHub.notify() throw after the /queue 200 — the response stays the already-sent 200, no unhandled rejection, no second send attempted (task 15c)', async () => {
+    const hub = new WatcherHub({ claim: () => queue.pull() })
+    vi.spyOn(hub, 'notify').mockImplementation(() => {
+      throw new Error('notify boom')
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mwWatch = createForgeMiddleware(queue, [], undefined, { agent: 'claude-code', channelsFlag: false }, hub)
+    const res = fakeRes()
+    await run(mwWatch, fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { host: 'localhost:5173' }), res)
+    // If notify()'s throw escaped to the outer .catch, it would attempt a second send(res, 400,
+    // ...) — fakeRes.end() throws on that second call (mirrors real ERR_HTTP_HEADERS_SENT), so
+    // reaching this assertion at all already proves no unhandled rejection occurred; the status
+    // check below proves the ORIGINAL 200 was never clobbered.
+    expect(res.statusCode).toBe(200)
+    expect(res.endCallCount).toBe(1)
+    const { id } = JSON.parse(res.body)
+    expect(queue.get(id)!.markdown).toBe('x')
+    expect(hub.notify).toHaveBeenCalledTimes(1)
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    warnSpy.mockRestore()
   })
 
   it('pull claims and returns pending items via POST', async () => {
@@ -300,18 +348,29 @@ describe('forge middleware', () => {
     })
   })
 
-  it('400s oversize bodies without double-settling', async () => {
+  it('400s oversize bodies without double-settling, and destroys the request socket (task 15b) so the client cannot keep streaming into discarded handlers', async () => {
     const res = fakeRes()
-    const req = new EventEmitter() as never
-    ;(req as { method: string }).method = 'POST'
-    ;(req as { url: string }).url = '/__the-forge/queue'
-    ;(req as { headers: object }).headers = { host: 'localhost:5173' }
+    const req = new EventEmitter() as unknown as EventEmitter & {
+      method: string
+      url: string
+      headers: Record<string, string>
+      destroyed: boolean
+      destroy(): void
+    }
+    req.method = 'POST'
+    req.url = '/__the-forge/queue'
+    req.headers = { host: 'localhost:5173' }
+    req.destroyed = false
+    req.destroy = () => {
+      req.destroyed = true
+    }
     process.nextTick(() => {
-      ;(req as EventEmitter).emit('data', Buffer.alloc(1024 * 1024 + 1))
-      ;(req as EventEmitter).emit('end')
+      req.emit('data', Buffer.alloc(1024 * 1024 + 1))
+      req.emit('end')
     })
     await run(mw, req, res)
     expect(res.statusCode).toBe(400)
+    expect(req.destroyed).toBe(true)
   })
 
   describe('shared secret', () => {
@@ -346,6 +405,16 @@ describe('forge middleware', () => {
         res
       )
       expect(res.statusCode).toBe(200)
+    })
+
+    it('403s POST /queue with a duplicated X-Forge-Secret header (task 15a — Node delivers repeated headers as an array)', async () => {
+      const res = fakeRes()
+      await run(
+        secured,
+        fakeReq('POST', '/__the-forge/queue', { markdown: 'x' }, { host: 'localhost:5173', 'x-forge-secret': [SECRET, SECRET] }),
+        res
+      )
+      expect(res.statusCode).toBe(403)
     })
 
     it('403s POST /pull and POST /mark missing the header', async () => {
@@ -1308,6 +1377,16 @@ describe('session endpoints (Task 4)', () => {
     it('GET /session/events 403s with a wrong secret', async () => {
       const res = fakeRes()
       await run(mwSecured, fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173', 'x-forge-secret': 'wrong' }), res)
+      expect(res.statusCode).toBe(403)
+    })
+
+    it('GET /session/events 403s with a duplicated secret header (task 15a, this call site too)', async () => {
+      const res = fakeRes()
+      await run(
+        mwSecured,
+        fakeReq('GET', '/__the-forge/session/events', undefined, { host: 'localhost:5173', 'x-forge-secret': [SECRET, SECRET] }),
+        res
+      )
       expect(res.statusCode).toBe(403)
     })
 
