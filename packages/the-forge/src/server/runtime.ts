@@ -7,7 +7,7 @@ import { SessionManager } from './session/manager'
 import { ApprovalRegistry, type ApprovalFeedItem } from './session/approvals'
 import { ClaudeAdapter } from './session/claude'
 import { CursorAdapter } from './session/cursor'
-import { isHarnessId, type HarnessId } from '../shared/chat-constants'
+import { isHarnessId, type HarnessId, type AgentId } from '../shared/chat-constants'
 
 /** Per-connection session handles exposed to the middleware. The fan-out broadcaster
  * (`onApproval`) bridges the registry's single constructor-injected onChange callback
@@ -39,7 +39,9 @@ export interface ForgeRuntime {
 export function createForgeRuntime(
   resolvedRoot: string,
   viteRoot?: string,
-  opts?: { defaultAgent?: 'claude-code' | 'cursor' | 'codex' }
+  // AgentId (not an inline union) — same drift rule as DispatchOpts['agent'] and agent.ts's
+  // AgentName: a fourth agent added to the shared union must fail to compile here too.
+  opts?: { defaultAgent?: AgentId }
 ): ForgeRuntime {
   const forgeDir = path.join(resolvedRoot, '.the-forge')
   const queue = new Queue(forgeDir)
