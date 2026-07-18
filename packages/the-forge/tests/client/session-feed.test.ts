@@ -1171,7 +1171,10 @@ describe('diff disclosure', () => {
     expect(details).not.toBeNull()
     expect(details?.tagName).toBe('DETAILS')
     expect(details?.open).toBe(false) // collapsed by default
-    expect(details?.querySelector('summary')?.textContent).toBe('App.tsx')
+    // Summary = basename + line-delta stats (chat-ux polish: Cursor's +N −M edit-card shape)
+    expect(details?.querySelector('.diff-file')?.textContent).toBe('App.tsx')
+    expect(details?.querySelector('.diff-stat-add')?.textContent).toBe('+1')
+    expect(details?.querySelector('.diff-stat-del')?.textContent).toBe('−1')
     expect(details?.querySelector('.diff-before')?.textContent).toBe('py-2.5')
     expect(details?.querySelector('.diff-after')?.textContent).toBe('py-6')
     feed.stop()
@@ -1207,7 +1210,7 @@ describe('diff disclosure', () => {
     const details = row?.querySelector('.session-diff') as HTMLDetailsElement | null
     expect(details).not.toBeNull()
     expect(details?.open).toBe(false) // same collapsed-by-default as the started path
-    expect(details?.querySelector('summary')?.textContent).toBe('App.tsx')
+    expect(details?.querySelector('.diff-file')?.textContent).toBe('App.tsx')
     expect(details?.querySelector('.diff-before')?.textContent).toBe('py-2.5')
     expect(details?.querySelector('.diff-after')?.textContent).toBe('py-6')
     feed.stop()
@@ -1366,7 +1369,11 @@ describe('chat input cluster', () => {
     expect(sent).toEqual([1])
   })
 
-  it('plain Enter (no modifier) does not send', () => {
+  // Plain Enter SENDS since the 2026-07-18 chat-ux polish (the universal chat-composer
+  // convention — ChatGPT/Cursor/claude.ai); Shift+Enter is the newline, IME composition
+  // never sends. This deliberately flips the prompt-mode-era "plain Enter does not send"
+  // pin — see docs/plans/2026-07-18-chat-ux-polish.md.
+  it('plain Enter (no modifier) sends', () => {
     const sent: number[] = []
     const feed = new SessionFeed()
     feed.onSend = () => sent.push(1)
@@ -1374,6 +1381,28 @@ describe('chat input cluster', () => {
     const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
     textarea.value = 'hello'
     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    expect(sent).toEqual([1])
+  })
+
+  it('Shift+Enter does not send (newline stays a newline)', () => {
+    const sent: number[] = []
+    const feed = new SessionFeed()
+    feed.onSend = () => sent.push(1)
+    document.body.appendChild(feed.root)
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'hello'
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true }))
+    expect(sent).toEqual([])
+  })
+
+  it('Enter mid-IME-composition does not send', () => {
+    const sent: number[] = []
+    const feed = new SessionFeed()
+    feed.onSend = () => sent.push(1)
+    document.body.appendChild(feed.root)
+    const textarea = feed.root.querySelector('.chat-textarea') as HTMLTextAreaElement
+    textarea.value = 'こんにちは'
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }))
     expect(sent).toEqual([])
   })
 
@@ -1513,7 +1542,8 @@ describe('chat input cluster', () => {
     feed.renderTransientError('chat queue full — wait for the current turn')
     const row = feed.root.querySelector('.session-error-row')
     expect(row).not.toBeNull()
-    expect(row?.textContent).toBe('chat queue full — wait for the current turn')
+    // Error cards carry a ⚠ glyph span now (chat-ux polish) — the message rides .error-text.
+    expect(row?.querySelector('.error-text')?.textContent).toBe('chat queue full — wait for the current turn')
   })
 })
 
@@ -1895,6 +1925,185 @@ describe('row cap', () => {
 // Anchor-at-top (chat-composer-chip spec): the tail spacer makes room so a sent
 // user bubble can scroll to the top of the list while the reply streams below.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Chat-ux polish (2026-07-18): thinking placeholder, turn-done marker, tool steps
+// ---------------------------------------------------------------------------
+
+describe('thinking placeholder', () => {
+  it('user-text shows the working row below the bubble; first delta clears it', async () => {
+    const lines = [
+      feedLine(1, { kind: 'user-text', text: 'hello' }),
+      feedLine(0, { kind: 'assistant-delta', text: 'Hi' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.chat-working')).toBeNull()
+    feed.stop()
+  })
+
+  it('working row is present while nothing has answered yet, singleton, before the spacer', async () => {
+    const lines = [
+      feedLine(1, { kind: 'user-text', text: 'one' }),
+      feedLine(2, { kind: 'user-text', text: 'two' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const list = feed.root.querySelector('.session-list') as HTMLElement
+    const working = list.querySelectorAll('.chat-working')
+    expect(working).toHaveLength(1)
+    // Still ahead of the tail spacer, which stays the last child
+    expect(list.lastElementChild?.className).toBe('feed-tail-spacer')
+    expect(working[0].nextElementSibling?.className).toBe('feed-tail-spacer')
+    feed.stop()
+  })
+
+  it('tool-started, turn-complete, session-error, and ended each clear the working row', async () => {
+    const terminals = [
+      { kind: 'tool-started', toolId: 't1', name: 'Read', detail: 'x.ts' },
+      { kind: 'turn-complete', isError: false },
+      { kind: 'session-error', text: 'boom' },
+      { kind: 'ended' },
+    ]
+    for (const terminal of terminals) {
+      const lines = [feedLine(1, { kind: 'user-text', text: 'go' }), feedLine(2, terminal)]
+      const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+      document.body.appendChild(feed.root)
+      feed.start()
+      await flush()
+      expect(feed.root.querySelector('.chat-working'), `after ${terminal.kind}`).toBeNull()
+      feed.stop()
+      feed.root.remove()
+    }
+  })
+
+  it('an approval request also clears the working row', async () => {
+    const lines = [
+      feedLine(1, { kind: 'user-text', text: 'go' }),
+      JSON.stringify({ type: 'approval', id: 'a1', toolName: 'Bash', detail: 'ls' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.chat-working')).toBeNull()
+    expect(feed.root.querySelector('.session-approval')).not.toBeNull()
+    feed.stop()
+  })
+
+  it('the working row never consumes a MAX_ROWS slot', async () => {
+    // 200 user-texts exactly fill the cap; the working row must not evict bubble #1.
+    const lines = Array.from({ length: 200 }, (_, i) => feedLine(i + 1, { kind: 'user-text', text: `m${i}` }))
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush(500)
+    expect(feed.root.querySelectorAll('.chat-user')).toHaveLength(200)
+    expect(feed.root.querySelectorAll('.chat-working')).toHaveLength(1)
+    feed.stop()
+  })
+})
+
+describe('turn-done marker', () => {
+  it('a clean turn-complete renders ✓ Done with no cost span when costUsd is absent', async () => {
+    const lines = [feedLine(1, { kind: 'turn-complete', isError: false })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const row = feed.root.querySelector('.turn-done')
+    expect(row).not.toBeNull()
+    expect(row?.querySelector('.turn-done-check')?.textContent).toBe('✓')
+    expect(row?.textContent).toContain('Done')
+    expect(row?.querySelector('.turn-done-cost')).toBeNull()
+    feed.stop()
+  })
+
+  it('carries the per-turn cost when the event has one', async () => {
+    const lines = [feedLine(1, { kind: 'turn-complete', isError: false, costUsd: 0.0234 })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.turn-done-cost')?.textContent).toBe('· $0.023')
+    feed.stop()
+  })
+
+  it('an error turn renders the error row and NO done marker', async () => {
+    const lines = [feedLine(1, { kind: 'turn-complete', isError: true, errorText: 'nope' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    expect(feed.root.querySelector('.session-error-row')).not.toBeNull()
+    expect(feed.root.querySelector('.turn-done')).toBeNull()
+    feed.stop()
+  })
+})
+
+describe('tool step affordances', () => {
+  it('tool rows carry icon, name, and detail spans', async () => {
+    const lines = [feedLine(1, { kind: 'tool-started', toolId: 't1', name: 'Read', detail: 'src/App.tsx' })]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const row = feed.root.querySelector('[data-tool-id="t1"]')
+    expect(row?.querySelector('.tool-icon svg')).not.toBeNull()
+    expect(row?.querySelector('.tool-name')?.textContent).toBe('Read')
+    expect(row?.querySelector('.tool-detail')?.textContent).toBe('src/App.tsx')
+    feed.stop()
+  })
+
+  it('tool-finished settles the row: .tool-done on the row, .done on the spinner', async () => {
+    const lines = [
+      feedLine(1, { kind: 'tool-started', toolId: 't1', name: 'Read', detail: 'x.ts' }),
+      feedLine(2, { kind: 'tool-finished', toolId: 't1' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const row = feed.root.querySelector('[data-tool-id="t1"]')
+    expect(row?.classList.contains('tool-done')).toBe(true)
+    const spinner = row?.querySelector('.session-spinner')
+    expect(spinner?.textContent).toBe('✓')
+    expect(spinner?.classList.contains('done')).toBe(true)
+    feed.stop()
+  })
+})
+
+describe('assistant markdown rendering', () => {
+  it('assistant bubbles render markdown blocks (code fence -> pre.md-code)', async () => {
+    const text = 'Here:\n```\nconst x = 1\n```'
+    const feed = new SessionFeed({ fetchFn: makeFetchFn([feedLine(1, { kind: 'assistant-text', text })]) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const bubble = feed.root.querySelector('.chat-msg.chat-assistant')
+    expect(bubble?.querySelector('pre.md-code')?.textContent).toBe('const x = 1')
+    feed.stop()
+  })
+
+  it('streaming deltas re-render markdown as it accumulates', async () => {
+    const lines = [
+      feedLine(0, { kind: 'assistant-delta', text: 'use `py-' }),
+      feedLine(0, { kind: 'assistant-delta', text: '6` here' }),
+    ]
+    const feed = new SessionFeed({ fetchFn: makeFetchFn(lines) })
+    document.body.appendChild(feed.root)
+    feed.start()
+    await flush()
+    const bubble = feed.root.querySelector('.chat-streaming')
+    expect(bubble?.querySelector('code.md-code-inline')?.textContent).toBe('py-6')
+    expect(bubble?.textContent).toBe('use py-6 here')
+    feed.stop()
+  })
+})
 
 describe('feed tail spacer + anchor', () => {
   it('the spacer is the last child of .session-list and rows insert before it', async () => {

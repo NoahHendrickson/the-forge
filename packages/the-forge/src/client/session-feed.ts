@@ -2,13 +2,15 @@
 // requires X-Forge-Secret for auth (same as all mutating endpoints), so we use
 // fetch + ReadableStream + manual NDJSON parsing instead.
 import { createButton } from './ui/button'
-import { basename } from './source'
-import { CHAT_TEXT_MAX, isHarnessId, type HarnessId } from '../shared/chat-constants'
-import { AGENT_DISPLAY_NAME } from './agent'
+import { CHAT_TEXT_MAX, type HarnessId } from '../shared/chat-constants'
 import { ComposerConfig } from './composer-config'
 import { FeedAnchor } from './feed-anchor'
 import { type SessionState } from './watch'
 import { popOnce } from './motion'
+import {
+  makeAssistantBubble, makeConfigRow, makeDiffDetails, makeErrorRow, makeToolRow,
+  makeTurnDoneRow, makeUserBubble, makeWorkingRow, setAssistantContent,
+} from './chat-rows'
 
 // Shared untyped-JSON guard for the edit payload carried by tool-started AND (Cursor's
 // late-diff path) tool-finished — the wire outlives any one bundle build, so shape is checked
@@ -21,24 +23,9 @@ function parseEditPayload(raw: unknown): { file: string; before: string; after: 
     : undefined
 }
 
-// Hand-rolled before/after disclosure — no diff library. Collapsed by default (native
-// <details> behavior); summary is just the basename so long paths don't blow out the row.
-// One builder for both attachment points: rows opened WITH a diff (tool-started, Claude) and
-// rows upgraded later (tool-finished, Cursor's terminal tool_call_update).
-function makeDiffDetails(edit: { file: string; before: string; after: string }): HTMLElement {
-  const details = document.createElement('details')
-  details.className = 'session-diff'
-  const summary = document.createElement('summary')
-  summary.textContent = basename(edit.file)
-  const before = document.createElement('pre')
-  before.className = 'diff-before'
-  before.textContent = edit.before
-  const after = document.createElement('pre')
-  after.className = 'diff-after'
-  after.textContent = edit.after
-  details.append(summary, before, after)
-  return details
-}
+/** The textarea's autosize growth cap — roughly seven lines; past it the textarea scrolls
+ * internally (every modern composer caps growth so the feed keeps most of the panel). */
+const TEXTAREA_MAX_PX = 140
 
 // ---------------------------------------------------------------------------
 // Stream line types (NDJSON, one object per line)
@@ -179,6 +166,11 @@ export class SessionFeed {
    * non-delta event creates it; subsequent deltas append to it; the next final assistant-text
    * replaces its content and clears this back to null (no duplicate bubble). */
   private streamingBubble: HTMLElement | null = null
+  /** The singleton "Thinking" placeholder (chat-ux polish) — inserted after a user-text
+   * bubble, removed by the next sign of turn activity. Deliberately NOT in rowList: it is
+   * ephemeral chrome, not history, so it must never consume a MAX_ROWS slot or survive as
+   * a row the cap could evict out from under this reference. */
+  private workingRow: HTMLElement | null = null
   /** Accumulated text of the current streaming bubble — tracked separately from the DOM node's
    * textContent so appends are O(1) string concat rather than re-reading the DOM each delta. */
   private streamingText = ''
@@ -297,7 +289,13 @@ export class SessionFeed {
     // a message the send can never succeed at.
     this.textarea.maxLength = CHAT_TEXT_MAX
     this.textarea.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      // Plain Enter SENDS; Shift+Enter inserts the newline (2026-07-18 chat-ux polish —
+      // the universal chat-composer convention: ChatGPT/Cursor/claude.ai all treat Enter as
+      // send; the old Cmd/Ctrl-Enter-only contract dated from the prompt-mode popup era,
+      // before this was a chat surface). Cmd/Ctrl-Enter still lands in the same branch
+      // (they're Enter without Shift), so trained fingers keep working. The isComposing
+      // guard keeps Enter-to-commit inside an IME composition from firing a send.
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault()
         this.trySend()
       }
@@ -309,8 +307,12 @@ export class SessionFeed {
     })
     // Re-evaluate the send↔stop morph on every keystroke — typing during a busy turn must
     // flip ■ back to ↑ immediately (a mid-turn message queues via the existing FIFO), not just
-    // whenever busyish itself next transitions.
-    this.textarea.addEventListener('input', () => this.updateSendMorph())
+    // whenever busyish itself next transitions. Autosize rides the same event: the textarea
+    // grows with typed content up to TEXTAREA_MAX_PX, then scrolls (chat-ux polish).
+    this.textarea.addEventListener('input', () => {
+      this.updateSendMorph()
+      this.autosize()
+    })
     this.inputCluster.append(this.composerChips, this.disabledReason, this.textarea)
 
     // Composer send/stop button: morphs between ↑ (send, fires onSend) and ■ (interrupt, fires
@@ -461,7 +463,7 @@ export class SessionFeed {
    * for host-side failures that never arrive over the NDJSON stream (e.g. a 429 from POST
    * /session/say). Public so index.ts can call it straight from the fetch handler. */
   renderTransientError(text: string): void {
-    this.addRow(this.makeErrorRow(text))
+    this.addRow(makeErrorRow(text))
   }
 
   /** Guard + fire onSend — composer consolidation Task 1 moved everything past the guard out
@@ -494,6 +496,17 @@ export class SessionFeed {
   clearText(): void {
     this.textarea.value = ''
     this.updateSendMorph()
+    this.autosize()
+  }
+
+  /** Grows the textarea to fit its content (up to TEXTAREA_MAX_PX, then it scrolls) —
+   * 'auto' first so shrinking works too, since scrollHeight never reports smaller than the
+   * current box. The scrollHeight>0 guard makes this a no-op under jsdom (layout-free). */
+  private autosize(): void {
+    this.textarea.style.height = 'auto'
+    if (this.textarea.scrollHeight > 0) {
+      this.textarea.style.height = `${Math.min(this.textarea.scrollHeight, TEXTAREA_MAX_PX)}px`
+    }
   }
 
   /** The element currently attached via setChip, shaped as the {source, tag} pair
@@ -715,6 +728,7 @@ export class SessionFeed {
       }
       case 'assistant-text': {
         const text = typeof e.text === 'string' ? e.text : ''
+        this.clearWorkingRow()
         this.finalizeAssistantText(text)
         this.setBusyish(true)
         break
@@ -722,13 +736,18 @@ export class SessionFeed {
       case 'user-text': {
         const text = typeof e.text === 'string' ? e.text : ''
         const element = typeof e.element === 'object' && e.element !== null ? (e.element as Record<string, unknown>) : undefined
-        const bubble = this.makeUserBubble(text, element)
+        const bubble = makeUserBubble(text, element)
         this.addRow(bubble)
+        // "Thinking" placeholder fills the dead air until the turn's first activity —
+        // shown BELOW the just-sent bubble, removed by the next non-user event. Inserted
+        // after anchor() so the anchored scroll measures the bubble, not the placeholder.
         this.anchor.anchor(bubble)
+        this.showWorkingRow()
         break
       }
       case 'assistant-delta': {
         const text = typeof e.text === 'string' ? e.text : ''
+        this.clearWorkingRow()
         this.appendDelta(text)
         this.setBusyish(true)
         break
@@ -738,14 +757,15 @@ export class SessionFeed {
         const name = typeof e.name === 'string' ? e.name : ''
         const detail = typeof e.detail === 'string' ? e.detail : ''
         const edit = parseEditPayload(e.edit)
-        const row = this.makeToolRow(toolId, name, detail, edit)
+        const row = makeToolRow(toolId, name, detail, edit)
+        this.clearWorkingRow()
         this.toolRows.set(toolId, row)
         this.addRow(row)
         this.setBusyish(true)
         break
       }
       case 'config-changed': {
-        this.addRow(this.makeConfigRow(e))
+        this.addRow(makeConfigRow(e))
         // Seeds the pickers AND records the last user-chosen effort/permission for a later
         // respawn's `started` to re-apply — see seedFromConfigChanged (composer-config.ts).
         this.config.seedFromConfigChanged(e)
@@ -755,8 +775,14 @@ export class SessionFeed {
         const toolId = typeof e.toolId === 'string' ? e.toolId : ''
         const row = this.toolRows.get(toolId)
         if (row) {
+          // The ✓ textContent flip is the pinned hook; .done/.tool-done are the CSS
+          // settle hooks added by the chat-ux polish (spin stops, check goes green).
+          row.classList.add('tool-done')
           const spinner = row.querySelector('.session-spinner')
-          if (spinner) spinner.textContent = '✓'
+          if (spinner) {
+            spinner.textContent = '✓'
+            spinner.classList.add('done')
+          }
           // Late-arriving diff (Cursor delivers it on the terminal tool_call_update): upgrade
           // the row with the same collapsed disclosure a started-edit gets. Started-payload
           // wins when both carry one — the started diff was rendered when the row opened and
@@ -773,9 +799,15 @@ export class SessionFeed {
         break
       }
       case 'turn-complete': {
+        this.clearWorkingRow()
         if (e.isError === true) {
           const errorText = typeof e.errorText === 'string' ? e.errorText : 'Turn error'
-          this.addRow(this.makeErrorRow(errorText))
+          this.addRow(makeErrorRow(errorText))
+        } else {
+          // Completion affordance (chat-ux polish): a clean turn ends with a subtle
+          // "✓ Done · $cost" marker — the "when is it finished" signal Cursor draws as a
+          // checkpoint line and Claude Code prints as its per-turn result/cost line.
+          this.addRow(makeTurnDoneRow(typeof e.costUsd === 'number' ? e.costUsd : undefined))
         }
         this.setBusyish(false)
         this.clearStreamingBubble()
@@ -783,12 +815,14 @@ export class SessionFeed {
       }
       case 'session-error': {
         const text = typeof e.text === 'string' ? e.text : 'Session error'
-        this.addRow(this.makeErrorRow(text))
+        this.clearWorkingRow()
+        this.addRow(makeErrorRow(text))
         this.setBusyish(false)
         this.clearStreamingBubble()
         break
       }
       case 'ended': {
+        this.clearWorkingRow()
         this.setBusyish(false)
         this.clearStreamingBubble()
         break
@@ -808,6 +842,26 @@ export class SessionFeed {
   private setBusyish(on: boolean): void {
     this.busyish = on
     this.updateSendMorph()
+  }
+
+  /** Inserts (or re-inserts, keeping it the newest row) the singleton "Thinking"
+   * placeholder before the anchor spacer. Not addRow on purpose — see workingRow's field
+   * doc: ephemeral chrome stays out of the MAX_ROWS bookkeeping entirely. */
+  private showWorkingRow(): void {
+    this.clearWorkingRow()
+    this.workingRow = makeWorkingRow()
+    this.list.insertBefore(this.workingRow, this.anchor.spacer)
+    this.anchor.update()
+  }
+
+  /** Removes the placeholder — called by every event that proves the turn is doing (or has
+   * finished doing) something: delta, final text, tool-started, approval, turn-complete,
+   * session-error, ended. A no-op when none is showing. */
+  private clearWorkingRow(): void {
+    if (this.workingRow === null) return
+    this.workingRow.remove()
+    this.workingRow = null
+    this.anchor.update()
   }
 
   /** Invalidates a stale in-progress streaming bubble (final-review fix 5) — called from
@@ -830,7 +884,7 @@ export class SessionFeed {
    * connection) falls through to a fresh bubble. */
   private finalizeAssistantText(text: string): void {
     if (this.streamingBubble) {
-      this.streamingBubble.textContent = text
+      setAssistantContent(this.streamingBubble, text)
       this.streamingBubble.classList.remove('chat-streaming')
       this.streamingBubble = null
       this.streamingText = ''
@@ -841,92 +895,25 @@ export class SessionFeed {
       this.anchor.update()
       return
     }
-    this.addRow(this.makeAssistantBubble(text))
+    this.addRow(makeAssistantBubble(text))
   }
 
   /** First delta after a non-delta event (or after the prior stream finalized) creates the
    * bubble via addRow (so MAX_ROWS cap applies once, at creation); every later delta in the
-   * same run just mutates its textContent in place — no repeated addRow/cap bookkeeping. */
+   * same run re-renders the accumulated text in place (setAssistantContent — a full markdown
+   * pass, so partially streamed block syntax settles as it closes) — no repeated addRow/cap
+   * bookkeeping. */
   private appendDelta(text: string): void {
     if (!this.streamingBubble) {
       this.streamingText = ''
-      const bubble = this.makeAssistantBubble('')
+      const bubble = makeAssistantBubble('')
       bubble.classList.add('chat-streaming')
       this.streamingBubble = bubble
       this.addRow(bubble)
     }
     this.streamingText += text
-    this.streamingBubble.textContent = this.streamingText
+    setAssistantContent(this.streamingBubble, this.streamingText)
     this.anchor.update()
-  }
-
-  private makeAssistantBubble(text: string): HTMLElement {
-    // Full text, no truncation — unlike the old snippet row, chat bubbles show the whole
-    // message (the panel scrolls instead).
-    const row = document.createElement('div')
-    row.className = 'session-row chat-msg chat-assistant'
-    row.textContent = text
-    return row
-  }
-
-  private makeUserBubble(text: string, element?: Record<string, unknown>): HTMLElement {
-    const row = document.createElement('div')
-    row.className = 'session-row chat-msg chat-user'
-    row.append(document.createTextNode(text))
-    if (element) {
-      const source = typeof element.source === 'string' ? element.source : ''
-      const tag = typeof element.tag === 'string' ? element.tag : ''
-      if (source || tag) {
-        const ref = document.createElement('div')
-        ref.className = 'chat-msg-ref'
-        ref.textContent = [tag, source].filter(Boolean).join(' · ')
-        row.append(ref)
-      }
-    }
-    return row
-  }
-
-  private makeToolRow(
-    toolId: string,
-    name: string,
-    detail: string,
-    edit?: { file: string; before: string; after: string },
-  ): HTMLElement {
-    const row = document.createElement('div')
-    row.className = 'session-row session-tool-row'
-    row.dataset.toolId = toolId
-    const spinner = document.createElement('span')
-    spinner.className = 'session-spinner'
-    // Braille spinning glyph; tool-finished flips this to ✓ by matching toolId
-    spinner.textContent = '\u28CB'
-    const label = document.createElement('span')
-    label.textContent = ` ${name} ${detail}`.trimEnd()
-    row.append(spinner, label)
-    if (edit) {
-      row.append(makeDiffDetails(edit))
-    }
-    return row
-  }
-
-  private makeConfigRow(e: Record<string, unknown>): HTMLElement {
-    const parts: string[] = []
-    // Renders the harness's DISPLAY NAME (AGENT_DISPLAY_NAME), not the wire id — same rule as
-    // the watch strip's "Linked to Claude Code" copy, never the raw 'claude-code'/'cursor'.
-    if (isHarnessId(e.harness)) parts.push(`harness → ${AGENT_DISPLAY_NAME[e.harness]}`)
-    if (typeof e.model === 'string') parts.push(`model → ${e.model}`)
-    if (typeof e.permissionMode === 'string') parts.push(`permissions → ${e.permissionMode}`)
-    if (typeof e.effort === 'string') parts.push(`effort → ${e.effort}`)
-    const row = document.createElement('div')
-    row.className = 'session-row session-config'
-    row.textContent = parts.join(' · ')
-    return row
-  }
-
-  private makeErrorRow(text: string): HTMLElement {
-    const row = document.createElement('div')
-    row.className = 'session-row session-error-row'
-    row.textContent = text
-    return row
   }
 
   private renderApproval(id: string, toolName: string, detail: string): void {
@@ -935,13 +922,27 @@ export class SessionFeed {
     // appending again would overwrite the approvalRows entry and leave a ghost row
     // (with live buttons) that approval-resolved could no longer collapse.
     if (this.approvalRows.has(id)) return
+    // An approval request IS turn activity — the harness stopped to ask, so the
+    // "Thinking" placeholder must yield to the card that explains the pause.
+    this.clearWorkingRow()
     const row = document.createElement('div')
     row.className = 'session-row session-approval'
     row.dataset.approvalId = id
 
-    const label = document.createElement('span')
-    label.textContent = `${toolName}: ${detail}`
+    // Tool name emphasized, command/detail on its own mono line (chat-ux polish) — the
+    // decision card must be scannable: WHAT wants to run, then exactly what it would do.
+    const body = document.createElement('div')
+    body.className = 'approval-body'
+    const tool = document.createElement('span')
+    tool.className = 'approval-tool'
+    tool.textContent = toolName
+    const detailLine = document.createElement('span')
+    detailLine.className = 'approval-detail'
+    detailLine.textContent = detail
+    body.append(tool, detailLine)
 
+    const actions = document.createElement('div')
+    actions.className = 'approval-actions'
     const allowBtn = createButton({ label: 'Allow', className: 'session-approval-allow' })
     allowBtn.type = 'button'
     allowBtn.addEventListener('click', () => this.onDecide(id, true))
@@ -949,8 +950,9 @@ export class SessionFeed {
     const denyBtn = createButton({ label: 'Deny', className: 'session-approval-deny' })
     denyBtn.type = 'button'
     denyBtn.addEventListener('click', () => this.onDecide(id, false))
+    actions.append(allowBtn, denyBtn)
 
-    row.append(label, allowBtn, denyBtn)
+    row.append(body, actions)
     this.approvalRows.set(id, row)
     this.addRow(row)
   }

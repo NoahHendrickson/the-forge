@@ -38,8 +38,10 @@ echo "PASS: Next.js production build is clean"
 # stripping was already applied to every bundle). Raised 280→320 for milestone B (chat surface
 # — ratified 2026-07-09): session-feed.ts grew into the full chat surface (bubbles, deltas,
 # diff rows, input, element chip, model/permission pickers) and PromptBox was retired in favor
-# of it. Still a regression tripwire, not a target.
-MAX_UNPACKED_KB=320
+# of it. Still a regression tripwire, not a target. Raised 320→336 with the 2026-07-18
+# chat-ux polish (~8KB of real surface: the zero-dep markdown renderer, chat-rows builders
+# with tool icons/diff stats, thinking/turn-done affordances, and their CSS).
+MAX_UNPACKED_KB=336
 PACK_JSON=$(npm pack --dry-run --json -w forge-mode 2>/dev/null)
 # String(...) around the number: Node's console colorizes bare numbers under FORCE_COLOR
 # (Claude Code background shells set FORCE_COLOR=3), which would wrap the digits in ANSI
