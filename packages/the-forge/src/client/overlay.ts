@@ -615,13 +615,74 @@ button {
   padding: 3px 6px; border-radius: 6px; font: 400 var(--text-sm) var(--font-ui);
   color: var(--text-secondary); word-break: break-word;
 }
-.session-error-row { color: #F87171; }
-.session-tool-row { color: var(--text-muted); }
-.session-spinner { flex: none; color: var(--accent-soft); font-size: 10px; }
-.session-approval {
-  border: 1px solid rgba(255,255,255,0.1); padding: 4px 6px; border-radius: 6px;
+` +
+// Error rows read as cards (chat-ux polish): red-tinted surface + ⚠ glyph, the same
+// tint idiom as .chip-failed. The glyph is a ::before, NOT a DOM span — nine host-side
+// tests pin the row's exact textContent, and a purely presentational icon has no business
+// in the text contract. .error-text keeps min-width:0 so long CLI error strings wrap
+// inside the card instead of blowing the row wide.
+`.session-error-row {
+  color: #F87171; background: rgba(248,113,113,0.08);
+  border: 1px solid rgba(248,113,113,0.18); padding: 6px 8px;
+  flex-wrap: nowrap; align-items: flex-start;
 }
-.session-approval-resolved { color: var(--text-muted); font-style: italic; border: none; }
+.session-error-row::before { content: '⚠'; flex: none; }
+.session-error-row .error-text { flex: 1 1 auto; min-width: 0; }
+` +
+// Tool rows as steps (chat-ux polish): [category icon] [name] [detail·mono·ellipsis]
+// [spinner→✓ at the right edge]. The spinner spins via forge-spin while the tool runs;
+// tool-finished adds .done (spin stops, check settles green) + .tool-done on the row.
+// nowrap + min-width:0 on .tool-detail is what makes one-line ellipsis work inside the
+// flex row; the diff disclosure still wraps below via its own flex-basis: 100%.
+`.session-tool-row { color: var(--text-muted); padding: 2px 6px; }
+.tool-icon { flex: none; width: 12px; height: 12px; color: var(--text-faint); }
+.tool-icon svg { width: 12px; height: 12px; display: block; }
+.tool-name { flex: none; font-weight: 500; color: var(--text-secondary); }
+.tool-detail {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 400 var(--text-xs) var(--font-mono); color: var(--text-muted);
+}
+.session-spinner {
+  flex: none; margin-left: auto; color: var(--accent-soft); font-size: 10px;
+  animation: forge-spin 0.9s linear infinite;
+}
+.session-spinner.done { animation: none; color: var(--positive); }
+.tool-done .tool-icon { color: var(--text-muted); }
+` +
+// Approval card (chat-ux polish): the one row that ASKS something gets the accent
+// treatment — tinted card, tool name emphasized, detail in mono, Allow as the primary
+// action. Resolution still collapses to the bare Allowed/Denied line (pinned contract).
+`.session-approval {
+  border: 1px solid rgba(13,153,255,0.35); background: rgba(13,153,255,0.07);
+  padding: 6px 8px; border-radius: 8px;
+}
+.approval-body { flex: 1 1 100%; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.approval-tool { font-weight: 600; color: var(--text-primary); }
+.approval-detail {
+  font: 400 var(--text-xs) var(--font-mono); color: var(--text-secondary);
+  word-break: break-word;
+}
+.approval-actions { display: flex; gap: 6px; }
+.session-approval .session-approval-allow { background: var(--accent); color: #fff; }
+.session-approval .session-approval-allow:hover { background: var(--accent); opacity: 0.85; }
+.session-approval-resolved { color: var(--text-muted); font-style: italic; border: none; background: none; }
+` +
+// Turn-completion marker (chat-ux polish): the "this exchange is finished" signal —
+// muted, small, with the check in the positive green and the per-turn cost when known.
+`.turn-done { color: var(--text-muted); font: 400 var(--text-xs) var(--font-ui); gap: 4px; }
+.turn-done-check { color: var(--positive); }
+.turn-done-cost { color: var(--text-faint); }
+` +
+// "Thinking" placeholder (chat-ux polish): fills the dead air between a sent message and
+// the first token/tool — three staggered pulsing dots, the ChatGPT/Claude shimmer idiom.
+`.chat-working { color: var(--text-muted); }
+.chat-working-dots { display: inline-flex; gap: 3px; align-items: center; }
+.chat-working-dot {
+  width: 4px; height: 4px; border-radius: 50%; background: currentColor;
+  animation: forge-dot-pulse 1.2s ease-in-out infinite;
+}
+.chat-working-dot:nth-child(2) { animation-delay: 0.2s; }
+.chat-working-dot:nth-child(3) { animation-delay: 0.4s; }
 ` +
 // Chat-entrance motion: content enters as fade+rise, deliberately NOT springy — the research
 // line is "springs for interactive elements, plain rise for content"; the approval card is the
@@ -644,21 +705,70 @@ button {
 // .session-config: the config-changed summary line.
 // CSS class names here are test hooks — extend, don't rename.
 `.chat-msg { flex-direction: column; align-items: flex-start; gap: 2px; white-space: pre-wrap; }
-.chat-user { background: var(--control); border-radius: 8px; padding: 8px 10px; }
+` +
+// User bubbles right-aligned at capped width with an asymmetric radius (chat-ux polish —
+// the ChatGPT/claude.ai sender convention: your words hug the right, the reply owns the
+// left), assistant text stays plain and full-width.
+`.chat-user {
+  background: var(--control-hover); border-radius: 12px 12px 4px 12px; padding: 7px 10px;
+  align-self: flex-end; max-width: 85%; align-items: flex-end;
+}
 .chat-assistant { background: none; padding: 3px 0; }
 .chat-streaming::after {
   content: '▍'; margin-left: 2px; color: var(--text-faint);
   animation: forge-blink 1s steps(1, end) infinite;
 }
-.chat-msg-ref { color: var(--text-faint); font: 400 var(--text-xs) var(--font-mono); }
-.session-diff { flex-basis: 100%; margin-top: 2px; font: 400 var(--text-xs) var(--font-mono); }
+` +
+// The attached-element reference renders as a chip (chat-ux polish) — echoing the
+// composer pill it came from, the way ChatGPT shows attachments as cards on the message.
+`.chat-msg-ref {
+  color: var(--text-faint); font: 400 var(--text-xs) var(--font-mono);
+  border: 1px solid var(--border-strong); border-radius: 999px; padding: 1px 8px;
+  background: var(--control); max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+` +
+// Assistant markdown (chat-markdown.ts): tight block rhythm tuned for an 11px chat column.
+// Blocks keep margin 0 and space out via the bubble's own flex gap; code blocks stretch
+// full-width and scroll horizontally rather than wrapping mid-token.
+`.chat-assistant { gap: 6px; }
+.chat-assistant .md-p { margin: 0; }
+.md-h { font-weight: 600; color: var(--text-title); }
+.md-h1 { font-size: 13px; }
+.md-h2 { font-size: 12px; }
+.md-code {
+  align-self: stretch; margin: 0; padding: 6px 8px; border-radius: 6px;
+  background: rgba(0,0,0,0.25); border: 1px solid var(--separator);
+  font: 400 var(--text-xs) var(--font-mono); white-space: pre; overflow-x: auto; max-width: 100%;
+}
+.md-code-inline {
+  background: var(--control-hover); border-radius: 4px; padding: 0 4px;
+  font: 400 var(--text-xs) var(--font-mono);
+}
+.md-list { margin: 0; padding-left: 18px; }
+.md-list li { margin: 2px 0; }
+.md-quote {
+  margin: 0; padding-left: 8px; border-left: 2px solid var(--border-strong);
+  color: var(--text-faint);
+}
+.md-link { color: var(--accent-soft); text-decoration: underline; }
+` +
+// Diff disclosure: the summary now carries basename + green/red line-delta chips
+// (chat-rows.ts diffStats — Cursor's +N −M edit-card shape); pre blocks cap at 140px and
+// scroll so a large edit can't swallow the feed.
+`.session-diff { flex-basis: 100%; margin-top: 2px; font: 400 var(--text-xs) var(--font-mono); }
 .session-diff summary { cursor: pointer; color: var(--text-muted); }
+.session-diff summary:hover { color: var(--text-secondary); }
+.session-diff .diff-file { color: inherit; }
+.diff-stat-add { color: var(--positive); margin-left: 6px; }
+.diff-stat-del { color: #F87171; margin-left: 4px; }
 .diff-before, .diff-after {
   white-space: pre-wrap; word-break: break-word; margin: 2px 0; padding: 4px 6px; border-radius: 4px;
+  max-height: 140px; overflow-y: auto;
 }
 .diff-before { background: rgba(248,113,113,0.08); }
 .diff-after { background: rgba(74,222,128,0.08); }
-.session-config { color: var(--text-faint); }
+.session-config { color: var(--text-faint); font-size: var(--text-xs); }
 ` +
 // Chat composer (composer consolidation Task 1) — replaces the retired status row, standalone
 // Stop button, and .session-config-bar. .chat-composer: the single bordered card holding the
@@ -746,8 +856,8 @@ button {
 .chat-input:focus-within { border-color: var(--accent); }
 .chat-input.has-items { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(13,153,255,0.15); }
 .chat-textarea {
-  box-sizing: border-box; width: 100%; resize: vertical; min-height: 40px;
-  background: none; color: var(--text-primary); border: none;
+  box-sizing: border-box; width: 100%; resize: none; min-height: 40px; max-height: 140px;
+  overflow-y: auto; background: none; color: var(--text-primary); border: none;
   padding: 0; font: 400 var(--text-sm)/1.4 var(--font-ui); outline: none;
 }
 .chat-textarea:disabled { opacity: 0.5; }
@@ -797,6 +907,12 @@ button {
 @keyframes forge-rise-in { from { opacity: 0; transform: translateY(8px); } }
 @keyframes forge-shake { 25% { transform: translateX(-2px); } 50% { transform: translateX(2px); } 75% { transform: translateX(-1px); } }
 @keyframes forge-blink { 50% { opacity: 0; } }
+` +
+// Chat-ux polish additions: forge-spin drives the tool spinner while a tool runs (linear —
+// a spring on a continuous rotation reads as stutter); forge-dot-pulse is the staggered
+// thinking-dots pulse. Both stop under the reduced-motion blanket below.
+`@keyframes forge-spin { to { transform: rotate(360deg); } }
+@keyframes forge-dot-pulse { 0%, 60%, 100% { opacity: 0.25; } 30% { opacity: 1; } }
 ` +
 // Animated show/hide for hidden-toggled popovers/chrome (.forge-anim opt-in — see the
 // [hidden] exemption at the top of this string). Entry: spring scale-in via
