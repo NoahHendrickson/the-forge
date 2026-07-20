@@ -3,6 +3,7 @@
 // fetch + ReadableStream + manual NDJSON parsing instead.
 import { createButton } from './ui/button'
 import { CHAT_TEXT_MAX, type HarnessId } from '../shared/chat-constants'
+import { TEXTAREA_MAX_PX } from './overlay'
 import { ComposerConfig } from './composer-config'
 import { FeedAnchor } from './feed-anchor'
 import { type SessionState } from './watch'
@@ -22,10 +23,6 @@ function parseEditPayload(raw: unknown): { file: string; before: string; after: 
     ? { file: e.file, before: e.before, after: e.after }
     : undefined
 }
-
-/** The textarea's autosize growth cap — roughly seven lines; past it the textarea scrolls
- * internally (every modern composer caps growth so the feed keeps most of the panel). */
-const TEXTAREA_MAX_PX = 140
 
 // ---------------------------------------------------------------------------
 // Stream line types (NDJSON, one object per line)

@@ -82,8 +82,9 @@ export function makeDiffDetails(edit: EditPayload): HTMLElement {
 
 // 12×12 stroke icons, one per tool CATEGORY (matched on the tool name, which is
 // harness-specific free text — 'Edit'/'edit_file'/'Write' all mean the pencil). Static
-// trusted strings, so the innerHTML here never carries model output. The fallback is the
-// gear — "some tool ran" — never blank.
+// trusted path data, built via createElementNS so no HTML parser ever runs (PR #42 review —
+// innerHTML retired even for trusted strings). The fallback is the gear — "some tool ran" —
+// never blank.
 const ICON_PATHS: ReadonlyArray<[RegExp, string]> = [
   [/edit|write|apply|patch|create/i, 'M9.06 1.94a1.5 1.5 0 0 1 2.12 2.12L4.5 10.75l-2.75.63.63-2.75z'],
   [/read|open|cat|view/i, 'M3 1.5h4.5L10.5 4v6.5a1 1 0 0 1-1 1h-6.5a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1zM7.5 1.5V4H10'],
@@ -95,12 +96,24 @@ const ICON_PATHS: ReadonlyArray<[RegExp, string]> = [
 const ICON_FALLBACK =
   'M6 7.75a1.75 1.75 0 1 0 0-3.5 1.75 1.75 0 0 0 0 3.5zM6 1.5v1.25M6 9.25v1.25M1.5 6h1.25M9.25 6h1.25M2.8 2.8l.9.9M8.3 8.3l.9.9M9.2 2.8l-.9.9M3.7 8.3l-.9.9'
 
+const SVG_NS = 'http://www.w3.org/2000/svg'
+
 function toolIcon(name: string): HTMLElement {
   const span = document.createElement('span')
   span.className = 'tool-icon'
   span.setAttribute('aria-hidden', 'true')
-  const path = ICON_PATHS.find(([re]) => re.test(name))?.[1] ?? ICON_FALLBACK
-  span.innerHTML = `<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="${path}"/></svg>`
+  const d = ICON_PATHS.find(([re]) => re.test(name))?.[1] ?? ICON_FALLBACK
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', '0 0 12 12')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', '1.2')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  const path = document.createElementNS(SVG_NS, 'path')
+  path.setAttribute('d', d)
+  svg.appendChild(path)
+  span.appendChild(svg)
   return span
 }
 
