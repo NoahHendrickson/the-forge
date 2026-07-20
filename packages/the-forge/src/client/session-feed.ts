@@ -8,8 +8,8 @@ import { FeedAnchor } from './feed-anchor'
 import { type SessionState } from './watch'
 import { popOnce } from './motion'
 import {
-  makeAssistantBubble, makeConfigRow, makeDiffDetails, makeErrorRow, makeToolRow,
-  makeTurnDoneRow, makeUserBubble, makeWorkingRow, setAssistantContent,
+  makeApprovalRow, makeAssistantBubble, makeConfigRow, makeErrorRow, makeToolRow,
+  makeTurnDoneRow, makeUserBubble, makeWorkingRow, markToolFinished, setAssistantContent,
 } from './chat-rows'
 
 // Shared untyped-JSON guard for the edit payload carried by tool-started AND (Cursor's
@@ -774,27 +774,11 @@ export class SessionFeed {
       case 'tool-finished': {
         const toolId = typeof e.toolId === 'string' ? e.toolId : ''
         const row = this.toolRows.get(toolId)
-        if (row) {
-          // The ✓ textContent flip is the pinned hook; .done/.tool-done are the CSS
-          // settle hooks added by the chat-ux polish (spin stops, check goes green).
-          row.classList.add('tool-done')
-          const spinner = row.querySelector('.session-spinner')
-          if (spinner) {
-            spinner.textContent = '✓'
-            spinner.classList.add('done')
-          }
-          // Late-arriving diff (Cursor delivers it on the terminal tool_call_update): upgrade
-          // the row with the same collapsed disclosure a started-edit gets. Started-payload
-          // wins when both carry one — the started diff was rendered when the row opened and
-          // may already be expanded/read by the user; silently swapping content under an open
-          // disclosure would be a rug-pull, and the payloads describe the same edit anyway.
-          const edit = parseEditPayload(e.edit)
-          if (edit && !row.querySelector('.session-diff')) {
-            row.append(makeDiffDetails(edit))
-            // In-place row growth with no addRow — same spacer invariant as the in-place
-            // finalize branch (PR #35 review: this path was the one still bypassing it).
-            this.anchor.update()
-          }
+        if (row && markToolFinished(row, parseEditPayload(e.edit))) {
+          // The row grew in place (late diff appended) with no addRow — same spacer
+          // invariant as the in-place finalize branch (PR #35 review: this path was the
+          // one still bypassing it).
+          this.anchor.update()
         }
         break
       }
@@ -925,34 +909,7 @@ export class SessionFeed {
     // An approval request IS turn activity — the harness stopped to ask, so the
     // "Thinking" placeholder must yield to the card that explains the pause.
     this.clearWorkingRow()
-    const row = document.createElement('div')
-    row.className = 'session-row session-approval'
-    row.dataset.approvalId = id
-
-    // Tool name emphasized, command/detail on its own mono line (chat-ux polish) — the
-    // decision card must be scannable: WHAT wants to run, then exactly what it would do.
-    const body = document.createElement('div')
-    body.className = 'approval-body'
-    const tool = document.createElement('span')
-    tool.className = 'approval-tool'
-    tool.textContent = toolName
-    const detailLine = document.createElement('span')
-    detailLine.className = 'approval-detail'
-    detailLine.textContent = detail
-    body.append(tool, detailLine)
-
-    const actions = document.createElement('div')
-    actions.className = 'approval-actions'
-    const allowBtn = createButton({ label: 'Allow', className: 'session-approval-allow' })
-    allowBtn.type = 'button'
-    allowBtn.addEventListener('click', () => this.onDecide(id, true))
-
-    const denyBtn = createButton({ label: 'Deny', className: 'session-approval-deny' })
-    denyBtn.type = 'button'
-    denyBtn.addEventListener('click', () => this.onDecide(id, false))
-    actions.append(allowBtn, denyBtn)
-
-    row.append(body, actions)
+    const row = makeApprovalRow(id, toolName, detail, (allow) => this.onDecide(id, allow))
     this.approvalRows.set(id, row)
     this.addRow(row)
   }

@@ -1,11 +1,13 @@
 // Row builders for the session feed (extracted from session-feed.ts in the 2026-07-18
 // chat-ux polish — same seam as composer-config.ts/feed-anchor.ts: presentation, not
-// stream state, and session-feed.ts must stay under 1k lines). Everything here builds a
-// detached element; session-feed.ts owns insertion, the MAX_ROWS cap, and the anchor
-// spacer. CSS class names are test hooks — extend, don't rename.
+// stream state, and session-feed.ts must stay under 1k lines). This module owns how a row
+// LOOKS in every state — building it detached AND settling it later (markToolFinished);
+// session-feed.ts owns insertion, the MAX_ROWS cap, and the anchor spacer. CSS class
+// names are test hooks — extend, don't rename.
 import { basename } from './source'
 import { renderMarkdown } from './chat-markdown'
 import { AGENT_DISPLAY_NAME } from './agent'
+import { createButton } from './ui/button'
 import { isHarnessId } from '../shared/chat-constants'
 
 export interface EditPayload {
@@ -116,13 +118,37 @@ export function makeToolRow(toolId: string, name: string, detail: string, edit?:
   const spinner = document.createElement('span')
   spinner.className = 'session-spinner'
   // Braille glyph, CSS-rotated while running; tool-finished flips this to ✓ (and adds
-  // .done / .tool-done) by matching toolId — see session-feed.ts's tool-finished handler.
+  // .done / .tool-done) by matching toolId — see markToolFinished below.
   spinner.textContent = '⣋'
   row.append(toolIcon(name), label, detailSpan, spinner)
   if (edit) {
     row.append(makeDiffDetails(edit))
   }
   return row
+}
+
+/** Settles a live tool row on tool-finished — the other half of makeToolRow's lifecycle.
+ * Returns true when the row GREW (a late diff was appended) so the caller knows to redo
+ * its anchor-spacer math; a plain settle changes classes/glyph only, no layout growth. */
+export function markToolFinished(row: HTMLElement, edit?: EditPayload): boolean {
+  // The ✓ textContent flip is the pinned hook; .done/.tool-done are the CSS
+  // settle hooks added by the chat-ux polish (spin stops, check goes green).
+  row.classList.add('tool-done')
+  const spinner = row.querySelector('.session-spinner')
+  if (spinner) {
+    spinner.textContent = '✓'
+    spinner.classList.add('done')
+  }
+  // Late-arriving diff (Cursor delivers it on the terminal tool_call_update): upgrade
+  // the row with the same collapsed disclosure a started-edit gets. Started-payload
+  // wins when both carry one — the started diff was rendered when the row opened and
+  // may already be expanded/read by the user; silently swapping content under an open
+  // disclosure would be a rug-pull, and the payloads describe the same edit anyway.
+  if (edit && !row.querySelector('.session-diff')) {
+    row.append(makeDiffDetails(edit))
+    return true
+  }
+  return false
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +231,46 @@ export function makeTurnDoneRow(costUsd?: number): HTMLElement {
     cost.textContent = `· $${costUsd.toFixed(costUsd < 0.1 ? 3 : 2)}`
     row.append(cost)
   }
+  return row
+}
+
+/** The approval decision card (chat-ux polish): tool name emphasized, command/detail on
+ * its own mono line — the card must be scannable: WHAT wants to run, then exactly what it
+ * would do. Allow is the primary action. The caller owns the approvalRows bookkeeping and
+ * the duplicate-id guard; resolution collapses the row via textContent (session-feed's
+ * resolveApproval), which wipes this structure wholesale — that's the pinned contract. */
+export function makeApprovalRow(
+  id: string,
+  toolName: string,
+  detail: string,
+  onDecide: (allow: boolean) => void,
+): HTMLElement {
+  const row = document.createElement('div')
+  row.className = 'session-row session-approval'
+  row.dataset.approvalId = id
+
+  const body = document.createElement('div')
+  body.className = 'approval-body'
+  const tool = document.createElement('span')
+  tool.className = 'approval-tool'
+  tool.textContent = toolName
+  const detailLine = document.createElement('span')
+  detailLine.className = 'approval-detail'
+  detailLine.textContent = detail
+  body.append(tool, detailLine)
+
+  const actions = document.createElement('div')
+  actions.className = 'approval-actions'
+  const allowBtn = createButton({ label: 'Allow', className: 'session-approval-allow' })
+  allowBtn.type = 'button'
+  allowBtn.addEventListener('click', () => onDecide(true))
+
+  const denyBtn = createButton({ label: 'Deny', className: 'session-approval-deny' })
+  denyBtn.type = 'button'
+  denyBtn.addEventListener('click', () => onDecide(false))
+  actions.append(allowBtn, denyBtn)
+
+  row.append(body, actions)
   return row
 }
 
