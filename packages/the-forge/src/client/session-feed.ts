@@ -3,7 +3,7 @@
 // fetch + ReadableStream + manual NDJSON parsing instead.
 import { createButton } from './ui/button'
 import { CHAT_TEXT_MAX, type HarnessId } from '../shared/chat-constants'
-import { TEXTAREA_MAX_PX } from './chat-styles'
+import { TEXTAREA_MAX_PX } from './overlay'
 import { ComposerConfig } from './composer-config'
 import { FeedAnchor } from './feed-anchor'
 import { type SessionState } from './watch'

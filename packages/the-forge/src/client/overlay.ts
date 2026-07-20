@@ -1,7 +1,16 @@
 import { DEFAULT_WIDTH } from './dock'
 import { createButton } from './ui/button'
 import { DUR_FAST_MS, DUR_POP_MS, DUR_PANEL_MS, EASE_SPRING, EASE_OUT, prefersReducedMotion } from './motion'
-import { CHAT_CSS, TEXTAREA_MAX_PX } from './chat-styles'
+import { CHAT_CSS } from './chat-styles'
+
+/** The composer textarea's autosize growth cap — roughly seven lines; past it the textarea
+ * scrolls internally (every modern composer caps growth so the feed keeps most of the panel).
+ * Lives beside TOKENS, not in chat-styles.ts (PR #43 review — behavior must not import a
+ * styles fragment): session-feed.ts's autoGrow clamps scrollHeight to this number, and
+ * .chat-textarea's max-height (chat-styles.ts) rides the --chat-textarea-max token generated
+ * below, so the JS clamp and the CSS cap can never drift apart — same idiom as motion.ts's
+ * duration constants. */
+export const TEXTAREA_MAX_PX = 140
 
 /**
  * The design-token registry — the single canonical source for the overlay's palette,
@@ -58,8 +67,8 @@ const tokenBlock = Object.entries(TOKENS)
 // --ripple: sibling-reflow ripple outline (must stay distinct from selection accent)
 // --font-ui / --font-mono: font-family stacks.
 // --text-xs / --text-sm / --text-md: the 10/11/12px type scale.
-// --chat-textarea-max: the composer textarea's growth cap (chat-styles.ts's TEXTAREA_MAX_PX
-//   is the source — session-feed.ts's JS autosize clamp rides the same constant).
+// --chat-textarea-max: the composer textarea's growth cap (TEXTAREA_MAX_PX above is the
+//   source — session-feed.ts's JS autosize clamp rides the same constant).
 // --dur-fast/--dur-pop/--dur-panel + --ease-spring/--ease-out: the motion system
 //   (motion.ts is the source; see the 2026-07-12 overlay-motion spec).
 // Radius: panel 12px, controls 6px, matrix tile 8px.

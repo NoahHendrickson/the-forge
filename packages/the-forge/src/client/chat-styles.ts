@@ -4,17 +4,10 @@
 // BETWEEN the concatenated template segments, never inside them (CSS-string comments ship
 // as bundle bytes — guard-tested in overlay.test.ts), colors/fonts/motion ride the :host
 // token block overlay.ts generates, and every class name is a test hook — extend, don't
-// rename. This module must stay a pure string fragment: no DOM access, no imports that
-// drag behavior in — overlay.ts is the only consumer of CHAT_CSS.
-
-/** The textarea's autosize growth cap — roughly seven lines; past it the textarea scrolls
- * internally (every modern composer caps growth so the feed keeps most of the panel).
- * Single source for BOTH sides of the cap (PR #42 review note): session-feed.ts's autoGrow
- * clamps scrollHeight to this number, and .chat-textarea's max-height below rides the same
- * value via the --chat-textarea-max token (overlay.ts's TOKENS serializes it into :host),
- * so the JS clamp and the CSS cap can never drift apart — same idiom as motion.ts's
- * duration constants. */
-export const TEXTAREA_MAX_PX = 140
+// rename. This module must stay a pure string fragment: no DOM access, no exports besides
+// CHAT_CSS, no imports that drag behavior in — overlay.ts is the only consumer (PR #43
+// review: shared JS/CSS constants like the textarea cap live beside overlay.ts's TOKENS,
+// never here — behavior modules must not import a styles fragment).
 
 export const CHAT_CSS =
 // Session feed — live activity stream from the embedded session (Task 7).
@@ -272,6 +265,8 @@ export const CHAT_CSS =
 // spec, Task 2) — so focus moved from .chat-textarea to the wrapper via :focus-within.
 // .has-items is the primed glow when a chip is showing: the rgba is --accent (#0D99FF) at 15%,
 // same hardcoded-tint idiom as .tp-pill.
+// .chat-textarea's max-height rides --chat-textarea-max, generated from overlay.ts's
+// TEXTAREA_MAX_PX — the same constant session-feed.ts's autoGrow clamps to (no-drift).
 `.chat-input {
   display: flex; flex-direction: column; gap: 6px;
   border: 1px solid var(--border-panel); border-radius: 8px; background: var(--control);
