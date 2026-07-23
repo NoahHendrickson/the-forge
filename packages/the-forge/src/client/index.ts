@@ -6,6 +6,8 @@ import { Panel } from './panel'
 import { Dock } from './dock'
 import { CanvasMode, unionClientRect, isEditable } from './canvas'
 import { TextEditMode } from './text-edit'
+import { LayersTree, LeftDock } from './layers'
+import { createButton } from './ui/button'
 import { buildCanvasChrome, type CanvasChrome } from './canvas-chrome'
 import {
   buildChangeRequestWithElements,
@@ -77,6 +79,10 @@ export class DesignMode {
   private drafts: DraftStore
   private panel: Panel
   private dock: Dock
+  /** The layers tree + its left-side page push (Figma pivot P2, layers.ts). */
+  private layers: LayersTree
+  private leftDock: LeftDock
+  private layersToggle: HTMLButtonElement
   private canvas: CanvasMode
   /** The zoom-pill DOM assembly + its repaint hook (canvas-chrome.ts) — presentation only,
    * constructed once this.canvas/this.panel exist. */
@@ -190,8 +196,29 @@ export class DesignMode {
         (el) => this.handleBeforeEdit(el)
       )
     this.dock = dock ?? new Dock(overlay.host, this.panel, overlay.status, overlay.toggle)
+    this.leftDock = new LeftDock(overlay.host)
+    this.layers = new LayersTree(this.drafts, {
+      onSelect: (el, additive) => (additive ? this.toggleSelection(el) : this.select(el)),
+      onHover: (el) => (el ? this.overlay.showOutline(el.getBoundingClientRect()) : this.overlay.hideOutline()),
+      onDelete: (el) => this.deleteElements([el]),
+      onClose: () => this.setLayersOpen(false),
+    })
+    this.overlay.attach(this.layers.root)
+    this.layersToggle = createButton({ label: 'Layers', title: 'Show layers', className: 'layers-toggle' })
+    this.layersToggle.hidden = true
+    this.layersToggle.addEventListener('click', () => this.setLayersOpen(true))
+    this.overlay.attach(this.layersToggle)
     this.canvas = new CanvasMode({
-      dock: this.dock,
+      // Fan setCanvasActive out to BOTH docks — the artboard pans behind the layers panel
+      // exactly as it does behind the properties panel (P2; CanvasModeOpts is structural).
+      dock: {
+        mode: () => this.dock.mode(),
+        width: () => this.dock.width(),
+        setCanvasActive: (on: boolean) => {
+          this.dock.setCanvasActive(on)
+          this.leftDock.setCanvasActive(on)
+        },
+      },
       // containsDeep, NOT contains: CanvasMode un-retargets events via composedPath()[0], so
       // its guard sees the real node INSIDE the overlay's shadow tree — which host.contains()
       // can never match (Node.contains stops at the shadow boundary). Plain contains() here
@@ -345,6 +372,9 @@ export class DesignMode {
       // updateDraftPill() stays immediate (not debounced) alongside refreshStatus() — it only
       // reads drafts.changeCount() (summed Map sizes), nothing scan/stringify-shaped.
       this.updateDraftPill()
+      // tombstone strike-through and discard-undo paint (P2) — internally 100ms-debounced,
+      // so scrub bursts cost one tree rebuild, not one per tick.
+      this.layers.refreshSoon()
       if (this.draftSyncTimer) clearTimeout(this.draftSyncTimer)
       this.draftSyncTimer = setTimeout(() => this.flushDraftSync(), RIPPLE_DEBOUNCE_MS)
     }
@@ -629,6 +659,9 @@ export class DesignMode {
       if (this.session.size() > 0) this.verifier.start()
       this.watch.start()
       this.feed.start()
+      this.leftDock.enter()
+      if (this.leftDock.isOpen()) this.layers.start()
+      this.syncLayersToggle()
       this.refreshStatus()
       this.persist()
     } else {
@@ -660,6 +693,9 @@ export class DesignMode {
       // the dock's own margin push. Either order now leaves both objects in a clean state.
       this.canvas.suspend()
       this.dock.exit()
+      this.layers.stop()
+      this.leftDock.exit()
+      this.layersToggle.hidden = true
       this.verifier.stop()
       this.watch.stop()
       this.feed.stop()
@@ -886,6 +922,7 @@ export class DesignMode {
     // refuses a tween from hidden, so single-after-deselect stays a fade-in).
     const wasSingle = this.selection.length === 1
     this.selection = next
+    this.layers.setSelection(next) // tree highlight rides the ONE selection funnel (P2)
     this.clearRippleState()
     if (next.length === 0) {
       this.overlay.hideSelectOutline()
@@ -1042,21 +1079,45 @@ export class DesignMode {
       if (this.selection.length === 0) return
       e.preventDefault()
       e.stopPropagation()
-      const doomed = [...this.selection]
-      // Deselect FIRST — a selection outline hugging a display:none tombstone is a lie.
-      this.deselect()
-      // Two-phase: every ripple baseline (layout reads) BEFORE any display:none write —
-      // interleaving forced one synchronous reflow per element in a single keydown
-      // (PR #44 review).
-      for (const el of doomed) this.handleBeforeEdit(el) // ripple baseline: show which siblings reflow into the gap
-      for (const el of doomed) this.drafts.applyDelete(el)
-      this.handleEdited()
+      this.deleteElements([...this.selection])
       return
     }
     if (e.key !== 'Escape') return
     e.stopPropagation()
     if (this.selection.length > 0) this.deselect()
     else this.setActive(false)
+  }
+
+  /** The one delete routine — canvas Del and the layers tree's row Del share it so the
+   * two paths can never drift (P2). Deselect FIRST: a selection outline hugging a
+   * display:none tombstone is a lie. Two-phase: every ripple baseline (layout reads)
+   * BEFORE any display:none write — interleaving forced one synchronous reflow per
+   * element in a single keydown (PR #44 review). */
+  private deleteElements(els: TaggedElement[]): void {
+    if (els.length === 0) return
+    this.deselect()
+    for (const el of els) this.handleBeforeEdit(el) // ripple baseline: show which siblings reflow into the gap
+    for (const el of els) this.drafts.applyDelete(el)
+    this.handleEdited()
+  }
+
+  /** Layers panel open-state verb (P2) — LeftDock owns the persisted truth; tree +
+   * toggle-pill visibility follow it. */
+  private setLayersOpen(open: boolean): void {
+    this.leftDock.setOpen(open)
+    if (this.active && open) {
+      this.layers.start()
+      this.layers.setSelection(this.selection)
+    } else {
+      this.layers.stop()
+    }
+    this.syncLayersToggle()
+  }
+
+  /** The top-left 'Layers' pill shows only while design mode is on AND the panel is closed
+   * (open state has the panel's own ‹ button; idle state must stay chrome-free). */
+  private syncLayersToggle(): void {
+    this.layersToggle.hidden = !this.active || this.leftDock.isOpen()
   }
 
   private onReflow = (): void => {
