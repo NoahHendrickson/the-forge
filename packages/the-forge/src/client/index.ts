@@ -4,7 +4,8 @@ import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { Dock } from './dock'
-import { CanvasMode, unionClientRect } from './canvas'
+import { CanvasMode, unionClientRect, isEditable } from './canvas'
+import { hasDirectText } from './panel-readers'
 import { buildCanvasChrome, type CanvasChrome } from './canvas-chrome'
 import {
   buildChangeRequestWithElements,
@@ -68,6 +69,12 @@ export class DesignMode {
   private reflowRaf = 0
   private rippleRaf = 0
   private lastMove: MouseEvent | null = null
+  /** The element currently in inline text-edit mode (double-click → contenteditable), or null.
+   * While set, hover/click/keydown handling yields to the browser's own editing behavior. */
+  private textEditing: TaggedElement | null = null
+  /** textContent at edit START — the draft's true "before". Captured here because by commit
+   * time the DOM already shows whatever the user typed (see DraftStore.applyText's hint). */
+  private textEditOriginal = ''
   private drafts: DraftStore
   private panel: Panel
   private dock: Dock
@@ -395,7 +402,7 @@ export class DesignMode {
     | 'no-changes'
     | 'already-sent' {
     const { request, elements } = buildChangeRequestWithElements(this.drafts)
-    const pairs = [...elements.entries()].filter(([el, change]) => !this.session.isDuplicate(el, change.changes))
+    const pairs = [...elements.entries()].filter(([el, change]) => !this.session.isDuplicate(el, change.changes, change.ops))
     request.elements = pairs.map(([, change]) => change)
     if (request.elements.length === 0) return elements.size > 0 ? 'already-sent' : 'no-changes'
     return { request, pairs }
@@ -599,6 +606,7 @@ export class DesignMode {
       resetTokensCache()
       document.addEventListener('mousemove', this.onMove, true)
       document.addEventListener('click', this.onClick, true)
+      document.addEventListener('dblclick', this.onDblClick, true)
       document.addEventListener('keydown', this.onKey, true)
       document.addEventListener('scroll', this.onReflow, { capture: true, passive: true })
       window.addEventListener('resize', this.onReflow, { passive: true })
@@ -608,8 +616,10 @@ export class DesignMode {
       this.refreshStatus()
       this.persist()
     } else {
+      this.finishTextEdit() // commit any in-progress inline text edit before the listeners go
       document.removeEventListener('mousemove', this.onMove, true)
       document.removeEventListener('click', this.onClick, true)
+      document.removeEventListener('dblclick', this.onDblClick, true)
       document.removeEventListener('keydown', this.onKey, true)
       document.removeEventListener('scroll', this.onReflow, true)
       window.removeEventListener('resize', this.onReflow)
@@ -949,6 +959,7 @@ export class DesignMode {
   }
 
   private onMove = (e: MouseEvent): void => {
+    if (this.textEditing) return // hover chrome is noise while the user is typing in the page
     this.lastMove = e
     if (this.moveRaf) return
     this.moveRaf = requestAnimationFrame(() => {
@@ -963,6 +974,12 @@ export class DesignMode {
 
   private onClick = (e: MouseEvent): void => {
     if (this.overlay.contains(e.target)) return
+    if (this.textEditing) {
+      // Clicks inside the editing element place the caret — the browser's job, not ours.
+      // A click anywhere else commits the edit and falls through to normal selection.
+      if (this.textEditing.contains(e.target as Node)) return
+      this.finishTextEdit()
+    }
     e.preventDefault()
     e.stopPropagation()
     const el = findTaggedElement(e.target as Element)
@@ -971,12 +988,90 @@ export class DesignMode {
     else this.deselect()
   }
 
-  private onKey = (e: KeyboardEvent): void => {
-    if (e.key !== 'Escape') return
+  /** Double-click on a text-bearing element enters inline text edit (Figma behavior).
+   * Registered/removed in setActive beside the other capture handlers. */
+  private onDblClick = (e: MouseEvent): void => {
     if (this.overlay.contains(e.target)) return
+    const el = findTaggedElement(e.target as Element)
+    if (!el || !hasDirectText(el)) return
+    e.preventDefault()
+    e.stopPropagation()
+    this.startTextEdit(el)
+  }
+
+  private onKey = (e: KeyboardEvent): void => {
+    if (this.overlay.contains(e.target)) return
+    if (this.textEditing) {
+      // Esc and Enter both commit (Figma: Esc commits text; P1 has no multi-line intent for
+      // Enter, so it commits too rather than inserting a newline). Everything else — typing,
+      // arrows, shortcuts — belongs to the contenteditable.
+      if (e.key === 'Escape' || e.key === 'Enter') {
+        e.preventDefault()
+        e.stopPropagation()
+        this.finishTextEdit()
+      }
+      return
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      // Same typing-surface guard as canvas mode's Space/zoom shortcuts — Del in the
+      // composer or any input must never nuke the canvas selection.
+      if (isEditable(e.target) || this.selection.length === 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      const doomed = [...this.selection]
+      // Deselect FIRST — a selection outline hugging a display:none tombstone is a lie.
+      this.deselect()
+      for (const el of doomed) {
+        this.handleBeforeEdit(el) // ripple baseline: show which siblings reflow into the gap
+        this.drafts.applyDelete(el)
+      }
+      this.handleEdited()
+      return
+    }
+    if (e.key !== 'Escape') return
     e.stopPropagation()
     if (this.selection.length > 0) this.deselect()
     else this.setActive(false)
+  }
+
+  private startTextEdit(el: TaggedElement): void {
+    if (!(el instanceof HTMLElement)) return // contenteditable is an HTMLElement affair — SVG text is out of P1's scope
+    if (this.textEditing === el) return
+    this.finishTextEdit()
+    if (this.selection[0] !== el || this.selection.length !== 1) this.select(el)
+    this.textEditing = el
+    this.textEditOriginal = el.textContent ?? ''
+    this.overlay.hideOutline()
+    // plaintext-only keeps paste/typing from minting nested markup the tagger never saw.
+    // Set as an ATTRIBUTE, not the property: jsdom's property setter doesn't reflect to the
+    // attribute (breaking the browser's own [contenteditable] activation contract in tests),
+    // and a browser too old for plaintext-only degrades to rich editing, not to a crash.
+    el.setAttribute('contenteditable', 'plaintext-only')
+    el.addEventListener('blur', this.onTextEditBlur)
+    ;(el as HTMLElement).focus()
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  }
+
+  private onTextEditBlur = (): void => {
+    this.finishTextEdit()
+  }
+
+  /** Commits the inline edit into a text draft. Always safe to call — no-op when not editing;
+   * applyText itself no-ops when the text is unchanged, so an idle in-and-out leaves nothing. */
+  private finishTextEdit(): void {
+    const el = this.textEditing
+    if (!el) return
+    this.textEditing = null
+    el.removeEventListener('blur', this.onTextEditBlur)
+    el.removeAttribute('contenteditable')
+    window.getSelection()?.removeAllRanges()
+    this.handleBeforeEdit(el)
+    this.drafts.applyText(el, el.textContent ?? '', this.textEditOriginal)
+    this.handleEdited()
   }
 
   private onReflow = (): void => {

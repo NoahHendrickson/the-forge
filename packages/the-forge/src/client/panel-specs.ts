@@ -2,7 +2,7 @@ import type { TaggedElement } from './source'
 import { DraftStore } from './drafts'
 import { UTILITY_PREFIXES, parseColor, type Theme, type Tokens } from './tokens'
 import type { ColorEntry, ScaleEntry } from './tokenpicker'
-import { hasDirectText, marginSectionVisible, isFlex, mainAxisProp } from './panel-readers'
+import { hasDirectText, isFlex, mainAxisProp } from './panel-readers'
 
 export interface RowSpec {
   label: string
@@ -235,7 +235,10 @@ export function minMaxRowsFor(sizeSpec: RowSpec): RowSpec[] {
   ]
 }
 
-// Section ORDER is fixed forever: Layout -> Margin -> Typography -> Fill -> Stroke -> Appearance.
+// Section ORDER is fixed forever: Layout -> Typography -> Fill -> Stroke -> Appearance.
+// The Margin section was REMOVED (not hidden) in the 2026-07-22 Figma pivot, superseding
+// the margin half of panel-patterns decision #1: margins are a code concept the designer
+// never sees — the translation layer may still read/write them, but no panel control does.
 const SECTIONS: SectionSpec[] = [
   {
     title: 'Layout',
@@ -251,22 +254,6 @@ const SECTIONS: SectionSpec[] = [
     // Unified UI3 section (spec M-C; reordered 2026-07-06 layout-polish spec): W/H rows ->
     // auto-layout cluster -> padding block -> align block, one fixed order, flex or not. The
     // cluster alone is single-select-only (B6); rows keep multi relative-delta behavior.
-  },
-  {
-    title: 'Margin',
-    expandKey: 'margin',
-    rows: [
-      { label: 'H', props: ['margin-left', 'margin-right'] },
-      { label: 'V', props: ['margin-top', 'margin-bottom'] },
-    ],
-    expandRows: [
-      { label: 'T', props: ['margin-top'] },
-      { label: 'R', props: ['margin-right'] },
-      { label: 'B', props: ['margin-bottom'] },
-      { label: 'L', props: ['margin-left'] },
-    ],
-    visible: marginSectionVisible,
-    hint: 'Space this element adds around itself (CSS margin) — shown only when the element actually has margins',
   },
   {
     title: 'Typography',

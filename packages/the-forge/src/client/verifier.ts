@@ -47,6 +47,60 @@ function locate(el: TaggedElement, dcSource: string | null, doc: Document, index
   return resolveElement(el, dcSource, index, doc)
 }
 
+/** Bound for text-mismatch expected/actual strings headed for the panel UI. */
+const MAX_TEXT_CHARS = 120
+
+/** Tracks whether a dev-server code update reached this page since a given cursor.
+ *
+ * Why it exists (Figma pivot P1, spec §4): the css verifier's false-done guard is
+ * neutralize-inline-then-measure — the cascade underneath our override is the code's truth.
+ * Text has no cascade: if the drafted node survived HMR, its textContent IS our own draft, and
+ * equality with the expected value proves nothing. The style trick has no text analog, so the
+ * guard becomes "only trust equality on a surviving node once a code update demonstrably
+ * reached the page" — Vite fires 'vite:afterUpdate' on window for exactly this. On Next there
+ * is no page-visible update event at all, so trustSince() returns true there (documented
+ * residual false-done risk; a full Fast-Refresh remount instead replaces the node, which the
+ * caller's identity check catches without needing this signal).
+ *
+ * Vite detection is the injected HMR client script tag (plus any observed vite event, which is
+ * definitive) — probing import.meta.hot is impossible from a foreign bundle. A failed probe on
+ * an exotic Vite setup degrades to the legacy accept-equality behavior, never to a stuck row. */
+export class HmrSignal {
+  private count = 0
+  private onVite = false
+  private listening = false
+  private handler = (): void => {
+    this.count++
+    this.onVite = true
+  }
+
+  start(doc: Document = document): void {
+    if (this.listening) return
+    this.listening = true
+    this.onVite ||= doc.querySelector('script[src*="/@vite/client"]') !== null
+    window.addEventListener('vite:afterUpdate', this.handler)
+  }
+
+  stop(): void {
+    if (!this.listening) return
+    this.listening = false
+    window.removeEventListener('vite:afterUpdate', this.handler)
+  }
+
+  /** Monotonic cursor — record at send time, test with trustSince at verify time. */
+  mark(): number {
+    return this.count
+  }
+
+  trustSince(cursor: number): boolean {
+    return this.onVite ? this.count > cursor : true
+  }
+}
+
+/** Decides whether a text-op equality on `target` is trustworthy — see HmrSignal. Injected
+ * into verifyElements so the pure verify math stays testable without a live Verifier. */
+type TextTrust = (sentEl: TaggedElement, target: TaggedElement) => boolean
+
 /** Per-element verification outcome, used to decide whether that element's drafts can be committed. */
 interface ElementVerification {
   el: TaggedElement
@@ -59,10 +113,51 @@ interface ElementVerification {
   missing: number
 }
 
-function verifyElements(entry: SentEntry, doc: Document = document): ElementVerification[] {
+function verifyElements(entry: SentEntry, doc: Document = document, textTrusted: TextTrust = () => true): ElementVerification[] {
   return entry.elements.map((el) => {
     const target = locate(el.el, el.dcSource, doc, el.index ?? 0)
-    if (!target) return { el: el.el, draftProps: el.draftProps, verified: 0, mismatched: [], missing: el.changes.length }
+    const ops = el.ops ?? []
+
+    // DELETE — inverted polarity: the element being GONE is success; every other outcome
+    // model below treats a locate miss as failure. No neutralization needed — our
+    // display:none preview affects rendering, not connectivity, and deletion can only reach
+    // the DOM through a file edit → HMR → re-render, which disconnects the node. Known edge
+    // (spec §4, accepted): after the JSX is removed, a following sibling can shift onto the
+    // deleted element's exact file:line:col and read as "still present" — that surfaces as a
+    // mismatch the user can dismiss, never as a false success.
+    if (ops.some((o) => o.kind === 'delete')) {
+      if (!target) return { el: el.el, draftProps: el.draftProps, verified: 1, mismatched: [], missing: 0 }
+      return {
+        el: el.el,
+        draftProps: el.draftProps,
+        verified: 0,
+        mismatched: [{ property: 'element', expected: 'deleted', actual: 'still present' }],
+        missing: 0,
+      }
+    }
+
+    if (!target) return { el: el.el, draftProps: el.draftProps, verified: 0, mismatched: [], missing: el.changes.length + ops.length }
+
+    // TEXT — getComputedStyle can't see text, so this runs outside the css measure block.
+    // Equality on a REPLACED node (or with an HMR update observed — textTrusted) is the
+    // code's truth; equality on a surviving node without either signal could be our own
+    // draft echoing back, and counts as `missing` (→ 'unverified'), never as a false done.
+    const textMismatched: ElementVerification['mismatched'] = []
+    let textVerified = 0
+    let textUnproven = 0
+    for (const op of ops) {
+      if (op.kind !== 'text') continue
+      const actual = target.textContent ?? ''
+      if (actual === op.after) {
+        if (textTrusted(el.el, target)) textVerified++
+        else textUnproven++
+      } else {
+        textMismatched.push({ property: 'text', expected: op.after.slice(0, MAX_TEXT_CHARS), actual: actual.slice(0, MAX_TEXT_CHARS) })
+      }
+    }
+    if (el.changes.length === 0) {
+      return { el: el.el, draftProps: el.draftProps, verified: textVerified, mismatched: textMismatched, missing: textUnproven }
+    }
 
     // Neutralize the draft's inline styles before measuring — inline styles win the
     // cascade, so if the sent draft is still applied as inline style (e.g. the DOM
@@ -109,13 +204,19 @@ function verifyElements(entry: SentEntry, doc: Document = document): ElementVeri
       else target.style.removeProperty('transition')
     }
 
-    return { el: el.el, draftProps: el.draftProps, verified, mismatched, missing: 0 }
+    return {
+      el: el.el,
+      draftProps: el.draftProps,
+      verified: verified + textVerified,
+      mismatched: [...mismatched, ...textMismatched],
+      missing: textUnproven,
+    }
   })
 }
 
-export function verifyEntry(entry: SentEntry, doc: Document = document): VerifyResult {
+export function verifyEntry(entry: SentEntry, doc: Document = document, textTrusted: TextTrust = () => true): VerifyResult {
   const result: VerifyResult = { verified: 0, mismatched: [], missing: 0 }
-  for (const ev of verifyElements(entry, doc)) {
+  for (const ev of verifyElements(entry, doc, textTrusted)) {
     result.verified += ev.verified
     result.mismatched.push(...ev.mismatched)
     result.missing += ev.missing
@@ -189,6 +290,12 @@ export class Verifier {
    * must not reschedule, even if a newer chain has since made this.timer non-null again. */
   private generation = 0
   private stageListeners: Array<(e: StageEvent) => void> = []
+  private hmr = new HmrSignal()
+  /** requestId → HmrSignal cursor at the moment the id was first seen pending. Recorded in
+   * start() AND every poll tick (a second send while the chain is already running never
+   * passes through start()'s body); deleted on take. Ids are unique per send, so a cursor
+   * surviving a stop()/start() cycle still describes its own send correctly. */
+  private hmrCursors = new Map<string, number>()
 
   constructor(
     private sent: SentStore,
@@ -205,6 +312,8 @@ export class Verifier {
   }
 
   start(): void {
+    this.hmr.start()
+    this.recordHmrCursors()
     if (this.timer) return
     if (this.sent.size() === 0) return
     this.generation++
@@ -217,6 +326,15 @@ export class Verifier {
     this.generation++
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
+    this.hmr.stop()
+  }
+
+  /** Baseline each pending id's HMR cursor the first time it's seen — updates observed
+   * BEFORE a send belong to earlier edits and must not vouch for this one. */
+  private recordHmrCursors(): void {
+    for (const id of this.sent.pendingIds()) {
+      if (!this.hmrCursors.has(id)) this.hmrCursors.set(id, this.hmr.mark())
+    }
   }
 
   /** Chained setTimeout instead of setInterval so the delay can stretch under backoff. */
@@ -232,6 +350,7 @@ export class Verifier {
       this.stop()
       return
     }
+    this.recordHmrCursors()
     fetch(`/__the-forge/status?ids=${ids.join(',')}`)
       .then((res) => {
         // A server that ANSWERS but errors (500s from a broken dev server, 404/HTML from some
@@ -306,10 +425,13 @@ export class Verifier {
   private handleApplied(id: string): void {
     const entry = this.sent.take(id)
     if (!entry) return
+    const cursor = this.hmrCursors.get(id) ?? 0
+    this.hmrCursors.delete(id)
+    const textTrusted: TextTrust = (sentEl, target) => target !== sentEl || this.hmr.trustSince(cursor)
     // decide per-element: only commit drafts for an element whose changes ALL
     // matched computed style — a mismatched element keeps its drafts so the
     // user can retry or adjust rather than silently losing the edit.
-    verifyElements(entry).forEach((ev, elIndex) => {
+    verifyElements(entry, document, textTrusted).forEach((ev, elIndex) => {
       const dcSource = entry.elements[elIndex].dcSource
       if (ev.missing > 0) {
         this.counters.unverified += 1
@@ -319,6 +441,10 @@ export class Verifier {
         this.emitStage({ requestId: id, elIndex, dcSource, stage: 'mismatch', mismatches: ev.mismatched })
       } else {
         this.drafts.commit(ev.el, ev.draftProps)
+        // targeted structural commit, mirroring the targeted css commit above: only the
+        // ops that were actually sent AND still match the live structural draft are
+        // forgotten — a text draft re-edited while in flight survives.
+        for (const op of entry.elements[elIndex].ops ?? []) this.drafts.commitStructural(ev.el, op)
         this.counters.implemented += 1
         this.emitStage({ requestId: id, elIndex, dcSource, stage: 'done' })
       }
@@ -328,6 +454,7 @@ export class Verifier {
   private handleFailed(id: string, note?: string | null): void {
     const entry = this.sent.take(id)
     if (!entry) return
+    this.hmrCursors.delete(id)
     this.counters.failed += 1
     // Agent-authored free text headed for the status line: collapse whitespace and bound the
     // length so a long note can't blow up the single-line summary.

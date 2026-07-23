@@ -120,6 +120,10 @@ export class Panel {
   // site) — LayoutSection holds its own reference for refresh purposes, but panel.ts still
   // owns destroy() on rebuild, same as every other field in `this.fields`.
   private gapField: NumberField | null = null
+  /** The read-only X/Y header pair + its block wrap (Figma pivot P1) — rebuilt per show(),
+   * value-refreshed per refresh(), hidden in multi (offsets across N elements are noise). */
+  private positionFields: { x: NumberField; y: NumberField } | null = null
+  private positionBlock: HTMLElement | null = null
 
   // Typography section widgets (rebuilt per show(), re-set() per refresh()).
   private typeFamilySelect: HTMLSelectElement | null = null
@@ -452,6 +456,12 @@ export class Panel {
       this.tokenUi.rebind(spec, field, values[0], mixed, this.drafts.isComparing(el))
     }
 
+    if (this.positionBlock) this.positionBlock.hidden = multi
+    if (this.positionFields && !multi) {
+      this.positionFields.x.set(el instanceof HTMLElement ? Math.round(el.offsetLeft) : 0)
+      this.positionFields.y.set(el instanceof HTMLElement ? Math.round(el.offsetTop) : 0)
+    }
+
     this.layoutSection.refresh(el, computed, multi)
     if (!multi) {
       // Family/weight/align selects and Fill/Stroke's single-element swatches are
@@ -511,6 +521,12 @@ export class Panel {
     // previous selection's baselines.
     this.scrubbingField = null
     this.scrubBaselines = null
+    if (this.positionFields) {
+      this.positionFields.x.destroy()
+      this.positionFields.y.destroy()
+    }
+    this.positionFields = null
+    this.positionBlock = null
     // Only sectionsRoot is wiped — the popover singletons are siblings of it directly in
     // `body` (same scrolled coordinate space, see the constructor's why-comment) and are
     // structurally untouchable by rebuilds. An earlier version cleared `body` itself and
@@ -551,6 +567,30 @@ export class Panel {
         // flex or not (the ORDER is the contract — see panel.test.ts's composition test).
         const rowWrap = document.createElement('div')
         rowWrap.className = 'panel-rows layout-section'
+        // Position block (Figma pivot P1, spec §5): Figma's header X/Y pair above Size.
+        // READ-ONLY in P1 — offsets from offsetParent, refreshed like W/H; the fields light
+        // up for editing with P3's Absolute toggle. Disabled inputs, no scrub, no tokens.
+        const posBlock = document.createElement('div')
+        posBlock.className = 'position-block'
+        posBlock.setAttribute('data-position-block', '')
+        const posLabel = document.createElement('span')
+        posLabel.className = 'group-label'
+        posLabel.textContent = 'Position'
+        const posFields = document.createElement('div')
+        posFields.className = 'position-fields'
+        const makePosField = (label: 'X' | 'Y'): NumberField => {
+          const f = new NumberField({ label, onInput: () => {} })
+          f.root.dataset.props = label.toLowerCase()
+          const input = f.root.querySelector('input') as HTMLInputElement
+          input.disabled = true
+          posFields.append(f.root)
+          return f
+        }
+        this.positionFields = { x: makePosField('X'), y: makePosField('Y') }
+        posBlock.append(posLabel, posFields)
+        rowWrap.append(posBlock)
+        this.positionBlock = posBlock
+
         // Size block (2026-07-06 size-pair spec): a "Size" group label above ONE line holding
         // the W and H size-rows side by side — mirrors the padding block's structure below.
         const sizeBlock = document.createElement('div')

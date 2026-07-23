@@ -350,6 +350,9 @@ button {
 .size-row { display: flex; gap: 4px; flex: 1 1 40%; min-width: 0; }
 .size-row .nf { flex: 1; }
 .group-label { color: var(--text-muted); font-size: 11px; }
+.position-block { display: flex; flex-direction: column; gap: 4px; }
+.position-fields { display: flex; gap: 6px; }
+.position-fields .nf input:disabled { opacity: 0.6; cursor: default; }
 .size-block { display: flex; flex-direction: column; gap: 4px; }
 .size-fields { display: flex; gap: 6px; }
 .padding-block { display: flex; flex-direction: column; gap: 4px; }

@@ -1,4 +1,4 @@
-import type { ElementChange } from './request'
+import type { ElementChange, StructuralOp } from './request'
 import type { TaggedElement } from './source'
 import type { StageEvent, LifecycleStage } from './verifier'
 import { resolveElement } from './lifecycle-store'
@@ -29,6 +29,9 @@ export interface SentEntry {
      * that don't match any DraftStore key. */
     draftProps: string[]
     changes: SentChange[]
+    /** Structural design ops sent for this element (Figma pivot P1) — mirrors
+     * ElementChange.ops; omitted when the send was css-only. */
+    ops?: StructuralOp[]
   }>
 }
 
@@ -73,10 +76,25 @@ export interface SentStore {
   get(id: string): SentEntry | undefined
   take(id: string): SentEntry | undefined
   size(): number
-  isDuplicate(el: TaggedElement, changes: SentChange[]): boolean
+  isDuplicate(el: TaggedElement, changes: SentChange[], ops?: StructuralOp[]): boolean
 }
 
 export type SessionChangeListener = () => void
+
+/** Structural-op identity for the duplicate window: same kinds in order, and text ops key on
+ * `after` (a re-edit to DIFFERENT text is a genuinely new request — same rule as css deltas).
+ * `before` is deliberately ignored: it's locate-context, not the ask. */
+function opsIdentical(a: StructuralOp[] | undefined, b: StructuralOp[] | undefined): boolean {
+  const aLen = a?.length ?? 0
+  const bLen = b?.length ?? 0
+  if (aLen !== bLen) return false
+  if (!a || !b) return true
+  return a.every((op, i) => {
+    const other = b[i]
+    if (op.kind !== other.kind) return false
+    return op.kind !== 'text' || other.kind !== 'text' || op.after === other.after
+  })
+}
 
 /** Single owner of sent-state, replacing three previously hand-synced stores (SentRegistry +
  * DesignMode.sentSeeds + ChangeList.sentRows). One Map<requestId, seeds[]> backs verifier
@@ -154,7 +172,7 @@ export class LifecycleSession implements SentStore {
    * apply already removed. Identical-only on purpose — an element re-edited to DIFFERENT
    * values is a genuinely new request and must go through. Ported verbatim from
    * SentRegistry.isDuplicate, including the dcSource-fallback-for-disconnected-entries. */
-  isDuplicate(el: TaggedElement, changes: SentChange[]): boolean {
+  isDuplicate(el: TaggedElement, changes: SentChange[], ops?: StructuralOp[]): boolean {
     for (const [id, seeds] of this.entries) {
       if (this.resolvedIds.has(id)) continue // resolved entries leave the duplicate window — pre-refactor semantics
       for (const rec of seeds) {
@@ -167,7 +185,12 @@ export class LifecycleSession implements SentStore {
         // re-mounted element from an identical re-queue.
         const sameEl =
           sentEl === el || (!sentEl.isConnected && sentDcSource !== null && el.dataset.dcSource === sentDcSource)
-        if (!sameEl || sentChanges.length !== changes.length) continue
+        if (!sameEl) continue
+        // A pending DELETE shields the element from ANY follow-up send — every further edit
+        // to an element whose removal is already in flight is moot, not a new request.
+        const sentOps = rec.seed.change.ops
+        if (sentOps?.some((o) => o.kind === 'delete')) return true
+        if (sentChanges.length !== changes.length || !opsIdentical(sentOps, ops)) continue
         const sentAfter = new Map(sentChanges.map((c) => [c.property, c.afterCss]))
         if (changes.every((c) => sentAfter.get(c.property) === c.afterCss)) return true
       }
@@ -184,6 +207,7 @@ export class LifecycleSession implements SentStore {
         index: rec.seed.index,
         draftProps: rec.seed.draftProps,
         changes: rec.seed.change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
+        ...(rec.seed.change.ops ? { ops: rec.seed.change.ops } : {}),
       })),
     }
   }

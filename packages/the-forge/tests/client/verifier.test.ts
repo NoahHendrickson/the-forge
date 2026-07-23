@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { Verifier, verifyEntry, PAUSE_AFTER_FAILURES, MAX_POLL_MS, type StageEvent } from '../../src/client/verifier'
+import { Verifier, verifyEntry, HmrSignal, PAUSE_AFTER_FAILURES, MAX_POLL_MS, type StageEvent } from '../../src/client/verifier'
 import type { SentEntry } from '../../src/client/lifecycle'
 import { LifecycleSession, type SentSeed } from '../../src/client/lifecycle'
 import type { ElementChange } from '../../src/client/request'
@@ -38,6 +38,7 @@ class SentRegistry extends LifecycleSession {
           afterUtility: null,
           tokenExact: false,
         })),
+        ...(e.ops ? { ops: e.ops } : {}),
       } satisfies ElementChange,
     }))
     this.register(id, seeds)
@@ -62,6 +63,19 @@ function styleRule(id: string, prop: string, value: string): void {
   const style = document.createElement('style')
   style.textContent = `#${id} { ${prop}: ${value}; }`
   document.head.appendChild(style)
+}
+
+// Marks the page as a Vite page for HmrSignal's detection probe, so surviving-node text
+// equality is gated on the vite:afterUpdate event in these tests (on a page without this
+// script tag the signal assumes Next and trusts equality outright — see HmrSignal docs).
+function markVitePage(): void {
+  const script = document.createElement('script')
+  script.src = '/@vite/client'
+  document.head.appendChild(script)
+}
+
+function fireViteUpdate(): void {
+  window.dispatchEvent(new Event('vite:afterUpdate'))
 }
 
 describe('verifyEntry', () => {
@@ -1100,5 +1114,200 @@ describe('stage events', () => {
     expect(events.map((e) => e.stage)).toEqual(['failed', 'failed'])
     expect(events[0].note).toBe('needs confirmation: shared component')
     verifier.stop()
+  })
+})
+
+describe('structural verification (Figma pivot P1)', () => {
+  it('verifyEntry: delete op + element gone = verified (inverted polarity)', () => {
+    const d = el()
+    d.dataset.dcSource = 'src/App.tsx:9:4'
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [{ el: d, dcSource: 'src/App.tsx:9:4', draftProps: [], changes: [], ops: [{ kind: 'delete' }] }],
+    }
+    d.remove()
+    const result = verifyEntry(entry)
+    expect(result.verified).toBe(1)
+    expect(result.mismatched).toEqual([])
+    expect(result.missing).toBe(0)
+  })
+
+  it('verifyEntry: delete op + element still present = mismatch, never unverified', () => {
+    const d = el()
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [{ el: d, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'delete' }] }],
+    }
+    const result = verifyEntry(entry)
+    expect(result.verified).toBe(0)
+    expect(result.mismatched).toEqual([{ property: 'element', expected: 'deleted', actual: 'still present' }])
+    expect(result.missing).toBe(0)
+  })
+
+  it('verifyEntry: text equality on a REPLACED node is trusted without any HMR signal', () => {
+    const d = el()
+    d.dataset.dcSource = 'src/App.tsx:2:2'
+    d.textContent = 'New'
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [{ el: d, dcSource: 'src/App.tsx:2:2', draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }],
+    }
+    d.remove()
+    const replacement = document.createElement('div')
+    replacement.dataset.dcSource = 'src/App.tsx:2:2'
+    replacement.textContent = 'New'
+    document.body.appendChild(replacement)
+    const result = verifyEntry(entry, document, (sentEl, target) => target !== sentEl)
+    expect(result.verified).toBe(1)
+    expect(result.missing).toBe(0)
+  })
+
+  it('verifyEntry: text inequality reports a mismatch with expected/actual', () => {
+    const d = el()
+    d.textContent = 'Something else'
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [{ el: d, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }],
+    }
+    const result = verifyEntry(entry)
+    expect(result.mismatched).toEqual([{ property: 'text', expected: 'New', actual: 'Something else' }])
+  })
+
+  it('delete flow end-to-end: applied status → done stage, structural draft committed', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    drafts.applyDelete(btn)
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'delete' }] }]))
+    btn.remove() // the agent deleted the JSX; HMR dropped the node
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(events.map((e) => e.stage)).toContain('done')
+    expect(drafts.structuralOf(btn)).toBeNull() // committed
+    verifier.stop()
+  })
+
+  it('text equality on a SURVIVING node without an HMR update stays unverified on a Vite page', async () => {
+    markVitePage()
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    btn.textContent = 'Old'
+    drafts.applyText(btn, 'New') // DOM now reads 'New' — but that's OUR draft, not the code's
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }]))
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(events.map((e) => e.stage)).toContain('unverified')
+    expect(events.map((e) => e.stage)).not.toContain('done')
+    expect(drafts.structuralOf(btn)).not.toBeNull() // NOT committed — equality was unproven
+    verifier.stop()
+  })
+
+  it('the same surviving-node equality verifies once a vite:afterUpdate lands after send', async () => {
+    markVitePage()
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    btn.textContent = 'Old'
+    drafts.applyText(btn, 'New')
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }]))
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    fireViteUpdate() // the agent's file edit reached the page
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(events.map((e) => e.stage)).toContain('done')
+    expect(drafts.structuralOf(btn)).toBeNull() // committed; DOM keeps showing 'New'
+    expect(btn.textContent).toBe('New')
+    verifier.stop()
+  })
+
+  it('a text draft re-edited while in flight survives the targeted structural commit', async () => {
+    markVitePage()
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    btn.textContent = 'Old'
+    drafts.applyText(btn, 'New')
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }]))
+    drafts.applyText(btn, 'Newer still') // user kept typing after the send
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    verifier.start()
+    fireViteUpdate()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    // DOM reads 'Newer still' ≠ sent 'New' → mismatch — and the LIVE draft must survive
+    expect(drafts.structuralOf(btn)).toEqual({ kind: 'text', original: 'Old', value: 'Newer still' })
+    verifier.stop()
+  })
+})
+
+describe('HmrSignal', () => {
+  it('trusts everything on a non-Vite page (no client script, no events)', () => {
+    const hmr = new HmrSignal()
+    hmr.start()
+    expect(hmr.trustSince(hmr.mark())).toBe(true)
+    hmr.stop()
+  })
+
+  it('on a Vite page, trustSince requires an update AFTER the cursor', () => {
+    markVitePage()
+    const hmr = new HmrSignal()
+    hmr.start()
+    const cursor = hmr.mark()
+    expect(hmr.trustSince(cursor)).toBe(false)
+    fireViteUpdate()
+    expect(hmr.trustSince(cursor)).toBe(true)
+    expect(hmr.trustSince(hmr.mark())).toBe(false) // new cursor — update already consumed
+    hmr.stop()
+  })
+
+  it('stop() removes the listener; an observed event still proves Vite', () => {
+    const hmr = new HmrSignal()
+    hmr.start()
+    fireViteUpdate() // no script tag, but the event itself is definitive
+    const cursor = hmr.mark()
+    expect(hmr.trustSince(cursor)).toBe(false) // now known-Vite, nothing since cursor
+    hmr.stop()
+    fireViteUpdate()
+    expect(hmr.trustSince(cursor)).toBe(false) // stopped — the second event was not counted
   })
 })

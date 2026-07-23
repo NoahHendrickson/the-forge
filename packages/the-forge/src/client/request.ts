@@ -13,6 +13,13 @@ export interface ChangeItem {
   intent?: string
 }
 
+/** A Figma-pivot structural design op (spec 2026-07-22 §2-3), anchored at its ElementChange's
+ * element. Parallel track to `changes` — style deltas keep their exact existing path.
+ * move/absolute/insert arrive in P3/P4; declare only what P1 ships. */
+export type StructuralOp =
+  | { kind: 'text'; before: string; after: string }
+  | { kind: 'delete' }
+
 export interface ElementChange {
   tag: string
   source: SourceLocation | null
@@ -20,6 +27,8 @@ export interface ElementChange {
   text: string
   selector: string
   changes: ChangeItem[]
+  /** Omitted (never []) when the element has no structural ops — keeps existing JSON stable. */
+  ops?: StructuralOp[]
 }
 
 export interface ChangeRequest {
@@ -188,6 +197,29 @@ export function cssPath(start: TaggedElement): string {
   return parts.join(' > ')
 }
 
+/** The text op's `before` is pure locate-context — the element heading already targets the
+ * edit — so it caps; `after` is the ask AND the verifier's textContent oracle, so it must
+ * travel exact on both the wire and the markdown (a truncated ask is an unappliable edit). */
+const TEXT_BEFORE_CAP = 200
+
+function structuralOpsFor(drafts: DraftStore, el: TaggedElement): StructuralOp[] | undefined {
+  const s = drafts.structuralOf(el)
+  if (!s) return undefined
+  if (s.kind === 'delete') return [{ kind: 'delete' }]
+  return [{ kind: 'text', before: s.original.slice(0, TEXT_BEFORE_CAP), after: s.value }]
+}
+
+/** Attach a text-drafted element's ops AND repoint its locate-context `text` at the ORIGINAL —
+ * the DOM shows the drafted text, but the agent greps the source file, which still holds the
+ * before text; drafted context would mislead the selector/text fallback. */
+function attachOps(elementChange: ElementChange, drafts: DraftStore, el: TaggedElement): void {
+  const ops = structuralOpsFor(drafts, el)
+  if (!ops) return
+  elementChange.ops = ops
+  const s = drafts.structuralOf(el)
+  if (s?.kind === 'text') elementChange.text = sanitizeInline(s.original).slice(0, 80)
+}
+
 export function buildChangeRequestWithElements(
   drafts: DraftStore,
   theme: Theme = readTheme()
@@ -259,9 +291,22 @@ export function buildChangeRequestWithElements(
       }
       changes.push(item)
     }
-    if (changes.length === 0) continue // every drafted property was a no-op — nothing to request
+    // every drafted property was a no-op — nothing to request… unless a structural op
+    // rides on this element, which must survive a zero-css-delta send on its own.
+    if (changes.length === 0 && drafts.structuralOf(el) === null) continue
 
     const elementChange = elementContext(el, changes)
+    attachOps(elementChange, drafts, el)
+    elementList.push(elementChange)
+    elements.set(el, elementChange)
+  }
+
+  // Structural-only elements never appear in drafts.entries() (a delete discards its css
+  // drafts; a plain text edit may have none) — sweep them here.
+  for (const el of drafts.structuralEntries().keys()) {
+    if (elements.has(el) || !el.isConnected) continue
+    const elementChange = elementContext(el, [])
+    attachOps(elementChange, drafts, el)
     elementList.push(elementChange)
     elements.set(el, elementChange)
   }
@@ -311,6 +356,16 @@ export function renderMarkdown(req: ChangeRequest): string {
       }
       if (c.intent) line += ` — intent: ${c.intent}`
       lines.push(line)
+    }
+    for (const op of el.ops ?? []) {
+      if (op.kind === 'delete') {
+        lines.push('- Delete this element: remove its JSX (and children) from the source.')
+      } else {
+        // JSON.stringify escapes quotes AND newlines — page-controlled text stays a single
+        // quoted line and can never inject instruction lines into the request (same threat
+        // model as sanitizeInline, which can't be used here: the ask must stay verbatim).
+        lines.push(`- Text: ${JSON.stringify(op.before)} → ${JSON.stringify(op.after)}`)
+      }
     }
     lines.push('')
   })

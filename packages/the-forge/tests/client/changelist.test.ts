@@ -454,3 +454,60 @@ describe('stage-change motion', () => {
     expect(session.records().length).toBe(0)
   })
 })
+
+describe('structural rows (Figma pivot P1)', () => {
+  it('a delete draft renders its own row with designer-vocabulary label', () => {
+    const drafts = new DraftStore()
+    const el = tagged()
+    const list = new ChangeList(drafts, new LifecycleSession(), noop)
+    drafts.applyDelete(el as never)
+    list.syncDrafts()
+    const row = list.root.querySelector('.change-row')!
+    expect(row.classList.contains('change-structural')).toBe(true)
+    expect(row.querySelector('.change-detail-structural')!.textContent).toBe('Delete <h1>')
+    expect(row.querySelector('.chip')!.className).toContain('chip-draft')
+  })
+
+  it('a text draft renders truncated designer label alongside css detail lines', () => {
+    const drafts = new DraftStore()
+    const el = tagged()
+    el.textContent = 'Old headline'
+    const list = new ChangeList(drafts, new LifecycleSession(), noop)
+    drafts.apply(el as never, 'padding-top', '24px')
+    drafts.applyText(el as never, 'A very long replacement headline that keeps going')
+    list.syncDrafts()
+    const rows = list.root.querySelectorAll('.change-row')
+    expect(rows).toHaveLength(1)
+    const details = [...rows[0].querySelectorAll('.change-detail')].map((l) => l.textContent)
+    expect(details[0]).toBe('Text: "A very long replacement …"')
+    expect(details[1]).toBe('padding-top → 24px')
+  })
+
+  it('sent rows lead the summary with the op label', () => {
+    const drafts = new DraftStore()
+    const el = tagged()
+    const list = new ChangeList(drafts, new LifecycleSession(), noop)
+    list.addSent('q1', [seed(el, elementChange({ changes: [], ops: [{ kind: 'delete' }] }))])
+    const row = list.root.querySelector('.change-row')!
+    expect(row.classList.contains('change-structural')).toBe(true)
+    expect(row.querySelector('.change-summary')!.textContent).toBe('Delete <h1>')
+  })
+
+  it('an in-flight structural op suppresses its duplicate draft row', () => {
+    const drafts = new DraftStore()
+    const el = tagged()
+    el.textContent = 'Old'
+    const list = new ChangeList(drafts, new LifecycleSession(), noop)
+    drafts.applyText(el as never, 'New')
+    list.addSent('q1', [seed(el, elementChange({ changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }))])
+    list.syncDrafts()
+    const chips = [...list.root.querySelectorAll('.chip')].map((c) => c.className)
+    expect(chips.filter((c) => c.includes('chip-draft'))).toHaveLength(0)
+    expect(chips.filter((c) => c.includes('chip-sent'))).toHaveLength(1)
+    // …but a RE-EDITED text draft (different after) gets its own row again
+    drafts.applyText(el as never, 'Newer')
+    list.syncDrafts()
+    const draftRow = [...list.root.querySelectorAll('.change-row')].find((r) => r.querySelector('.chip-draft'))
+    expect(draftRow!.querySelector('.change-detail-structural')!.textContent).toBe('Text: "Newer"')
+  })
+})

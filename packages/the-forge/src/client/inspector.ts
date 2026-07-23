@@ -17,6 +17,10 @@ export interface InspectorData {
   tag: string
   source: SourceLocation | null
   classes: string[]
+  /** Offset from the offsetParent's padding edge (Figma pivot P1) — the panel's read-only
+   * X/Y header pair. 0 for SVG and other non-HTMLElements, which have no offset model. */
+  x: number
+  y: number
   width: number
   height: number
   styles: Record<string, string>
@@ -33,6 +37,8 @@ export function buildInspectorData(el: TaggedElement): InspectorData {
     tag: el.tagName.toLowerCase(),
     source: el.dataset.dcSource ? parseSourceAttr(el.dataset.dcSource) : null,
     classes: Array.from(el.classList),
+    x: el instanceof HTMLElement ? Math.round(el.offsetLeft) : 0,
+    y: el instanceof HTMLElement ? Math.round(el.offsetTop) : 0,
     width: Math.round(rect.width),
     height: Math.round(rect.height),
     styles,
