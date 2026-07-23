@@ -5,7 +5,7 @@ import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { Dock } from './dock'
 import { CanvasMode, unionClientRect, isEditable } from './canvas'
-import { isTextLeaf } from './panel-readers'
+import { TextEditMode } from './text-edit'
 import { buildCanvasChrome, type CanvasChrome } from './canvas-chrome'
 import {
   buildChangeRequestWithElements,
@@ -69,12 +69,11 @@ export class DesignMode {
   private reflowRaf = 0
   private rippleRaf = 0
   private lastMove: MouseEvent | null = null
-  /** The element currently in inline text-edit mode (double-click → contenteditable), or null.
-   * While set, hover/click/keydown handling yields to the browser's own editing behavior. */
-  private textEditing: TaggedElement | null = null
-  /** textContent at edit START — the draft's true "before". Captured here because by commit
-   * time the DOM already shows whatever the user typed (see DraftStore.applyText's hint). */
-  private textEditOriginal = ''
+  /** The inline text-edit session (double-click → contenteditable), extracted to
+   * text-edit.ts (PR #44 follow-up). While its `active` flag is set, hover/click/keydown
+   * handling yields to the browser's own editing behavior via the delegation in
+   * onMove/onClick/onKey below. Constructed in the constructor body (needs this.drafts). */
+  private textEdit: TextEditMode
   private drafts: DraftStore
   private panel: Panel
   private dock: Dock
@@ -176,6 +175,13 @@ export class DesignMode {
     dock?: Dock
   ) {
     this.drafts = drafts ?? new DraftStore()
+    this.textEdit = new TextEditMode(this.drafts, {
+      select: (el) => this.select(el),
+      isSoleSelection: (el) => this.selection.length === 1 && this.selection[0] === el,
+      beforeEdit: (el) => this.handleBeforeEdit(el),
+      edited: () => this.handleEdited(),
+      hideHover: () => this.overlay.hideOutline(),
+    })
     this.panel =
       panel ??
       new Panel(
@@ -626,7 +632,7 @@ export class DesignMode {
       this.refreshStatus()
       this.persist()
     } else {
-      this.finishTextEdit() // commit any in-progress inline text edit before the listeners go
+      this.textEdit.finish() // commit any in-progress inline text edit before the listeners go
       document.removeEventListener('mousemove', this.onMove, true)
       document.removeEventListener('click', this.onClick, true)
       document.removeEventListener('dblclick', this.onDblClick, true)
@@ -982,7 +988,7 @@ export class DesignMode {
   }
 
   private onMove = (e: MouseEvent): void => {
-    if (this.textEditing) return // hover chrome is noise while the user is typing in the page
+    if (this.textEdit.active) return // hover chrome is noise while the user is typing in the page
     this.lastMove = e
     if (this.moveRaf) return
     this.moveRaf = requestAnimationFrame(() => {
@@ -997,22 +1003,8 @@ export class DesignMode {
 
   private onClick = (e: MouseEvent): void => {
     if (this.overlay.contains(e.target)) return
-    if (this.textEditing) {
-      // Clicks inside the editing element place the caret — the browser's job, and it
-      // happens on MOUSEDOWN default, so shielding the click costs the caret nothing. The
-      // shield is still mandatory here: this is a document-CAPTURE listener, above React's
-      // root delegation, and contenteditable only suppresses the native <a> default — a
-      // react-router Link or modal-opening handler on the edited element would otherwise
-      // fire on a caret-repositioning click and navigate mid-edit, after which blur commits
-      // the half-finished draft against a changed page (PR #44 review).
-      if (this.textEditing.contains(e.target as Node)) {
-        e.preventDefault()
-        e.stopPropagation()
-        return
-      }
-      // A click anywhere else commits the edit and falls through to normal selection.
-      this.finishTextEdit()
-    }
+    // Mid-edit click policy (caret shield / commit-and-fall-through) lives in TextEditMode.
+    if (this.textEdit.handleClick(e) === 'shielded') return
     e.preventDefault()
     e.stopPropagation()
     const el = findTaggedElement(e.target as Element)
@@ -1021,38 +1013,22 @@ export class DesignMode {
     else this.deselect()
   }
 
-  /** Double-click on a text-leaf element enters inline text edit (Figma behavior).
-   * Registered/removed in setActive beside the other capture handlers. */
+  /** Double-click on a text-leaf element enters inline text edit (Figma behavior) — gates
+   * and session lifecycle live in TextEditMode (text-edit.ts); this handler only owns the
+   * event plumbing, so registration/removal stays in setActive beside the other capture
+   * handlers. */
   private onDblClick = (e: MouseEvent): void => {
     if (this.overlay.contains(e.target)) return
-    // Same typing-surface guard as the Del branch below: a double-click inside a real form
-    // control is a select-the-word gesture in THAT control — without this, the tagged
-    // ancestor (e.g. a <label>) goes contenteditable with the control inside the
-    // selectNodeContents range, and the first keystroke deletes it from the live DOM
-    // (PR #44 review).
-    if (isEditable(e.target)) return
-    const el = findTaggedElement(e.target as Element)
-    // isTextLeaf, NOT hasDirectText: the flat-textContent draft model destroys element
-    // children of mixed-content elements — see panel-readers.ts (PR #44 review).
-    if (!el || !isTextLeaf(el)) return
+    const el = this.textEdit.candidate(e.target)
+    if (!el) return
     e.preventDefault()
     e.stopPropagation()
-    this.startTextEdit(el)
+    this.textEdit.begin(el)
   }
 
   private onKey = (e: KeyboardEvent): void => {
     if (this.overlay.contains(e.target)) return
-    if (this.textEditing) {
-      // Esc and Enter both commit (Figma: Esc commits text; P1 has no multi-line intent for
-      // Enter, so it commits too rather than inserting a newline). Everything else — typing,
-      // arrows, shortcuts — belongs to the contenteditable.
-      if (e.key === 'Escape' || e.key === 'Enter') {
-        e.preventDefault()
-        e.stopPropagation()
-        this.finishTextEdit()
-      }
-      return
-    }
+    if (this.textEdit.handleKey(e)) return
     if (e.key === 'Delete' || e.key === 'Backspace') {
       // Same typing-surface guard as canvas mode's Space/zoom shortcuts — Del in the
       // composer or any input must never nuke the canvas selection. Carve-out: when the
@@ -1081,65 +1057,6 @@ export class DesignMode {
     e.stopPropagation()
     if (this.selection.length > 0) this.deselect()
     else this.setActive(false)
-  }
-
-  private startTextEdit(el: TaggedElement): void {
-    if (!(el instanceof HTMLElement)) return // contenteditable is an HTMLElement affair — SVG text is out of P1's scope
-    if (this.textEditing === el) return
-    this.finishTextEdit()
-    if (this.selection[0] !== el || this.selection.length !== 1) this.select(el)
-    this.textEditing = el
-    this.textEditOriginal = el.textContent ?? ''
-    this.overlay.hideOutline()
-    // plaintext-only keeps paste/typing from minting nested markup the tagger never saw.
-    // Set as an ATTRIBUTE, not the property: jsdom's property setter doesn't reflect to the
-    // attribute (breaking the browser's own [contenteditable] activation contract in tests).
-    // contenteditable is an ENUMERATED attribute — an unrecognized keyword resolves to the
-    // INHERIT state (NOT editable; pre-136 Firefox shipped exactly that silently-dead mode),
-    // so feature-detect via isContentEditable and fall back to 'true': rich editing loses
-    // the plaintext guard but keeps the feature alive (PR #44 review). Strict `=== false`:
-    // jsdom doesn't implement isContentEditable (undefined), and must keep plaintext-only.
-    el.setAttribute('contenteditable', 'plaintext-only')
-    if ((el as HTMLElement).isContentEditable === false) el.setAttribute('contenteditable', 'true')
-    el.addEventListener('blur', this.onTextEditBlur)
-    ;(el as HTMLElement).focus()
-    const range = document.createRange()
-    range.selectNodeContents(el)
-    const sel = window.getSelection()
-    sel?.removeAllRanges()
-    sel?.addRange(range)
-  }
-
-  private onTextEditBlur = (): void => {
-    this.finishTextEdit()
-  }
-
-  /** Commits the inline edit into a text draft. Always safe to call — no-op when not editing;
-   * applyText itself no-ops when the text is unchanged, so an idle in-and-out leaves nothing. */
-  private finishTextEdit(): void {
-    const el = this.textEditing
-    if (!el) return
-    this.textEditing = null
-    el.removeEventListener('blur', this.onTextEditBlur)
-    el.removeAttribute('contenteditable')
-    window.getSelection()?.removeAllRanges()
-    // Browsers rebalance collapsible spaces (trailing, consecutive) to U+00A0 inside
-    // contenteditable — plaintext-only included. The committed value is both the agent's ask
-    // and the verifier's textContent oracle, and the agent writes ordinary spaces in JSX, so
-    // an un-normalized nbsp would land the row in a terminal 'mismatch' whose expected and
-    // actual render identically (PR #44 review). The unchanged-check normalizes BOTH sides
-    // so an idle in-and-out on nbsp-bearing source text stays a no-op.
-    const denbsp = (s: string): string => s.replace(/\u00a0/g, ' ')
-    const value = denbsp(el.textContent ?? '')
-    if (value === denbsp(this.textEditOriginal)) {
-      // Unchanged (modulo nbsp) — put the verbatim original back: the browser may have
-      // swapped spaces for nbsp while the element was editable.
-      el.textContent = this.textEditOriginal
-      return
-    }
-    this.handleBeforeEdit(el)
-    this.drafts.applyText(el, value, this.textEditOriginal)
-    this.handleEdited()
   }
 
   private onReflow = (): void => {
