@@ -1,5 +1,6 @@
 import type { SentEntry, SentStore } from './lifecycle'
 import type { DraftStore } from './drafts'
+import { HmrSignal } from './hmr'
 import { parseSourceAttr, type TaggedElement } from './source'
 import { AGENT_DISPLAY_NAME, currentAgent } from './agent'
 import { parseSessionState, parseWatcherState, queuedLineFor, type SessionState, type WatcherState } from './watch'
@@ -50,128 +51,8 @@ function locate(el: TaggedElement, dcSource: string | null, doc: Document, index
 /** Bound for text-mismatch expected/actual strings headed for the panel UI. */
 const MAX_TEXT_CHARS = 120
 
-/** Tracks whether a dev-server code update reached this page since a given cursor.
- *
- * Why it exists (Figma pivot P1, spec §4): the css verifier's false-done guard is
- * neutralize-inline-then-measure — the cascade underneath our override is the code's truth.
- * Text has no cascade: if the drafted node survived HMR, its textContent IS our own draft, and
- * equality with the expected value proves nothing. The style trick has no text analog, so the
- * guard becomes "only trust equality on a surviving node once a code update demonstrably
- * reached the page" — Vite fires 'vite:afterUpdate' on window for exactly this. On Next there
- * is no page-visible update event at all, so trustSince() returns true there (documented
- * residual false-done risk; a full Fast-Refresh remount instead replaces the node, which the
- * caller's identity check catches without needing this signal).
- *
- * Vite detection: onVite latches ONLY once a listener demonstrably attached (the hot-context
- * import resolved) or a vite event was actually observed — never from the script-tag sniff
- * alone. The sniff used to latch it, which broke the degrade promise: any setup where the tag
- * matches but the probe can't attach (non-root `base`: tag src '/app/@vite/client' matches the
- * substring, the hardcoded absolute import 404s) gated every text verify on a signal that
- * could never arrive — permanent 'unverified' (PR #44 review). A failed probe on an exotic
- * Vite setup now degrades to the legacy accept-equality behavior, never to a stuck row. */
-const MAX_UPDATE_LOG = 200
-
-/** Pulls the touched module paths out of a vite:afterUpdate payload — hot-context payloads
- * carry {updates: [{path, acceptedPath}]}; window CustomEvents may carry the same under
- * .detail; anything else yields [] (an update with unknown shape trusts globally, the
- * pre-path-scoping behavior). */
-function extractUpdatePaths(payload: unknown): string[] {
-  const body = isObj(payload) && 'detail' in payload ? (payload as { detail?: unknown }).detail : payload
-  if (!isObj(body) || !Array.isArray((body as { updates?: unknown }).updates)) return []
-  const paths: string[] = []
-  for (const u of (body as { updates: unknown[] }).updates) {
-    if (!isObj(u)) continue
-    for (const v of [(u as { acceptedPath?: unknown }).acceptedPath, (u as { path?: unknown }).path]) {
-      if (typeof v === 'string') paths.push(v)
-    }
-  }
-  return paths
-}
-
-function isObj(v: unknown): v is object {
-  return typeof v === 'object' && v !== null
-}
-
-/** Vite update paths are dev-server-absolute ('/src/App.tsx', possibly '?t='-suffixed);
- * data-dc-source files are whatever the tagger recorded (project-relative or absolute).
- * Suffix-match either way after stripping query strings and leading slashes. */
-function pathMatchesFile(updatePath: string, file: string): boolean {
-  const norm = (s: string): string => s.split('?')[0].replace(/^\/+/, '')
-  const a = norm(updatePath)
-  const b = norm(file)
-  return a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`)
-}
-
-export class HmrSignal {
-  private count = 0
-  private onVite = false
-  private listening = false
-  /** seq (count value AFTER the update) + touched module paths, bounded to MAX_UPDATE_LOG.
-   * Paths let trustSince scope trust to the edited element's OWN file: a page-global counter
-   * let any unrelated element's hot update vouch for a failed text edit in the same request —
-   * false Implemented, and commitStructural then destroys the draft (PR #44 review). */
-  private updates: Array<{ seq: number; paths: string[] }> = []
-  private hot: { on(e: string, cb: (p?: unknown) => void): void; off?(e: string, cb: (p?: unknown) => void): void } | null = null
-  private handler = (payload?: unknown): void => {
-    this.count++
-    this.onVite = true
-    this.updates.push({ seq: this.count, paths: extractUpdatePaths(payload) })
-    if (this.updates.length > MAX_UPDATE_LOG) this.updates.shift()
-  }
-
-  start(doc: Document = document): void {
-    if (this.listening) return
-    this.listening = true
-    // Belt (tests + any future page-level dispatch) …
-    window.addEventListener('vite:afterUpdate', this.handler)
-    // … and braces (the path that actually fires on real Vite, caught by the P1 E2E):
-    // 'vite:afterUpdate' is NOT a DOM event — client.mjs's notifyListeners only invokes
-    // import.meta.hot listeners, and this bundle is served raw (never Vite-transformed), so
-    // it has no import.meta.hot. Mint our own hot context by importing the HMR client and
-    // calling createHotContext — the exact preamble Vite injects into transformed modules.
-    // The specifier comes from the injected client tag's own src when present — a hardcoded
-    // '/@vite/client' 404s on any non-root `base` (PR #44 review) — and lives in a variable
-    // so esbuild leaves the import dynamic instead of trying to resolve a dev-server-only
-    // path at build time. On Next the import rejects and we stay in trust-always mode
-    // (spec §4's documented Next behavior).
-    const viteClientPath = doc.querySelector('script[src*="/@vite/client"]')?.getAttribute('src') ?? '/@vite/client'
-    import(viteClientPath).then(
-      (mod: { createHotContext?: (path: string) => { on(e: string, cb: (p?: unknown) => void): void } }) => {
-        if (!this.listening || typeof mod.createHotContext !== 'function') return
-        this.onVite = true
-        this.hot = mod.createHotContext('/__the-forge/hmr-signal')
-        this.hot.on('vite:afterUpdate', this.handler)
-      },
-      () => {} // not Vite (or client unreachable) — the window listener remains the only ear
-    )
-  }
-
-  stop(): void {
-    if (!this.listening) return
-    this.listening = false
-    window.removeEventListener('vite:afterUpdate', this.handler)
-    this.hot?.off?.('vite:afterUpdate', this.handler)
-    this.hot = null
-  }
-
-  /** Monotonic cursor — record at send time, test with trustSince at verify time. */
-  mark(): number {
-    return this.count
-  }
-
-  /** True when a code update demonstrably reached the page since `cursor` — scoped to `file`
-   * (the element's own data-dc-source file) when both it and the updates' path info are
-   * available. Non-Vite pages (no listener ever attached) trust unconditionally. */
-  trustSince(cursor: number, file?: string | null): boolean {
-    if (!this.onVite) return true
-    const since = this.updates.filter((u) => u.seq > cursor)
-    if (since.length === 0) return false
-    if (!file) return true
-    return since.some((u) => u.paths.length === 0 || u.paths.some((p) => pathMatchesFile(p, file)))
-  }
-}
-
-/** Decides whether a text-op equality on `target` is trustworthy — see HmrSignal. Injected
+/** Decides whether a text-op equality on `target` is trustworthy — see HmrSignal (hmr.ts,
+ * where the dev-server probing lives; this module only consumes mark()/trustSince). Injected
  * into verifyElements so the pure verify math stays testable without a live Verifier.
  * `dcSource` is the element's own source tag, letting the trust decision scope to its file. */
 type TextTrust = (sentEl: TaggedElement, target: TaggedElement, dcSource: string | null) => boolean
@@ -188,112 +69,139 @@ interface ElementVerification {
   missing: number
 }
 
+/** One op-kind's (or the css track's) contribution to an element's verification — the
+ * per-kind verifiers below each return one of these and verifyElements composes them.
+ * Split per kind (PR #44 follow-up): the old single function interleaved four
+ * mutually-exclusive outcome models, and the delete branch had to remember to short-circuit
+ * before the no-target check; now each kind owns its outcome model and exactly one of them
+ * (css) owns the neutralize/measure trick. */
+interface KindVerification {
+  verified: number
+  mismatched: Array<{ property: string; expected: string; actual: string }>
+  missing: number
+}
+
+type SentElement = SentEntry['elements'][number]
+
+// DELETE — inverted polarity: the element being GONE is success; every other outcome
+// model treats a locate miss as failure. No neutralization needed — our
+// display:none preview affects rendering, not connectivity, and deletion can only reach
+// the DOM through a file edit → HMR → re-render, which disconnects the node. Known edge
+// (spec §4, accepted): after the JSX is removed, a following sibling can shift onto the
+// deleted element's exact file:line:col and read as "still present" — that surfaces as a
+// mismatch the user can dismiss, never as a false success.
+function verifyDelete(target: TaggedElement | null): KindVerification {
+  if (!target) return { verified: 1, mismatched: [], missing: 0 }
+  return {
+    verified: 0,
+    mismatched: [{ property: 'element', expected: 'deleted', actual: 'still present' }],
+    missing: 0,
+  }
+}
+
+// TEXT — getComputedStyle can't see text, so this runs outside the css measure block.
+// Equality on a REPLACED node (or with an HMR update observed — textTrusted) is the
+// code's truth; equality on a surviving node without either signal could be our own
+// draft echoing back, and counts as `missing` (→ 'unverified'), never as a false done.
+// Also the home of the unknown-kind fail-closed rule: an op kind with no verify branch
+// (P3's move before its branch lands, a version-skewed restore) counts as unproven →
+// 'unverified'. Without it, an element carrying only an unknown op would return all-zeros,
+// which handleApplied's else-arm reads as fully verified — commit + 'done' with zero checks
+// performed (PR #44 review). (Delete never reaches here — verifyElements dispatches it.)
+function verifyText(el: SentElement, target: TaggedElement, textTrusted: TextTrust): KindVerification {
+  const ops = el.ops ?? []
+  const mismatched: KindVerification['mismatched'] = []
+  let verified = 0
+  let unproven = 0
+  for (const op of ops) {
+    if (op.kind !== 'text') continue
+    // U+00A0-normalize BOTH sides: contenteditable rebalances collapsible spaces to nbsp,
+    // and finishTextEdit normalizes the committed value — but a pre-normalization
+    // persisted send (or nbsp genuinely in the page's own source) must still compare as
+    // the visually-identical text it is, never as an undiagnosable terminal 'mismatch'
+    // whose expected/actual render the same (PR #44 review).
+    const denbsp = (s: string): string => s.replace(/\u00a0/g, ' ')
+    const actual = target.textContent ?? ''
+    if (denbsp(actual) === denbsp(op.after)) {
+      if (textTrusted(el.el, target, el.dcSource)) verified++
+      else unproven++
+    } else {
+      mismatched.push({ property: 'text', expected: op.after.slice(0, MAX_TEXT_CHARS), actual: actual.slice(0, MAX_TEXT_CHARS) })
+    }
+  }
+  const unknownOps = ops.filter((o) => o.kind !== 'text' && o.kind !== 'delete').length
+  return { verified, mismatched, missing: unproven + unknownOps }
+}
+
+// CSS — the one owner of the neutralize/measure trick. Neutralize the draft's inline styles
+// before measuring — inline styles win the cascade, so if the sent draft is still applied
+// as inline style (e.g. the DOM node survived Fast Refresh), getComputedStyle would just
+// read back what WE put there, reporting "implemented" even if the underlying code never
+// adopted the value. Stash and strip each sent property (plus transition, to avoid
+// measuring mid-transition values), measure, then restore in a finally.
+//
+// Strip the UNION of el.changes[].property and el.draftProps, not just el.changes:
+// `changes` carries request.ts's COLLAPSE names (padding-block, border-radius, …) used
+// for the change-request markdown, but the DraftStore's actual inline styles are the
+// longhands the panel edits (padding-top/padding-bottom, …) — draftProps is exactly
+// those real keys (see SentEntry.elements[].draftProps docs in lifecycle.ts).
+// removeProperty('padding-block') does not strip an inline padding-top, so a DOM node
+// that survived HMR with its draft still inline would be measured against the client's
+// OWN draft value — a false "done", followed by commit() visibly snapping the page back.
+// draftProps exists for exactly this divergence and commit() already uses it (see
+// handleApplied below); this neutralize loop was the one place that got missed.
+function verifyCss(el: SentElement, target: TaggedElement): KindVerification {
+  const inlineTransition = target.style.getPropertyValue('transition')
+  target.style.setProperty('transition', 'none')
+  const stashed = new Map<string, string>()
+  const toStrip = new Set<string>([...el.changes.map((c) => c.property), ...el.draftProps])
+  for (const prop of toStrip) {
+    stashed.set(prop, target.style.getPropertyValue(prop))
+    target.style.removeProperty(prop)
+  }
+
+  const mismatched: KindVerification['mismatched'] = []
+  let verified = 0
+  try {
+    const computed = getComputedStyle(target)
+    for (const change of el.changes) {
+      const actual = computed.getPropertyValue(change.property).trim()
+      const expected = change.afterCss.trim()
+      if (actual === expected) verified++
+      else mismatched.push({ property: change.property, expected, actual })
+    }
+  } finally {
+    for (const [prop, value] of stashed) {
+      if (value) target.style.setProperty(prop, value)
+      else target.style.removeProperty(prop)
+    }
+    if (inlineTransition) target.style.setProperty('transition', inlineTransition)
+    else target.style.removeProperty('transition')
+  }
+  return { verified, mismatched, missing: 0 }
+}
+
 function verifyElements(entry: SentEntry, doc: Document = document, textTrusted: TextTrust = () => true): ElementVerification[] {
   return entry.elements.map((el) => {
     const target = locate(el.el, el.dcSource, doc, el.index ?? 0)
     const ops = el.ops ?? []
 
-    // DELETE — inverted polarity: the element being GONE is success; every other outcome
-    // model below treats a locate miss as failure. No neutralization needed — our
-    // display:none preview affects rendering, not connectivity, and deletion can only reach
-    // the DOM through a file edit → HMR → re-render, which disconnects the node. Known edge
-    // (spec §4, accepted): after the JSX is removed, a following sibling can shift onto the
-    // deleted element's exact file:line:col and read as "still present" — that surfaces as a
-    // mismatch the user can dismiss, never as a false success.
+    // A delete op claims the WHOLE element (see verifyDelete's inverted polarity) — it must
+    // dispatch before the no-target check, which every other kind reads as failure.
     if (ops.some((o) => o.kind === 'delete')) {
-      if (!target) return { el: el.el, draftProps: el.draftProps, verified: 1, mismatched: [], missing: 0 }
-      return {
-        el: el.el,
-        draftProps: el.draftProps,
-        verified: 0,
-        mismatched: [{ property: 'element', expected: 'deleted', actual: 'still present' }],
-        missing: 0,
-      }
+      return { el: el.el, draftProps: el.draftProps, ...verifyDelete(target) }
     }
 
     if (!target) return { el: el.el, draftProps: el.draftProps, verified: 0, mismatched: [], missing: el.changes.length + ops.length }
 
-    // TEXT — getComputedStyle can't see text, so this runs outside the css measure block.
-    // Equality on a REPLACED node (or with an HMR update observed — textTrusted) is the
-    // code's truth; equality on a surviving node without either signal could be our own
-    // draft echoing back, and counts as `missing` (→ 'unverified'), never as a false done.
-    const textMismatched: ElementVerification['mismatched'] = []
-    let textVerified = 0
-    let textUnproven = 0
-    for (const op of ops) {
-      if (op.kind !== 'text') continue
-      // U+00A0-normalize BOTH sides: contenteditable rebalances collapsible spaces to nbsp,
-      // and finishTextEdit normalizes the committed value — but a pre-normalization
-      // persisted send (or nbsp genuinely in the page's own source) must still compare as
-      // the visually-identical text it is, never as an undiagnosable terminal 'mismatch'
-      // whose expected/actual render the same (PR #44 review).
-      const denbsp = (s: string): string => s.replace(/\u00a0/g, ' ')
-      const actual = target.textContent ?? ''
-      if (denbsp(actual) === denbsp(op.after)) {
-        if (textTrusted(el.el, target, el.dcSource)) textVerified++
-        else textUnproven++
-      } else {
-        textMismatched.push({ property: 'text', expected: op.after.slice(0, MAX_TEXT_CHARS), actual: actual.slice(0, MAX_TEXT_CHARS) })
-      }
-    }
-    // Fail CLOSED on op kinds this function has no verify branch for (P3's move before its
-    // branch lands, a version-skewed restore): they count as unproven → 'unverified'. Without
-    // this, an element carrying only an unknown op returns all-zeros, which handleApplied's
-    // else-arm reads as fully verified — commit + 'done' with zero checks performed
-    // (PR #44 review). (Delete never reaches here — its branch early-returns above.)
-    const unknownOps = ops.filter((o) => o.kind !== 'text' && o.kind !== 'delete').length
-
-    // Neutralize the draft's inline styles before measuring — inline styles win the
-    // cascade, so if the sent draft is still applied as inline style (e.g. the DOM
-    // node survived Fast Refresh), getComputedStyle would just read back what WE put
-    // there, reporting "implemented" even if the underlying code never adopted the
-    // value. Stash and strip each sent property (plus transition, to avoid measuring
-    // mid-transition values), measure, then restore in a finally.
-    //
-    // Strip the UNION of el.changes[].property and el.draftProps, not just el.changes:
-    // `changes` carries request.ts's COLLAPSE names (padding-block, border-radius, …) used
-    // for the change-request markdown, but the DraftStore's actual inline styles are the
-    // longhands the panel edits (padding-top/padding-bottom, …) — draftProps is exactly
-    // those real keys (see SentEntry.elements[].draftProps docs in lifecycle.ts).
-    // removeProperty('padding-block') does not strip an inline padding-top, so a DOM node
-    // that survived HMR with its draft still inline would be measured against the client's
-    // OWN draft value — a false "done", followed by commit() visibly snapping the page back.
-    // draftProps exists for exactly this divergence and commit() already uses it (see
-    // handleApplied below); this neutralize loop was the one place that got missed.
-    const inlineTransition = target.style.getPropertyValue('transition')
-    target.style.setProperty('transition', 'none')
-    const stashed = new Map<string, string>()
-    const toStrip = new Set<string>([...el.changes.map((c) => c.property), ...el.draftProps])
-    for (const prop of toStrip) {
-      stashed.set(prop, target.style.getPropertyValue(prop))
-      target.style.removeProperty(prop)
-    }
-
-    const mismatched: ElementVerification['mismatched'] = []
-    let verified = 0
-    try {
-      const computed = getComputedStyle(target)
-      for (const change of el.changes) {
-        const actual = computed.getPropertyValue(change.property).trim()
-        const expected = change.afterCss.trim()
-        if (actual === expected) verified++
-        else mismatched.push({ property: change.property, expected, actual })
-      }
-    } finally {
-      for (const [prop, value] of stashed) {
-        if (value) target.style.setProperty(prop, value)
-        else target.style.removeProperty(prop)
-      }
-      if (inlineTransition) target.style.setProperty('transition', inlineTransition)
-      else target.style.removeProperty('transition')
-    }
-
+    const text = verifyText(el, target, textTrusted)
+    const css = verifyCss(el, target)
     return {
       el: el.el,
       draftProps: el.draftProps,
-      verified: verified + textVerified,
-      mismatched: [...mismatched, ...textMismatched],
-      missing: textUnproven + unknownOps,
+      verified: css.verified + text.verified,
+      mismatched: [...css.mismatched, ...text.mismatched],
+      missing: css.missing + text.missing,
     }
   })
 }
