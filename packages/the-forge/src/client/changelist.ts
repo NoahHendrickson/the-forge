@@ -1,6 +1,7 @@
 import type { DraftStore, StructuralDraft } from './drafts'
 import type { StageEvent, LifecycleStage } from './verifier'
 import type { ChangeItem, StructuralOp } from './request'
+import { draftToOps, opsIdentical } from './ops'
 import type { TaggedElement } from './source'
 import { shortSource } from './source'
 import type { LifecycleSession, SentSeed, SeedRecord } from './lifecycle'
@@ -29,7 +30,9 @@ function summarizeOp(op: StructuralOp, tag: string): string {
 }
 
 function summarizeStructuralDraft(s: StructuralDraft, tag: string): string {
-  return summarizeOp(s.kind === 'delete' ? { kind: 'delete' } : { kind: 'text', before: s.original, after: s.value }, tag)
+  // ops.ts's shared projection — the label must be built from the SAME op a send would
+  // actually produce, not a hand-built lookalike (PR #44 review).
+  return summarizeOp(draftToOps(s)[0], tag)
 }
 
 /** Shared "+N more" collapse for sent-row (summarize) summaries — `text` is the visible
@@ -128,17 +131,17 @@ export class ChangeList {
 
   /** `el`'s structural draft, unless an in-flight row already represents the same op — the
    * structural analog of inFlightProps' dedupe (a delete draft riding under its own sent row
-   * would show the same change twice). Identity matches lifecycle.ts's opsIdentical rules:
-   * delete by kind, text by `after`. */
+   * would show the same change twice). Identity IS ops.ts's opsIdentical — the same predicate
+   * lifecycle's duplicate window uses, not a hand-synced inline copy (PR #44 review). */
   private pendingStructural(el: TaggedElement, rows: SeedRecord[]): StructuralDraft | null {
     const s = this.drafts.structuralOf(el)
     if (!s) return null
+    const draftOps = draftToOps(s)
     for (const row of rows) {
       if (row.seed.el !== el) continue
       if (row.stage !== 'sent' && row.stage !== 'applying') continue
       for (const op of row.seed.change.ops ?? []) {
-        if (s.kind === 'delete' && op.kind === 'delete') return null
-        if (s.kind === 'text' && op.kind === 'text' && op.after === s.value) return null
+        if (opsIdentical(draftOps, [op])) return null
       }
     }
     return s
@@ -157,23 +160,20 @@ export class ChangeList {
     }
 
     // Draft rows after sent rows: drafts are "not yet part of the story being told above".
+    // ONE walk of the DraftStore's own drafted-element union — the old two-pass sweep
+    // (entries() + a structuralEntries() second pass with its own seen-set) re-implemented
+    // the union the store already encodes, and had drifted from the request builder's twin
+    // (PR #44 review). Disconnected elements still render (dimmed .row-gone via baseRow) —
+    // that's this list's job as the visible truth; the send builder's isConnected filter is
+    // about what's SENDABLE, and healStructural re-binds or prunes the gap between the two.
     if (!this.suppressDrafts) {
-      const structuralSeen = new Set<TaggedElement>()
-      for (const [el, props] of this.drafts.entries()) {
-        const inFlight = this.inFlightProps(el as TaggedElement, rows)
-        const remaining = [...props.entries()].filter(([prop]) => !inFlight.has(prop))
-        const structural = this.pendingStructural(el as TaggedElement, rows)
-        if (structural) structuralSeen.add(el as TaggedElement)
-        if (remaining.length === 0 && !structural) continue
-        this.list.appendChild(this.renderDraftRow(el as TaggedElement, remaining, structural))
-      }
-      // Structural-only drafted elements (a delete, or a text edit with no css draft) never
-      // appear in drafts.entries() — sweep them, mirroring the request builder's own sweep.
-      for (const el of this.drafts.structuralEntries().keys()) {
-        if (structuralSeen.has(el)) continue
+      for (const el of this.drafts.draftedElements()) {
+        const props = this.drafts.entries().get(el)
+        const inFlight = this.inFlightProps(el, rows)
+        const remaining = props ? [...props.entries()].filter(([prop]) => !inFlight.has(prop)) : []
         const structural = this.pendingStructural(el, rows)
-        if (!structural) continue
-        this.list.appendChild(this.renderDraftRow(el, [], structural))
+        if (remaining.length === 0 && !structural) continue
+        this.list.appendChild(this.renderDraftRow(el, remaining, structural))
       }
     }
 

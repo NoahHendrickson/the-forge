@@ -3558,4 +3558,68 @@ describe('canvas verbs (Figma pivot P1): inline text edit + Del delete', () => {
     expect(setup.drafts.structuralOf(btn)).toEqual({ kind: 'text', original: 'go', value: 'renamed' })
     expect(setup.mode.selected).toBe(other)
   })
+
+  it('double-click on a MIXED-content element does not enter text edit (isTextLeaf gate, PR #44 review)', () => {
+    const setup = fullSetup()
+    setup.mode.setActive(true)
+    // direct text + an element child: the flat-textContent draft model would destroy the <b>
+    document.body.insertAdjacentHTML('beforeend', `<p id="mixed" data-dc-source="src/App.tsx:3:3">Hello <b>world</b></p>`)
+    const mixed = document.getElementById('mixed')!
+    mixed.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    expect(mixed.hasAttribute('contenteditable')).toBe(false)
+  })
+
+  it('double-click inside a form control never text-edits the tagged ancestor (PR #44 review)', () => {
+    const setup = fullSetup()
+    setup.mode.setActive(true)
+    document.body.insertAdjacentHTML('beforeend', `<label id="lbl" data-dc-source="src/App.tsx:4:4">Name: <input id="field"/></label>`)
+    const lbl = document.getElementById('lbl')!
+    const input = document.getElementById('field')!
+    // double-click-to-select-a-word inside the input — must not hijack the label
+    input.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    expect(lbl.hasAttribute('contenteditable')).toBe(false)
+    expect(input.isConnected).toBe(true)
+  })
+
+  it('caret clicks inside the editing element are shielded from the app (PR #44 review)', () => {
+    const { btn } = textSetup()
+    const appHandler = vi.fn()
+    btn.addEventListener('click', appHandler) // stands in for a react-router Link / modal opener
+    btn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    const caretClick = new MouseEvent('click', { bubbles: true, cancelable: true })
+    btn.dispatchEvent(caretClick)
+    expect(appHandler).not.toHaveBeenCalled() // stopped at document capture, above the app
+    expect(caretClick.defaultPrevented).toBe(true)
+    expect(btn.hasAttribute('contenteditable')).toBe(true) // the click did NOT commit the edit
+  })
+
+  it('Del deletes a selected form control — the focused-control guard carves out the selection (PR #44 review)', () => {
+    const setup = fullSetup()
+    setup.mode.setActive(true)
+    document.body.insertAdjacentHTML('beforeend', `<input id="tagged-input" data-dc-source="src/App.tsx:6:6"/>`)
+    const input = document.getElementById('tagged-input')! as HTMLElement
+    input.click()
+    expect(setup.mode.selected).toBe(input)
+    // click-selecting a control also natively focuses it — keydown then targets the input
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+    expect(setup.drafts.structuralOf(input)).toEqual({ kind: 'delete', priorInlineDisplay: '' })
+  })
+
+  it('committed text is nbsp-normalized; an nbsp-only re-edit is treated as unchanged (PR #44 review)', () => {
+    const { drafts, btn } = textSetup()
+    btn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    btn.textContent = 'get\u00a0started' // browser-rebalanced nbsp mid-edit
+    btn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    // the committed value carries an ordinary space — the wire ask and the verifier's
+    // oracle must match the agent's JSX, never the browser's invisible nbsp
+    expect(drafts.structuralOf(btn)).toEqual({ kind: 'text', original: 'go', value: 'get started' })
+    expect(btn.textContent).toBe('get started')
+
+    // second session: same text, nbsp again — unchanged modulo nbsp, so no draft churn
+    btn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    btn.textContent = 'get\u00a0started'
+    btn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(drafts.structuralOf(btn)).toEqual({ kind: 'text', original: 'go', value: 'get started' })
+    expect(btn.textContent).toBe('get started') // the verbatim pre-edit text put back
+  })
 })

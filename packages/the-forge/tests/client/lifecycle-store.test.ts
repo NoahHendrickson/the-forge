@@ -212,6 +212,36 @@ describe('loadLifecycle — per-item boundary validation', () => {
     expect(loaded!.selection).toEqual([{ dcSource: 'good.tsx:1:1', index: 0 }])
   })
 
+  it('drops a sent element whose change.ops carries a malformed or unknown op (PR #44 review)', () => {
+    // ops fields are METHOD-CALLED on restore (summarizeOp's op.after.replace, the verifier's
+    // op.after.slice) — a truncated op crashed the whole restored session before validation.
+    const missingAfter = { ...validSentElement(), change: { ...validSentElement().change, ops: [{ kind: 'text' }] } }
+    const unknownKind = { ...validSentElement(), change: { ...validSentElement().change, ops: [{ kind: 'move', toIndex: 2 }] } }
+    const validOps = { ...validSentElement(), change: { ...validSentElement().change, ops: [{ kind: 'text', before: 'Old', after: 'New' }] } }
+    sessionStorage.setItem(
+      LIFECYCLE_KEY,
+      JSON.stringify({
+        v: 1,
+        designModeOn: true,
+        selection: [],
+        drafts: [],
+        sent: [{ id: 'q1', elements: [missingAfter, unknownKind, validOps] }],
+      })
+    )
+    const loaded = loadLifecycle()
+    expect(loaded!.sent).toHaveLength(1)
+    expect(loaded!.sent[0].elements).toHaveLength(1)
+    expect(loaded!.sent[0].elements[0].change.ops).toEqual([{ kind: 'text', before: 'Old', after: 'New' }])
+  })
+
+  it('keeps a sent element with no ops field at all (pre-P1 persisted state)', () => {
+    sessionStorage.setItem(
+      LIFECYCLE_KEY,
+      JSON.stringify({ v: 1, designModeOn: true, selection: [], drafts: [], sent: [{ id: 'q1', elements: [validSentElement()] }] })
+    )
+    expect(loadLifecycle()!.sent[0].elements).toHaveLength(1)
+  })
+
   it('drops a sent element with a change missing its changes array', () => {
     const badElement = { ...validSentElement(), change: { ...validSentElement().change, changes: 'nope' } }
     sessionStorage.setItem(

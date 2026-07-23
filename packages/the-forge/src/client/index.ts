@@ -5,7 +5,7 @@ import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { Dock } from './dock'
 import { CanvasMode, unionClientRect, isEditable } from './canvas'
-import { hasDirectText } from './panel-readers'
+import { isTextLeaf } from './panel-readers'
 import { buildCanvasChrome, type CanvasChrome } from './canvas-chrome'
 import {
   buildChangeRequestWithElements,
@@ -378,6 +378,12 @@ export class DesignMode {
       clearTimeout(this.draftSyncTimer)
       this.draftSyncTimer = null
     }
+    // Structural drafts are keyed by node reference — re-bind (or prune) any whose node an
+    // HMR remount replaced before projecting state to the Changes list / sessionStorage
+    // (PR #44 review; the sent entries' equivalent is healPlaceholders at render time).
+    // A heal emits onChange, which only re-arms the debounce — the flush itself already
+    // reflects the healed state below, and the follow-up flush is a cheap no-op.
+    this.drafts.healStructural()
     this.changeList.syncDrafts()
     this.persist()
   }
@@ -401,6 +407,10 @@ export class DesignMode {
     | { request: ChangeRequest; pairs: Array<[TaggedElement, ElementChange]> }
     | 'no-changes'
     | 'already-sent' {
+    // Re-bind structural drafts orphaned by an HMR remount before building — the builder's
+    // isConnected sweep would silently skip them, degrading ↑ to chat-only while the pill
+    // still counts the change (PR #44 review).
+    this.drafts.healStructural()
     const { request, elements } = buildChangeRequestWithElements(this.drafts)
     const pairs = [...elements.entries()].filter(([el, change]) => !this.session.isDuplicate(el, change.changes, change.ops))
     request.elements = pairs.map(([, change]) => change)
@@ -667,7 +677,12 @@ export class DesignMode {
     if (!saved.designModeOn) return
     this.setActive(true)
     this.session.restoreSent(saved.sent, locateBySource)
-    if (this.session.size() > 0) this.verifier.start()
+    if (this.session.size() > 0) {
+      // Fresh-page trust (P1 plan: "full reloads trivially count") — restored ids verify
+      // text by plain equality; see Verifier.markRestored for why an echo is impossible here.
+      this.verifier.markRestored(this.session.pendingIds())
+      this.verifier.start()
+    }
     this.pendingRestore = { drafts: saved.drafts, selection: saved.selection }
     const { done } = this.drainPendingRestore()
     if (!done) this.scheduleRestoreRetry()
@@ -943,6 +958,14 @@ export class DesignMode {
       // its own element, so in multi-select every co-selected element still shows up
       // in the others' scopes and must be dropped here.
       for (const sel of this.selection) changed.delete(sel)
+      // Tombstoned elements never ripple: display:none measures 0×0-at-origin (still
+      // isConnected, so diffRects reports it as "moved"), and on multi-delete the selection
+      // is already empty by the time this rAF runs — the filter above can't exclude
+      // co-deleted elements, which drew spurious outlines at the viewport corner
+      // (PR #44 review).
+      for (const el of [...changed]) {
+        if (this.drafts.structuralOf(el)?.kind === 'delete') changed.delete(el)
+      }
       if (changed.size > 0) this.overlay.showRipples([...changed].map((moved) => moved.getBoundingClientRect()))
     })
   }
@@ -975,9 +998,19 @@ export class DesignMode {
   private onClick = (e: MouseEvent): void => {
     if (this.overlay.contains(e.target)) return
     if (this.textEditing) {
-      // Clicks inside the editing element place the caret — the browser's job, not ours.
+      // Clicks inside the editing element place the caret — the browser's job, and it
+      // happens on MOUSEDOWN default, so shielding the click costs the caret nothing. The
+      // shield is still mandatory here: this is a document-CAPTURE listener, above React's
+      // root delegation, and contenteditable only suppresses the native <a> default — a
+      // react-router Link or modal-opening handler on the edited element would otherwise
+      // fire on a caret-repositioning click and navigate mid-edit, after which blur commits
+      // the half-finished draft against a changed page (PR #44 review).
+      if (this.textEditing.contains(e.target as Node)) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
       // A click anywhere else commits the edit and falls through to normal selection.
-      if (this.textEditing.contains(e.target as Node)) return
       this.finishTextEdit()
     }
     e.preventDefault()
@@ -988,12 +1021,20 @@ export class DesignMode {
     else this.deselect()
   }
 
-  /** Double-click on a text-bearing element enters inline text edit (Figma behavior).
+  /** Double-click on a text-leaf element enters inline text edit (Figma behavior).
    * Registered/removed in setActive beside the other capture handlers. */
   private onDblClick = (e: MouseEvent): void => {
     if (this.overlay.contains(e.target)) return
+    // Same typing-surface guard as the Del branch below: a double-click inside a real form
+    // control is a select-the-word gesture in THAT control — without this, the tagged
+    // ancestor (e.g. a <label>) goes contenteditable with the control inside the
+    // selectNodeContents range, and the first keystroke deletes it from the live DOM
+    // (PR #44 review).
+    if (isEditable(e.target)) return
     const el = findTaggedElement(e.target as Element)
-    if (!el || !hasDirectText(el)) return
+    // isTextLeaf, NOT hasDirectText: the flat-textContent draft model destroys element
+    // children of mixed-content elements — see panel-readers.ts (PR #44 review).
+    if (!el || !isTextLeaf(el)) return
     e.preventDefault()
     e.stopPropagation()
     this.startTextEdit(el)
@@ -1014,17 +1055,25 @@ export class DesignMode {
     }
     if (e.key === 'Delete' || e.key === 'Backspace') {
       // Same typing-surface guard as canvas mode's Space/zoom shortcuts — Del in the
-      // composer or any input must never nuke the canvas selection.
-      if (isEditable(e.target) || this.selection.length === 0) return
+      // composer or any input must never nuke the canvas selection. Carve-out: when the
+      // focused control IS in the selection, the intent is deleting the element itself —
+      // click-selecting an input also natively focuses it (no mousedown interception here),
+      // so without this, form controls are undeletable via the only delete verb P1 ships,
+      // and Backspace live-edits the focused input's value instead (PR #44 review).
+      const target = e.target as Node | null
+      const deletingEditable = target !== null && this.selection.includes(target as TaggedElement)
+      if (isEditable(e.target) && !deletingEditable) return
+      if (this.selection.length === 0) return
       e.preventDefault()
       e.stopPropagation()
       const doomed = [...this.selection]
       // Deselect FIRST — a selection outline hugging a display:none tombstone is a lie.
       this.deselect()
-      for (const el of doomed) {
-        this.handleBeforeEdit(el) // ripple baseline: show which siblings reflow into the gap
-        this.drafts.applyDelete(el)
-      }
+      // Two-phase: every ripple baseline (layout reads) BEFORE any display:none write —
+      // interleaving forced one synchronous reflow per element in a single keydown
+      // (PR #44 review).
+      for (const el of doomed) this.handleBeforeEdit(el) // ripple baseline: show which siblings reflow into the gap
+      for (const el of doomed) this.drafts.applyDelete(el)
       this.handleEdited()
       return
     }
@@ -1044,9 +1093,14 @@ export class DesignMode {
     this.overlay.hideOutline()
     // plaintext-only keeps paste/typing from minting nested markup the tagger never saw.
     // Set as an ATTRIBUTE, not the property: jsdom's property setter doesn't reflect to the
-    // attribute (breaking the browser's own [contenteditable] activation contract in tests),
-    // and a browser too old for plaintext-only degrades to rich editing, not to a crash.
+    // attribute (breaking the browser's own [contenteditable] activation contract in tests).
+    // contenteditable is an ENUMERATED attribute — an unrecognized keyword resolves to the
+    // INHERIT state (NOT editable; pre-136 Firefox shipped exactly that silently-dead mode),
+    // so feature-detect via isContentEditable and fall back to 'true': rich editing loses
+    // the plaintext guard but keeps the feature alive (PR #44 review). Strict `=== false`:
+    // jsdom doesn't implement isContentEditable (undefined), and must keep plaintext-only.
     el.setAttribute('contenteditable', 'plaintext-only')
+    if ((el as HTMLElement).isContentEditable === false) el.setAttribute('contenteditable', 'true')
     el.addEventListener('blur', this.onTextEditBlur)
     ;(el as HTMLElement).focus()
     const range = document.createRange()
@@ -1069,8 +1123,22 @@ export class DesignMode {
     el.removeEventListener('blur', this.onTextEditBlur)
     el.removeAttribute('contenteditable')
     window.getSelection()?.removeAllRanges()
+    // Browsers rebalance collapsible spaces (trailing, consecutive) to U+00A0 inside
+    // contenteditable — plaintext-only included. The committed value is both the agent's ask
+    // and the verifier's textContent oracle, and the agent writes ordinary spaces in JSX, so
+    // an un-normalized nbsp would land the row in a terminal 'mismatch' whose expected and
+    // actual render identically (PR #44 review). The unchanged-check normalizes BOTH sides
+    // so an idle in-and-out on nbsp-bearing source text stays a no-op.
+    const denbsp = (s: string): string => s.replace(/\u00a0/g, ' ')
+    const value = denbsp(el.textContent ?? '')
+    if (value === denbsp(this.textEditOriginal)) {
+      // Unchanged (modulo nbsp) — put the verbatim original back: the browser may have
+      // swapped spaces for nbsp while the element was editable.
+      el.textContent = this.textEditOriginal
+      return
+    }
     this.handleBeforeEdit(el)
-    this.drafts.applyText(el, el.textContent ?? '', this.textEditOriginal)
+    this.drafts.applyText(el, value, this.textEditOriginal)
     this.handleEdited()
   }
 

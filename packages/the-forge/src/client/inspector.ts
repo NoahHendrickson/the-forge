@@ -1,3 +1,4 @@
+import { elementOffsets } from './panel-readers'
 import { parseSourceAttr, type SourceLocation, type TaggedElement } from './source'
 
 export const STYLE_PROPS = [
@@ -37,8 +38,7 @@ export function buildInspectorData(el: TaggedElement): InspectorData {
     tag: el.tagName.toLowerCase(),
     source: el.dataset.dcSource ? parseSourceAttr(el.dataset.dcSource) : null,
     classes: Array.from(el.classList),
-    x: el instanceof HTMLElement ? Math.round(el.offsetLeft) : 0,
-    y: el instanceof HTMLElement ? Math.round(el.offsetTop) : 0,
+    ...elementOffsets(el),
     width: Math.round(rect.width),
     height: Math.round(rect.height),
     styles,

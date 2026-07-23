@@ -56,6 +56,25 @@ export function hasDirectText(el: Element): boolean {
   return [...el.childNodes].some((n) => n.nodeType === 3 && (n.textContent ?? '').trim() !== '')
 }
 
+/** The inline-text-edit gate: a pure text LEAF — non-whitespace direct text AND zero element
+ * children. hasDirectText alone admits mixed content (`<button><svg/>Buy</button>`), whose
+ * flat-textContent draft model would destroy the element children on commit (`el.textContent =
+ * value` replaces ALL child nodes) and could only ever restore a flattened string on discard —
+ * an unrecoverable live-page corruption React may then crash reconciling (PR #44 review). */
+export function isTextLeaf(el: Element): boolean {
+  return el.childElementCount === 0 && hasDirectText(el)
+}
+
+/** Offset from the offsetParent's padding edge — the ONE derivation behind both
+ * InspectorData.x/y and the panel's Position header refresh. Two inline copies of this
+ * expression shipped in P1 with zero consumers of the canonical one; when P3's Absolute
+ * toggle changes what X/Y means, this is the only place to change (PR #44 review).
+ * 0 for SVG and other non-HTMLElements, which have no offset model. */
+export function elementOffsets(el: Element): { x: number; y: number } {
+  if (!(el instanceof HTMLElement)) return { x: 0, y: 0 }
+  return { x: Math.round(el.offsetLeft), y: Math.round(el.offsetTop) }
+}
+
 // marginSectionVisible (and its MARGIN_PROPS) died with the Margin section in the
 // 2026-07-22 Figma pivot — margins are invisible to the designer now (spec §5).
 

@@ -1,6 +1,6 @@
 import type { SentEntry, SentStore } from './lifecycle'
 import type { DraftStore } from './drafts'
-import type { TaggedElement } from './source'
+import { parseSourceAttr, type TaggedElement } from './source'
 import { AGENT_DISPLAY_NAME, currentAgent } from './agent'
 import { parseSessionState, parseWatcherState, queuedLineFor, type SessionState, type WatcherState } from './watch'
 import { resolveElement } from './lifecycle-store'
@@ -62,23 +62,66 @@ const MAX_TEXT_CHARS = 120
  * residual false-done risk; a full Fast-Refresh remount instead replaces the node, which the
  * caller's identity check catches without needing this signal).
  *
- * Vite detection is the injected HMR client script tag (plus any observed vite event, which is
- * definitive) — probing import.meta.hot is impossible from a foreign bundle. A failed probe on
- * an exotic Vite setup degrades to the legacy accept-equality behavior, never to a stuck row. */
+ * Vite detection: onVite latches ONLY once a listener demonstrably attached (the hot-context
+ * import resolved) or a vite event was actually observed — never from the script-tag sniff
+ * alone. The sniff used to latch it, which broke the degrade promise: any setup where the tag
+ * matches but the probe can't attach (non-root `base`: tag src '/app/@vite/client' matches the
+ * substring, the hardcoded absolute import 404s) gated every text verify on a signal that
+ * could never arrive — permanent 'unverified' (PR #44 review). A failed probe on an exotic
+ * Vite setup now degrades to the legacy accept-equality behavior, never to a stuck row. */
+const MAX_UPDATE_LOG = 200
+
+/** Pulls the touched module paths out of a vite:afterUpdate payload — hot-context payloads
+ * carry {updates: [{path, acceptedPath}]}; window CustomEvents may carry the same under
+ * .detail; anything else yields [] (an update with unknown shape trusts globally, the
+ * pre-path-scoping behavior). */
+function extractUpdatePaths(payload: unknown): string[] {
+  const body = isObj(payload) && 'detail' in payload ? (payload as { detail?: unknown }).detail : payload
+  if (!isObj(body) || !Array.isArray((body as { updates?: unknown }).updates)) return []
+  const paths: string[] = []
+  for (const u of (body as { updates: unknown[] }).updates) {
+    if (!isObj(u)) continue
+    for (const v of [(u as { acceptedPath?: unknown }).acceptedPath, (u as { path?: unknown }).path]) {
+      if (typeof v === 'string') paths.push(v)
+    }
+  }
+  return paths
+}
+
+function isObj(v: unknown): v is object {
+  return typeof v === 'object' && v !== null
+}
+
+/** Vite update paths are dev-server-absolute ('/src/App.tsx', possibly '?t='-suffixed);
+ * data-dc-source files are whatever the tagger recorded (project-relative or absolute).
+ * Suffix-match either way after stripping query strings and leading slashes. */
+function pathMatchesFile(updatePath: string, file: string): boolean {
+  const norm = (s: string): string => s.split('?')[0].replace(/^\/+/, '')
+  const a = norm(updatePath)
+  const b = norm(file)
+  return a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`)
+}
+
 export class HmrSignal {
   private count = 0
   private onVite = false
   private listening = false
-  private hot: { on(e: string, cb: () => void): void; off?(e: string, cb: () => void): void } | null = null
-  private handler = (): void => {
+  /** seq (count value AFTER the update) + touched module paths, bounded to MAX_UPDATE_LOG.
+   * Paths let trustSince scope trust to the edited element's OWN file: a page-global counter
+   * let any unrelated element's hot update vouch for a failed text edit in the same request —
+   * false Implemented, and commitStructural then destroys the draft (PR #44 review). */
+  private updates: Array<{ seq: number; paths: string[] }> = []
+  private hot: { on(e: string, cb: (p?: unknown) => void): void; off?(e: string, cb: (p?: unknown) => void): void } | null = null
+  private handler = (payload?: unknown): void => {
     this.count++
     this.onVite = true
+    this.updates.push({ seq: this.count, paths: extractUpdatePaths(payload) })
+    if (this.updates.length > MAX_UPDATE_LOG) this.updates.shift()
   }
 
   start(doc: Document = document): void {
     if (this.listening) return
     this.listening = true
-    this.onVite ||= doc.querySelector('script[src*="/@vite/client"]') !== null
     // Belt (tests + any future page-level dispatch) …
     window.addEventListener('vite:afterUpdate', this.handler)
     // … and braces (the path that actually fires on real Vite, caught by the P1 E2E):
@@ -86,12 +129,14 @@ export class HmrSignal {
     // import.meta.hot listeners, and this bundle is served raw (never Vite-transformed), so
     // it has no import.meta.hot. Mint our own hot context by importing the HMR client and
     // calling createHotContext — the exact preamble Vite injects into transformed modules.
-    // The specifier lives in a variable so esbuild leaves the import dynamic instead of
-    // trying to resolve a dev-server-only path at build time. On Next the import rejects
-    // and we stay in trust-always mode (spec §4's documented Next behavior).
-    const viteClientPath = '/@vite/client'
+    // The specifier comes from the injected client tag's own src when present — a hardcoded
+    // '/@vite/client' 404s on any non-root `base` (PR #44 review) — and lives in a variable
+    // so esbuild leaves the import dynamic instead of trying to resolve a dev-server-only
+    // path at build time. On Next the import rejects and we stay in trust-always mode
+    // (spec §4's documented Next behavior).
+    const viteClientPath = doc.querySelector('script[src*="/@vite/client"]')?.getAttribute('src') ?? '/@vite/client'
     import(viteClientPath).then(
-      (mod: { createHotContext?: (path: string) => { on(e: string, cb: () => void): void } }) => {
+      (mod: { createHotContext?: (path: string) => { on(e: string, cb: (p?: unknown) => void): void } }) => {
         if (!this.listening || typeof mod.createHotContext !== 'function') return
         this.onVite = true
         this.hot = mod.createHotContext('/__the-forge/hmr-signal')
@@ -114,14 +159,22 @@ export class HmrSignal {
     return this.count
   }
 
-  trustSince(cursor: number): boolean {
-    return this.onVite ? this.count > cursor : true
+  /** True when a code update demonstrably reached the page since `cursor` — scoped to `file`
+   * (the element's own data-dc-source file) when both it and the updates' path info are
+   * available. Non-Vite pages (no listener ever attached) trust unconditionally. */
+  trustSince(cursor: number, file?: string | null): boolean {
+    if (!this.onVite) return true
+    const since = this.updates.filter((u) => u.seq > cursor)
+    if (since.length === 0) return false
+    if (!file) return true
+    return since.some((u) => u.paths.length === 0 || u.paths.some((p) => pathMatchesFile(p, file)))
   }
 }
 
 /** Decides whether a text-op equality on `target` is trustworthy — see HmrSignal. Injected
- * into verifyElements so the pure verify math stays testable without a live Verifier. */
-type TextTrust = (sentEl: TaggedElement, target: TaggedElement) => boolean
+ * into verifyElements so the pure verify math stays testable without a live Verifier.
+ * `dcSource` is the element's own source tag, letting the trust decision scope to its file. */
+type TextTrust = (sentEl: TaggedElement, target: TaggedElement, dcSource: string | null) => boolean
 
 /** Per-element verification outcome, used to decide whether that element's drafts can be committed. */
 interface ElementVerification {
@@ -169,17 +222,26 @@ function verifyElements(entry: SentEntry, doc: Document = document, textTrusted:
     let textUnproven = 0
     for (const op of ops) {
       if (op.kind !== 'text') continue
+      // U+00A0-normalize BOTH sides: contenteditable rebalances collapsible spaces to nbsp,
+      // and finishTextEdit normalizes the committed value — but a pre-normalization
+      // persisted send (or nbsp genuinely in the page's own source) must still compare as
+      // the visually-identical text it is, never as an undiagnosable terminal 'mismatch'
+      // whose expected/actual render the same (PR #44 review).
+      const denbsp = (s: string): string => s.replace(/\u00a0/g, ' ')
       const actual = target.textContent ?? ''
-      if (actual === op.after) {
-        if (textTrusted(el.el, target)) textVerified++
+      if (denbsp(actual) === denbsp(op.after)) {
+        if (textTrusted(el.el, target, el.dcSource)) textVerified++
         else textUnproven++
       } else {
         textMismatched.push({ property: 'text', expected: op.after.slice(0, MAX_TEXT_CHARS), actual: actual.slice(0, MAX_TEXT_CHARS) })
       }
     }
-    if (el.changes.length === 0) {
-      return { el: el.el, draftProps: el.draftProps, verified: textVerified, mismatched: textMismatched, missing: textUnproven }
-    }
+    // Fail CLOSED on op kinds this function has no verify branch for (P3's move before its
+    // branch lands, a version-skewed restore): they count as unproven → 'unverified'. Without
+    // this, an element carrying only an unknown op returns all-zeros, which handleApplied's
+    // else-arm reads as fully verified — commit + 'done' with zero checks performed
+    // (PR #44 review). (Delete never reaches here — its branch early-returns above.)
+    const unknownOps = ops.filter((o) => o.kind !== 'text' && o.kind !== 'delete').length
 
     // Neutralize the draft's inline styles before measuring — inline styles win the
     // cascade, so if the sent draft is still applied as inline style (e.g. the DOM
@@ -231,7 +293,7 @@ function verifyElements(entry: SentEntry, doc: Document = document, textTrusted:
       draftProps: el.draftProps,
       verified: verified + textVerified,
       mismatched: [...mismatched, ...textMismatched],
-      missing: textUnproven,
+      missing: textUnproven + unknownOps,
     }
   })
 }
@@ -315,9 +377,35 @@ export class Verifier {
   private hmr = new HmrSignal()
   /** requestId → HmrSignal cursor at the moment the id was first seen pending. Recorded in
    * start() AND every poll tick (a second send while the chain is already running never
-   * passes through start()'s body); deleted on take. Ids are unique per send, so a cursor
-   * surviving a stop()/start() cycle still describes its own send correctly. */
+   * passes through start()'s body); deleted on final resolution and swept against pendingIds
+   * (ids that leave the lifecycle sideways — row dismiss, Clear done — never hit the take
+   * paths, and their cursors would otherwise accumulate for the page lifetime; PR #44
+   * review). Ids are unique per send, so a cursor surviving a stop()/start() cycle still
+   * describes its own send correctly. */
   private hmrCursors = new Map<string, number>()
+  /** Ids restored from sessionStorage (a fresh page). Their text equality is trusted WITHOUT
+   * an HMR signal — the P1 plan's "full reloads trivially count (fresh page)": nothing on a
+   * fresh page can echo our own draft back, because structural draft previews deliberately
+   * don't persist across reloads (HANDOFF known limitation), so the DOM text IS the code's
+   * truth. Without this, a full-reload apply terminally lands 'unverified' (PR #44 review). */
+  private restoredIds = new Set<string>()
+  /** Ids that were pending when the signal went deaf (design-mode off stops the verifier
+   * while sent entries survive). An update firing in that window is uncountable, so these
+   * degrade to accept-equality — the same documented trade as Next's trust-always path —
+   * instead of never-trust (PR #44 review). */
+  private signalGapIds = new Set<string>()
+  /** requestId → verify attempts since the server first reported 'applied' — see
+   * VERIFY_WINDOW_ATTEMPTS. */
+  private verifyAttempts = new Map<string, number>()
+
+  /** Bounded re-verify window (P1 plan: equality-without-signal "keeps polling — normal
+   * window → unverified"): mark_applied lands the instant the agent writes the file, but the
+   * HMR/Fast-Refresh update can reach the page seconds later (Next recompiles take seconds);
+   * a one-shot verify at the first poll after 'applied' terminalized a wrong answer it could
+   * never correct — take() resolves the entry for good (PR #44 review). While attempts
+   * remain, an unresolved entry stays un-taken (pending), so the next poll tick re-verifies;
+   * the poll loop shows it as 'applying' meanwhile. ~5 × POLL_MS ≈ a 10s window. */
+  private static readonly VERIFY_WINDOW_ATTEMPTS = 5
 
   constructor(
     private sent: SentStore,
@@ -348,15 +436,34 @@ export class Verifier {
     this.generation++
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
+    // Sent entries survive design-mode off (setActive keeps the SentStore), but the HMR
+    // signal goes deaf below — an update firing while off would leave count == cursor
+    // forever and land a genuinely-applied edit as terminal 'unverified' on re-activation.
+    // Ids still pending here degrade to accept-equality instead — see signalGapIds.
+    for (const id of this.sent.pendingIds()) this.signalGapIds.add(id)
     this.hmr.stop()
   }
 
+  /** Tells the verifier these ids came back from sessionStorage on a fresh page — see
+   * restoredIds. Called by the restore path (index.ts restoreLifecycle) before start(). */
+  markRestored(ids: string[]): void {
+    for (const id of ids) this.restoredIds.add(id)
+  }
+
   /** Baseline each pending id's HMR cursor the first time it's seen — updates observed
-   * BEFORE a send belong to earlier edits and must not vouch for this one. */
+   * BEFORE a send belong to earlier edits and must not vouch for this one. Also sweeps every
+   * per-id map/set against pendingIds: ids that left the lifecycle sideways (row dismiss,
+   * Clear done) never pass the take paths, and their bookkeeping would otherwise grow
+   * monotonically for the page lifetime (PR #44 review). */
   private recordHmrCursors(): void {
-    for (const id of this.sent.pendingIds()) {
+    const pending = new Set(this.sent.pendingIds())
+    for (const id of pending) {
       if (!this.hmrCursors.has(id)) this.hmrCursors.set(id, this.hmr.mark())
     }
+    for (const id of [...this.hmrCursors.keys()]) if (!pending.has(id)) this.hmrCursors.delete(id)
+    for (const id of [...this.restoredIds]) if (!pending.has(id)) this.restoredIds.delete(id)
+    for (const id of [...this.signalGapIds]) if (!pending.has(id)) this.signalGapIds.delete(id)
+    for (const id of [...this.verifyAttempts.keys()]) if (!pending.has(id)) this.verifyAttempts.delete(id)
   }
 
   /** Chained setTimeout instead of setInterval so the delay can stretch under backoff. */
@@ -407,8 +514,11 @@ export class Verifier {
         let pendingManual = 0
         for (const id of this.sent.pendingIds()) {
           const status = statusById.get(id)
-          const stage: LifecycleStage = status === 'claimed' ? 'applying' : 'sent'
-          if (status === 'claimed') claimed++
+          // 'applied' ids can legitimately still be pending here — the bounded re-verify
+          // window (handleApplied) keeps an unresolved entry un-taken across a few ticks.
+          // They read as 'applying' (the agent HAS acted), never as the manual instruction.
+          const stage: LifecycleStage = status === 'claimed' || status === 'applied' ? 'applying' : 'sent'
+          if (status === 'claimed' || status === 'applied') claimed++
           else pendingManual++ // status === 'pending', or unknown/missing from the response
           const entry = this.sent.get(id)
           if (entry) {
@@ -445,15 +555,38 @@ export class Verifier {
   }
 
   private handleApplied(id: string): void {
-    const entry = this.sent.take(id)
+    const entry = this.sent.get(id)
     if (!entry) return
     const cursor = this.hmrCursors.get(id) ?? 0
+    // Accept-equality fallbacks: a fresh-page restore (restoredIds) or a signal-deaf window
+    // (signalGapIds) — see the field docs. Otherwise trust is the HMR signal, scoped to the
+    // element's OWN source file so an unrelated element's update can't vouch for this one.
+    const lenient = this.restoredIds.has(id) || this.signalGapIds.has(id)
+    const textTrusted: TextTrust = (sentEl, target, dcSource) => {
+      if (target !== sentEl) return true
+      if (lenient) return true
+      const file = dcSource ? (parseSourceAttr(dcSource)?.file ?? null) : null
+      return this.hmr.trustSince(cursor, file)
+    }
+    const results = verifyElements(entry, document, textTrusted)
+    // Bounded re-verify window — see VERIFY_WINDOW_ATTEMPTS: an unresolved outcome inside
+    // the window leaves the entry pending (un-taken) so the next poll tick retries with a
+    // DOM the HMR update may have reached by then.
+    const unresolved = results.some((ev) => ev.missing > 0 || ev.mismatched.length > 0)
+    const attempts = (this.verifyAttempts.get(id) ?? 0) + 1
+    if (unresolved && attempts < Verifier.VERIFY_WINDOW_ATTEMPTS) {
+      this.verifyAttempts.set(id, attempts)
+      return
+    }
+    this.sent.take(id)
     this.hmrCursors.delete(id)
-    const textTrusted: TextTrust = (sentEl, target) => target !== sentEl || this.hmr.trustSince(cursor)
+    this.restoredIds.delete(id)
+    this.signalGapIds.delete(id)
+    this.verifyAttempts.delete(id)
     // decide per-element: only commit drafts for an element whose changes ALL
     // matched computed style — a mismatched element keeps its drafts so the
     // user can retry or adjust rather than silently losing the edit.
-    verifyElements(entry, document, textTrusted).forEach((ev, elIndex) => {
+    results.forEach((ev, elIndex) => {
       const dcSource = entry.elements[elIndex].dcSource
       if (ev.missing > 0) {
         this.counters.unverified += 1
@@ -477,6 +610,9 @@ export class Verifier {
     const entry = this.sent.take(id)
     if (!entry) return
     this.hmrCursors.delete(id)
+    this.restoredIds.delete(id)
+    this.signalGapIds.delete(id)
+    this.verifyAttempts.delete(id)
     this.counters.failed += 1
     // Agent-authored free text headed for the status line: collapse whitespace and bound the
     // length so a long note can't blow up the single-line summary.

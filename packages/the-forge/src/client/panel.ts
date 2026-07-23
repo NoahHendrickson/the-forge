@@ -36,6 +36,7 @@ import {
   normalizeJustify,
   normalizeAlign,
   hasDirectText,
+  elementOffsets,
   snapWeight,
   firstFamily,
   cssFamilyValue,
@@ -458,8 +459,11 @@ export class Panel {
 
     if (this.positionBlock) this.positionBlock.hidden = multi
     if (this.positionFields && !multi) {
-      this.positionFields.x.set(el instanceof HTMLElement ? Math.round(el.offsetLeft) : 0)
-      this.positionFields.y.set(el instanceof HTMLElement ? Math.round(el.offsetTop) : 0)
+      // elementOffsets is the SAME derivation buildInspectorData uses for InspectorData.x/y —
+      // one producer, so P3's Absolute toggle changes both surfaces together (PR #44 review).
+      const { x, y } = elementOffsets(el)
+      this.positionFields.x.set(x)
+      this.positionFields.y.set(y)
     }
 
     this.layoutSection.refresh(el, computed, multi)

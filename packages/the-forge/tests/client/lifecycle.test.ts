@@ -432,6 +432,50 @@ describe('LifecycleSession: structural ops (Figma pivot P1)', () => {
     restored.restoreSent(persisted, () => btn as never)
     expect(restored.get('q1')!.elements[0].ops).toEqual([{ kind: 'text', before: 'Old', after: 'New' }])
   })
+
+  it('a DISCONNECTED delete entry does not shield same-source siblings (PR #44 review)', () => {
+    const session = new LifecycleSession()
+    const dcSource = 'src/List.tsx:5:5'
+    const first = el('li')
+    first.dataset.dcSource = dcSource
+    session.register('q1', [seed(first, { dcSource, change: elementChange({ changes: [], ops: [{ kind: 'delete' }] }) })])
+    first.remove() // the agent applied the delete; HMR dropped the node
+    const sibling = el('li')
+    sibling.dataset.dcSource = dcSource // every .map() entry shares the file:line:col
+    // the sibling's genuinely-new edit must pass — the dcSource fallback used to swallow it
+    expect(session.isDuplicate(sibling as never, [{ property: 'width', afterCss: '10px' }])).toBe(false)
+    expect(session.isDuplicate(sibling as never, [], [{ kind: 'text', before: 'a', after: 'b' }])).toBe(false)
+  })
+
+  it('the delete shield still holds by reference while the sent node is live', () => {
+    const session = new LifecycleSession()
+    const btn = el('button')
+    session.register('q1', [seed(btn, { change: elementChange({ changes: [], ops: [{ kind: 'delete' }] }) })])
+    expect(session.isDuplicate(btn as never, [{ property: 'width', afterCss: '10px' }])).toBe(true)
+  })
+
+  it('the placeholder fallback matches per list INSTANCE (dcSource AND index), not per source line (PR #44 review)', () => {
+    const session = new LifecycleSession()
+    const dcSource = 'src/List.tsx:5:5'
+    const placeholder = document.createElement('li') // detached — mirrors a restored entry
+    placeholder.dataset.dcSource = dcSource
+    session.register('q1', [
+      seed(placeholder, {
+        dcSource,
+        index: 1, // the entry was sent for the SECOND list instance
+        change: elementChange({
+          changes: [{ property: 'padding-top', beforeCss: '', afterCss: '24px', beforeUtility: null, afterUtility: null, tokenExact: false }],
+        }),
+      }),
+    ])
+    const firstInstance = el('li')
+    firstInstance.dataset.dcSource = dcSource
+    const secondInstance = el('li')
+    secondInstance.dataset.dcSource = dcSource
+    const changes = [{ property: 'padding-top', afterCss: '24px' }]
+    expect(session.isDuplicate(firstInstance as never, changes)).toBe(false)
+    expect(session.isDuplicate(secondInstance as never, changes)).toBe(true)
+  })
 })
 
 // Ported verbatim from the deleted tests/client/sent.test.ts — SentRegistry.isDuplicate moved

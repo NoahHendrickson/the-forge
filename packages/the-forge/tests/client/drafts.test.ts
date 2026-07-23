@@ -403,6 +403,77 @@ describe('DraftStore', () => {
       store.applyDelete(d)
       expect(store.structuralEntries().get(d)).toEqual({ kind: 'delete', priorInlineDisplay: '' })
     })
+
+    it('a text draft edited back to its recorded original is dropped, not kept as a no-op (PR #44 review)', () => {
+      const store = new DraftStore()
+      const d = el()
+      d.textContent = 'Old'
+      store.applyText(d, 'New', 'Old')
+      expect(store.changeCount()).toBe(1)
+      store.applyText(d, 'Old', 'New') // second edit session types the original back
+      expect(store.structuralOf(d)).toBeNull()
+      expect(store.changeCount()).toBe(0)
+      expect(d.textContent).toBe('Old')
+    })
+
+    it('css apply() is a no-op on a delete-drafted element (tombstone guard, PR #44 review)', () => {
+      const store = new DraftStore()
+      const d = el()
+      store.applyDelete(d)
+      store.apply(d, 'width', '100px') // reachable via Compare un-hiding the tombstone
+      expect(store.entries().get(d)).toBeUndefined()
+      expect(d.style.getPropertyValue('width')).toBe('')
+    })
+
+    it('applyDelete sweeps descendant drafts — no restyle ops ride a delete request (PR #44 review)', () => {
+      const store = new DraftStore()
+      const parent = el()
+      const child = document.createElement('span')
+      const childText = document.createElement('em')
+      childText.textContent = 'Old'
+      parent.append(child, childText)
+      store.apply(child, 'padding-top', '24px')
+      store.applyText(childText, 'New', 'Old')
+
+      const emits = vi.fn()
+      store.onChange = emits
+      store.applyDelete(parent)
+
+      expect(store.entries().get(child)).toBeUndefined()
+      expect(child.style.getPropertyValue('padding-top')).toBe('') // original restored
+      expect(store.structuralOf(childText)).toBeNull()
+      expect(childText.textContent).toBe('Old') // text rolled back before the tombstone
+      expect(store.structuralOf(parent)).toEqual({ kind: 'delete', priorInlineDisplay: '' })
+      expect(store.changeCount()).toBe(1) // only the delete itself
+      expect(emits).toHaveBeenCalledTimes(1) // the whole operation cascades onChange ONCE
+    })
+
+    it('healStructural re-binds a remounted node and prunes an unlocatable one (PR #44 review)', () => {
+      const store = new DraftStore()
+      const a = el()
+      a.dataset.dcSource = 'src/App.tsx:5:5'
+      a.textContent = 'Old'
+      store.applyText(a, 'New', 'Old')
+      const b = el()
+      store.applyDelete(b) // untagged — unlocatable once disconnected
+
+      // an unrelated HMR remount replaces both nodes
+      a.remove()
+      b.remove()
+      const fresh = el()
+      fresh.dataset.dcSource = 'src/App.tsx:5:5'
+      fresh.textContent = 'Old' // the fresh node renders the source truth
+
+      expect(store.changeCount()).toBe(2) // phantom counts before the heal
+      store.healStructural()
+      // the text draft re-bound onto the fresh node, preview re-applied
+      expect(store.structuralOf(a)).toBeNull()
+      expect(store.structuralOf(fresh)).toEqual({ kind: 'text', original: 'Old', value: 'New' })
+      expect(fresh.textContent).toBe('New')
+      // the unlocatable delete draft was pruned
+      expect(store.structuralOf(b)).toBeNull()
+      expect(store.changeCount()).toBe(1)
+    })
   })
 
   it('changeCount() sums drafted properties across elements', () => {
