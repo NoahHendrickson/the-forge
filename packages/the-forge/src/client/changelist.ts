@@ -1,6 +1,7 @@
-import type { DraftStore } from './drafts'
+import type { DraftStore, StructuralDraft } from './drafts'
 import type { StageEvent, LifecycleStage } from './verifier'
-import type { ChangeItem } from './request'
+import type { ChangeItem, StructuralOp } from './request'
+import { draftToOps, opsIdentical } from './ops'
 import type { TaggedElement } from './source'
 import { shortSource } from './source'
 import type { LifecycleSession, SentSeed, SeedRecord } from './lifecycle'
@@ -20,16 +21,26 @@ function summarizeItem(c: ChangeItem): string {
   return `${c.property}: ${c.beforeCss} → ${c.afterCss}`
 }
 
+/** Row label for a structural op (Figma pivot P1) — designer vocabulary, never css. */
+const OP_TEXT_CAP = 24
+function summarizeOp(op: StructuralOp, tag: string): string {
+  if (op.kind === 'delete') return `Delete <${tag}>`
+  const t = op.after.replace(/\s+/g, ' ').trim()
+  return `Text: "${t.length > OP_TEXT_CAP ? `${t.slice(0, OP_TEXT_CAP)}…` : t}"`
+}
+
+function summarizeStructuralDraft(s: StructuralDraft, tag: string): string {
+  // ops.ts's shared projection — the label must be built from the SAME op a send would
+  // actually produce, not a hand-built lookalike (PR #44 review).
+  return summarizeOp(draftToOps(s)[0], tag)
+}
+
 /** Shared "+N more" collapse for sent-row (summarize) summaries — `text` is the visible
  * summary (first entry, +N more if there's more than one), `full` is the newline-joined tooltip
  * shown via the row's title attribute. */
 function collapseWithMore(all: string[]): { text: string; full: string } {
   const text = all.length > 1 ? `${all[0]} +${all.length - 1} more` : (all[0] ?? '')
   return { text, full: all.join('\n') }
-}
-
-function summarize(changes: ChangeItem[]): { text: string; full: string } {
-  return collapseWithMore(changes.map(summarizeItem))
 }
 
 /** Renders the send/verify lifecycle as rows. Sent-row state lives in LifecycleSession now —
@@ -118,6 +129,24 @@ export class ChangeList {
     return props
   }
 
+  /** `el`'s structural draft, unless an in-flight row already represents the same op — the
+   * structural analog of inFlightProps' dedupe (a delete draft riding under its own sent row
+   * would show the same change twice). Identity IS ops.ts's opsIdentical — the same predicate
+   * lifecycle's duplicate window uses, not a hand-synced inline copy (PR #44 review). */
+  private pendingStructural(el: TaggedElement, rows: SeedRecord[]): StructuralDraft | null {
+    const s = this.drafts.structuralOf(el)
+    if (!s) return null
+    const draftOps = draftToOps(s)
+    for (const row of rows) {
+      if (row.seed.el !== el) continue
+      if (row.stage !== 'sent' && row.stage !== 'applying') continue
+      for (const op of row.seed.change.ops ?? []) {
+        if (opsIdentical(draftOps, [op])) return null
+      }
+    }
+    return s
+  }
+
   private render(): void {
     this.session.healPlaceholders()
     this.list.replaceChildren()
@@ -131,12 +160,20 @@ export class ChangeList {
     }
 
     // Draft rows after sent rows: drafts are "not yet part of the story being told above".
+    // ONE walk of the DraftStore's own drafted-element union — the old two-pass sweep
+    // (entries() + a structuralEntries() second pass with its own seen-set) re-implemented
+    // the union the store already encodes, and had drifted from the request builder's twin
+    // (PR #44 review). Disconnected elements still render (dimmed .row-gone via baseRow) —
+    // that's this list's job as the visible truth; the send builder's isConnected filter is
+    // about what's SENDABLE, and healStructural re-binds or prunes the gap between the two.
     if (!this.suppressDrafts) {
-      for (const [el, props] of this.drafts.entries()) {
-        const inFlight = this.inFlightProps(el as TaggedElement, rows)
-        const remaining = [...props.entries()].filter(([prop]) => !inFlight.has(prop))
-        if (remaining.length === 0) continue
-        this.list.appendChild(this.renderDraftRow(el as TaggedElement, remaining))
+      for (const el of this.drafts.draftedElements()) {
+        const props = this.drafts.entries().get(el)
+        const inFlight = this.inFlightProps(el, rows)
+        const remaining = props ? [...props.entries()].filter(([prop]) => !inFlight.has(prop)) : []
+        const structural = this.pendingStructural(el, rows)
+        if (remaining.length === 0 && !structural) continue
+        this.list.appendChild(this.renderDraftRow(el, remaining, structural))
       }
     }
 
@@ -174,10 +211,22 @@ export class ChangeList {
     return elLabel
   }
 
-  private renderDraftRow(el: TaggedElement, props: Array<[string, { original: string; value: string }]>): HTMLElement {
+  private renderDraftRow(
+    el: TaggedElement,
+    props: Array<[string, { original: string; value: string }]>,
+    structural: StructuralDraft | null = null
+  ): HTMLElement {
     const row = this.baseRow('draft', el)
     const dcSource = el.dataset?.dcSource ?? null
     row.appendChild(this.elLabel(el.tagName.toLowerCase(), dcSource))
+    // Structural line first — a delete IS the row's story; text is the headline over styling.
+    if (structural) {
+      row.classList.add('change-structural')
+      const line = document.createElement('div')
+      line.className = 'change-detail change-detail-structural'
+      line.textContent = summarizeStructuralDraft(structural, el.tagName.toLowerCase())
+      row.appendChild(line)
+    }
     // Draft rows list EVERY drafted property (2026-07-11 draft-badge spec) — the disclosure
     // is already the user's opt-in to detail, so nothing hides behind "+N more"/title here.
     // The value shown is the inline draft (`prop → value`, no "before"): the DraftStore's
@@ -204,7 +253,10 @@ export class ChangeList {
     // (.change-detail) instead, which is why the span is built here and not in elLabel().
     const summary = document.createElement('span')
     summary.className = 'change-summary'
-    const { text, full } = summarize(row.seed.change.changes)
+    // Ops lead the summary — "Delete <div>" is the row's story; css deltas are supporting cast.
+    const opSummaries = (row.seed.change.ops ?? []).map((op) => summarizeOp(op, row.seed.change.tag))
+    if (opSummaries.length > 0) dom.classList.add('change-structural')
+    const { text, full } = collapseWithMore([...opSummaries, ...row.seed.change.changes.map(summarizeItem)])
     summary.textContent = text
     summary.title = full
     dom.append(elLabel, summary)

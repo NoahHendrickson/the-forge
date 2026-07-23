@@ -55,6 +55,17 @@ contextual position) is unchanged — this is a one-time re-ratification, not a 
   (group label + one H|V line) → Align. Supersedes M-C's W/H → flex-child strip → cluster →
   padding order.
 
+## Amendment — 2026-07-22 (Figma pivot, user-ratified)
+
+- **The Margin section is REMOVED, not conditionally hidden** — margins are fully invisible
+  to the designer ("we never use them in Figma"). This supersedes the margin half of
+  decision #1 and the 2026-07-05 margin-disclosure rule; the translation layer may still
+  read/write margins in code, but no panel control surfaces them. Section order is now
+  Layout → Typography → Fill → Stroke → Appearance (stable-order principle unchanged).
+- **A read-only X/Y Position pair heads the Layout section** (Figma's header cluster);
+  it becomes editable with the P3 Absolute toggle.
+  Spec: [2026-07-22-figma-pivot-design.md](../specs/2026-07-22-figma-pivot-design.md).
+
 ## Amendment — 2026-07-07 (panel-input-polish)
 
 The Baseline toggle under the 9-dot matrix is **removed** (user-ratified, 2026-07-07

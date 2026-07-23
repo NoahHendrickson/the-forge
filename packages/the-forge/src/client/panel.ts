@@ -27,6 +27,7 @@ import {
   WEIGHTS,
   SIZE_ROWS,
   PADDING_ROWS,
+  POSITION_ROWS,
   minMaxRowsFor,
   SECTIONS,
 } from './panel-specs'
@@ -120,6 +121,11 @@ export class Panel {
   // site) — LayoutSection holds its own reference for refresh purposes, but panel.ts still
   // owns destroy() on rebuild, same as every other field in `this.fields`.
   private gapField: NumberField | null = null
+  /** The Position block's wrap element (Figma pivot P1) — held ONLY for the multi-hide
+   * toggle (offsets across N elements are noise); its X/Y fields ride `this.fields` like
+   * every other row (POSITION_ROWS in panel-specs.ts), so refresh/destroy need no
+   * bespoke handling here (PR #44 follow-up). */
+  private positionBlock: HTMLElement | null = null
 
   // Typography section widgets (rebuilt per show(), re-set() per refresh()).
   private typeFamilySelect: HTMLSelectElement | null = null
@@ -405,6 +411,15 @@ export class Panel {
     if (this.selectionColorsTitle) this.selectionColorsTitle.hidden = !multi
 
     for (const { field, spec } of this.fields) {
+      // Read-only rows carry their own reader (Position X/Y — offsets, not computed style):
+      // display-only, no per-side commas, no token-pill bookkeeping. Same Mixed rule as the
+      // css path for a multi-selection.
+      if (spec.read) {
+        const values = (multi ? this.els : [el]).map(spec.read)
+        if (values.some((v) => v !== values[0])) field.setMixed()
+        else field.set(values[0])
+        continue
+      }
       // Size-mode (W/H) fields can hold the literal 'auto' draft (Hug mode) — show
       // it as the auto keyword rather than resolving it through fromCss. Draft check
       // stays first; when there's no draft (and we're not in comparing mode), an
@@ -451,6 +466,8 @@ export class Panel {
       // B5 re-bind contract — see PanelTokenUi.rebind
       this.tokenUi.rebind(spec, field, values[0], mixed, this.drafts.isComparing(el))
     }
+
+    if (this.positionBlock) this.positionBlock.hidden = multi
 
     this.layoutSection.refresh(el, computed, multi)
     if (!multi) {
@@ -511,6 +528,7 @@ export class Panel {
     // previous selection's baselines.
     this.scrubbingField = null
     this.scrubBaselines = null
+    this.positionBlock = null // its X/Y fields were destroyed with `this.fields` above
     // Only sectionsRoot is wiped — the popover singletons are siblings of it directly in
     // `body` (same scrolled coordinate space, see the constructor's why-comment) and are
     // structurally untouchable by rebuilds. An earlier version cleared `body` itself and
@@ -551,6 +569,24 @@ export class Panel {
         // flex or not (the ORDER is the contract — see panel.test.ts's composition test).
         const rowWrap = document.createElement('div')
         rowWrap.className = 'panel-rows layout-section'
+        // Position block (Figma pivot P1, spec §5): Figma's header X/Y pair above Size.
+        // READ-ONLY in P1 — offsets from offsetParent; the fields light up for editing with
+        // P3's Absolute toggle. Declared in panel-specs.ts (POSITION_ROWS) and built through
+        // buildRow like the Size block's rows, so refresh + destroy ride the standard field
+        // lifecycle (PR #44 follow-up); only the multi-hide toggle needs the block element.
+        const posBlock = document.createElement('div')
+        posBlock.className = 'position-block'
+        posBlock.setAttribute('data-position-block', '')
+        const posLabel = document.createElement('span')
+        posLabel.className = 'group-label'
+        posLabel.textContent = 'Position'
+        const posFields = document.createElement('div')
+        posFields.className = 'position-fields'
+        for (const row of POSITION_ROWS) posFields.append(this.buildRow(row))
+        posBlock.append(posLabel, posFields)
+        rowWrap.append(posBlock)
+        this.positionBlock = posBlock
+
         // Size block (2026-07-06 size-pair spec): a "Size" group label above ONE line holding
         // the W and H size-rows side by side — mirrors the padding block's structure below.
         const sizeBlock = document.createElement('div')
@@ -1129,7 +1165,10 @@ export class Panel {
       max: spec.max,
       allowAuto: spec.sizeMode || spec.allowAuto,
       noTokenButton: !!spec.sizeMode,
-      onInput: commit,
+      // Read-only rows (Position X/Y) are display-only: the disabled input (below) blocks
+      // typing and the no-op onInput blocks label-scrub commits — a scrub gesture must
+      // never draft a fake 'x' css property.
+      onInput: spec.readOnly ? () => {} : commit,
       valuesCount: spec.props.length > 1 ? spec.props.length : undefined,
       onValuesInput: spec.props.length > 1 ? commitValues : undefined,
       onRelative: multi
@@ -1182,6 +1221,7 @@ export class Panel {
     // Stable machine identity for tests/tooling — labels are designer-facing display text and
     // may collide across sections (Size H vs Padding H); props are the field's real identity.
     field.root.dataset.props = spec.props.join(' ')
+    if (spec.readOnly) (field.root.querySelector('input') as HTMLInputElement).disabled = true
     const bound: BoundField = { field, spec }
     this.fields.push(bound)
     return bound

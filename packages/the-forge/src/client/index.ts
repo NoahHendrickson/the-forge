@@ -4,7 +4,8 @@ import { buildInspectorData } from './inspector'
 import { DraftStore } from './drafts'
 import { Panel } from './panel'
 import { Dock } from './dock'
-import { CanvasMode, unionClientRect } from './canvas'
+import { CanvasMode, unionClientRect, isEditable } from './canvas'
+import { TextEditMode } from './text-edit'
 import { buildCanvasChrome, type CanvasChrome } from './canvas-chrome'
 import {
   buildChangeRequestWithElements,
@@ -68,6 +69,11 @@ export class DesignMode {
   private reflowRaf = 0
   private rippleRaf = 0
   private lastMove: MouseEvent | null = null
+  /** The inline text-edit session (double-click → contenteditable), extracted to
+   * text-edit.ts (PR #44 follow-up). While its `active` flag is set, hover/click/keydown
+   * handling yields to the browser's own editing behavior via the delegation in
+   * onMove/onClick/onKey below. Constructed in the constructor body (needs this.drafts). */
+  private textEdit: TextEditMode
   private drafts: DraftStore
   private panel: Panel
   private dock: Dock
@@ -169,6 +175,13 @@ export class DesignMode {
     dock?: Dock
   ) {
     this.drafts = drafts ?? new DraftStore()
+    this.textEdit = new TextEditMode(this.drafts, {
+      select: (el) => this.select(el),
+      isSoleSelection: (el) => this.selection.length === 1 && this.selection[0] === el,
+      beforeEdit: (el) => this.handleBeforeEdit(el),
+      edited: () => this.handleEdited(),
+      hideHover: () => this.overlay.hideOutline(),
+    })
     this.panel =
       panel ??
       new Panel(
@@ -371,6 +384,12 @@ export class DesignMode {
       clearTimeout(this.draftSyncTimer)
       this.draftSyncTimer = null
     }
+    // Structural drafts are keyed by node reference — re-bind (or prune) any whose node an
+    // HMR remount replaced before projecting state to the Changes list / sessionStorage
+    // (PR #44 review; the sent entries' equivalent is healPlaceholders at render time).
+    // A heal emits onChange, which only re-arms the debounce — the flush itself already
+    // reflects the healed state below, and the follow-up flush is a cheap no-op.
+    this.drafts.healStructural()
     this.changeList.syncDrafts()
     this.persist()
   }
@@ -394,8 +413,12 @@ export class DesignMode {
     | { request: ChangeRequest; pairs: Array<[TaggedElement, ElementChange]> }
     | 'no-changes'
     | 'already-sent' {
+    // Re-bind structural drafts orphaned by an HMR remount before building — the builder's
+    // isConnected sweep would silently skip them, degrading ↑ to chat-only while the pill
+    // still counts the change (PR #44 review).
+    this.drafts.healStructural()
     const { request, elements } = buildChangeRequestWithElements(this.drafts)
-    const pairs = [...elements.entries()].filter(([el, change]) => !this.session.isDuplicate(el, change.changes))
+    const pairs = [...elements.entries()].filter(([el, change]) => !this.session.isDuplicate(el, change.changes, change.ops))
     request.elements = pairs.map(([, change]) => change)
     if (request.elements.length === 0) return elements.size > 0 ? 'already-sent' : 'no-changes'
     return { request, pairs }
@@ -599,6 +622,7 @@ export class DesignMode {
       resetTokensCache()
       document.addEventListener('mousemove', this.onMove, true)
       document.addEventListener('click', this.onClick, true)
+      document.addEventListener('dblclick', this.onDblClick, true)
       document.addEventListener('keydown', this.onKey, true)
       document.addEventListener('scroll', this.onReflow, { capture: true, passive: true })
       window.addEventListener('resize', this.onReflow, { passive: true })
@@ -608,8 +632,10 @@ export class DesignMode {
       this.refreshStatus()
       this.persist()
     } else {
+      this.textEdit.finish() // commit any in-progress inline text edit before the listeners go
       document.removeEventListener('mousemove', this.onMove, true)
       document.removeEventListener('click', this.onClick, true)
+      document.removeEventListener('dblclick', this.onDblClick, true)
       document.removeEventListener('keydown', this.onKey, true)
       document.removeEventListener('scroll', this.onReflow, true)
       window.removeEventListener('resize', this.onReflow)
@@ -657,7 +683,12 @@ export class DesignMode {
     if (!saved.designModeOn) return
     this.setActive(true)
     this.session.restoreSent(saved.sent, locateBySource)
-    if (this.session.size() > 0) this.verifier.start()
+    if (this.session.size() > 0) {
+      // Fresh-page trust (P1 plan: "full reloads trivially count") — restored ids verify
+      // text by plain equality; see Verifier.markRestored for why an echo is impossible here.
+      this.verifier.markRestored(this.session.pendingIds())
+      this.verifier.start()
+    }
     this.pendingRestore = { drafts: saved.drafts, selection: saved.selection }
     const { done } = this.drainPendingRestore()
     if (!done) this.scheduleRestoreRetry()
@@ -933,6 +964,14 @@ export class DesignMode {
       // its own element, so in multi-select every co-selected element still shows up
       // in the others' scopes and must be dropped here.
       for (const sel of this.selection) changed.delete(sel)
+      // Tombstoned elements never ripple: display:none measures 0×0-at-origin (still
+      // isConnected, so diffRects reports it as "moved"), and on multi-delete the selection
+      // is already empty by the time this rAF runs — the filter above can't exclude
+      // co-deleted elements, which drew spurious outlines at the viewport corner
+      // (PR #44 review).
+      for (const el of [...changed]) {
+        if (this.drafts.structuralOf(el)?.kind === 'delete') changed.delete(el)
+      }
       if (changed.size > 0) this.overlay.showRipples([...changed].map((moved) => moved.getBoundingClientRect()))
     })
   }
@@ -949,6 +988,7 @@ export class DesignMode {
   }
 
   private onMove = (e: MouseEvent): void => {
+    if (this.textEdit.active) return // hover chrome is noise while the user is typing in the page
     this.lastMove = e
     if (this.moveRaf) return
     this.moveRaf = requestAnimationFrame(() => {
@@ -963,6 +1003,8 @@ export class DesignMode {
 
   private onClick = (e: MouseEvent): void => {
     if (this.overlay.contains(e.target)) return
+    // Mid-edit click policy (caret shield / commit-and-fall-through) lives in TextEditMode.
+    if (this.textEdit.handleClick(e) === 'shielded') return
     e.preventDefault()
     e.stopPropagation()
     const el = findTaggedElement(e.target as Element)
@@ -971,9 +1013,47 @@ export class DesignMode {
     else this.deselect()
   }
 
-  private onKey = (e: KeyboardEvent): void => {
-    if (e.key !== 'Escape') return
+  /** Double-click on a text-leaf element enters inline text edit (Figma behavior) — gates
+   * and session lifecycle live in TextEditMode (text-edit.ts); this handler only owns the
+   * event plumbing, so registration/removal stays in setActive beside the other capture
+   * handlers. */
+  private onDblClick = (e: MouseEvent): void => {
     if (this.overlay.contains(e.target)) return
+    const el = this.textEdit.candidate(e.target)
+    if (!el) return
+    e.preventDefault()
+    e.stopPropagation()
+    this.textEdit.begin(el)
+  }
+
+  private onKey = (e: KeyboardEvent): void => {
+    if (this.overlay.contains(e.target)) return
+    if (this.textEdit.handleKey(e)) return
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      // Same typing-surface guard as canvas mode's Space/zoom shortcuts — Del in the
+      // composer or any input must never nuke the canvas selection. Carve-out: when the
+      // focused control IS in the selection, the intent is deleting the element itself —
+      // click-selecting an input also natively focuses it (no mousedown interception here),
+      // so without this, form controls are undeletable via the only delete verb P1 ships,
+      // and Backspace live-edits the focused input's value instead (PR #44 review).
+      const target = e.target as Node | null
+      const deletingEditable = target !== null && this.selection.includes(target as TaggedElement)
+      if (isEditable(e.target) && !deletingEditable) return
+      if (this.selection.length === 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      const doomed = [...this.selection]
+      // Deselect FIRST — a selection outline hugging a display:none tombstone is a lie.
+      this.deselect()
+      // Two-phase: every ripple baseline (layout reads) BEFORE any display:none write —
+      // interleaving forced one synchronous reflow per element in a single keydown
+      // (PR #44 review).
+      for (const el of doomed) this.handleBeforeEdit(el) // ripple baseline: show which siblings reflow into the gap
+      for (const el of doomed) this.drafts.applyDelete(el)
+      this.handleEdited()
+      return
+    }
+    if (e.key !== 'Escape') return
     e.stopPropagation()
     if (this.selection.length > 0) this.deselect()
     else this.setActive(false)

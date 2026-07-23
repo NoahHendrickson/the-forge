@@ -56,25 +56,27 @@ export function hasDirectText(el: Element): boolean {
   return [...el.childNodes].some((n) => n.nodeType === 3 && (n.textContent ?? '').trim() !== '')
 }
 
-const MARGIN_PROPS = ['margin-top', 'margin-right', 'margin-bottom', 'margin-left']
-
-/**
- * Margin-section disclosure (spec 2026-07-05, decision 2): designers don't set margins, so
- * the section renders only when the element actually carries some — any computed margin that
- * isn't zero (negative and `auto` margins count), OR any live margin draft. The draft clause
- * is the mid-edit latch: scrubbing a margin to 0 keeps the draft (and thus the section) alive
- * under the pointer; it only disappears once the element genuinely has no margin and no
- * pending edit. jsdom reports '' for an unset margin — treat as zero (same quirk handling as
- * draftSolidIfNone's border-style read).
- */
-export function marginSectionVisible(el: TaggedElement, drafts?: DraftStore): boolean {
-  const computed = getComputedStyle(el)
-  return MARGIN_PROPS.some((p) => {
-    if (drafts && drafts.current(el, p) !== null) return true
-    const v = computed.getPropertyValue(p)
-    return v !== '' && v !== '0px'
-  })
+/** The inline-text-edit gate: a pure text LEAF — non-whitespace direct text AND zero element
+ * children. hasDirectText alone admits mixed content (`<button><svg/>Buy</button>`), whose
+ * flat-textContent draft model would destroy the element children on commit (`el.textContent =
+ * value` replaces ALL child nodes) and could only ever restore a flattened string on discard —
+ * an unrecoverable live-page corruption React may then crash reconciling (PR #44 review). */
+export function isTextLeaf(el: Element): boolean {
+  return el.childElementCount === 0 && hasDirectText(el)
 }
+
+/** Offset from the offsetParent's padding edge — the ONE derivation behind both
+ * InspectorData.x/y and the panel's Position header refresh. Two inline copies of this
+ * expression shipped in P1 with zero consumers of the canonical one; when P3's Absolute
+ * toggle changes what X/Y means, this is the only place to change (PR #44 review).
+ * 0 for SVG and other non-HTMLElements, which have no offset model. */
+export function elementOffsets(el: Element): { x: number; y: number } {
+  if (!(el instanceof HTMLElement)) return { x: 0, y: 0 }
+  return { x: Math.round(el.offsetLeft), y: Math.round(el.offsetTop) }
+}
+
+// marginSectionVisible (and its MARGIN_PROPS) died with the Margin section in the
+// 2026-07-22 Figma pivot — margins are invisible to the designer now (spec §5).
 
 /**
  * Min/max row disclosure (spec M-D): a constraint row shows when the user opened it this

@@ -1,7 +1,8 @@
-import type { ElementChange } from './request'
+import type { ElementChange, StructuralOp } from './request'
+import { opsIdentical } from './ops'
 import type { TaggedElement } from './source'
 import type { StageEvent, LifecycleStage } from './verifier'
-import { resolveElement } from './lifecycle-store'
+import { resolveElement, sourceIndex } from './lifecycle-store'
 import type { PersistedLifecycle, PersistedSentElement } from './lifecycle-store'
 
 // SentChange/SentEntry lived in sent.ts (the SentRegistry's home) until the registry class
@@ -29,6 +30,9 @@ export interface SentEntry {
      * that don't match any DraftStore key. */
     draftProps: string[]
     changes: SentChange[]
+    /** Structural design ops sent for this element (Figma pivot P1) — mirrors
+     * ElementChange.ops; omitted when the send was css-only. */
+    ops?: StructuralOp[]
   }>
 }
 
@@ -73,10 +77,14 @@ export interface SentStore {
   get(id: string): SentEntry | undefined
   take(id: string): SentEntry | undefined
   size(): number
-  isDuplicate(el: TaggedElement, changes: SentChange[]): boolean
+  isDuplicate(el: TaggedElement, changes: SentChange[], ops?: StructuralOp[]): boolean
 }
 
 export type SessionChangeListener = () => void
+
+// opsIdentical moved to ops.ts (2026-07-23 review of PR #44): the identity rule was
+// hand-copied into changelist.ts's pendingStructural and drafts.ts's commitStructural —
+// three synced-by-comment implementations of one predicate. ops.ts is its single home now.
 
 /** Single owner of sent-state, replacing three previously hand-synced stores (SentRegistry +
  * DesignMode.sentSeeds + ChangeList.sentRows). One Map<requestId, seeds[]> backs verifier
@@ -154,7 +162,7 @@ export class LifecycleSession implements SentStore {
    * apply already removed. Identical-only on purpose — an element re-edited to DIFFERENT
    * values is a genuinely new request and must go through. Ported verbatim from
    * SentRegistry.isDuplicate, including the dcSource-fallback-for-disconnected-entries. */
-  isDuplicate(el: TaggedElement, changes: SentChange[]): boolean {
+  isDuplicate(el: TaggedElement, changes: SentChange[], ops?: StructuralOp[]): boolean {
     for (const [id, seeds] of this.entries) {
       if (this.resolvedIds.has(id)) continue // resolved entries leave the duplicate window — pre-refactor semantics
       for (const rec of seeds) {
@@ -164,10 +172,27 @@ export class LifecycleSession implements SentStore {
         // Strict reference match first; then the same dcSource fallback the verifier's
         // locate() uses — a reload restores in-flight entries with detached placeholder
         // elements (see restoreLifecycle), and a placeholder must still shield its real,
-        // re-mounted element from an identical re-queue.
+        // re-mounted element from an identical re-queue. The fallback ALSO matches the
+        // seed's index: one source location renders many DOM instances (a .map()'d list all
+        // shares file:line:col), and a dcSource-only match let one disconnected entry stand
+        // in for every sibling from that line (PR #44 review).
         const sameEl =
-          sentEl === el || (!sentEl.isConnected && sentDcSource !== null && el.dataset.dcSource === sentDcSource)
-        if (!sameEl || sentChanges.length !== changes.length) continue
+          sentEl === el ||
+          (!sentEl.isConnected &&
+            sentDcSource !== null &&
+            el.dataset.dcSource === sentDcSource &&
+            sourceIndex(el, sentDcSource) === rec.seed.index)
+        if (!sameEl) continue
+        // A pending DELETE shields the element from ANY follow-up send — every further edit
+        // to an element whose removal is already in flight is moot, not a new request.
+        // REFERENCE identity only: once the deletion lands and the sent node disconnects,
+        // even the index-matched fallback can collide with a real sibling (indexes shift
+        // over the deleted slot), and the shield would swallow that sibling's genuinely-new
+        // edits forever (PR #44 review). A restored in-flight delete still shields — its
+        // placeholder heals to the live node (healPlaceholders) before sends are possible.
+        const sentOps = rec.seed.change.ops
+        if (sentEl === el && sentOps?.some((o) => o.kind === 'delete')) return true
+        if (sentChanges.length !== changes.length || !opsIdentical(sentOps, ops)) continue
         const sentAfter = new Map(sentChanges.map((c) => [c.property, c.afterCss]))
         if (changes.every((c) => sentAfter.get(c.property) === c.afterCss)) return true
       }
@@ -184,6 +209,7 @@ export class LifecycleSession implements SentStore {
         index: rec.seed.index,
         draftProps: rec.seed.draftProps,
         changes: rec.seed.change.changes.map((c) => ({ property: c.property, afterCss: c.afterCss })),
+        ...(rec.seed.change.ops ? { ops: rec.seed.change.ops } : {}),
       })),
     }
   }

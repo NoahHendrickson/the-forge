@@ -73,7 +73,7 @@ describe('DesignMode listener lifecycle (spec §10: zero idle listeners)', () =>
     // Two 'resize' listeners now land on `window`: DesignMode's own onReflow (passive)
     // AND the Dock's onWindowResize (docked by default — see dock.ts enter()), which
     // carries no listener-options object at all.
-    expect(added).toEqual(['click', 'keydown', 'mousemove', 'resize', 'resize', 'scroll'])
+    expect(added).toEqual(['click', 'dblclick', 'keydown', 'mousemove', 'resize', 'resize', 'scroll'])
     for (const call of addSpy.mock.calls) {
       if (call[0] === 'scroll') expect(call[2]).toEqual({ capture: true, passive: true })
       else expect(call[2]).toBe(true)
@@ -88,7 +88,7 @@ describe('DesignMode listener lifecycle (spec §10: zero idle listeners)', () =>
 
     mode.setActive(false)
     const removed = [...removeSpy.mock.calls.map((c) => c[0]), ...winRemoveSpy.mock.calls.map((c) => c[0])].sort()
-    expect(removed).toEqual(['click', 'keydown', 'mousemove', 'resize', 'resize', 'scroll'])
+    expect(removed).toEqual(['click', 'dblclick', 'keydown', 'mousemove', 'resize', 'resize', 'scroll'])
   })
 
   it('toggle button flips design mode', () => {
@@ -3467,5 +3467,159 @@ describe('SessionFeed wiring', () => {
     ;(panel.root.querySelector('.chat-send') as HTMLButtonElement).click()
     for (let i = 0; i < 6; i++) await Promise.resolve()
     expect(mode.session.pendingIds()).toEqual(['q1'])
+  })
+})
+
+describe('canvas verbs (Figma pivot P1): inline text edit + Del delete', () => {
+  function textSetup() {
+    const setup = fullSetup()
+    setup.mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    return { ...setup, btn }
+  }
+
+  it('double-click on a text element enters contenteditable; Escape commits a text draft without deselecting', () => {
+    const { mode, drafts, btn } = textSetup()
+    btn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    expect(btn.hasAttribute('contenteditable')).toBe(true)
+    expect(mode.selected).toBe(btn)
+    btn.textContent = 'changed'
+    btn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(btn.hasAttribute('contenteditable')).toBe(false)
+    expect(drafts.structuralOf(btn)).toEqual({ kind: 'text', original: 'go', value: 'changed' })
+    expect(mode.selected).toBe(btn) // Esc committed the edit — it must NOT also deselect
+    expect(mode.active).toBe(true)
+  })
+
+  it('an idle in-and-out (no change) leaves no draft', () => {
+    const { drafts, btn } = textSetup()
+    btn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    btn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(btn.hasAttribute('contenteditable')).toBe(false)
+    expect(drafts.structuralOf(btn)).toBeNull()
+  })
+
+  it('double-click on an element without direct text does nothing', () => {
+    const setup = fullSetup()
+    setup.mode.setActive(true)
+    document.body.insertAdjacentHTML('beforeend', `<div id="wrap" data-dc-source="src/App.tsx:1:1"><span>inner</span></div>`)
+    const wrap = document.getElementById('wrap')!
+    wrap.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    expect(wrap.hasAttribute('contenteditable')).toBe(false)
+  })
+
+  it('deactivating design mode mid-edit commits the draft', () => {
+    const { mode, drafts, btn } = textSetup()
+    btn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    btn.textContent = 'edited then toggled off'
+    mode.setActive(false)
+    expect(btn.hasAttribute('contenteditable')).toBe(false)
+    expect(drafts.structuralOf(btn)).toEqual({ kind: 'text', original: 'go', value: 'edited then toggled off' })
+  })
+
+  it('Del drafts a delete for the selection, previews display:none, and deselects', () => {
+    const { mode, drafts, btn } = textSetup()
+    btn.click()
+    expect(mode.selected).toBe(btn)
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+    expect(drafts.structuralOf(btn)).toEqual({ kind: 'delete', priorInlineDisplay: '' })
+    expect(btn.style.getPropertyValue('display')).toBe('none')
+    expect(mode.selected).toBeNull()
+    expect(mode.active).toBe(true) // Del must not fall through to the Escape branch
+  })
+
+  it('Backspace in an input never deletes the canvas selection', () => {
+    const { mode, drafts, btn } = textSetup()
+    btn.click()
+    document.body.insertAdjacentHTML('beforeend', `<input id="field" />`)
+    const input = document.getElementById('field')!
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }))
+    expect(drafts.structuralOf(btn)).toBeNull()
+    expect(mode.selected).toBe(btn)
+  })
+
+  it('Del with nothing selected is inert', () => {
+    const { mode, drafts, btn } = textSetup()
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+    expect(drafts.structuralOf(btn)).toBeNull()
+    expect(mode.active).toBe(true)
+  })
+
+  it('a click outside the editing element commits and re-selects normally', () => {
+    const setup = fullSetup()
+    setup.mode.setActive(true)
+    const btn = document.querySelector('button')! as HTMLElement
+    document.body.insertAdjacentHTML('beforeend', `<p id="other" data-dc-source="src/App.tsx:9:2">para</p>`)
+    const other = document.getElementById('other')!
+    btn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    btn.textContent = 'renamed'
+    other.click()
+    expect(btn.hasAttribute('contenteditable')).toBe(false)
+    expect(setup.drafts.structuralOf(btn)).toEqual({ kind: 'text', original: 'go', value: 'renamed' })
+    expect(setup.mode.selected).toBe(other)
+  })
+
+  it('double-click on a MIXED-content element does not enter text edit (isTextLeaf gate, PR #44 review)', () => {
+    const setup = fullSetup()
+    setup.mode.setActive(true)
+    // direct text + an element child: the flat-textContent draft model would destroy the <b>
+    document.body.insertAdjacentHTML('beforeend', `<p id="mixed" data-dc-source="src/App.tsx:3:3">Hello <b>world</b></p>`)
+    const mixed = document.getElementById('mixed')!
+    mixed.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    expect(mixed.hasAttribute('contenteditable')).toBe(false)
+  })
+
+  it('double-click inside a form control never text-edits the tagged ancestor (PR #44 review)', () => {
+    const setup = fullSetup()
+    setup.mode.setActive(true)
+    document.body.insertAdjacentHTML('beforeend', `<label id="lbl" data-dc-source="src/App.tsx:4:4">Name: <input id="field"/></label>`)
+    const lbl = document.getElementById('lbl')!
+    const input = document.getElementById('field')!
+    // double-click-to-select-a-word inside the input — must not hijack the label
+    input.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    expect(lbl.hasAttribute('contenteditable')).toBe(false)
+    expect(input.isConnected).toBe(true)
+  })
+
+  it('caret clicks inside the editing element are shielded from the app (PR #44 review)', () => {
+    const { btn } = textSetup()
+    const appHandler = vi.fn()
+    btn.addEventListener('click', appHandler) // stands in for a react-router Link / modal opener
+    btn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    const caretClick = new MouseEvent('click', { bubbles: true, cancelable: true })
+    btn.dispatchEvent(caretClick)
+    expect(appHandler).not.toHaveBeenCalled() // stopped at document capture, above the app
+    expect(caretClick.defaultPrevented).toBe(true)
+    expect(btn.hasAttribute('contenteditable')).toBe(true) // the click did NOT commit the edit
+  })
+
+  it('Del deletes a selected form control — the focused-control guard carves out the selection (PR #44 review)', () => {
+    const setup = fullSetup()
+    setup.mode.setActive(true)
+    document.body.insertAdjacentHTML('beforeend', `<input id="tagged-input" data-dc-source="src/App.tsx:6:6"/>`)
+    const input = document.getElementById('tagged-input')! as HTMLElement
+    input.click()
+    expect(setup.mode.selected).toBe(input)
+    // click-selecting a control also natively focuses it — keydown then targets the input
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+    expect(setup.drafts.structuralOf(input)).toEqual({ kind: 'delete', priorInlineDisplay: '' })
+  })
+
+  it('committed text is nbsp-normalized; an nbsp-only re-edit is treated as unchanged (PR #44 review)', () => {
+    const { drafts, btn } = textSetup()
+    btn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    btn.textContent = 'get\u00a0started' // browser-rebalanced nbsp mid-edit
+    btn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    // the committed value carries an ordinary space — the wire ask and the verifier's
+    // oracle must match the agent's JSX, never the browser's invisible nbsp
+    expect(drafts.structuralOf(btn)).toEqual({ kind: 'text', original: 'go', value: 'get started' })
+    expect(btn.textContent).toBe('get started')
+
+    // second session: same text, nbsp again — unchanged modulo nbsp, so no draft churn
+    btn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    btn.textContent = 'get\u00a0started'
+    btn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(drafts.structuralOf(btn)).toEqual({ kind: 'text', original: 'go', value: 'get started' })
+    expect(btn.textContent).toBe('get started') // the verbatim pre-edit text put back
   })
 })

@@ -90,12 +90,27 @@ function isValidSentChange(v: unknown): v is SentChange {
   return isRecord(v) && typeof v.property === 'string' && typeof v.afterCss === 'string'
 }
 
+/** Restored ops are METHOD-CALLED, not just displayed — summarizeOp does `op.after.replace`
+ * (changelist.ts) and the verifier's text branch does `op.after.slice` — so a malformed op is
+ * a crash, not a glitch: the first ChangeList.render() after restore would throw, and boot's
+ * defense-in-depth catch can't contain it (its setActive(false) teardown re-renders and
+ * re-throws). Unknown kinds fail CLOSED: a future plugin version writing new op kinds under
+ * the same v:1 key, read back by a stale cached client bundle, must drop per-item — the
+ * module's own convention — not take down the whole restored session (PR #44 review). */
+function isValidStructuralOp(v: unknown): boolean {
+  if (!isRecord(v)) return false
+  if (v.kind === 'delete') return true
+  if (v.kind === 'text') return typeof v.before === 'string' && typeof v.after === 'string'
+  return false
+}
+
 /** `change` (the full ElementChange payload) is only shallow-checked here — it's a big nested
  * shape owned by request.ts, and the fields this module actually reads back out (tag/source/
  * changes array) are what would break a restore. A malformed nested ChangeItem inside
  * `change.changes` is cosmetic (a row summary glitch), not a crash risk, so it's deliberately
  * not walked field-by-field — that's the line between "boundary validation" and reimplementing
- * request.ts's own types here. */
+ * request.ts's own types here. `change.ops` is the exception: its fields are method-called on
+ * restore (see isValidStructuralOp), so it IS walked. */
 function isValidElementChange(v: unknown): v is ElementChange {
   if (!isRecord(v)) return false
   if (typeof v.tag !== 'string' || typeof v.selector !== 'string') return false
@@ -104,6 +119,7 @@ function isValidElementChange(v: unknown): v is ElementChange {
   // selector/text. Rejecting null here used to silently drop the whole sent entry.
   if (v.source !== null && (!isRecord(v.source) || typeof v.source.file !== 'string')) return false
   if (!Array.isArray(v.changes)) return false
+  if (v.ops !== undefined && (!Array.isArray(v.ops) || !v.ops.every(isValidStructuralOp))) return false
   return true
 }
 

@@ -38,6 +38,7 @@ class SentRegistry extends LifecycleSession {
           afterUtility: null,
           tokenExact: false,
         })),
+        ...(e.ops ? { ops: e.ops } : {}),
       } satisfies ElementChange,
     }))
     this.register(id, seeds)
@@ -63,6 +64,34 @@ function styleRule(id: string, prop: string, value: string): void {
   style.textContent = `#${id} { ${prop}: ${value}; }`
   document.head.appendChild(style)
 }
+
+// Injects the Vite client script tag — since the PR #44 review, the tag alone no longer
+// latches HmrSignal's Vite-ness (a matching tag with a dead import probe must degrade to
+// accept-equality, never strand rows); it only supplies the probe's import specifier. In
+// jsdom the dynamic import always rejects, so tests establish Vite-ness the definitive way:
+// an observed vite:afterUpdate event (fireViteUpdate) BEFORE the cursor under test.
+function markVitePage(): void {
+  const script = document.createElement('script')
+  script.src = '/@vite/client'
+  document.head.appendChild(script)
+}
+
+function fireViteUpdate(): void {
+  window.dispatchEvent(new Event('vite:afterUpdate'))
+}
+
+/** vite:afterUpdate carrying its real payload shape ({updates: [{acceptedPath}]}) via
+ * CustomEvent detail — lets tests pin the per-file trust scoping. */
+function fireViteUpdateFor(...paths: string[]): void {
+  window.dispatchEvent(
+    new CustomEvent('vite:afterUpdate', { detail: { type: 'update', updates: paths.map((p) => ({ acceptedPath: p, path: p })) } })
+  )
+}
+
+/** The bounded re-verify window in wall-clock: VERIFY_WINDOW_ATTEMPTS polls at POLL_MS.
+ * Tests that expect a TERMINAL unresolved outcome (mismatch/unverified) must advance this
+ * far — the first 'applied' tick no longer terminalizes (PR #44 review). */
+const VERIFY_WINDOW_MS = 5 * 2000
 
 describe('verifyEntry', () => {
   it('reports verified when computed style matches afterCss (live element)', () => {
@@ -252,6 +281,9 @@ describe('Verifier polling lifecycle', () => {
 
     await vi.advanceTimersByTimeAsync(2000)
     expect(fetchMock).toHaveBeenCalledWith('/__the-forge/status?ids=q1')
+    // the entry mismatches (no style rule backs the draft), so it rides the bounded
+    // re-verify window before terminalizing — then the registry empties.
+    await vi.advanceTimersByTimeAsync(VERIFY_WINDOW_MS)
     expect(sent.size()).toBe(0)
 
     // registry now empty -> interval should have cleared itself; no more fetches
@@ -366,7 +398,7 @@ describe('Verifier polling lifecycle', () => {
 
     const verifier = new Verifier(sent, drafts, onUpdate)
     verifier.start()
-    await vi.advanceTimersByTimeAsync(2000)
+    await vi.advanceTimersByTimeAsync(VERIFY_WINDOW_MS)
 
     expect(commitSpy).not.toHaveBeenCalled()
     const lastSummary = onUpdate.mock.calls.at(-1)![0] as string
@@ -489,7 +521,7 @@ describe('Verifier polling lifecycle', () => {
 
     const verifier = new Verifier(sent, drafts, onUpdate)
     verifier.start()
-    await vi.advanceTimersByTimeAsync(2000)
+    await vi.advanceTimersByTimeAsync(VERIFY_WINDOW_MS)
 
     const lastSummary = onUpdate.mock.calls.at(-1)![0] as string
     expect(lastSummary).toContain('unverified')
@@ -1042,7 +1074,9 @@ describe('stage events', () => {
     const events: StageEvent[] = []
     verifier.subscribe((e) => events.push(e))
     verifier.start()
-    await vi.advanceTimersByTimeAsync(2000)
+    // element b's mismatch keeps the whole entry inside the re-verify window; terminal
+    // stages land once it runs dry (the Map keeps the LAST event per index).
+    await vi.advanceTimersByTimeAsync(VERIFY_WINDOW_MS)
     const byIndex = new Map(events.map((e) => [e.elIndex, e]))
     expect(byIndex.get(0)?.stage).toBe('done')
     expect(byIndex.get(1)?.stage).toBe('mismatch')
@@ -1080,8 +1114,10 @@ describe('stage events', () => {
     const events: StageEvent[] = []
     verifier.subscribe((e) => events.push(e))
     verifier.start()
-    await vi.advanceTimersByTimeAsync(2000)
-    expect(events).toEqual([{ requestId: 'q1', elIndex: 0, dcSource: 'gone.tsx:9:9', stage: 'unverified' }])
+    // 'applying' re-emissions tick through the re-verify window first; the terminal event
+    // is what the window ends on.
+    await vi.advanceTimersByTimeAsync(VERIFY_WINDOW_MS)
+    expect(events.at(-1)).toEqual({ requestId: 'q1', elIndex: 0, dcSource: 'gone.tsx:9:9', stage: 'unverified' })
     verifier.stop()
   })
 
@@ -1100,5 +1136,344 @@ describe('stage events', () => {
     expect(events.map((e) => e.stage)).toEqual(['failed', 'failed'])
     expect(events[0].note).toBe('needs confirmation: shared component')
     verifier.stop()
+  })
+})
+
+describe('structural verification (Figma pivot P1)', () => {
+  it('verifyEntry: delete op + element gone = verified (inverted polarity)', () => {
+    const d = el()
+    d.dataset.dcSource = 'src/App.tsx:9:4'
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [{ el: d, dcSource: 'src/App.tsx:9:4', draftProps: [], changes: [], ops: [{ kind: 'delete' }] }],
+    }
+    d.remove()
+    const result = verifyEntry(entry)
+    expect(result.verified).toBe(1)
+    expect(result.mismatched).toEqual([])
+    expect(result.missing).toBe(0)
+  })
+
+  it('verifyEntry: delete op + element still present = mismatch, never unverified', () => {
+    const d = el()
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [{ el: d, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'delete' }] }],
+    }
+    const result = verifyEntry(entry)
+    expect(result.verified).toBe(0)
+    expect(result.mismatched).toEqual([{ property: 'element', expected: 'deleted', actual: 'still present' }])
+    expect(result.missing).toBe(0)
+  })
+
+  it('verifyEntry: text equality on a REPLACED node is trusted without any HMR signal', () => {
+    const d = el()
+    d.dataset.dcSource = 'src/App.tsx:2:2'
+    d.textContent = 'New'
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [{ el: d, dcSource: 'src/App.tsx:2:2', draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }],
+    }
+    d.remove()
+    const replacement = document.createElement('div')
+    replacement.dataset.dcSource = 'src/App.tsx:2:2'
+    replacement.textContent = 'New'
+    document.body.appendChild(replacement)
+    const result = verifyEntry(entry, document, (sentEl, target) => target !== sentEl)
+    expect(result.verified).toBe(1)
+    expect(result.missing).toBe(0)
+  })
+
+  it('verifyEntry: text inequality reports a mismatch with expected/actual', () => {
+    const d = el()
+    d.textContent = 'Something else'
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [{ el: d, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }],
+    }
+    const result = verifyEntry(entry)
+    expect(result.mismatched).toEqual([{ property: 'text', expected: 'New', actual: 'Something else' }])
+  })
+
+  it('delete flow end-to-end: applied status → done stage, structural draft committed', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    drafts.applyDelete(btn)
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'delete' }] }]))
+    btn.remove() // the agent deleted the JSX; HMR dropped the node
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(events.map((e) => e.stage)).toContain('done')
+    expect(drafts.structuralOf(btn)).toBeNull() // committed
+    verifier.stop()
+  })
+
+  it('text equality on a SURVIVING node without an HMR update since send stays unverified on a Vite page', async () => {
+    markVitePage()
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    btn.textContent = 'Old'
+    drafts.applyText(btn, 'New') // DOM now reads 'New' — but that's OUR draft, not the code's
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    // Latch Vite-ness the definitive way (an observed event) BEFORE the send's cursor —
+    // the tag sniff alone no longer gates (see markVitePage). start() with an empty
+    // registry attaches the listener without recording any cursor.
+    verifier.start()
+    fireViteUpdate()
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }]))
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(VERIFY_WINDOW_MS)
+
+    expect(events.map((e) => e.stage)).toContain('unverified')
+    expect(events.map((e) => e.stage)).not.toContain('done')
+    expect(drafts.structuralOf(btn)).not.toBeNull() // NOT committed — equality was unproven
+    verifier.stop()
+  })
+
+  it('the same surviving-node equality verifies once a vite:afterUpdate lands after send', async () => {
+    markVitePage()
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    btn.textContent = 'Old'
+    drafts.applyText(btn, 'New')
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }]))
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    fireViteUpdate() // the agent's file edit reached the page
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(events.map((e) => e.stage)).toContain('done')
+    expect(drafts.structuralOf(btn)).toBeNull() // committed; DOM keeps showing 'New'
+    expect(btn.textContent).toBe('New')
+    verifier.stop()
+  })
+
+  it('a text draft re-edited while in flight survives the targeted structural commit', async () => {
+    markVitePage()
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    btn.textContent = 'Old'
+    drafts.applyText(btn, 'New')
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }]))
+    drafts.applyText(btn, 'Newer still') // user kept typing after the send
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    verifier.start()
+    fireViteUpdate()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    // DOM reads 'Newer still' ≠ sent 'New' → mismatch — and the LIVE draft must survive
+    expect(drafts.structuralOf(btn)).toEqual({ kind: 'text', original: 'Old', value: 'Newer still' })
+    verifier.stop()
+  })
+})
+
+describe('verification robustness (PR #44 review fixes)', () => {
+  const appliedFetch = (): void => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ items: [{ id: 'q1', status: 'applied', note: null }] }),
+      })
+    )
+  }
+
+  it('re-verify window: a delete whose HMR lands AFTER the first applied tick still flips to done', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    drafts.applyDelete(btn)
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'delete' }] }]))
+    appliedFetch()
+
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    // First applied tick: the tombstone is still connected — the old one-shot verify
+    // terminalized a false 'mismatch — still present' here, uncorrectable forever.
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(events.map((e) => e.stage)).not.toContain('mismatch')
+    btn.remove() // the HMR update reaches the page 2s later
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(events.map((e) => e.stage)).toContain('done')
+    expect(drafts.structuralOf(btn)).toBeNull() // committed
+    verifier.stop()
+  })
+
+  it('an unrelated file\'s HMR update does not vouch for a failed text edit (no false Implemented)', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    btn.dataset.dcSource = 'src/Footer.tsx:3:3'
+    btn.textContent = 'Old'
+    drafts.applyText(btn, 'New') // the surviving node echoes OUR draft
+
+    appliedFetch()
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    fireViteUpdate() // latch Vite-ness before the send's cursor
+    sent.add('q1', makeEntry([{ el: btn, dcSource: 'src/Footer.tsx:3:3', draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }]))
+    verifier.start()
+    fireViteUpdateFor('/src/Hero.tsx') // the agent applied a DIFFERENT element's edit
+    await vi.advanceTimersByTimeAsync(VERIFY_WINDOW_MS)
+
+    expect(events.map((e) => e.stage)).not.toContain('done')
+    expect(events.map((e) => e.stage)).toContain('unverified')
+    expect(drafts.structuralOf(btn)).not.toBeNull() // draft survives — nothing was proven
+    verifier.stop()
+  })
+
+  it('an update to the element\'s OWN file vouches for it', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    btn.dataset.dcSource = 'src/Footer.tsx:3:3'
+    btn.textContent = 'Old'
+    drafts.applyText(btn, 'New')
+
+    appliedFetch()
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    fireViteUpdate()
+    sent.add('q1', makeEntry([{ el: btn, dcSource: 'src/Footer.tsx:3:3', draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }]))
+    verifier.start()
+    fireViteUpdateFor('/src/Footer.tsx')
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(events.map((e) => e.stage)).toContain('done')
+    expect(drafts.structuralOf(btn)).toBeNull()
+    verifier.stop()
+  })
+
+  it('markRestored: a fresh-page restore trusts surviving-node equality (full reloads trivially count)', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    btn.textContent = 'New' // the fresh page renders the code's truth — no draft echo possible
+
+    appliedFetch()
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    fireViteUpdate() // this IS a Vite page — trust would otherwise need a per-file update
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }]))
+    verifier.markRestored(['q1'])
+    verifier.start()
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(events.map((e) => e.stage)).toContain('done')
+    verifier.stop()
+  })
+
+  it('a stop() with entries pending (design-mode off) degrades those ids to accept-equality', async () => {
+    const sent = new SentRegistry()
+    const drafts = new DraftStore()
+    const btn = el()
+    btn.textContent = 'New'
+
+    appliedFetch()
+    const verifier = new Verifier(sent, drafts, vi.fn())
+    const events: StageEvent[] = []
+    verifier.subscribe((e) => events.push(e))
+    verifier.start()
+    fireViteUpdate() // Vite page
+    sent.add('q1', makeEntry([{ el: btn, dcSource: null, draftProps: [], changes: [], ops: [{ kind: 'text', before: 'Old', after: 'New' }] }]))
+    verifier.start()
+    verifier.stop() // design mode off — the signal goes deaf while q1 is still pending
+    verifier.start() // design mode back on
+    await vi.advanceTimersByTimeAsync(2000)
+
+    // The applied edit landed while the listener was detached — never-trust would strand
+    // this as terminal 'unverified'; the signal-gap degrade accepts equality instead.
+    expect(events.map((e) => e.stage)).toContain('done')
+    verifier.stop()
+  })
+
+  it('verifyEntry fails CLOSED on op kinds it has no verify branch for', () => {
+    const d = el()
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [
+        {
+          el: d,
+          dcSource: null,
+          draftProps: [],
+          changes: [],
+          ops: [{ kind: 'move', toIndex: 2 } as never],
+        },
+      ],
+    }
+    const result = verifyEntry(entry)
+    // all-zeros would read as fully verified in handleApplied's else-arm — the unknown op
+    // must count as unproven instead.
+    expect(result.verified).toBe(0)
+    expect(result.missing).toBe(1)
+  })
+
+  it('verifyEntry treats U+00A0 and ordinary spaces as the same text', () => {
+    const d = el()
+    d.textContent = 'Get started' // the agent wrote an ordinary space
+    const entry: SentEntry = {
+      id: 'q1',
+      elements: [
+        {
+          el: d,
+          dcSource: null,
+          draftProps: [],
+          changes: [],
+          // a pre-normalization persisted send may still carry the browser's nbsp
+          ops: [{ kind: 'text', before: 'Old', after: 'Get started' }],
+        },
+      ],
+    }
+    const result = verifyEntry(entry)
+    expect(result.mismatched).toEqual([])
+    expect(result.verified).toBe(1)
   })
 })

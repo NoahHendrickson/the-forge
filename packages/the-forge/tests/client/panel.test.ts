@@ -31,8 +31,6 @@ const P = {
   PR: 'padding-right',
   PB: 'padding-bottom',
   PL: 'padding-left',
-  MX: 'margin-left margin-right',
-  MY: 'margin-top margin-bottom',
   GAP: 'gap',
   R: 'border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius',
   O: 'opacity',
@@ -123,7 +121,7 @@ describe('Panel', () => {
     expect((nf.querySelector('.nf-label') as HTMLElement).title).toBe('padding-left, padding-right → px-*')
   })
 
-  it('padding and margin speak designer labels (H/V + T/R/B/L)', () => {
+  it('padding speaks designer labels (H/V + T/R/B/L)', () => {
     const { panel } = setup()
     const labelFor = (props: string): string => {
       const nf = [...panel.root.querySelectorAll('.nf')].find(
@@ -134,8 +132,6 @@ describe('Panel', () => {
     expect(labelFor(P.PX)).toBe('H')
     expect(labelFor(P.PY)).toBe('V')
     expect(labelFor(P.PT)).toBe('T')
-    expect(labelFor(P.MX)).toBe('H')
-    expect(labelFor(P.MY)).toBe('V')
   })
 
   it('renders the header as two separate nodes: tag and source', () => {
@@ -294,16 +290,41 @@ describe('Panel', () => {
     // it needs the `multiSetup` helper defined in that block (don't duplicate the helper).
   })
 
-  it('section order is Layout, Margin, Typography, Fill, Stroke, Appearance regardless of visibility', () => {
+  it('section order is Layout, Typography, Fill, Stroke, Appearance regardless of visibility', () => {
     const { panel } = setup()
     // Sections with an expand button now parent it inside the title row, so title row
     // textContent includes the '⋯' glyph for expandable sections (and Layout's title row
     // also carries the '−' remove-auto-layout button) — compare the leading label text
     // only (title row's first text-bearing segment) rather than exact equality.
+    // Margin left the lineup in the 2026-07-22 Figma pivot (margins are invisible to the
+    // designer — panel-patterns amendment).
     const titles = [...panel.root.querySelectorAll('.panel-section')].map(
       (n) => titleText(n)
     )
-    expect(titles).toEqual(['Layout', 'Margin', 'Typography', 'Fill', 'Stroke', 'Appearance'])
+    expect(titles).toEqual(['Layout', 'Typography', 'Fill', 'Stroke', 'Appearance'])
+  })
+
+  it('renders NO margin controls anywhere, even for a margined element (Figma pivot P1)', () => {
+    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="margin-top: 12px;"></div>`)
+    const propsSeen = [...panel.root.querySelectorAll('.nf')].map((n) => (n as HTMLElement).dataset.props ?? '')
+    expect(propsSeen.some((p) => p.includes('margin'))).toBe(false)
+  })
+
+  it('shows a read-only X/Y position pair above Size (Figma pivot P1)', () => {
+    const { panel } = setup()
+    const block = panel.root.querySelector('[data-position-block]') as HTMLElement
+    expect(block).not.toBeNull()
+    const x = block.querySelector('[data-props="x"] input') as HTMLInputElement
+    const y = block.querySelector('[data-props="y"] input') as HTMLInputElement
+    expect(x.disabled).toBe(true)
+    expect(y.disabled).toBe(true)
+    // jsdom has no layout — offsets read 0; presence/type is the unit contract, real values are E2E's.
+    expect(x.value).toBe('0')
+    expect(y.value).toBe('0')
+    // Position renders above the Size block inside the Layout section
+    const layoutRows = panel.root.querySelector('.layout-section')!
+    const children = [...layoutRows.children]
+    expect(children.indexOf(block)).toBeLessThan(children.indexOf(layoutRows.querySelector('[data-size-block]')!))
   })
 
   it('expand button is parented inside the section title row, not the rows wrap', () => {
@@ -351,19 +372,22 @@ describe('Panel', () => {
     const { panel } = flexSetup()
     const body = panel.root.querySelector('.layout-section') as HTMLElement
     const kinds = [...body.children].map((c) =>
-      c.hasAttribute('data-size-block')
-        ? 'size'
-        : c.hasAttribute('data-minmax-row')
-          ? ((c as HTMLElement).dataset.propsRow?.startsWith('min') ? 'minmax-min' : 'minmax-max')
-          : c.classList.contains('flex-child-controls')
-            ? 'align'
-            : c.classList.contains('layout-controls') || c.hasAttribute('data-add-layout')
-              ? 'cluster'
-              : c.hasAttribute('data-padding-row')
-                ? 'padding'
-                : c.className
+      c.hasAttribute('data-position-block')
+        ? 'position'
+        : c.hasAttribute('data-size-block')
+          ? 'size'
+          : c.hasAttribute('data-minmax-row')
+            ? ((c as HTMLElement).dataset.propsRow?.startsWith('min') ? 'minmax-min' : 'minmax-max')
+            : c.classList.contains('flex-child-controls')
+              ? 'align'
+              : c.classList.contains('layout-controls') || c.hasAttribute('data-add-layout')
+                ? 'cluster'
+                : c.hasAttribute('data-padding-row')
+                  ? 'padding'
+                  : c.className
     )
     expect(kinds).toEqual([
+      'position', // Figma pivot P1: read-only X/Y header pair above Size
       'size',
       'minmax-min',
       'minmax-max',
@@ -1542,15 +1566,15 @@ describe('Panel Typography section', () => {
     expect(typographySection(panel).hidden).toBe(false)
   })
 
-  it('sits between Margin and Fill in stable DOM order', () => {
+  it('sits between Layout and Fill in stable DOM order (Margin gone since the Figma pivot)', () => {
     const { panel } = textSetup()
     const titles = [...panel.root.querySelectorAll('.panel-section')].map(
       (n) => titleText(n)
     )
-    const marginIdx = titles.indexOf('Margin')
+    const layoutIdx = titles.indexOf('Layout')
     const typographyIdx = titles.indexOf('Typography')
     const fillIdx = titles.indexOf('Fill')
-    expect(typographyIdx).toBe(marginIdx + 1)
+    expect(typographyIdx).toBe(layoutIdx + 1)
     expect(fillIdx).toBe(typographyIdx + 1)
   })
 
@@ -3070,55 +3094,6 @@ describe('Panel multi-select (B6)', () => {
     panel.show(el, buildInspectorData(el))
     const layoutTitle = [...panel.root.querySelectorAll('.panel-section')].find((n) => n.textContent?.startsWith('Layout'))!
     expect((layoutTitle as HTMLElement).hidden).toBe(false)
-  })
-})
-
-describe('Margin section disclosure', () => {
-  function marginSection(panel: Panel): HTMLElement {
-    // Margin's title row parents the expand button, so textContent includes the '⋯'
-    // glyph — strip it before comparing the leading label text.
-    return [...panel.root.querySelectorAll('.panel-section')].find(
-      (n) => titleText(n) === 'Margin'
-    ) as HTMLElement
-  }
-
-  it('is hidden for a margin-less element', () => {
-    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="padding: 8px; width: 200px;"></div>`)
-    const title = marginSection(panel)
-    const body = title.nextElementSibling as HTMLElement
-    expect(title.hidden).toBe(true)
-    expect(body.hidden).toBe(true)
-  })
-
-  it('is shown when the element has margins', () => {
-    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="margin-top: 12px;"></div>`)
-    const title = marginSection(panel)
-    const body = title.nextElementSibling as HTMLElement
-    expect(title.hidden).toBe(false)
-    expect(body.hidden).toBe(false)
-  })
-
-  it('stays shown while a margin draft exists after editing to 0', () => {
-    const { panel } = setup(`<div data-dc-source="src/Card.tsx:4:7" id="t" style="margin-top: 12px; margin-bottom: 12px;"></div>`)
-    const title = marginSection(panel)
-    expect(title.hidden).toBe(false)
-    commit(fieldInput(panel, P.MY), '0')
-    expect(title.hidden).toBe(false)
-  })
-
-  it('multi-select: shown when ANY selected element has margins', () => {
-    document.body.innerHTML = `
-      <div data-dc-source="src/A.tsx:1:1" id="a" style="margin-top: 12px;"></div>
-      <div data-dc-source="src/B.tsx:2:2" id="b"></div>
-    `
-    const a = document.getElementById('a')! as HTMLElement
-    const b = document.getElementById('b')! as HTMLElement
-    const drafts = new DraftStore()
-    const panel = new Panel(drafts, vi.fn())
-    document.body.appendChild(panel.root)
-    panel.show([a, b], buildInspectorData(a))
-    const title = marginSection(panel)
-    expect(title.hidden).toBe(false)
   })
 })
 

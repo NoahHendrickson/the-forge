@@ -160,7 +160,9 @@ interface SavedStyles {
   htmlCursor: string
 }
 
-function isEditable(t: EventTarget | null): boolean {
+/** Exported since the Figma pivot (P1): index.ts's Del-to-delete guard needs the exact same
+ * "typing surface" rule as canvas mode's Space/zoom shortcuts — one definition, not two. */
+export function isEditable(t: EventTarget | null): boolean {
   return (
     t instanceof HTMLElement &&
     (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')

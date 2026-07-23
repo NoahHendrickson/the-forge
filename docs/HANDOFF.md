@@ -1,10 +1,23 @@
-# The Forge — Handoff (updated 2026-07-10)
+# The Forge — Handoff (updated 2026-07-22)
 
 **Read [/CLAUDE.md](../CLAUDE.md) first** — it owns the what/why, commands, architecture map, MCP contract, hard product constraints, conventions, and gotchas. This file holds process conventions and a coarse state pointer: how work gets executed and reviewed with this user, and what's next. Fine-grained session state lives in auto-memory (see Working agreements), not here — this file only needs updating at milestone boundaries.
 
 State: **v1 + watch mode + Next.js adapter + panel redesign + embedded sessions all COMPLETE and on `main`.** Shipped since the v1 line (M1–M5): watch mode (`/forge-watch` long-poll), the Next 15/16 adapter (both routers, both dev bundlers), the designer panel redesign + layout/fill/stroke/sizing/input-polish milestones, prompt mode → embedded sessions (milestones A+B: the dev server spawns `claude -p` as the dispatch ladder's top rung, with in-overlay approvals and a streamed session feed) → composer consolidation (the chat composer's ↑ is the only send surface; the old "Send to agent" button is retired), and the npm publish: the package was renamed `the-forge` → **`forge-mode`** (npm typosquat block, 2026-07-10) and v0.2.0 is live on npm (2026-07-22; v0.1.0 was the initial 2026-07-10 publish). Gate: `npm test` at root (typecheck + full suite), `./scripts/check-prod-clean.sh` (prod purity + package-size budget). Owner: Noey (product designer; the product's target user).
 
 The full loop is user-verified live: panel edit → ↑ in the composer → embedded session (or linked watcher / dispatch ladder) pulls via MCP, applies to source → browser verifies computed styles → Implemented ✓.
+
+**In flight (2026-07-22): the Figma pivot** — design mode becomes a Figma-shaped tool (frames,
+insert/delete/move/text; margins invisible; a translation layer converts design ops to code
+intent at send time). Spec: docs/specs/2026-07-22-figma-pivot-design.md; ratified decisions in
+docs/research/2026-07-22-figma-pivot-exploration.md (amendment). **P1 is COMPLETE on branch
+`claude/design-mode-figma-pivot-5d5133`** (unmerged): the DesignOp union at the three choke
+points (drafts/wire/verifier), inline text editing (double-click → contenteditable), Del-to-
+delete (display:none preview, inverted-polarity verify), Margin section removed, read-only X/Y
+header. E2E-proved live against a real embedded session (text + delete + css regression all
+Implemented ✓). E2E-caught fix worth knowing: Vite's 'vite:afterUpdate' is NOT a DOM event —
+HmrSignal (client/verifier.ts) imports /@vite/client and mints its own hot context to hear it.
+Known P1 limitation: structural drafts don't persist across reloads (css drafts do). Next:
+P2 layers tree (own LEFT panel) → P3 move/resize + Absolute toggle → P4 insert → P5 reparent.
 
 ## Process conventions (these built the whole repo — keep them)
 

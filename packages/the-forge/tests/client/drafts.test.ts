@@ -227,6 +227,255 @@ describe('DraftStore', () => {
     expect(d.style.getPropertyValue('margin-top')).toBe('')
   })
 
+  describe('structural drafts (Figma pivot P1)', () => {
+    it('applyText records the original once across edits and writes the value to the DOM', () => {
+      const store = new DraftStore()
+      const d = el()
+      d.textContent = 'Sign up'
+      store.applyText(d, 'Get started')
+      store.applyText(d, 'Get started now')
+      expect(d.textContent).toBe('Get started now')
+      expect(store.structuralOf(d)).toEqual({ kind: 'text', original: 'Sign up', value: 'Get started now' })
+      store.discard(d)
+      expect(d.textContent).toBe('Sign up')
+      expect(store.structuralOf(d)).toBeNull()
+    })
+
+    it('applyText with the unchanged original mints no draft', () => {
+      const store = new DraftStore()
+      const d = el()
+      d.textContent = 'Same'
+      store.applyText(d, 'Same')
+      expect(store.structuralOf(d)).toBeNull()
+      expect(store.hasDrafts(d)).toBe(false)
+    })
+
+    it('applyDelete previews as inline display:none without creating a css draft', () => {
+      const store = new DraftStore()
+      const d = el()
+      store.applyDelete(d)
+      expect(d.style.getPropertyValue('display')).toBe('none')
+      expect(store.structuralOf(d)).toEqual({ kind: 'delete', priorInlineDisplay: '' })
+      expect(store.current(d, 'display')).toBeNull() // NOT a css draft — must never render as a property delta
+      expect(store.changeCount()).toBe(1)
+    })
+
+    it('applyDelete discards existing css drafts (restoring originals) and replaces a text draft', () => {
+      const store = new DraftStore()
+      const d = el()
+      d.textContent = 'Hello'
+      d.style.setProperty('padding-top', '4px')
+      store.apply(d, 'padding-top', '12px')
+      store.applyText(d, 'Goodbye')
+      store.applyDelete(d)
+      expect(d.style.getPropertyValue('padding-top')).toBe('4px') // css original restored
+      expect(d.textContent).toBe('Hello') // text original restored under the tombstone
+      expect(store.structuralOf(d)).toEqual({ kind: 'delete', priorInlineDisplay: '' })
+      expect(store.changeCount()).toBe(1)
+    })
+
+    it('discard after delete restores the prior inline display exactly', () => {
+      const store = new DraftStore()
+      const d = el()
+      d.style.setProperty('display', 'inline-flex')
+      store.applyDelete(d)
+      store.discard(d)
+      expect(d.style.getPropertyValue('display')).toBe('inline-flex')
+      const bare = el()
+      store.applyDelete(bare)
+      store.discard(bare)
+      expect(bare.style.getPropertyValue('display')).toBe('') // empty prior restores to no inline value
+    })
+
+    it('applyText on a delete-drafted element is a no-op', () => {
+      const store = new DraftStore()
+      const d = el()
+      d.textContent = 'Hi'
+      store.applyDelete(d)
+      store.applyText(d, 'changed')
+      expect(store.structuralOf(d)!.kind).toBe('delete')
+      expect(d.textContent).toBe('Hi')
+    })
+
+    it('changeCount and elementCount include structural drafts', () => {
+      const store = new DraftStore()
+      const a = el()
+      const b = el()
+      a.textContent = 'x'
+      store.apply(a, 'width', '10px')
+      store.applyText(a, 'y')
+      store.applyDelete(b)
+      expect(store.changeCount()).toBe(3) // width + text + delete
+      expect(store.elementCount()).toBe(2)
+      expect(store.hasDrafts(a)).toBe(true)
+      expect(store.hasDrafts(b)).toBe(true)
+    })
+
+    it('targeted css discard and commit never touch structural drafts', () => {
+      const store = new DraftStore()
+      const d = el()
+      d.textContent = 'Keep me'
+      store.apply(d, 'gap', '24px')
+      store.applyText(d, 'Edited')
+      store.discard(d, ['gap'])
+      expect(store.structuralOf(d)).toEqual({ kind: 'text', original: 'Keep me', value: 'Edited' })
+      expect(store.hasDrafts(d)).toBe(true)
+      store.apply(d, 'width', '10px')
+      store.commit(d, ['width'])
+      expect(store.structuralOf(d)).not.toBeNull()
+      expect(store.hasDrafts(d)).toBe(true)
+    })
+
+    it('compare flips text and delete previews to the original side and back', () => {
+      const store = new DraftStore()
+      const t = el()
+      t.textContent = 'Before'
+      store.applyText(t, 'After')
+      const gone = el()
+      store.applyDelete(gone)
+      store.compare(t, true)
+      expect(t.textContent).toBe('Before')
+      store.compare(t, false)
+      expect(t.textContent).toBe('After')
+      store.compare(gone, true)
+      expect(gone.style.getPropertyValue('display')).toBe('')
+      store.compare(gone, false)
+      expect(gone.style.getPropertyValue('display')).toBe('none')
+    })
+
+    it('compareAll covers structural-only elements and isComparingAll counts them', () => {
+      const store = new DraftStore()
+      const a = el()
+      const b = el()
+      store.apply(a, 'width', '10px')
+      store.applyDelete(b)
+      store.compareAll(true)
+      expect(b.style.getPropertyValue('display')).toBe('')
+      expect(store.isComparingAll()).toBe(true)
+      store.compareAll(false)
+      expect(b.style.getPropertyValue('display')).toBe('none')
+    })
+
+    it('applyText while comparing auto-exits compare', () => {
+      const store = new DraftStore()
+      const d = el()
+      d.textContent = 'Orig'
+      store.applyText(d, 'Draft')
+      store.compare(d, true)
+      store.applyText(d, 'Draft 2')
+      expect(store.isComparing(d)).toBe(false)
+      expect(d.textContent).toBe('Draft 2')
+    })
+
+    it('commit forgets a text draft leaving the DOM as-is, and leaves a deleted element hidden', () => {
+      const store = new DraftStore()
+      const t = el()
+      t.textContent = 'Old'
+      store.applyText(t, 'New')
+      store.commit(t)
+      expect(t.textContent).toBe('New') // code owns it now
+      expect(store.hasDrafts(t)).toBe(false)
+      const gone = el()
+      store.applyDelete(gone)
+      store.commit(gone)
+      expect(gone.style.getPropertyValue('display')).toBe('none') // stale node stays invisible
+      expect(store.hasDrafts(gone)).toBe(false)
+    })
+
+    it('discardAll restores structural drafts too', () => {
+      const store = new DraftStore()
+      const t = el()
+      t.textContent = 'Orig'
+      store.applyText(t, 'Draft')
+      const gone = el()
+      gone.style.setProperty('display', 'flex')
+      store.applyDelete(gone)
+      store.discardAll()
+      expect(t.textContent).toBe('Orig')
+      expect(gone.style.getPropertyValue('display')).toBe('flex')
+      expect(store.changeCount()).toBe(0)
+      expect(store.elementCount()).toBe(0)
+    })
+
+    it('structuralEntries exposes the live map for the request builder', () => {
+      const store = new DraftStore()
+      const d = el()
+      store.applyDelete(d)
+      expect(store.structuralEntries().get(d)).toEqual({ kind: 'delete', priorInlineDisplay: '' })
+    })
+
+    it('a text draft edited back to its recorded original is dropped, not kept as a no-op (PR #44 review)', () => {
+      const store = new DraftStore()
+      const d = el()
+      d.textContent = 'Old'
+      store.applyText(d, 'New', 'Old')
+      expect(store.changeCount()).toBe(1)
+      store.applyText(d, 'Old', 'New') // second edit session types the original back
+      expect(store.structuralOf(d)).toBeNull()
+      expect(store.changeCount()).toBe(0)
+      expect(d.textContent).toBe('Old')
+    })
+
+    it('css apply() is a no-op on a delete-drafted element (tombstone guard, PR #44 review)', () => {
+      const store = new DraftStore()
+      const d = el()
+      store.applyDelete(d)
+      store.apply(d, 'width', '100px') // reachable via Compare un-hiding the tombstone
+      expect(store.entries().get(d)).toBeUndefined()
+      expect(d.style.getPropertyValue('width')).toBe('')
+    })
+
+    it('applyDelete sweeps descendant drafts — no restyle ops ride a delete request (PR #44 review)', () => {
+      const store = new DraftStore()
+      const parent = el()
+      const child = document.createElement('span')
+      const childText = document.createElement('em')
+      childText.textContent = 'Old'
+      parent.append(child, childText)
+      store.apply(child, 'padding-top', '24px')
+      store.applyText(childText, 'New', 'Old')
+
+      const emits = vi.fn()
+      store.onChange = emits
+      store.applyDelete(parent)
+
+      expect(store.entries().get(child)).toBeUndefined()
+      expect(child.style.getPropertyValue('padding-top')).toBe('') // original restored
+      expect(store.structuralOf(childText)).toBeNull()
+      expect(childText.textContent).toBe('Old') // text rolled back before the tombstone
+      expect(store.structuralOf(parent)).toEqual({ kind: 'delete', priorInlineDisplay: '' })
+      expect(store.changeCount()).toBe(1) // only the delete itself
+      expect(emits).toHaveBeenCalledTimes(1) // the whole operation cascades onChange ONCE
+    })
+
+    it('healStructural re-binds a remounted node and prunes an unlocatable one (PR #44 review)', () => {
+      const store = new DraftStore()
+      const a = el()
+      a.dataset.dcSource = 'src/App.tsx:5:5'
+      a.textContent = 'Old'
+      store.applyText(a, 'New', 'Old')
+      const b = el()
+      store.applyDelete(b) // untagged — unlocatable once disconnected
+
+      // an unrelated HMR remount replaces both nodes
+      a.remove()
+      b.remove()
+      const fresh = el()
+      fresh.dataset.dcSource = 'src/App.tsx:5:5'
+      fresh.textContent = 'Old' // the fresh node renders the source truth
+
+      expect(store.changeCount()).toBe(2) // phantom counts before the heal
+      store.healStructural()
+      // the text draft re-bound onto the fresh node, preview re-applied
+      expect(store.structuralOf(a)).toBeNull()
+      expect(store.structuralOf(fresh)).toEqual({ kind: 'text', original: 'Old', value: 'New' })
+      expect(fresh.textContent).toBe('New')
+      // the unlocatable delete draft was pruned
+      expect(store.structuralOf(b)).toBeNull()
+      expect(store.changeCount()).toBe(1)
+    })
+  })
+
   it('changeCount() sums drafted properties across elements', () => {
     const store = new DraftStore()
     const a = el()

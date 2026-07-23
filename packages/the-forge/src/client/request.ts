@@ -1,4 +1,5 @@
 import { DraftStore } from './drafts'
+import { draftToOps } from './ops'
 import { parseSourceAttr, type SourceLocation, type TaggedElement } from './source'
 import { readTheme, readTokens, suggestUtility, findExistingUtility, type Theme } from './tokens'
 
@@ -13,6 +14,13 @@ export interface ChangeItem {
   intent?: string
 }
 
+/** A Figma-pivot structural design op (spec 2026-07-22 §2-3), anchored at its ElementChange's
+ * element. Parallel track to `changes` — style deltas keep their exact existing path.
+ * move/absolute/insert arrive in P3/P4; declare only what P1 ships. */
+export type StructuralOp =
+  | { kind: 'text'; before: string; after: string }
+  | { kind: 'delete' }
+
 export interface ElementChange {
   tag: string
   source: SourceLocation | null
@@ -20,6 +28,8 @@ export interface ElementChange {
   text: string
   selector: string
   changes: ChangeItem[]
+  /** Omitted (never []) when the element has no structural ops — keeps existing JSON stable. */
+  ops?: StructuralOp[]
 }
 
 export interface ChangeRequest {
@@ -143,6 +153,15 @@ function sanitizeInline(value: string): string {
   return value.replace(/[`]/g, '').replace(/\s+/g, ' ').trim()
 }
 
+/** Locate-context text cap. One helper for BOTH context-text sites (elementContext and
+ * attachOps' original-repoint) so page-controlled text always gets the identical
+ * sanitize+cap treatment — two hard-coded 80s kept "the same treatment" in sync by luck
+ * (PR #44 review; the policy itself is the 2026-07-10 injection-hardening review's). */
+const CONTEXT_TEXT_CAP = 80
+function contextText(raw: string): string {
+  return sanitizeInline(raw).slice(0, CONTEXT_TEXT_CAP)
+}
+
 /** Element identity/context block shared by the precise and prompt builders — tag, source,
  * classes, trimmed text, selector. `changes` is the caller's: measured deltas for the precise
  * flow, always [] for prompts. */
@@ -152,7 +171,7 @@ function elementContext(el: TaggedElement, changes: ChangeItem[]): ElementChange
     tag: el.tagName.toLowerCase(),
     source: el.dataset.dcSource ? parseSourceAttr(el.dataset.dcSource) : null,
     className: sanitizeInline(className),
-    text: sanitizeInline(el.textContent ?? '').slice(0, 80),
+    text: contextText(el.textContent ?? ''),
     selector: sanitizeInline(cssPath(el)),
     changes,
   }
@@ -188,6 +207,20 @@ export function cssPath(start: TaggedElement): string {
   return parts.join(' > ')
 }
 
+/** Attach a structural-drafted element's ops (via ops.ts's shared draft→op projection) AND
+ * repoint a text-drafted element's locate-context `text` at the ORIGINAL — the DOM shows the
+ * drafted text, but the agent greps the source file, which still holds the before text;
+ * drafted context would mislead the selector/text fallback. A no-op text draft (original ===
+ * value) attaches nothing — belt-and-braces beside applyText's own collapse: a 'Text: "X" →
+ * "X"' ask must never reach the wire (PR #44 review). */
+function attachOps(elementChange: ElementChange, drafts: DraftStore, el: TaggedElement): void {
+  const s = drafts.structuralOf(el)
+  if (!s) return
+  if (s.kind === 'text' && s.original === s.value) return
+  elementChange.ops = draftToOps(s)
+  if (s.kind === 'text') elementChange.text = contextText(s.original)
+}
+
 export function buildChangeRequestWithElements(
   drafts: DraftStore,
   theme: Theme = readTheme()
@@ -196,72 +229,83 @@ export function buildChangeRequestWithElements(
   const elements = new Map<TaggedElement, ElementChange>()
   const tokens = readTokens()
 
-  for (const [el, props] of drafts.entries()) {
+  // ONE walk of the drafted-element union (css + structural) — draftedElements() is the
+  // DraftStore's own canonical iteration; the old shape (entries() loop + a second
+  // structural-only sweep) re-implemented the union here and again in changelist.ts, and the
+  // two copies had already diverged on their isConnected filters (PR #44 review).
+  for (const el of drafts.draftedElements()) {
     if (!el.isConnected) continue
-
-    const wasComparing = drafts.isComparing(el)
-    const inlineTransition = el.style.getPropertyValue('transition')
-    el.style.setProperty('transition', 'none')
-
-    let raw: Map<string, { beforeCss: string; afterCss: string }>
-    try {
-      // measure "after" (drafted) computed values
-      if (wasComparing) drafts.compare(el, false)
-      const afterCss = measureComputed(el, props.keys())
-
-      // measure "before" (original) computed values
-      drafts.compare(el, true)
-      const beforeCss = measureComputed(el, props.keys())
-
-      raw = new Map<string, { beforeCss: string; afterCss: string }>()
-      for (const [prop, draft] of props) {
-        // A drafted layout keyword (e.g. 'auto' for Hug width/height) never round-trips through
-        // the computed style — getComputedStyle resolves it to a px measurement, which would
-        // silently invert the user's intent (Hug -> a hardcoded px). Pass such keywords through
-        // verbatim as the "after" value; "before" stays a real measurement. Restricted to an
-        // explicit allowlist (KEYWORD_PASSTHROUGH) rather than a keyword-shape regex, so that
-        // color keywords like 'red' are NOT passed through — those must be measured, since
-        // getComputedStyle legitimately resolves them to 'rgb(...)'.
-        const isKeyword = KEYWORD_PASSTHROUGH.has(draft.value.toLowerCase())
-        raw.set(prop, {
-          beforeCss: beforeCss.get(prop)!,
-          afterCss: isKeyword ? draft.value : afterCss.get(prop)!,
-        })
-      }
-      drafts.compare(el, wasComparing)
-    } finally {
-      if (inlineTransition) el.style.setProperty('transition', inlineTransition)
-      else el.style.removeProperty('transition')
-    }
-
-    const className = typeof el.className === 'string' ? el.className : [...el.classList].join(' ')
+    const props = drafts.entries().get(el)
     const changes: ChangeItem[] = []
-    for (const [property, v] of collapse(raw)) {
-      // A draft scrubbed back to its original value survives in the DraftStore (apply() keeps
-      // it), so it reaches here as a genuine no-op. Dropping it HERE — not just its markdown
-      // bullet — keeps empty sections out of the agent's request and lets the caller skip the
-      // send entirely when nothing actually changed.
-      if (v.beforeCss === v.afterCss) continue
-      const suggestion = suggestUtility(property, v.afterCss, theme, tokens)
-      const item: ChangeItem = {
-        property,
-        beforeCss: v.beforeCss,
-        afterCss: v.afterCss,
-        beforeUtility: theme.spacingBasePx === null ? null : findExistingUtility(className, property),
-        afterUtility: suggestion?.utility ?? null,
-        tokenExact: suggestion?.tokenExact ?? false,
+    if (props) {
+      const wasComparing = drafts.isComparing(el)
+      const inlineTransition = el.style.getPropertyValue('transition')
+      el.style.setProperty('transition', 'none')
+
+      let raw: Map<string, { beforeCss: string; afterCss: string }>
+      try {
+        // measure "after" (drafted) computed values
+        if (wasComparing) drafts.compare(el, false)
+        const afterCss = measureComputed(el, props.keys())
+
+        // measure "before" (original) computed values
+        drafts.compare(el, true)
+        const beforeCss = measureComputed(el, props.keys())
+
+        raw = new Map<string, { beforeCss: string; afterCss: string }>()
+        for (const [prop, draft] of props) {
+          // A drafted layout keyword (e.g. 'auto' for Hug width/height) never round-trips through
+          // the computed style — getComputedStyle resolves it to a px measurement, which would
+          // silently invert the user's intent (Hug -> a hardcoded px). Pass such keywords through
+          // verbatim as the "after" value; "before" stays a real measurement. Restricted to an
+          // explicit allowlist (KEYWORD_PASSTHROUGH) rather than a keyword-shape regex, so that
+          // color keywords like 'red' are NOT passed through — those must be measured, since
+          // getComputedStyle legitimately resolves them to 'rgb(...)'.
+          const isKeyword = KEYWORD_PASSTHROUGH.has(draft.value.toLowerCase())
+          raw.set(prop, {
+            beforeCss: beforeCss.get(prop)!,
+            afterCss: isKeyword ? draft.value : afterCss.get(prop)!,
+          })
+        }
+        drafts.compare(el, wasComparing)
+      } finally {
+        if (inlineTransition) el.style.setProperty('transition', inlineTransition)
+        else el.style.removeProperty('transition')
       }
-      // 'display: flex → block' is never the literal ask — it is the panel's deterministic
-      // preview of REMOVING auto layout. Stamp the intent here at construction so the agent
-      // edits classes (removes the flex family); the renderer prints it without owning policy.
-      if (item.property === 'display' && (item.beforeCss === 'flex' || item.beforeCss === 'inline-flex') && item.afterCss === 'block') {
-        item.intent = REMOVE_AUTO_LAYOUT_INTENT
+
+      const className = typeof el.className === 'string' ? el.className : [...el.classList].join(' ')
+      for (const [property, v] of collapse(raw)) {
+        // A draft scrubbed back to its original value survives in the DraftStore (apply() keeps
+        // it), so it reaches here as a genuine no-op. Dropping it HERE — not just its markdown
+        // bullet — keeps empty sections out of the agent's request and lets the caller skip the
+        // send entirely when nothing actually changed.
+        if (v.beforeCss === v.afterCss) continue
+        const suggestion = suggestUtility(property, v.afterCss, theme, tokens)
+        const item: ChangeItem = {
+          property,
+          beforeCss: v.beforeCss,
+          afterCss: v.afterCss,
+          beforeUtility: theme.spacingBasePx === null ? null : findExistingUtility(className, property),
+          afterUtility: suggestion?.utility ?? null,
+          tokenExact: suggestion?.tokenExact ?? false,
+        }
+        // 'display: flex → block' is never the literal ask — it is the panel's deterministic
+        // preview of REMOVING auto layout. Stamp the intent here at construction so the agent
+        // edits classes (removes the flex family); the renderer prints it without owning policy.
+        if (item.property === 'display' && (item.beforeCss === 'flex' || item.beforeCss === 'inline-flex') && item.afterCss === 'block') {
+          item.intent = REMOVE_AUTO_LAYOUT_INTENT
+        }
+        changes.push(item)
       }
-      changes.push(item)
     }
-    if (changes.length === 0) continue // every drafted property was a no-op — nothing to request
 
     const elementChange = elementContext(el, changes)
+    attachOps(elementChange, drafts, el)
+    // every drafted property was a no-op — nothing to request… unless a structural op
+    // rides on this element, which must survive a zero-css-delta send on its own. The
+    // ops check reads what attachOps actually attached (not structuralOf) so a collapsed
+    // no-op text draft can't keep an empty section alive.
+    if (changes.length === 0 && !elementChange.ops) continue
     elementList.push(elementChange)
     elements.set(el, elementChange)
   }
@@ -311,6 +355,16 @@ export function renderMarkdown(req: ChangeRequest): string {
       }
       if (c.intent) line += ` — intent: ${c.intent}`
       lines.push(line)
+    }
+    for (const op of el.ops ?? []) {
+      if (op.kind === 'delete') {
+        lines.push('- Delete this element: remove its JSX (and children) from the source.')
+      } else {
+        // JSON.stringify escapes quotes AND newlines — page-controlled text stays a single
+        // quoted line and can never inject instruction lines into the request (same threat
+        // model as sanitizeInline, which can't be used here: the ask must stay verbatim).
+        lines.push(`- Text: ${JSON.stringify(op.before)} → ${JSON.stringify(op.after)}`)
+      }
     }
     lines.push('')
   })
