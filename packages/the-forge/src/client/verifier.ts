@@ -69,6 +69,7 @@ export class HmrSignal {
   private count = 0
   private onVite = false
   private listening = false
+  private hot: { on(e: string, cb: () => void): void; off?(e: string, cb: () => void): void } | null = null
   private handler = (): void => {
     this.count++
     this.onVite = true
@@ -78,13 +79,34 @@ export class HmrSignal {
     if (this.listening) return
     this.listening = true
     this.onVite ||= doc.querySelector('script[src*="/@vite/client"]') !== null
+    // Belt (tests + any future page-level dispatch) …
     window.addEventListener('vite:afterUpdate', this.handler)
+    // … and braces (the path that actually fires on real Vite, caught by the P1 E2E):
+    // 'vite:afterUpdate' is NOT a DOM event — client.mjs's notifyListeners only invokes
+    // import.meta.hot listeners, and this bundle is served raw (never Vite-transformed), so
+    // it has no import.meta.hot. Mint our own hot context by importing the HMR client and
+    // calling createHotContext — the exact preamble Vite injects into transformed modules.
+    // The specifier lives in a variable so esbuild leaves the import dynamic instead of
+    // trying to resolve a dev-server-only path at build time. On Next the import rejects
+    // and we stay in trust-always mode (spec §4's documented Next behavior).
+    const viteClientPath = '/@vite/client'
+    import(viteClientPath).then(
+      (mod: { createHotContext?: (path: string) => { on(e: string, cb: () => void): void } }) => {
+        if (!this.listening || typeof mod.createHotContext !== 'function') return
+        this.onVite = true
+        this.hot = mod.createHotContext('/__the-forge/hmr-signal')
+        this.hot.on('vite:afterUpdate', this.handler)
+      },
+      () => {} // not Vite (or client unreachable) — the window listener remains the only ear
+    )
   }
 
   stop(): void {
     if (!this.listening) return
     this.listening = false
     window.removeEventListener('vite:afterUpdate', this.handler)
+    this.hot?.off?.('vite:afterUpdate', this.handler)
+    this.hot = null
   }
 
   /** Monotonic cursor — record at send time, test with trustSince at verify time. */
