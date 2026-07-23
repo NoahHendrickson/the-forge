@@ -1,5 +1,6 @@
 import { AGENT_DISPLAY_NAME, type AgentName } from './agent'
 import { isHarnessId, type HarnessId } from '../shared/chat-constants'
+import { createTransport, type ForgeTransport } from './transport'
 
 /** Watcher lifecycle as reported by GET /__the-forge/status (server/watchers.ts):
  * 'live' — a session is parked on (or freshly cycling) the /wait long-poll;
@@ -158,7 +159,10 @@ export class WatchStatus {
      * as when DispatchConfig.embedded is off server-side and there's no adapter to report
      * transitions for). index.ts wires this to refreshStatus() so chat availability is
      * recomputed on every tick, per the task-6 contract, not just on watcher/session flips. */
-    private onTick?: () => void
+    private onTick?: () => void,
+    /** O0 seam: how this poller reaches the runtime — defaults to today's relative-URL
+     * same-origin transport, so existing call sites and tests are unchanged. */
+    private transport: ForgeTransport = createTransport()
   ) {}
 
   current(): WatcherState {
@@ -222,7 +226,7 @@ export class WatchStatus {
 
   private poll(gen: number): void {
     if (gen !== this.generation) return
-    fetch('/__the-forge/status?ids=')
+    this.transport.get('/__the-forge/status?ids=')
       .then(
         (res) =>
           res.ok

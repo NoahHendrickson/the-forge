@@ -4,6 +4,7 @@ import type { TaggedElement } from './source'
 import { AGENT_DISPLAY_NAME, currentAgent } from './agent'
 import { parseSessionState, parseWatcherState, queuedLineFor, type SessionState, type WatcherState } from './watch'
 import { resolveElement } from './lifecycle-store'
+import { createTransport, type ForgeTransport } from './transport'
 
 const POLL_MS = 2000
 /** After this many consecutive failed polls the verifier surfaces "paused" and starts backing off. */
@@ -193,7 +194,9 @@ export class Verifier {
   constructor(
     private sent: SentStore,
     private drafts: DraftStore,
-    private onUpdate: (summary: string) => void
+    private onUpdate: (summary: string) => void,
+    /** O0 seam: same default-transport pattern as WatchStatus. */
+    private transport: ForgeTransport = createTransport()
   ) {}
 
   subscribe(fn: (e: StageEvent) => void): void {
@@ -232,7 +235,7 @@ export class Verifier {
       this.stop()
       return
     }
-    fetch(`/__the-forge/status?ids=${ids.join(',')}`)
+    this.transport.get(`/__the-forge/status?ids=${ids.join(',')}`)
       .then((res) => {
         // A server that ANSWERS but errors (500s from a broken dev server, 404/HTML from some
         // other process squatting on the port) is just as stuck as an unreachable one — before
