@@ -24,6 +24,7 @@ import { WatchStatus, watchIndicatorFor } from './watch'
 import { SessionFeed } from './session-feed'
 import { saveLifecycle, loadLifecycle, sourceIndex, locateBySource, type PersistedLifecycle } from './lifecycle-store'
 import { ComposerSend } from './composer-send'
+import { createTransport, type ForgeTransport } from './transport'
 
 /** Rapid edits (e.g. dragging a number field) within this window reuse the first snapshot. */
 const RIPPLE_DEBOUNCE_MS = 300
@@ -32,15 +33,6 @@ declare global {
   interface Window {
     __THE_FORGE__?: { mode: DesignMode; secret?: string; agent?: AgentName }
   }
-}
-
-/** Belt-and-braces against cross-origin/DNS-rebinding bypasses of the server's Origin/Host
- * checks — same-origin page scripts are the user's own app and not the adversary. The secret
- * is injected by the server into `globalThis.__THE_FORGE__` (see index.ts load()); read it
- * lazily on each send so a value set after this module first evaluates is still picked up. */
-function forgeSecretHeaders(): Record<string, string> {
-  const secret = (globalThis as { __THE_FORGE__?: { secret?: string } }).__THE_FORGE__?.secret
-  return secret ? { 'X-Forge-Secret': secret } : {}
 }
 
 /** Builds the SessionFeed chip payload for an element — label format `<tag> · <basename>:<line>`,
@@ -111,14 +103,14 @@ export class DesignMode {
    * third arg (onTick) fires on EVERY poll, transition or not — refreshStatus also recomputes
    * chat availability from sessionEnabled(), which onChange/onSessionChange alone could miss
    * (see WatchStatus's onTick doc comment). */
-  private watch = new WatchStatus(
-    () => this.refreshStatus(),
-    () => this.refreshStatus(),
-    () => this.refreshStatus()
-  )
+  private watch: WatchStatus
   /** Live activity stream from the embedded session (Task 7/8) — idle-zero: start/stop
    * mirror this.watch.start()/stop() in setActive so no fetch or timer survives design mode off. */
-  private feed = new SessionFeed({ headers: forgeSecretHeaders })
+  private feed: SessionFeed
+  /** O0 seam: the ONE transport instance shared by watch/feed/verifier/composerSend and every
+   * endpoint call below — defaults to today's relative-URL same-origin transport, so existing
+   * call sites and tests are unchanged. */
+  private transport: ForgeTransport
   /** Single owner of the send-everything verb's orchestration + chat leg (composer-send.ts) —
    * constructed in the constructor body (needs this.feed/this.drafts/this.watch, not available
    * to a field initializer at this position). */
@@ -166,8 +158,17 @@ export class DesignMode {
     private overlay: Overlay,
     panel?: Panel,
     drafts?: DraftStore,
-    dock?: Dock
+    dock?: Dock,
+    transport?: ForgeTransport
   ) {
+    this.transport = transport ?? createTransport()
+    this.watch = new WatchStatus(
+      () => this.refreshStatus(),
+      () => this.refreshStatus(),
+      () => this.refreshStatus(),
+      this.transport
+    )
+    this.feed = new SessionFeed({ headers: this.transport.secretHeaders })
     this.drafts = drafts ?? new DraftStore()
     this.panel =
       panel ??
@@ -191,14 +192,19 @@ export class DesignMode {
     })
     this.canvasChrome = buildCanvasChrome(this.canvas, this.panel)
     this.overlay.attach(this.canvasChrome.wrap)
-    this.verifier = new Verifier(this.session, this.drafts, (summary) => {
-      this.verifierSummary = summary
-      this.refreshStatus()
-      // a commit/mismatch may change the computed style of the element the panel is
-      // currently showing (or the selection outline's geometry) — refresh both.
-      this.panel.refresh()
-      this.remeasure()
-    })
+    this.verifier = new Verifier(
+      this.session,
+      this.drafts,
+      (summary) => {
+        this.verifierSummary = summary
+        this.refreshStatus()
+        // a commit/mismatch may change the computed style of the element the panel is
+        // currently showing (or the selection outline's geometry) — refresh both.
+        this.panel.refresh()
+        this.remeasure()
+      },
+      this.transport
+    )
     this.changeList = new ChangeList(this.drafts, this.session, {
       onHover: (el) => (el ? this.overlay.showOutline(el.getBoundingClientRect()) : this.overlay.hideOutline()),
       onSelect: (el) => this.select(el),
@@ -220,15 +226,10 @@ export class DesignMode {
     // Fire-and-forget with .catch(() => {}) — same style as the unlink button's fetch;
     // a failed interrupt just means the session keeps running (degraded, not broken).
     this.feed.onInterrupt = () => {
-      void fetch('/__the-forge/session/interrupt', { method: 'POST', headers: forgeSecretHeaders() })
-        .catch(() => {})
+      void this.transport.post('/__the-forge/session/interrupt').catch(() => {})
     }
     this.feed.onDecide = (id: string, allow: boolean) => {
-      void fetch('/__the-forge/approval/decide', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
-        body: JSON.stringify({ id, allow }),
-      }).catch(() => {})
+      void this.transport.postJson('/__the-forge/approval/decide', { id, allow }).catch(() => {})
     }
     // ComposerSend (composer-send.ts) owns the send-everything verb's orchestration and its chat
     // leg — the composer's ↑ is the only send surface, firing whichever of drafts/chat are
@@ -245,11 +246,8 @@ export class DesignMode {
     })
     this.feed.onSend = () => this.composerSend.send()
     this.feed.onConfig = (cfg) => {
-      void fetch('/__the-forge/session/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
-        body: JSON.stringify(cfg),
-      })
+      void this.transport
+        .postJson('/__the-forge/session/config', cfg)
         .then((res) => {
           // A non-ok response (409 while the session is busy — harness/effort switches — or
           // any other failure) means the value the select optimistically shows was never
@@ -302,7 +300,8 @@ export class DesignMode {
       // The strip's ✕ (2026-07-05 watcher-unlink spec): stop the linked /forge-watch loop
       // (or dismiss the asleep hint) server-side. Fire-and-forget with a same-shape catch —
       // a failed unlink leaves the indicator as-is and the next 5s poll re-syncs anyway.
-      void fetch('/__the-forge/unwatch', { method: 'POST', headers: forgeSecretHeaders() })
+      void this.transport
+        .post('/__the-forge/unwatch')
         .then((res) => (res.ok ? (res.json() as Promise<{ watcher?: unknown }>) : null))
         .then((body) => {
           if (body === null || !this.active) return
@@ -432,11 +431,8 @@ export class DesignMode {
    * Nesting is deliberate, matching the pre-extraction Send handler: the send tests count
    * microtask ticks — re-check them before flattening to a flat .then chain or async/await. */
   private queueRequest(request: ChangeRequest, markdown: string, onOk: (id: string) => void, onFail: () => void): void {
-    fetch('/__the-forge/queue', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
-      body: JSON.stringify({ request, markdown }),
-    })
+    this.transport
+      .postJson('/__the-forge/queue', { request, markdown })
       .then((res) => {
         if (!res.ok) return onFail()
         res
@@ -453,11 +449,8 @@ export class DesignMode {
    * composer consolidation, so all callers care about is WHEN the round trip settles (guard
    * release / onSendComplete), never HOW the request was delivered. */
   private postDispatch(onSettled: () => void): void {
-    fetch('/__the-forge/dispatch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
-      body: JSON.stringify({}),
-    })
+    this.transport
+      .postJson('/__the-forge/dispatch', {})
       .then(() => onSettled())
       .catch(() => onSettled())
   }
@@ -466,11 +459,7 @@ export class DesignMode {
    * the same secret-header + JSON-body shape as queueRequest/postDispatch/onConfig's own fetch
    * calls above, so composer-send.ts never has to read globalThis.__THE_FORGE__ itself. */
   private postJson(path: string, body: unknown): Promise<Response> {
-    return fetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...forgeSecretHeaders() },
-      body: JSON.stringify(body),
-    })
+    return this.transport.postJson(path, body)
   }
 
   /** The drafts leg of the send-everything verb (composer consolidation Task 3) — extracted
