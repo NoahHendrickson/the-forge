@@ -118,7 +118,49 @@ button {
   border: 1.5px dashed var(--ripple); border-radius: 2px;
   opacity: 1; transition: opacity 0.3s ease-out;
 }
-#panel {
+` +
+// Layers tree (Figma pivot P2): a fixed LEFT sidebar, the mirror of the docked panel —
+// page content is pushed right by LeftDock's html margin-left (layers.ts).
+`.layers-panel {
+  position: fixed; left: 0; top: 0; bottom: 0; z-index: 2147483647;
+  width: var(--forge-layers-w, 240px);
+  display: flex; flex-direction: column; overflow: hidden;
+  font: 400 var(--text-md) var(--font-ui); background: var(--surface); color: var(--text-primary);
+  border-right: 1px solid var(--border-panel);
+  -webkit-font-smoothing: antialiased;
+}
+.layers-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; font: 600 var(--text-md) var(--font-ui);
+  border-bottom: 1px solid var(--separator);
+}
+.layers-close {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  font: 600 var(--text-md) var(--font-ui); padding: 0 4px; border-radius: 4px;
+}
+.layers-close:hover { background: var(--control); color: var(--text-primary); }
+.layers-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 6px 0; }
+.layer-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 8px 3px calc(8px + var(--layer-depth, 0) * 14px);
+  font: 400 var(--text-sm) var(--font-ui); color: var(--text-secondary);
+  cursor: default; user-select: none; white-space: nowrap;
+}
+.layer-row:hover { background: var(--control); color: var(--text-primary); }
+.layer-row.layer-selected { background: rgba(13,153,255,0.22); color: var(--text-primary); }
+.layer-row.layer-deleted .layer-label { text-decoration: line-through; opacity: 0.5; }
+.layer-chevron { flex: none; width: 12px; text-align: center; font-size: 9px; color: var(--text-muted); cursor: pointer; }
+.layer-chevron-empty { cursor: default; }
+.layer-label { overflow: hidden; text-overflow: ellipsis; }
+.layers-toggle {
+  position: fixed; left: 16px; top: 16px; z-index: 2147483646;
+  font: 500 var(--text-sm) var(--font-ui);
+  background: var(--surface); color: var(--text-primary); border: 1px solid var(--border-strong);
+  border-radius: 999px; padding: 6px 12px; cursor: pointer;
+}
+.layers-toggle:hover { background: var(--control); }
+` +
+`#panel {
   position: fixed; right: 16px; top: 16px; z-index: 2147483647;
   width: var(--forge-dock-w, ${DEFAULT_WIDTH}px); max-height: 80vh;
   display: flex; flex-direction: column; overflow: hidden;

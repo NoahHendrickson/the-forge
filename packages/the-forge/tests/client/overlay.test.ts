@@ -172,6 +172,11 @@ describe('Overlay CSS design tokens (Task 1)', () => {
       // Set at runtime by the resize/dock feature (dock.ts), not a design token — has its
       // own `, <fallback>px` default at every use site, so it's legitimately absent here.
       'forge-dock-w',
+      // Same runtime-var contract, LEFT edition: set by LeftDock (layers.ts, P2), with a
+      // `, 240px` fallback at its use site.
+      'forge-layers-w',
+      // Per-row indent depth, set inline by LayersTree.renderNode — data, not a token.
+      'layer-depth',
       // Set at runtime by colorpicker.ts (svArea.style.setProperty) to drive the hue
       // gradient — not a design token, has its own `, red` fallback at its one use site.
       'cp-hue',

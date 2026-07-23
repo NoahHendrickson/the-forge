@@ -23,6 +23,10 @@ const liveModes: DesignMode[] = []
 beforeEach(() => {
   document.body.innerHTML = ''
   document.head.innerHTML = ''
+  // Same zombie-dock hygiene as afterEach's marginRight reset, LEFT edition (P2): an
+  // untracked earlier instance's LeftDock may have pushed margin-left, and a fresh dock
+  // entering over that would capture the stale 240px as its "pre-existing" value.
+  document.documentElement.style.marginLeft = ''
   localStorage.clear()
   vi.restoreAllMocks()
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
@@ -35,6 +39,7 @@ afterEach(() => {
   for (const mode of liveModes.splice(0)) mode.setActive(false)
   vi.unstubAllGlobals()
   document.documentElement.style.marginRight = ''
+  document.documentElement.style.marginLeft = ''
 })
 
 function fullSetup() {
@@ -3621,5 +3626,77 @@ describe('canvas verbs (Figma pivot P1): inline text edit + Del delete', () => {
     btn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     expect(drafts.structuralOf(btn)).toEqual({ kind: 'text', original: 'go', value: 'get started' })
     expect(btn.textContent).toBe('get started') // the verbatim pre-edit text put back
+  })
+})
+
+describe('layers panel integration (Figma pivot P2)', () => {
+  function layersSetup() {
+    const setup = fullSetup()
+    setup.mode.setActive(true)
+    const panel = setup.overlay.host.shadowRoot!.querySelector('.layers-panel') as HTMLElement
+    const rows = () => [...panel.querySelectorAll('.layer-row')] as HTMLElement[]
+    return { ...setup, layersPanel: panel, rows }
+  }
+
+  it('activating design mode opens the layers panel by default and pushes margin-left', () => {
+    const { layersPanel, rows } = layersSetup()
+    expect(layersPanel.hidden).toBe(false)
+    expect(document.documentElement.style.marginLeft).toBe('240px')
+    // fullSetup's fixture is one tagged <button>go</button> — one row, text label
+    expect(rows().map((r) => r.querySelector('.layer-label')!.textContent)).toEqual(['go'])
+  })
+
+  it('deactivating closes the panel and restores margin-left', () => {
+    const { mode, layersPanel } = layersSetup()
+    mode.setActive(false)
+    expect(layersPanel.hidden).toBe(true)
+    expect(document.documentElement.style.marginLeft).toBe('')
+  })
+
+  it('canvas selection highlights the tree row; tree click selects on the canvas', () => {
+    const { mode, rows } = layersSetup()
+    const btn = document.querySelector('button')! as HTMLElement
+    btn.click() // canvas → tree
+    expect(rows()[0].classList.contains('layer-selected')).toBe(true)
+    mode.setActive(true)
+    const mode2 = mode // tree → canvas: click the row of the same element
+    rows()[0].click()
+    expect(mode2.selected).toBe(btn)
+  })
+
+  it('Del on a tree row tombstones the element through the shared delete routine', () => {
+    const { drafts, rows } = layersSetup()
+    const btn = document.querySelector('button')! as HTMLElement
+    rows()[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+    expect(drafts.structuralOf(btn)).toEqual({ kind: 'delete', priorInlineDisplay: '' })
+    expect(btn.style.getPropertyValue('display')).toBe('none')
+  })
+
+  it('the ‹ button closes the panel, shows the Layers pill, and the pill reopens it', () => {
+    const { overlay, layersPanel } = layersSetup()
+    const shadow = overlay.host.shadowRoot!
+    const toggle = shadow.querySelector('.layers-toggle') as HTMLButtonElement
+    expect(toggle.hidden).toBe(true) // open panel → no pill
+    ;(layersPanel.querySelector('.layers-close') as HTMLButtonElement).click()
+    expect(layersPanel.hidden).toBe(true)
+    expect(document.documentElement.style.marginLeft).toBe('')
+    expect(toggle.hidden).toBe(false)
+    toggle.click()
+    expect(layersPanel.hidden).toBe(false)
+    expect(document.documentElement.style.marginLeft).toBe('240px')
+    expect(toggle.hidden).toBe(true)
+  })
+
+  it('the closed-state preference persists into the next activation', () => {
+    const first = layersSetup()
+    const shadow = first.overlay.host.shadowRoot!
+    ;(shadow.querySelector('.layers-close') as HTMLButtonElement).click()
+    first.mode.setActive(false)
+
+    const second = layersSetup()
+    const panel2 = second.layersPanel
+    expect(panel2.hidden).toBe(true) // closed pref survived
+    expect(document.documentElement.style.marginLeft).toBe('')
+    expect((second.overlay.host.shadowRoot!.querySelector('.layers-toggle') as HTMLButtonElement).hidden).toBe(false)
   })
 })

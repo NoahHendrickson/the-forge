@@ -41,8 +41,11 @@ echo "PASS: Next.js production build is clean"
 # of it. Raised 320→336 for the Figma pivot P1 (2026-07-22 spec): the structural-op union
 # (text/delete drafts, ops wire format + markdown, HmrSignal + inverted-polarity verify,
 # inline text edit, changelist op rows, X/Y header) is ~7KB of real client surface.
-# Still a regression tripwire, not a target.
-MAX_UNPACKED_KB=336
+# Raised 336→352 for P2 + the PR #44 review remediation: the layers tree (layers.ts —
+# curated tree, LeftDock, tombstone rows) plus the review's safety/structure additions
+# (hmr.ts hot-context probe, ops.ts, TextEditMode extraction, per-op verifier split) are
+# ~14KB of real surface between them. Still a regression tripwire, not a target.
+MAX_UNPACKED_KB=352
 PACK_JSON=$(npm pack --dry-run --json -w forge-mode 2>/dev/null)
 # String(...) around the number: Node's console colorizes bare numbers under FORCE_COLOR
 # (Claude Code background shells set FORCE_COLOR=3), which would wrap the digits in ANSI
