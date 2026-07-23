@@ -2,7 +2,7 @@ import type { TaggedElement } from './source'
 import { DraftStore } from './drafts'
 import { UTILITY_PREFIXES, parseColor, type Theme, type Tokens } from './tokens'
 import type { ColorEntry, ScaleEntry } from './tokenpicker'
-import { hasDirectText, isFlex, mainAxisProp } from './panel-readers'
+import { elementOffsets, hasDirectText, isFlex, mainAxisProp } from './panel-readers'
 
 export interface RowSpec {
   label: string
@@ -11,6 +11,11 @@ export interface RowSpec {
   max?: number
   toCss?: (n: number) => string
   fromCss?: (css: string) => number
+  /** Read-only, non-css row (the Position X/Y pair): `read` supplies the value straight from
+   * the element — offsets aren't computed-style properties — the input renders disabled, and
+   * no editing/scrub/token affordances wire up. P3's Absolute toggle is the planned lift. */
+  readOnly?: boolean
+  read?: (el: TaggedElement) => number
   /** When true (W/H rows), a sizing chevron menu button (Fixed/Hug/Fill, ui/menu.ts) renders
    * next to the field. */
   sizeMode?: boolean
@@ -52,6 +57,16 @@ const BORDER_COLOR_PROPS = ['border-top-color', 'border-right-color', 'border-bo
 // object so tokenEntriesFor/pillLabelFor (both keyed on `.props`) and the boundTokens map
 // (keyed on `.props.join(',')`) can treat it identically to every other token-pickable field.
 const GAP_SPEC: RowSpec = { label: 'Gap', props: ['gap'], min: 0 }
+
+/** Position block rows (Figma pivot P1, spec §5): Figma's header X/Y pair above Size —
+ * READ-ONLY in P1, offsets from the offsetParent via elementOffsets, the same single
+ * derivation that feeds InspectorData.x/y. Declared HERE like every other row (PR #44
+ * follow-up) so the block rides the standard field lifecycle — refresh and destroy on one
+ * track — instead of bespoke panel DOM with its own copies of both. */
+export const POSITION_ROWS: RowSpec[] = [
+  { label: 'X', props: ['x'], readOnly: true, read: (el) => elementOffsets(el).x },
+  { label: 'Y', props: ['y'], readOnly: true, read: (el) => elementOffsets(el).y },
+]
 
 // Tailwind's numeric spacing scale (padding/margin/gap/width/height) — each step n maps to
 // n * theme.spacingBasePx. Kept as a flat literal list (not generated) so the exact set —
